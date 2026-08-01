@@ -178,3 +178,93 @@ type PathProposal = {
   intent: string;
   resolution: ResolvedRouteIntent;
   candidates: RouteCandidate[];
+  recommendedCandidateId: string;
+  status: "ready" | "stale" | "applied" | "rejected" | "expired";
+};</pre>
+  <p>The renderer increments <code>revision</code> for every project or planner mutation. A proposal becomes stale as soon as its base revision no longer matches; it may be regenerated, never force-applied. Applying uses the renderer's existing commit/history path, selects the new path, marks the project dirty, and preserves stable path IDs and naming rules.</p>
+
+  <h2>MCP surface</h2>
+  <p>Natural-language interpretation belongs to the agent. Bordeaux supplies authoritative resources and deterministic tools so the agent can turn prose into a structured route request without a second embedded LLM or an API key.</p>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Primitive</th><th>Name / URI</th><th>Behavior</th></tr></thead>
+    <tbody>
+      <tr><td>Resource</td><td><code>bordeaux://session/current</code></td><td>Current revision, active path, robot, planner, alliance view, field pack, and linked command-catalog identity.</td></tr>
+      <tr><td>Resource</td><td><code>bordeaux://field/2026-rebuilt</code></td><td>Coordinate frame, official landmarks and zones, aliases, traversable corridors, obstacles, source revision, and alliance transforms.</td></tr>
+      <tr><td>Resource</td><td><code>bordeaux://commands/current</code></td><td>Linked, generated Java commands with schemas and explicit semantic tags. Empty when no authoritative catalog is linked.</td></tr>
+      <tr><td>Resource</td><td><code>bordeaux://paths/{id}/analysis</code></td><td>Authored waypoints/handles, constraints, normalized raw trajectory samples, extrema, diagnostics, markers, stationary actions, planner fallback data, and source-to-sample references.</td></tr>
+      <tr><td>Resource</td><td><code>bordeaux://proposals/{id}</code></td><td>Resolved intent, all candidate metrics, diagnostics, recommendation reason, and application status.</td></tr>
+      <tr><td>Tool</td><td><code>inspect_session</code></td><td>Small read-only summary for clients that do not attach resources automatically.</td></tr>
+      <tr><td>Tool</td><td><code>resolve_field_terms</code></td><td>Maps phrases plus alliance/start context to ranked canonical landmarks or reports ambiguity. Never mutates.</td></tr>
+      <tr><td>Tool</td><td><code>analyze_path</code></td><td>Runs structural validation, shared planner generation, raw-sample measurements, clearance/collision checks, and source attribution for an existing path without changing it.</td></tr>
+      <tr><td>Tool</td><td><code>repair_path</code></td><td>Regenerates bounded repair candidates on clones for selected measured findings, rejects candidates that do not fix the target or introduce a worse check, and stages the comparison for review.</td></tr>
+      <tr><td>Tool</td><td><code>plan_path</code></td><td>Accepts a structured route specification, generates bounded candidates on clones, validates and scores them, and stages a visual proposal.</td></tr>
+      <tr><td>Tool</td><td><code>get_proposal</code></td><td>Reads status and metrics after the user applies, rejects, or invalidates a proposal.</td></tr>
+      <tr><td>Prompt</td><td><code>author_autonomous_path</code></td><td>Guides an agent to inspect, resolve ambiguity, plan, explain alternatives, and wait for in-app acceptance.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><strong>Deliberate v1 boundary.</strong> Do not expose save, Save As, <code>.bdx</code> export, Java export, Gradle execution, arbitrary file access, or direct project replacement. Those remain existing user-controlled app actions.</div>
+
+  <h2>2026 field vocabulary model</h2>
+  <p>Create <code>src/shared/field/fieldPack.ts</code> plus a built-in <code>2026-rebuilt</code> fixture. A field pack is data, not prompt text:</p>
+  <ul>
+    <li><strong>Geometry:</strong> field boundary; HUB, BUMP, TRENCH, TOWER, DEPOT, guardrail, and keep-out polygons; NEUTRAL ZONE, ALLIANCE ZONE, CENTER LINE, ROBOT STARTING LINE, and named boundary segments.</li>
+    <li><strong>Traversal:</strong> “under trench” portals with opening dimensions and approach corridors; “over bump” surfaces with traversal penalties and optional local speed caps; non-traversable structure solids inflated by robot footprint.</li>
+    <li><strong>Language:</strong> official names, common lowercase aliases, alliance-relative qualifiers (<code>our</code>/<code>opponent</code>), side qualifiers (<code>scoring-table</code>/<code>non-scoring-table</code>), near/far resolution relative to a known start pose, and robot-relative directions (<code>front</code>/<code>back</code>/<code>left</code>/<code>right</code>).</li>
+    <li><strong>Provenance:</strong> season, field revision, coordinate-frame statement, source document URLs, update date, and a fixture checksum.</li>
+  </ul>
+  <p>Use one canonical blue-origin coordinate frame. Red requests are transformed into that frame before creating <code>PathDoc</code> geometry, matching the renderer's existing 180-degree alliance view. Official manual terms define semantics; exact dimensions are transcribed once from official field drawings and tested against the renderer calibration.</p>
+  <p>Ambiguity is data. “Under the trench” is ambiguous when both side TRENCHES are viable. “Far side of the neutral zone” requires an alliance or start pose. The resolver returns ranked alternatives with reasons; it does not silently choose left/right or our/their.</p>
+  <p>Robot-relative language uses the physical chassis frame at a named pose or trajectory sample: front is positive chassis X, back is negative chassis X, and left/right are perpendicular to the physical heading. Direction of travel is a different concept. When <code>driveBackward</code> is active, resolve the authored heading first and then apply the existing 180-degree physical-heading transform before interpreting front/back. If no pose/sample is specified and more than one is plausible, return ambiguity rather than using the active viewport or path tangent implicitly.</p>
+
+  <h3>Team strategy vocabulary</h3>
+  <p>The manual cannot define a team's best shooting pose or robot command. Add a small project-owned strategy overlay with named poses/regions and action bindings. Examples: <code>our-safe-shot</code>, <code>centerline-intake-lane</code>, and capability <code>shoot-fuel</code>. This metadata is editor-only, optional, additive to project schema 1.0, and preserved in project save/round trips but not reconstructed from imported <code>.bdx</code>.</p>
+  <p>Extend <code>@BordeauxCommand</code> and the generated catalog with optional bounded semantic tags/aliases. “Shoot” resolves only when exactly one linked runtime-ready command advertises the matching capability, or when the project overlay explicitly selects one. Otherwise the proposal ends at the shooting pose with an unresolved-action warning and no invented event marker.</p>
+
+  <h2>Route generation and optimization</h2>
+  <ol>
+    <li><strong>Resolve the structured request.</strong> Convert every named start, destination, corridor, action pose, heading, and alliance qualifier to canonical geometry. Stop when required terms remain ambiguous.</li>
+    <li><strong>Build configuration space.</strong> Inflate solid field elements by the robot's actual half-width/half-length plus the selected clearance. Treat TRENCH portals and BUMPS as typed traversals, not empty space.</li>
+    <li><strong>Generate bounded route skeletons.</strong> Use a visibility graph or small navmesh over portals, obstacle corners, named lanes, and goal regions. Respect required phrases such as “through the TRENCH”; do not search an unconstrained continuous field.</li>
+    <li><strong>Fit authored geometry.</strong> Convert each skeleton to a minimal <code>PathDoc</code> using existing waypoint builders and planner-appropriate segment types. Reject self-intersections, field exits, obstacle intersections, invalid look-at singularities, and infeasible traversal approaches.</li>
+    <li><strong>Time with the real planner.</strong> Run the selected shared planner on each clone, apply range constraints and stationary actions, and collect total time, distance, minimum clearance, peak curvature, peak angular rate, fallback status, and diagnostics.</li>
+    <li><strong>Rank honestly.</strong> Invalid candidates never rank. By default minimize total trajectory time; if candidates are within the near-tie window, prefer more clearance, then less curvature/rotation demand, then fewer waypoints. Return the top three and the exact reason one won.</li>
+    <li><strong>Stage, do not commit.</strong> Send candidates to the renderer as dashed overlays with traversal labels, ETA, distance, clearance, diagnostics, and an Apply/Reject control. Applying is one history entry.</li>
+  </ol>
+
+  <h3>Existing-path analysis and repair</h3>
+  <ol>
+    <li><strong>Analyze without mutation.</strong> Normalize and validate the selected path, generate it through the shared planner, and expose bounded raw sample arrays plus summarized extrema. Every reported finding includes severity, measured value, authored limit, sample index/time/distance/fraction, segment, and nearest authored waypoint/range.</li>
+    <li><strong>Explain provenance.</strong> Distinguish authored values, normalized defaults, planner output, measured violations, and neutral planner slowdowns. Preserve planner fallback reasons and never call an expected curvature- or rotation-limited slowdown an error.</li>
+    <li><strong>Repair one target at a time.</strong> A repair request names one or more analysis finding IDs. Generate candidate handle, waypoint, segment, heading-law, range, or constraint changes only when they directly address those findings.</li>
+    <li><strong>Prove the candidate is better.</strong> Re-run complete validation and path checks on a clone. A candidate must remove or materially reduce the target finding, introduce no worse finding, preserve unrelated metadata/actions, and show an authored-field diff plus before/after metrics.</li>
+    <li><strong>Preview before Apply.</strong> Stage original and repaired geometry together, including changed raw values and the exact findings resolved. Imported <code>.bdx</code> projects retain their Save As behavior.</li>
+  </ol>
+
+  <h3>Local route-policy tuner</h3>
+  <p>The defaults below are implementation assumptions, not game rules. Adjust them to produce a JSON policy for a future implementation pass.</p>
+  <div class="tuner" id="route-tuner">
+    <div class="tuner-row"><label for="clearance">Minimum structure clearance</label><input id="clearance" type="range" min="0.05" max="0.50" step="0.01" value="0.15"><output id="clearance-out">0.15 m</output></div>
+    <div class="tuner-row"><label for="tie-window">Near-tie time window</label><input id="tie-window" type="range" min="0" max="0.50" step="0.01" value="0.15"><output id="tie-window-out">0.15 s</output></div>
+    <div class="tuner-row"><label for="candidate-cap">Maximum route candidates</label><input id="candidate-cap" type="range" min="3" max="24" step="1" value="12"><output id="candidate-cap-out">12</output></div>
+    <div class="tuner-row"><label for="traversal">Unspecified crossing preference</label><select id="traversal"><option value="fastest" selected>Fastest valid</option><option value="trench">Prefer TRENCH</option><option value="bump">Prefer BUMP</option><option value="compare">Always compare both</option></select><output></output></div>
+    <pre class="code" id="policy-json">{
+  "minimumClearanceM": 0.15,
+  "nearTieWindowS": 0.15,
+  "maximumCandidates": 12,
+  "unspecifiedTraversal": "fastest"
+}</pre>
+    <div class="tuner-actions"><button type="button" id="copy-policy">Copy as JSON</button><span class="tuner-note" id="copy-status">Safety and validity remain hard constraints.</span></div>
+  </div>
+
+  <h2>Phased implementation</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Phase</th><th>Scope</th><th>Exit condition</th></tr></thead>
+    <tbody>
+      <tr><td>0 · Contracts</td><td>Add shared session/proposal/field/route types and schemas; record current project/planner fixtures; choose and pin the current official MCP TypeScript SDK at implementation time.</td><td>Malformed payloads and stale revisions have deterministic typed errors; no behavior change to existing planners or file formats.</td></tr>
+      <tr><td>1 · Session + preview</td><td>Add request/response IPC in <code>main.ts</code>/<code>preload.ts</code>; add renderer refs, monotonic revision, proposal state, ghost overlays, comparison panel, Apply/Reject, and stale invalidation.</td><td>A test harness can stage a coordinate-defined path while the app is open; user edits invalidate it; Apply is one undoable project mutation.</td></tr>
+      <tr><td>2 · MCP vertical slice</td><td>Add <code>src/mcp</code>, <code>--mcp-stdio</code> startup mode, private app IPC, Agents menu/status, server instructions, resources, <code>inspect_session</code>, <code>analyze_path</code>, coordinate-based <code>plan_path</code>, and <code>get_proposal</code>.</td><td>An MCP Inspector/client can connect to the packaged app, inspect the current session and raw active-path data, stage a basic path, and observe Apply/Reject without exposing file writes.</td></tr>
+      <tr><td>3 · REBUILT vocabulary</td><td>Add the versioned 2026 field pack, official source fixtures, alliance transforms, robot-frame transforms, ambiguity-aware resolver, and <code>resolve_field_terms</code>.</td><td>Golden phrases resolve consistently for both alliances and forward/reverse driving; ambiguous TRENCH, near/far, and front/back terms return alternatives instead of coordinates.</td></tr>
+      <tr><td>4 · Route search + repair</td><td>Add configuration-space geometry, typed TRENCH/BUMP traversals, bounded candidate generation, spline fitting, collision checks, actual planner scoring, source-attributed raw analysis, focused repair candidates, top-three comparison, and route-policy inputs.</td><td>The example out-and-back request recommends the fastest valid candidate; an existing invalid/slow path produces explainable raw findings and a previewed repair with no worse path check.</td></tr>
+      <tr><td>5 · Actions + hardening</td><td>Add optional strategy overlay and Java command semantic tags, unresolved-action flow, MCP cancellation/limits/audit log, packaging, docs, and end-to-end smoke coverage.</td><td>“Shoot” binds only to an authoritative tagged command; installed macOS/Windows builds expose copyable client config and pass security/lifecycle tests.</td></tr>
+    </tbody>
+  </table></div>
