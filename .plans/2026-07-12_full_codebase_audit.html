@@ -178,3 +178,93 @@
   <p><strong>Evidence.</strong> All 13 tests are in <code>tests/bdx.test.ts</code>. The only shipped-renderer check asserts string fragments in a generated bundle. There are no IPC, startup, open/save/export failure, routine deployment, unsaved-close, packaged-app, accessibility, or malformed-file tests; no CI config or lint command exists.</p>
   <p><strong>Smallest fix.</strong> First add regression tests for findings 2–5 and malformed validation. Then add one Electron smoke suite for launch → edit → save → reopen → export → close, and run test/typecheck/build/audit in minimal CI.</p>
 
+  <h2>Additional engineering observations</h2>
+  <ul>
+    <li><strong>False diagnostics:</strong> <code>constraintViolations</code> is hard-coded to zero in <code>optimizedTrajectory.ts:98–109</code>. Calculate it from final samples or remove the claim.</li>
+    <li><strong>Main-process stalls:</strong> file reading is asynchronous, but JSON parsing and trajectory generation run synchronously in main IPC with no file/count limits. Cap inputs and move expensive planning off main when projects become large.</li>
+    <li><strong>Type escape hatch:</strong> the 543-line core math engine is <code>// @ts-nocheck</code>, and consumers use <code>any</code>. A typed adapter around its return value is a smaller first step than rewriting it.</li>
+    <li><strong>Production weight:</strong> the legacy renderer embeds development React/ReactDOM; ReactDOM alone is about 1 MB/29,924 lines.</li>
+    <li><strong>Export feedback:</strong> the shipped handler does not await export, disable duplicate clicks, report cancellation, or show success; failure falls back to blocking <code>alert()</code>. Add pending state, a calm error, and a success toast with filename/reveal action.</li>
+    <li><strong>Zoom/reflow:</strong> the window enforces 1100×720, uses fixed side rails, and hides root overflow. At 200% zoom the non-field chrome can clip. Collapse rails/tool labels and provide overflow before sacrificing the editor.</li>
+    <li><strong>Popover semantics:</strong> path/theme/context menus lack complete expanded-state, Escape, focus management, and arrow-key behavior. Prefer normal-button popovers unless full menu semantics are implemented.</li>
+    <li><strong>Naming and recents:</strong> duplicate path names are allowed, while the recent-files list only lives for the current process. Disambiguate or validate names and persist a bounded recent list after the persistence flow exists.</li>
+    <li><strong>Tooling drift:</strong> Vite and several helper dependencies are installed but unused by current scripts; there is no packaging command or contributor README.</li>
+  </ul>
+
+  <h2>What is working well</h2>
+  <ul>
+    <li>The live UI has a clear, calm visual hierarchy suited to an engineering tool: strong field focus, persistent outline/inspector, coherent constraint vocabulary, and useful inline diagnostics.</li>
+    <li><code>contextIsolation:true</code> and <code>nodeIntegration:false</code> are good baseline Electron choices.</li>
+    <li>Shared planner/export boundaries are compact, planner selection is explicit, and existing tests cover default export, stops, markers, path exclusion, optimized output, and clothoid continuity.</li>
+    <li>Strict TypeScript is enabled outside the legacy/math escape hatches, and the current test/type/build checks are fast enough to run on every change.</li>
+  </ul>
+
+  <h2>Recommended remediation sequence</h2>
+  <ol>
+    <li><strong>Stop data loss:</strong> connect persistence, dirty-close protection, routine/project state, stable path references, and safe project-wide undo.</li>
+    <li><strong>Make export trustworthy:</strong> total schema validation, finite-output checks, shared diagnostic blocking, correct marker retiming, and honest constraint diagnostics.</li>
+    <li><strong>Unify the product boundary:</strong> select one renderer, make build load exactly what it validates, and add Electron lifecycle tests.</li>
+    <li><strong>Harden the desktop shell:</strong> Electron upgrade, sandbox/CSP/navigation rules, intent-based IPC, atomic saves, and input limits.</li>
+    <li><strong>Make the UI inclusive:</strong> semantic controls, accessible names/states, keyboard parity, contrast fixes, reduced-motion review, and assistive-tech testing.</li>
+    <li><strong>Productionize:</strong> CI, linting, packaging/signing/update documentation, production React bundle, and cleanup of unused dependencies.</li>
+  </ol>
+
+  <h2>Verification evidence</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Check</th><th>Result</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>npm test</code></td><td>Pass: 13/13</td><td>Shared export/math regression suite is green.</td></tr>
+      <tr><td><code>npm run typecheck</code></td><td>Pass</td><td>Typed renderer/shared/Electron sources compile; this does not cover generated runtime JS.</td></tr>
+      <tr><td><code>npm run build</code></td><td>Pass</td><td>Electron TypeScript compiles; no renderer/package artifact is built.</td></tr>
+      <tr><td><code>npm audit --omit=dev</code></td><td>Fail: 1 high package</td><td>Electron 37.10.3 has multiple advisories; offered fix is a major upgrade.</td></tr>
+      <tr><td>Full <code>npm audit</code></td><td>Fail: 8 vulnerabilities</td><td>3 moderate, 2 high, 3 critical groups, largely development tooling plus Electron.</td></tr>
+      <tr><td>Electron live smoke</td><td>Pass with findings</td><td>Shipped legacy UI launched at 1440×920; accessibility tree and actual loaded URL were inspected.</td></tr>
+      <tr><td>Malformed handle probe</td><td>Fail</td><td>Validation passed; 57 bad samples and 170 serialized nulls were observed.</td></tr>
+      <tr><td>Optimized marker probe</td><td>Fail</td><td>Observed 0.1310 s error against final retimed sample interpolation.</td></tr>
+      <tr><td>High-curvature export probe</td><td>Fail</td><td>Preview blocked while direct build returned export data.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Reproduction appendix</h2>
+  <p>Install the lockfile and compile the shared modules first:</p>
+  <pre class="code">npm ci
+npm run build</pre>
+
+  <p>The following probe reproduces the malformed-handle, diagnostic-policy, and optimized-marker findings against the compiled shared code:</p>
+  <pre class="code">node - &lt;&lt;'NODE'
+const { createDemoProject, buildWaypoints } = require('./dist-electron/shared/project/defaults.js');
+const { validateProject } = require('./dist-electron/shared/validation.js');
+const { buildBdxExport, previewBdxExport } = require('./dist-electron/shared/export/bdx.js');
+
+const bad = createDemoProject();
+bad.paths[0].waypoints[0].nextC.x = 'not-a-number';
+const badOut = buildBdxExport(bad);
+const badSamples = badOut.paths[0].samples.filter((sample) =&gt;
+  Object.values(sample).some((value) =&gt; typeof value === 'number' &amp;&amp; !Number.isFinite(value)),
+);
+console.log('malformed', {
+  validationOk: validateProject(bad).ok,
+  badSamples: badSamples.length,
+  jsonNulls: (JSON.stringify(badOut).match(/null/g) || []).length,
+});
+
+const tight = createDemoProject();
+tight.paths[0].waypoints = buildWaypoints([
+  { x: 1, y: 1, theta: 0, segType: 'bezier' },
+  { x: 1.05, y: 7, theta: 0, segType: 'bezier' },
+  { x: 1.1, y: 1, theta: 0 },
+]);
+console.log('tight', {
+  previewOk: previewBdxExport(tight).ok,
+  buildDiagnostics: buildBdxExport(tight).paths[0].diagnostics,
+});
+
+const markerProject = createDemoProject();
+markerProject.plannerId = 'optimizedTrajectory';
+markerProject.paths[0].waypoints = buildWaypoints([
+  { x: 2.2, y: 4, theta: 0, segType: 'bezier' },
+  { x: 3.2, y: 4.7, stop: true, segType: 'bezier' },
+  { x: 5.4, y: 4, theta: 0 },
+]);
+markerProject.paths[0].markers = [{ f: 0.66, name: 'm' }];
+const retimed = buildBdxExport(markerProject).paths[0];
