@@ -268,3 +268,30 @@ markerProject.paths[0].waypoints = buildWaypoints([
 ]);
 markerProject.paths[0].markers = [{ f: 0.66, name: 'm' }];
 const retimed = buildBdxExport(markerProject).paths[0];
+const i = retimed.samples.findIndex((sample) =&gt; sample.f &gt;= 0.66);
+const a = retimed.samples[i - 1], b = retimed.samples[i];
+const expected = a.t + ((0.66 - a.f) / (b.f - a.f)) * (b.t - a.t);
+console.log('marker', {
+  exported: retimed.markers[0].timeS,
+  interpolated: +expected.toFixed(4),
+  delta: +Math.abs(retimed.markers[0].timeS - expected).toFixed(4),
+});
+NODE</pre>
+  <p>Observed on this checkout: <code>validationOk:true</code>, 57 bad samples, 170 JSON nulls; preview blocked the tight path while build returned a radius ≈0.12 m error diagnostic; optimized marker delta was 0.1310 s.</p>
+
+  <p>For the shipped runtime and accessibility counts, launch Electron with the DevTools protocol:</p>
+  <pre class="code">npm run dev -- --remote-debugging-port=9222
+curl -s http://127.0.0.1:9222/json/list</pre>
+  <p>The returned page URL must be <code>file:///…/public/legacy/index.html</code>. Against that page at 1440×920, query <code>button</code>, <code>button[aria-label]</code>, <code>main</code>, <code>nav</code>, and React-backed clickable <code>div</code> nodes; then call CDP <code>Accessibility.getFullAXTree</code> and count control roles with an empty accessible name. This run returned 35 buttons, zero button <code>aria-label</code> attributes, zero main/nav landmarks, seven clickable divs, 50 exposed controls, and 11 unnamed controls. The unnamed-control count—not the raw aria-label count—is the accessibility defect signal.</p>
+
+  <h2>Verification gaps</h2>
+  <ul>
+    <li>No packaged artifact, signing/notarization, updater, crash reporting, or installer workflow exists to inspect.</li>
+    <li>No real screen-reader session or user study was run; accessibility findings use DOM/accessibility-tree inspection and WCAG analysis.</li>
+    <li>No large-project benchmark, fuzz/property testing, file-write fault injection, or cross-platform Windows/Linux run was available.</li>
+    <li>This was an audit, not a fix pass; only this report was added. Existing user edits were not changed.</li>
+  </ul>
+</article>
+</main>
+</body>
+</html>
