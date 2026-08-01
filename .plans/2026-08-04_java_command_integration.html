@@ -268,3 +268,93 @@ eventRunner.advance(previousElapsedS, currentElapsedS, bordeaux, Command::schedu
       <label for="w-params">Typed parameters</label><input id="w-params" data-weight="params" type="range" min="0" max="5" value="5"><output>5</output>
       <label for="w-safe">No robot-code execution</label><input id="w-safe" data-weight="safe" type="range" min="0" max="5" value="5"><output>5</output>
       <label for="w-friction">Low team setup</label><input id="w-friction" data-weight="friction" type="range" min="0" max="5" value="3"><output>3</output>
+      <label for="w-maintain">Low maintenance</label><input id="w-maintain" data-weight="maintain" type="range" min="0" max="5" value="4"><output>4</output>
+    </div>
+    <div class="tbl-scroll"><table class="data"><thead><tr><th>Option</th><th>Weighted score</th></tr></thead><tbody id="rank-body"></tbody></table></div>
+    <button class="copy" id="copy-decision" type="button">Copy decision as JSON</button>
+    <p class="tool-note" id="copy-note" aria-live="polite"></p>
+  </div>
+
+  <h2>Finding Java projects on the computer</h2>
+  <p>Java has no global equivalent of LabVIEW's open-project API. An IDE may know what it has open, Gradle knows a build after a folder is chosen, and a JVM knows only its own classpath. Bordeaux therefore needs a project-linking workflow rather than pretending it can reliably enumerate “open Java projects.”</p>
+  <ol>
+    <li><strong>Primary: Link Robot Project.</strong> The user chooses a directory. Electron verifies a plausible WPILib/GradleRIO project using read-only signals such as <code>gradlew</code>, <code>build.gradle</code> or <code>build.gradle.kts</code>, <code>src/main/java</code>, and WPILib preferences. Never infer trust from the folder shape alone.</li>
+    <li><strong>Convenience: recent linked projects.</strong> Store bookmarks/fingerprints, not a full filesystem index. If the folder moves or its identity changes, ask the user to relink.</li>
+    <li><strong>Optional discovery: bounded search roots.</strong> Let the user opt into shallow scanning of named development folders for GradleRIO markers. Do not recursively search the entire home directory or mounted drives by default.</li>
+    <li><strong>Catalog refresh.</strong> The first milestone reads and parses bounded source files directly; it does not run Gradle, load compiled classes, or execute project code. The in-memory catalog is automatic and app-owned. Gradle/annotation generation remains a later accuracy upgrade. <a href="https://docs.gradle.org/current/userguide/tooling_api.html">Gradle Tooling API documentation</a></li>
+    <li><strong>Refresh deliberately.</strong> A lightweight source watcher may mark results stale, but the UI refresh action owns rescanning and reports source count, warnings, and the last successful time.</li>
+  </ol>
+
+  <h2>Packaging the trajectory for Java</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Transport</th><th>Benefits</th><th>Costs</th><th>Recommendation</th></tr></thead>
+    <tbody>
+      <tr><td>JSON in <code>src/main/deploy/bordeaux/</code></td><td>Inspectable, diffable, versionable, and automatically copied by standard WPILib deployment.</td><td>Needs strict schema/resource limits and a JSON parser at robot startup.</td><td><strong>Default.</strong> WPILib documents <code>src/main/deploy</code> for robot runtime resources and <code>Filesystem</code> for locating them. <a href="https://docs.wpilib.org/en/latest/docs/software/basic-programming/deploy-directory.html">WPILib deploy directory documentation</a></td></tr>
+      <tr><td>Standalone JSON chosen by Save As</td><td>Never mutates the robot project automatically.</td><td>User must copy it into deploy resources and can deploy a stale file.</td><td>Always offer as an export option.</td></tr>
+      <tr><td>Compact binary</td><td>Smaller and faster to parse.</td><td>Harder to inspect/debug; new binary contract and tooling burden.</td><td>Only after profiling proves JSON startup cost or size is a problem.</td></tr>
+      <tr><td>LabVIEW <code>.bdx</code> command records</td><td>Potential compatibility with the rebuilt LabVIEW application.</td><td>Records contain LabVIEW Path and Variant data; neither represents Java factories, and the repository intentionally does not write them.</td><td>Do not use for Java commands.</td></tr>
+      <tr><td>PathPlanner/Choreo conversion</td><td>Could reuse an installed Java runtime and existing event system.</td><td>Feature and timing semantics may not map losslessly; parameterized commands still need an adapter.</td><td>Optional exporter/adapter, verified independently.</td></tr>
+    </tbody>
+  </table></div>
+  <p>Write deploy artifacts atomically and show the exact destination before overwriting. Include trajectory schema, command schema, catalog ID/hash, planner ID, sample period, and path ID. Load and validate once during robot initialization; WPILib cautions against filesystem reads in periodic methods. <a href="https://docs.wpilib.org/en/2022/docs/software/advanced-gradlerio/deploy-git-data.html">WPILib deploy-file usage guidance</a></p>
+
+  <h2>Recommended rollout</h2>
+  <h3>Phase 0 — app-side discovery and model</h3>
+  <ol>
+    <li>Define shared catalog, recursive custom-type schema, and marker invocation types with strict resource ceilings and additive validation.</li>
+    <li>Build a read-only Electron Java-project scanner with fixture projects covering command classes, factory methods, records, enums, collections, custom constructor shapes, comments/strings, malformed sources, symlinks, and resource limits.</li>
+    <li>Expose only link and refresh operations through preload IPC; keep paths and filesystem traversal out of the renderer.</li>
+  </ol>
+  <h3>Phase 1 — command and parameter authoring UX</h3>
+  <ol>
+    <li>Add optional <code>Marker.invocation</code> and catalog-link metadata to shared Bordeaux types, normalization, validation, cloning, reversal/insertion behavior, and project serialization. Leave existing <code>cmd</code> and LabVIEW paths additive and unchanged.</li>
+    <li>Add Electron main/preload methods to link and rescan a chosen robot project. Persist only a bookmark/fingerprint needed for recents. Do not expose arbitrary filesystem access to the renderer.</li>
+    <li>Replace the hardcoded command select with catalog-backed controls, nested custom-parameter editors, clear empty/loading/error/stale states, and an “unresolved legacy command” state.</li>
+    <li>Persist JSON-compatible arguments and surface unresolved/opaque type warnings without blocking ordinary path editing.</li>
+  </ol>
+  <h3>Phase 2 — annotation, catalog, and bindings</h3>
+  <ol>
+    <li>Add <code>@BordeauxCommand</code>, <code>@BordeauxParam</code>, and an annotation processor for team-owned provider methods. Generate both the catalog and type-safe binder code from one declaration.</li>
+    <li>Use a provider-instance pattern so generated code binds real robot-owned subsystem instances without reflection or hardware construction in the editor.</li>
+    <li>Add a fixed Gradle task such as <code>bordeauxCatalog</code>. Bordeaux may run it only after the user trusts the linked project; otherwise it consumes the last generated catalog.</li>
+  </ol>
+  <h3>Phase 3 — native export and runtime</h3>
+  <ol>
+    <li>Export a dedicated versioned JSON document with exact units, stable event IDs, resolved event times, typed arguments, and the authoritative catalog hash. Keep this independent from LabVIEW <code>.bdx</code>.</li>
+    <li>Load and validate once during robot initialization. The runner polls from the robot loop and fires every unfired event whose timestamp is at or before the current elapsed time, so a late loop catches up without double-firing.</li>
+    <li>Let WPILib <code>CommandScheduler</code> own requirements and interruption. Track only commands explicitly marked <code>cancelOnPathEnd</code> for runner-owned cleanup.</li>
+  </ol>
+
+  <h2>Implementation progress — 2026-08-05</h2>
+  <div class="callout"><strong>The app-side discovery and authoring milestone is implemented and verified.</strong> Bordeaux can explicitly link or reopen a recent Gradle Java project, build a bounded data-only command/type catalog from source, search the catalog, attach a stable command ID plus schema-validated JSON-compatible arguments to a marker, and continue using the last successful catalog when refresh fails. The implementation review found no remaining blocking issue. <a href="https://thelab.wilsonzach.com/project/bordeaux/review/java-command-app-side-implementation-review">Read the implementation review</a>.</div>
+  <ul>
+    <li><strong>Complete:</strong> shared invocation/catalog types; additive validation and planner propagation; read-only streamed source discovery with depth, directory, entry, file, byte, type, command, and schema ceilings; main-process recent-project bookmarks; link/reopen/refresh IPC; searchable selection; recursive parameter controls; exact Java <code>long</code>, <code>BigInteger</code>, and <code>BigDecimal</code> editing; schema-aware JSON validation; explicit saved-argument reconciliation; stale last-known-good presentation; compatibility fixtures; and end-to-end Electron smoke coverage.</li>
+    <li><strong>In progress:</strong> Java 17 annotations and processor, generated provider bindings, canonical catalog hashing, bundled GradleRIO support installation, explicitly trusted and bounded Gradle catalog generation, authoritative invocation checks, deploy-directory JSON export, and the WPILib time-crossing runner.</li>
+    <li><strong>Contract gates:</strong> generated catalogs are authoritative only after strict bounded parsing and hash verification; export blocks unresolved/source-only commands; the robot rejects catalog mismatches before scheduling; app files never load robot classes; Gradle runs only after a native trust confirmation.</li>
+    <li><strong>Still deferred:</strong> whole-disk discovery, arbitrary Gradle tasks, automatic provider/RobotContainer wiring, robot deployment, position/condition triggers, PathPlanner, and Choreo.</li>
+  </ul>
+
+  <h2>Files and systems likely involved</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Area</th><th>Likely changes</th></tr></thead>
+    <tbody>
+      <tr><td>Shared model</td><td><code>src/shared/types.ts</code>, normalization/defaults, project migration, validation, planner marker adapters, native export schema.</td></tr>
+      <tr><td>Electron</td><td><code>src/electron/main.ts</code>, <code>preload.ts</code>, and a focused Java-project/catalog module with path validation, bounded reads, subprocess control, and watcher cleanup.</td></tr>
+      <tr><td>Canonical UI</td><td>Legacy renderer inspector/app assets: linked-project state, catalog search, generated parameter fields, stale/error states, export destination and overwrite preview.</td></tr>
+      <tr><td>Java integration</td><td>A new isolated Gradle module or companion repository for schema models, registry, parser, event runner, optional WPILib adapter, annotations, processor, and fixtures.</td></tr>
+      <tr><td>Documentation</td><td>Team onboarding, registry/provider example, supported parameter types, scheduler conflicts, project trust, deploy workflow, and version compatibility matrix.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Risks and mitigations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Impact</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>Catalog/registry drift</td><td>Wrong or missing command during autonomous.</td><td>Hash the normalized catalog, embed the hash in the trajectory, validate every invocation before motion, and generate both sides from one declaration in phase 2.</td></tr>
+      <tr><td>Command interrupts path follower</td><td>Robot stops following or behaves unexpectedly.</td><td>Surface command requirements in documentation/optional catalog hints, rely on WPILib scheduler rules, test conflicts, and warn that drivetrain-requiring event commands can interrupt the follower.</td></tr>
+      <tr><td>Loop jitter skips an exact timestamp</td><td>Event never runs.</td><td>Use interval crossing and ordered catch-up, never timestamp equality.</td></tr>
+      <tr><td>Duplicate execution after restart/seek</td><td>Mechanism action runs twice.</td><td>Stable event IDs and a per-run fired set; define restart ownership explicitly.</td></tr>
+      <tr><td>Unsafe project discovery</td><td>Privacy, performance, or arbitrary code execution.</td><td>Explicit folder linking, bounded opt-in scans, data-only reads by default, and consent before a fixed Gradle task.</td></tr>
+      <tr><td>Parameter ambiguity</td><td>Units or values mean something different in editor and robot code.</td><td>Canonical units, bounded primitive schema, strict finite-number validation, defaults in one place, and golden round-trip fixtures.</td></tr>
+      <tr><td>Overloading LabVIEW compatibility</td><td>Breaks proven <code>.bdx</code> behavior.</td><td>Keep Java export separate and additive; leave LabVIEW command records empty until their own fixture-backed contract is independently recovered.</td></tr>
+      <tr><td>Runtime parsing affects loop timing</td><td>Robot loop overruns at autonomous start.</td><td>Read and validate deploy files once during initialization, cap counts/string sizes, and pre-sort events.</td></tr>
