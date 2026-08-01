@@ -88,3 +88,93 @@
   <!-- Plan meta: local-file chrome only — `lab publish` strips this whole section
        from the published body (The Lab renders its own header + metadata rail). The
        CLI fills the Version cell on publish (v1, v2, …). -->
+  <section class="plan-links">
+    <div class="tbl-scroll"><table class="data">
+      <tr><td>Project</td><td>bordeaux</td></tr>
+      <tr><td>Version</td><td id="thelab-version">v5</td></tr>
+      <tr><td>Status</td><td><span class="status st-active">active</span> · 2026-08-05</td></tr>
+    </table></div>
+  </section>
+
+  <p class="lede">Java command events are practical, but the safe Java equivalent of a LabVIEW VI reference is a stable command ID resolved by robot-owned factory code—not a serialized class, method, or object reference.</p>
+
+  <div class="callout"><strong>Approved direction, full scope now active.</strong> The app-first milestone is complete. The current implementation extends the same stable-command-ID and JSON invocation contract through annotated team-owned factories, a generated catalog and compile-time bindings, trusted catalog builds, native Java trajectory export, and a WPILib event runner. PathPlanner and Choreo remain out of scope because the native contract does not need either adapter.</div>
+
+  <h2>Feasibility and the important difference from LabVIEW</h2>
+  <p>Yes, the end-to-end behavior is possible in Java: discover callable robot actions, show them in Bordeaux, attach an action and parameters to a trajectory event, then execute it when the trajectory reaches that event. WPILib already provides the runtime half: commands are scheduled and run synchronously through <code>CommandScheduler</code>, which also arbitrates subsystem requirements and interruptions. The scheduler normally runs once per robot loop, commonly every 20 ms. <a href="https://docs.wpilib.org/en/stable/docs/software/commandbased/command-scheduler.html">WPILib command scheduler documentation</a></p>
+  <p>The part that does <em>not</em> transfer from LabVIEW is reference identity. A VI reference is meaningful to the LabVIEW application and runtime that opened it. A Java object, lambda, <code>Method</code>, or method handle is likewise meaningful only inside the JVM that created it; Bordeaux is an Electron process on the development computer and the robot is a different JVM on a different machine. Java serialization cannot turn that live reference into a safe cross-process capability, and a fully qualified class name does not solve constructor dependencies, subsystem ownership, or parameter meaning.</p>
+  <p>The cross-process contract should therefore be:</p>
+  <pre class="code">trajectory event = stable command ID + typed argument values + event time
+robot registry   = stable command ID -&gt; factory(arguments) -&gt; fresh WPILib Command
+robot scheduler  = schedule(command) when the event time is crossed</pre>
+  <p>This follows common command-based robot structure: commands often receive subsystem dependencies through constructors or factory methods, and subsystem requirements are enforced by the scheduler. <a href="https://docs.wpilib.org/en/stable/docs/software/commandbased/subsystems.html">WPILib subsystem documentation</a></p>
+
+  <h2>What Bordeaux has today</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Area</th><th>Current behavior</th><th>Implication</th></tr></thead>
+    <tbody>
+      <tr><td>Project model</td><td><code>Marker</code> stores fraction/distance, a name, optional free-form <code>cmd</code>, and a group label in <code>src/shared/types.ts</code>.</td><td>The new invocation can be additive; legacy strings can be migrated or preserved.</td></tr>
+      <tr><td>Planner output</td><td>All four planners resolve markers to an exported <code>timeS</code>.</td><td>The robot should use the exported time rather than recalculate marker timing.</td></tr>
+      <tr><td>Editor</td><td>The command dropdown is a hardcoded eight-item array in the canonical legacy renderer.</td><td>Replace the array with a catalog supplied through a narrow Electron IPC boundary.</td></tr>
+      <tr><td>Native JSON</td><td><code>buildBdxExport</code> already includes marker name, command string, group, time, and fraction.</td><td>A versioned invocation object fits naturally in a future JSON deploy artifact.</td></tr>
+      <tr><td>LabVIEW 4.4 binary</td><td>The writer emits zero commands; the strict reader rejects nonempty commands because their LabVIEW Path and Variant layouts are unproven.</td><td>Keep Java commands out of the LabVIEW command array. It encodes LabVIEW-specific values and is not a Java transport.</td></tr>
+      <tr><td>Desktop boundary</td><td>Filesystem work is already owned by Electron main/preload code.</td><td>Java project linking, catalog reads, and refresh tasks should remain outside the renderer sandbox.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Approved first milestone</h2>
+  <ul>
+    <li><strong>Project discovery:</strong> explicitly link a GradleRIO/Java project, scan bounded Java source roots automatically, retain session/recent project state, and refresh without executing robot code or Gradle tasks.</li>
+    <li><strong>Command discovery:</strong> recognize concrete WPILib command classes and command-returning factory methods, including constructors/factories with primitive, enum, collection, record, and custom Java parameters.</li>
+    <li><strong>Custom data types:</strong> preserve the Java type name and build nested schemas for records, enums, arrays/collections, maps, optionals, and discoverable constructor-shaped classes. Unknown types remain editable as validated JSON rather than being discarded.</li>
+    <li><strong>Authoring UX:</strong> replace the hardcoded command list with linked-project status, refresh/error states, searchable commands, nested parameter controls, defaults, and an explicit raw-JSON fallback for opaque custom types.</li>
+    <li><strong>Project persistence:</strong> store stable command IDs and JSON-compatible arguments on markers additively. Existing projects and LabVIEW binary output remain unchanged.</li>
+    <li><strong>Not in this milestone:</strong> robot execution, command scheduling, vendor dependency distribution, annotations supplied by Bordeaux, deploy-folder writes, PathPlanner/Choreo compatibility, and a final Java trajectory export contract.</li>
+  </ul>
+
+  <h2>Proposed three-plane architecture</h2>
+  <div class="fig-scroll">
+    <svg viewBox="0 0 940 430" role="img" aria-labelledby="arch-title arch-desc">
+      <title id="arch-title">Java command discovery, authoring, and runtime flow</title>
+      <desc id="arch-desc">A robot project produces a data-only catalog. Bordeaux uses it to author invocations and exports a trajectory. Robot runtime resolves the invocations through a registry and schedules WPILib commands.</desc>
+      <rect width="940" height="430" fill="#0d0d0d"/>
+      <g font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">
+        <text x="32" y="38" fill="#6b6b6b" font-size="12" letter-spacing="1.2">DISCOVERY / BUILD TIME</text>
+        <rect x="30" y="58" width="250" height="112" rx="6" fill="#111" stroke="#333"/>
+        <text x="50" y="88" fill="#ededed" font-size="16">Java robot project</text>
+        <text x="50" y="115" fill="#a1a1a1" font-size="13">command providers + subsystem wiring</text>
+        <text x="50" y="140" fill="#a1a1a1" font-size="13">Gradle task or annotation processor</text>
+        <path d="M280 114 H360" stroke="#4e9bfa" stroke-width="2" marker-end="url(#arrow)"/>
+        <rect x="360" y="58" width="230" height="112" rx="6" fill="#111" stroke="#333"/>
+        <text x="380" y="88" fill="#ededed" font-size="16">Command catalog</text>
+        <text x="380" y="115" fill="#a1a1a1" font-size="13">IDs, labels, parameter schemas</text>
+        <text x="380" y="140" fill="#a1a1a1" font-size="13">data only; no command instances</text>
+
+        <text x="32" y="226" fill="#6b6b6b" font-size="12" letter-spacing="1.2">AUTHORING / EXPORT</text>
+        <path d="M475 170 V244" stroke="#4e9bfa" stroke-width="2" marker-end="url(#arrow)"/>
+        <rect x="360" y="244" width="230" height="112" rx="6" fill="#111" stroke="#333"/>
+        <text x="380" y="274" fill="#ededed" font-size="16">Bordeaux</text>
+        <text x="380" y="301" fill="#a1a1a1" font-size="13">typed command picker + validation</text>
+        <text x="380" y="326" fill="#a1a1a1" font-size="13">marker resolves to trajectory time</text>
+        <path d="M590 300 H670" stroke="#4e9bfa" stroke-width="2" marker-end="url(#arrow)"/>
+        <rect x="670" y="244" width="240" height="112" rx="6" fill="#111" stroke="#333"/>
+        <text x="690" y="274" fill="#ededed" font-size="16">Deploy artifact</text>
+        <text x="690" y="301" fill="#a1a1a1" font-size="13">samples + timed invocations</text>
+        <text x="690" y="326" fill="#a1a1a1" font-size="13">catalog hash + schema versions</text>
+
+        <text x="632" y="38" fill="#6b6b6b" font-size="12" letter-spacing="1.2">ROBOT RUNTIME</text>
+        <path d="M790 244 V170" stroke="#4e9bfa" stroke-width="2" marker-end="url(#arrow)"/>
+        <rect x="650" y="58" width="260" height="112" rx="6" fill="#111" stroke="#333"/>
+        <text x="670" y="88" fill="#ededed" font-size="16">Registry + event runner</text>
+        <text x="670" y="115" fill="#a1a1a1" font-size="13">validate args → create Command</text>
+        <text x="670" y="140" fill="#a1a1a1" font-size="13">schedule once on the main loop</text>
+
+        <path d="M650 114 H590" stroke="#555" stroke-width="1.5" stroke-dasharray="5 5" marker-end="url(#arrow-muted)"/>
+        <text x="598" y="101" fill="#6b6b6b" font-size="11" text-anchor="middle">same IDs</text>
+      </g>
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#4e9bfa"/></marker>
+        <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#555"/></marker>
+      </defs>
+    </svg>
+  </div>
