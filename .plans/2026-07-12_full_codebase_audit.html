@@ -88,3 +88,93 @@
   <h1>Bordeaux Full Codebase Audit</h1>
 
   <!-- Plan meta: local-file chrome only — `lab publish` strips this whole section
+       from the published body (The Lab renders its own header + metadata rail). The
+       CLI fills the Version cell on publish (v1, v2, …). -->
+  <section class="plan-links">
+    <div class="tbl-scroll"><table class="data">
+      <tr><td>Project</td><td>bordeaux</td></tr>
+      <tr><td>Version</td><td id="thelab-version">v1</td></tr>
+      <tr><td>Status</td><td><span class="status st-active">active</span> · 2026-07-12</td></tr>
+    </table></div>
+  </section>
+
+  <p class="lede">The product has a strong visual foundation and useful trajectory math, but it is not ready to trust with project persistence or robot deployment: the shipped UI cannot save projects, autonomous routines are omitted from export, and malformed geometry can serialize invalid motion data.</p>
+
+  <div class="callout"><strong>Verdict: request changes before release.</strong> One critical workflow defect can lose all user work. Several high-impact correctness, deployment-contract, security, and accessibility issues affect exported robot behavior and core use. The recommended sequence is data integrity first, renderer consolidation second, then accessibility and production hardening.</div>
+
+  <h2>Scope and method</h2>
+  <p>Read-only audit of the current checkout at commit <code>1b8a127</code> on <code>main</code>, including the two pre-existing working-tree changes in <code>package.json</code> and <code>scripts/extract-standalone.mjs</code>. Inspected all TypeScript source, the generated legacy renderer, Electron IPC, trajectory planners, validation/export paths, package/build configuration, tests, and live runtime behavior at 1440×920.</p>
+  <ul>
+    <li>Static inspection: roughly 3,100 typed source/test lines plus the generated renderer and extraction pipeline.</li>
+    <li>Runtime inspection: Electron launch, DOM/accessibility tree, computed UI structure, and targeted data-corruption/trajectory probes.</li>
+    <li>Verification: tests, both TypeScript builds, build script, dependency audit, and working-tree/diff checks.</li>
+  </ul>
+
+  <h2>Executive findings</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Priority</th><th>Finding</th><th>Why it matters</th></tr></thead>
+    <tbody>
+      <tr><td>Critical</td><td>Persistence is disconnected</td><td>The shipped renderer never registers the native File-menu handlers. New, Open, Open Recent, Save, Save As, and menu Export silently do nothing; closing has no dirty-state protection.</td></tr>
+      <tr><td>High</td><td>“Deploy” has no routine contract</td><td>The Auto page labels a path-only <code>.bdx</code> export as Deploy; the edited routine is not present in the export schema at all.</td></tr>
+      <tr><td>High</td><td>Invalid motion data can be written</td><td>Unvalidated handles can produce <code>NaN</code>; JSON silently converts these values to <code>null</code>.</td></tr>
+      <tr><td>High</td><td>Safety diagnostics do not block export</td><td>The preview rejects high-severity curvature diagnostics, but IPC export bypasses preview and writes anyway.</td></tr>
+      <tr><td>High</td><td>Optimized marker times are wrong</td><td>A global duration scale is used after nonuniform retiming, moving event triggers away from their intended field positions.</td></tr>
+      <tr><td>High</td><td>Runtime and source have split</td><td>The typed React UI is not the UI Electron loads, so green types/tests do not establish shipped behavior.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Detailed findings</h2>
+
+  <h3>1. Project persistence is absent from the shipped UI — Critical</h3>
+  <p><strong>Evidence.</strong> <code>src/electron/main.ts:38</code> loads <code>public/legacy/index.html</code>. Menu actions send <code>menu-command</code> at <code>main.ts:67–74</code>, but only the unused typed renderer subscribes at <code>src/renderer/App.tsx:78–82, 169–187</code>. The legacy renderer only calls direct export at <code>public/legacy/assets/34f…js:349–361</code>. It contains no dirty state, <code>beforeunload</code>, open, or save integration.</p>
+  <p><strong>User impact.</strong> Users can spend a full session authoring paths and lose everything on close. Native menu commands appear valid and fail silently, which is worse than a visibly unavailable feature.</p>
+  <p><strong>Smallest fix.</strong> Pick the canonical renderer, wire New/Open/Save/Save As and dirty-close protection end to end, report success/failure in the UI, then add one Electron smoke test that performs the complete lifecycle.</p>
+
+  <h3>2. Auto “Deploy” has no contract for the routine being authored — High</h3>
+  <p><strong>Evidence.</strong> The shipped app initializes independent routine state at <code>34f…js:68</code> and edits/runs it at <code>303–335</code>. The Auto toolbar labels the same path-export action “Deploy” (<code>public/legacy/assets/796c…js:113–118</code>), but <code>BdxExport</code> has no routine field (<code>src/shared/types.ts:225–242</code>) and <code>buildBdxExport</code> returns only robot and paths (<code>src/shared/export/bdx.ts:45–62</code>). Routine path nodes also use numeric indices (<code>src/shared/types.ts:97–101</code>) that delete/duplicate operations do not repair (<code>34f…js:283–286</code>).</p>
+  <p><strong>User impact.</strong> The UI promises deployment from the routine workspace while producing a path-only artifact. Whether this is release-blocking depends on the intended downstream contract, but the current label and behavior are materially misleading. Structural path edits can also retarget routine steps.</p>
+  <p><strong>Smallest fix.</strong> Decide and test the contract: version/extend <code>.bdx</code> to include routines, emit a separate routine artifact, or relabel/remove “Deploy” if the feature is simulation-only. Independently, persist routine state in the project and replace index references with stable path IDs.</p>
+
+  <h3>3. Nested numeric corruption passes validation — High</h3>
+  <p><strong>Evidence.</strong> <code>src/shared/validation.ts:33–39</code> checks waypoint positions and only the presence of handles, not handle coordinates. It also omits headings, targets, markers, ranges, endpoint velocities, angular limits, schema version, and planner ID. A focused probe with a string handle coordinate returned <code>validationOk true</code>, generated 57 samples containing non-finite numbers, and produced 170 JSON <code>null</code> values.</p>
+  <p><strong>Smallest fix.</strong> Fully validate the serialized boundary, with <code>Number.isFinite</code> for every numeric field and bounds/enums where applicable. After planning, reject any non-finite sample or summary field before writing.</p>
+
+  <h3>4. Export bypasses its own blocking diagnostics — High</h3>
+  <p><strong>Evidence.</strong> <code>previewBdxExport</code> incorporates path diagnostics and sets <code>ok:false</code> for high-severity issues (<code>src/shared/export/bdx.ts:65–91</code>). IPC export calls <code>buildBdxExport</code> directly (<code>src/electron/main.ts:138–150</code>), which returns diagnostic errors but does not block them. A verified tight-turn probe produced radius ≈0.12 m: preview rejected it while build returned export data.</p>
+  <p><strong>Smallest fix.</strong> Centralize one export policy used by preview and write. Block errors by default; if overrides are a product requirement, require explicit informed confirmation and preserve the diagnostic in the file.</p>
+
+  <h3>5. Optimized event-marker timing is mathematically wrong — High</h3>
+  <p><strong>Evidence.</strong> Samples are retimed segment by segment in <code>src/shared/planners/optimizedTrajectory.ts:13–43</code>, then all marker times are multiplied by one total-duration ratio at <code>138–146</code>. A localized-stop probe measured an exported marker time of 2.0414 s versus 2.1724 s interpolated from final samples: a 0.1310 s error.</p>
+  <p><strong>Smallest fix.</strong> Interpolate each marker fraction against the final sample <code>f/t</code> curve. Add tests with slowdowns and stops on both sides of multiple markers.</p>
+
+  <h3>6. Two renderers create a false verification boundary — High</h3>
+  <p><strong>Evidence.</strong> Electron loads generated legacy assets, while <code>src/renderer/main.tsx</code> is the source TypeScript checks. <code>npm run build</code> only runs the Electron TypeScript compiler. The legacy app is regenerated through a large exact-string patch script, and shipped React/ReactDOM are development builds.</p>
+  <p><strong>Impact.</strong> UI fixes, types, and tests can all be correct for code users never run. Generated files are expensive to review and easy to drift.</p>
+  <p><strong>Smallest fix.</strong> Prefer migrating the current UX into the typed renderer. Acceptance criteria: one renderer entrypoint; one production build artifact; Electron loads that exact artifact; shipped assets contain no development React; and one smoke test exercises launch plus persistence/export. If legacy must remain temporarily, declare it canonical, lint/test it directly, and assert its generation stamp during build.</p>
+
+  <h3>7. Electron privileges exceed renderer trust — High</h3>
+  <p><strong>Evidence.</strong> The preload accepts arbitrary open/save/export/reveal paths (<code>src/electron/preload.ts:4–10</code>); main consumes them without sender/origin checks (<code>main.ts:120–155</code>). Chromium sandboxing is disabled at <code>main.ts:32</code>. The loaded document has no CSP or navigation/window-open denial. <code>npm audit --omit=dev</code> reports Electron 37.10.3 as a high-severity vulnerable production package. The shipped UI does not currently pass arbitrary output paths, so arbitrary file overwrite requires a compromised renderer; this is a privileged-boundary risk, not a demonstrated exploit.</p>
+  <p><strong>Smallest fix.</strong> Upgrade to a patched Electron release, enable sandboxing, add a restrictive CSP and navigation policies, validate IPC sender/frame, and keep current file paths in main. Expose intent-based calls such as <code>saveCurrent</code> rather than general path-bearing filesystem calls.</p>
+
+  <h3>8. Unknown JSON can crash validation; save is not a safe boundary — Medium</h3>
+  <p><strong>Evidence.</strong> <code>validateProject</code> reports a non-array <code>paths</code> field, then still calls <code>forEach</code> at <code>src/shared/validation.ts:18,27</code>. Null path entries and string waypoint containers also throw. Save does not validate and truncates the destination directly at <code>src/electron/main.ts:122–135</code>.</p>
+  <p><strong>Smallest fix.</strong> Treat these as two acceptance tracks: (a) guarantee <code>validateProject(unknown)</code> never throws, reject unsupported schema/planner values, and reuse it at open/save/export; (b) serialize saves per target and write a sibling temporary file followed by atomic rename.</p>
+
+  <h3>9. Accessibility semantics block keyboard and assistive-tech users — Major / High</h3>
+  <p><strong>WCAG.</strong> 1.3.1 Info and Relationships, 2.1.1 Keyboard, 4.1.2 Name/Role/Value.</p>
+  <p><strong>Evidence.</strong> Live Chromium accessibility inspection found 50 exposed controls, 11 without accessible names, seven clickable <code>div</code> elements outside native keyboard behavior, zero <code>main</code>/<code>nav</code> landmarks, and no <code>aria-label</code> attributes on 35 buttons. Field geometry is an SVG/pointer workflow without an equivalent structured editor path for all operations. Outline disclosures use button roles without normal tab/Enter/Space behavior, numeric controls are visually but not programmatically labeled, and many controls define hover styles while inputs/ranges suppress the native outline without a strong <code>:focus-visible</code> replacement.</p>
+  <p><strong>Smallest fix.</strong> Use native buttons for clickable rows, programmatically label all fields/icon controls/sliders, expose selected/expanded states, add landmarks and logical headings, ensure every canvas action has a keyboard route, and add one global high-contrast focus-visible treatment. Then test with keyboard plus VoiceOver/NVDA. Automated checks are a floor, not the completion criterion.</p>
+
+  <h3>10. Low-contrast tokens weaken readability — Major / Medium</h3>
+  <p><strong>WCAG.</strong> 1.4.3 Contrast (Minimum).</p>
+  <p><strong>Evidence.</strong> <code>--txt-3: #5f656e</code> is used for 9.5–12px labels on <code>#0b0c0e</code>/<code>#16181b</code>, measuring roughly 3.1–3.35:1. The default blue active text measures about 3.7–3.95:1 on common dark surfaces. Normal text requires 4.5:1.</p>
+  <p><strong>Smallest fix.</strong> Raise muted and active text tokens, separate decorative from textual accent usage, and run contrast checks across slate, forest, amber, cyan, and violet themes.</p>
+
+  <h3>11. Destructive flows lack recovery — Medium</h3>
+  <p><strong>Evidence.</strong> Path deletion at <code>34f…js:285</code> is immediate, has no confirmation, and sits outside the per-path undo stack. Routine-step deletion is likewise direct.</p>
+  <p><strong>Smallest fix.</strong> Make deletion undoable at project scope or confirm high-value path/branch removals, and verify selection/reference state after undo.</p>
+
+  <h3>12. Green checks do not cover the product boundary — Medium</h3>
+  <p><strong>Evidence.</strong> All 13 tests are in <code>tests/bdx.test.ts</code>. The only shipped-renderer check asserts string fragments in a generated bundle. There are no IPC, startup, open/save/export failure, routine deployment, unsaved-close, packaged-app, accessibility, or malformed-file tests; no CI config or lint command exists.</p>
+  <p><strong>Smallest fix.</strong> First add regression tests for findings 2–5 and malformed validation. Then add one Electron smoke suite for launch → edit → save → reopen → export → close, and run test/typecheck/build/audit in minimal CI.</p>
+
