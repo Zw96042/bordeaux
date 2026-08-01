@@ -358,3 +358,89 @@ eventRunner.advance(previousElapsedS, currentElapsedS, bordeaux, Command::schedu
       <tr><td>Parameter ambiguity</td><td>Units or values mean something different in editor and robot code.</td><td>Canonical units, bounded primitive schema, strict finite-number validation, defaults in one place, and golden round-trip fixtures.</td></tr>
       <tr><td>Overloading LabVIEW compatibility</td><td>Breaks proven <code>.bdx</code> behavior.</td><td>Keep Java export separate and additive; leave LabVIEW command records empty until their own fixture-backed contract is independently recovered.</td></tr>
       <tr><td>Runtime parsing affects loop timing</td><td>Robot loop overruns at autonomous start.</td><td>Read and validate deploy files once during initialization, cap counts/string sizes, and pre-sort events.</td></tr>
+      <tr><td>Build/toolchain incompatibility</td><td>Catalog refresh fails on some team projects.</td><td>Keep a manual catalog escape hatch, use the project's Gradle wrapper, isolate errors, retain last-known-good catalog with an obvious stale badge, and never silently replace it.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification plan</h2>
+  <ul>
+    <li><strong>Schema:</strong> golden catalog and trajectory fixtures validate in TypeScript and Java; unknown versions, duplicate IDs, nonfinite numbers, invalid enums, oversized input, and missing fields fail identically.</li>
+    <li><strong>Migration:</strong> projects without catalogs or invocations load unchanged; legacy marker strings remain visible; every existing planner still produces the same geometry and timing.</li>
+    <li><strong>Planner/export:</strong> authored fraction/distance markers resolve to the expected exported time for all planners, including waits and stationary turns; Java events do not alter LabVIEW binary bytes.</li>
+    <li><strong>Runtime:</strong> time-zero, same-time, skipped-tick, out-of-order-file, restart, interruption, path-end cancellation, unknown command, invalid argument, and catalog-hash mismatch tests.</li>
+    <li><strong>WPILib integration:</strong> a fake subsystem verifies normal scheduling, requirement conflicts, interruption behavior, command completion, and fresh factory instances.</li>
+    <li><strong>Desktop security:</strong> symlink/path traversal, oversized manifest, malformed UTF-8/JSON, canceled Gradle task, timeout, watcher disposal, moved project, and untrusted-project behavior.</li>
+    <li><strong>End to end:</strong> a sample GradleRIO project generates a catalog, Bordeaux authors a parameterized event, deploy JSON is copied to the standard deploy directory, and a desktop robot simulation schedules the expected command once with the exact arguments.</li>
+    <li><strong>Bordeaux gates:</strong> run focused marker/schema tests during development, then the repository-required <code>npm test</code>, <code>npm run typecheck</code>, <code>npm run build</code>, and Electron smoke test before shipping.</li>
+  </ul>
+
+  <h2>Acceptance criteria</h2>
+  <ul>
+    <li>A team can link one Java robot project without Bordeaux scanning the entire computer or loading robot classes.</li>
+    <li>The command picker is populated from that project's catalog and supports at least booleans, bounded numbers/integers, enums, and strings with defaults.</li>
+    <li>Every Java export either resolves all invocations against the exact catalog hash or is blocked with actionable errors.</li>
+    <li>The robot loads and validates the deploy artifact before starting motion, constructs fresh commands through team-owned factories, and schedules every crossed event exactly once.</li>
+    <li>Subsystem conflicts follow documented WPILib behavior and never masquerade as Bordeaux group semantics.</li>
+    <li>Projects with no Java integration behave exactly as they do now, and LabVIEW-compatible planners/export remain unchanged.</li>
+  </ul>
+
+  <h2>Decisions still worth making</h2>
+  <ul>
+    <li><strong>Discovery confidence:</strong> decide which source patterns count as confirmed commands versus suggestions that require user confirmation.</li>
+    <li><strong>Opaque custom values:</strong> decide whether raw JSON is sufficient for the first UI or whether teams need an app-side custom schema supplement immediately.</li>
+    <li><strong>Local project persistence:</strong> decide whether linked robot-project bookmarks belong in app preferences, a portable relative hint inside Bordeaux projects, or both.</li>
+  </ul>
+</article>
+</main>
+<script>
+(() => {
+  const options = [
+    { id: 'registry-manifest', label: 'Explicit registry + catalog', correct: 5, params: 5, safe: 5, friction: 3, maintain: 4 },
+    { id: 'annotations', label: 'Annotations + processor', correct: 5, params: 5, safe: 5, friction: 2, maintain: 5 },
+    { id: 'manual-manifest', label: 'Manual manifest', correct: 4, params: 5, safe: 5, friction: 4, maintain: 2 },
+    { id: 'source-scan', label: 'Static source scan', correct: 2, params: 2, safe: 5, friction: 5, maintain: 2 },
+    { id: 'bytecode', label: 'Bytecode scan', correct: 3, params: 2, safe: 4, friction: 3, maintain: 2 },
+    { id: 'reflection', label: 'Reflection / helper JVM', correct: 4, params: 4, safe: 1, friction: 2, maintain: 2 },
+    { id: 'pathplanner', label: 'PathPlanner adapter', correct: 4, params: 2, safe: 5, friction: 4, maintain: 3 }
+  ];
+  const sliders = Array.from(document.querySelectorAll('[data-weight]'));
+  const body = document.getElementById('rank-body');
+  const note = document.getElementById('copy-note');
+  let current = null;
+
+  function render() {
+    const weights = Object.fromEntries(sliders.map((input) => [input.dataset.weight, Number(input.value)]));
+    sliders.forEach((input) => { input.nextElementSibling.value = input.value; });
+    const max = Object.values(weights).reduce((sum, weight) => sum + weight * 5, 0) || 1;
+    const ranked = options.map((option) => {
+      const raw = Object.entries(weights).reduce((sum, [key, weight]) => sum + option[key] * weight, 0);
+      return { id: option.id, label: option.label, score: Math.round(raw / max * 100) };
+    }).sort((a, b) => b.score - a.score || a.label.localeCompare(b.label));
+    body.replaceChildren(...ranked.map((item, index) => {
+      const row = document.createElement('tr');
+      if (index === 0) row.className = 'rank-1';
+      const name = document.createElement('td');
+      const score = document.createElement('td');
+      name.textContent = item.label;
+      score.className = 'score';
+      score.textContent = item.score + ' / 100';
+      row.append(name, score);
+      return row;
+    }));
+    current = { weights, recommendation: ranked[0], ranking: ranked };
+  }
+
+  sliders.forEach((input) => input.addEventListener('input', render));
+  document.getElementById('copy-decision').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(current, null, 2));
+      note.textContent = 'Copied.';
+    } catch {
+      note.textContent = 'Clipboard access was unavailable; open this local file in a browser that permits clipboard writes.';
+    }
+  });
+  render();
+})();
+</script>
+</body>
+</html>
