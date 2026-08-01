@@ -88,3 +88,40 @@
 
   <h2>Result</h2>
   <div class="callout"><strong>Pass.</strong> The final independent Codex pass found no remaining blocking correctness or safety issues. MCP access remains disabled by default, no MCP tool can apply or persist a project change, and a proposal is not reported ready until the renderer acknowledges its preview.</div>
+
+  <h2>Review findings resolved</h2>
+  <ul>
+    <li>Added session ID plus revision checks, renderer receipt acknowledgement, reload/close invalidation, and a single-ready-proposal invariant.</li>
+    <li>Made team vocabulary collisions with official terms ambiguous; rejected out-of-field raw and robot-relative coordinates instead of clamping intent.</li>
+    <li>Added footprint-aware HUB, field-boundary, alliance-barrier, TRENCH, and BUMP checks, including approach clipping, portal width, TRENCH height, and BUMP speed ranges.</li>
+    <li>Changed source attribution to monotonic waypoint-arrival mapping and activated waypoint-local limits from measured waypoint distances.</li>
+    <li>Required an authoritative, runtime-ready, uniquely tagged or project-bound Java action before authoring an endpoint event.</li>
+    <li>Made recommendation text report the actual bounded candidate set and exact time/clearance/curvature/rotation/waypoint tie-break.</li>
+  </ul>
+
+  <h2>Residual boundaries</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Boundary</th><th>Treatment</th></tr></thead>
+    <tbody>
+      <tr><td>Optimization</td><td>The recommendation is the best result under the documented near-tie policy among the bounded generated candidates, not a proof of global optimality.</td></tr>
+      <tr><td>Game legality</td><td>The field pack checks modeled static geometry and typed traversals; it does not adjudicate opponents, live FMS state, or match rules.</td></tr>
+      <tr><td>Imported .bdx</td><td>Editor-only strategy names and action bindings are preserved in Bordeaux projects but cannot be reconstructed from flattened LabVIEW files.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li><code>npm test</code> — 18 files and 226 tests passed.</li>
+    <li><code>npm run typecheck</code> — renderer/shared types and Electron CommonJS build passed.</li>
+    <li><code>npm run build</code> — canonical static renderer, Java artifacts, and Electron build passed.</li>
+    <li><code>npm run test:java</code> — Java annotation, processor, runtime, and Gradle plugin tests passed.</li>
+    <li><code>env -u ELECTRON_RUN_AS_NODE npm run test:smoke</code> — real Electron launch returned <code>BORDEAUX_SMOKE_OK</code>.</li>
+    <li><code>git diff --check</code> — no whitespace errors.</li>
+  </ul>
+
+  <h2>Open questions</h2>
+  <p>None blocking this implementation. No commit or deployment was created as part of the review.</p>
+</article>
+</main>
+</body>
+</html>
