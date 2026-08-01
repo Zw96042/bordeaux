@@ -268,3 +268,93 @@ type PathProposal = {
       <tr><td>5 · Actions + hardening</td><td>Add optional strategy overlay and Java command semantic tags, unresolved-action flow, MCP cancellation/limits/audit log, packaging, docs, and end-to-end smoke coverage.</td><td>“Shoot” binds only to an authoritative tagged command; installed macOS/Windows builds expose copyable client config and pass security/lifecycle tests.</td></tr>
     </tbody>
   </table></div>
+
+  <h3>Likely files</h3>
+  <ul>
+    <li><code>src/shared/types.ts</code>, <code>src/shared/validation.ts</code>, <code>src/shared/project/{fileFormat,normalize,defaults}.ts</code> — additive contracts and project-owned strategy metadata.</li>
+    <li><code>src/shared/field/*</code>, <code>src/shared/route/*</code>, <code>src/shared/session/*</code> — new deterministic domain layers with no Electron dependency.</li>
+    <li><code>src/electron/{main,preload}.ts</code> plus focused session-service files — lifecycle, authenticated private IPC, renderer request routing.</li>
+    <li><code>src/mcp/*</code>, build scripts, Electron startup branch, and electron-builder file list — stdio adapter and packaging.</li>
+    <li>The canonical <code>public/legacy</code> renderer source bundle and <code>scripts/verify-legacy-renderer.mjs</code> — proposal UI, overlay, revision bridge, and regression assertions.</li>
+    <li><code>java/annotations</code>, <code>java/processor</code>, generated-catalog readers/types, and Java tests — optional action semantics in phase 5.</li>
+  </ul>
+
+  <h2>Acceptance scenario</h2>
+  <ol>
+    <li>Bordeaux is open on a blue-alliance project with a linked robot catalog and a team strategy overlay defining <code>safe-shot</code> and a <code>shoot-fuel</code> command.</li>
+    <li>The user asks an agent: “Start under our scoring-table-side trench, go to the far side of the neutral zone through the trench, come back to the safe shot, and shoot in the fastest safe way.”</li>
+    <li>The agent reads the session and field resources. All field terms resolve unambiguously; the action resolves to one authoritative command.</li>
+    <li><code>plan_path</code> returns up to three candidates with exact ETA, distance, minimum clearance, traversal, diagnostics, and recommendation reason. No project data changes yet.</li>
+    <li>Bordeaux shows the recommended dashed overlay and alternatives. The user can switch candidates and inspect the event location and arguments.</li>
+    <li>The user clicks Apply. Bordeaux creates/selects one uniquely named path, adds the typed shoot marker, records one undo step, marks the project dirty, and updates the MCP proposal status to <code>applied</code>.</li>
+    <li>Undo restores the prior project. Save/export continue through the existing app controls.</li>
+  </ol>
+  <p>A second acceptance flow starts from a pre-made path: “Analyze this path's raw values and fix the acceleration spike near the back of the bot after it clears the TRENCH.” Bordeaux resolves “back” from the physical sample heading, reports the measured spike and its authored source, stages only candidates that improve that finding without worse checks, and waits for Apply.</p>
+
+  <h2>Risks &amp; mitigations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>Agent overwrites concurrent user edits</td><td>high without a contract</td><td>Renderer-owned revision, proposal base revision, immediate stale invalidation, no force apply.</td></tr>
+      <tr><td>Wrong interpretation of “our,” “far,” or “the trench”</td><td>medium</td><td>Alliance/start context is required; resolver returns ranked ambiguity; agent prompt requires clarification before planning.</td></tr>
+      <tr><td>Shortest route collides or is dynamically poor</td><td>medium</td><td>Inflated obstacle geometry, typed traversals, collision sampling, actual planner timing, clearance/curvature tie-breakers.</td></tr>
+      <tr><td>“Shoot” invokes the wrong robot behavior</td><td>medium</td><td>Explicit semantic capability tags plus project binding; exact single match required; otherwise unresolved warning and no marker.</td></tr>
+      <tr><td>Local MCP endpoint is abused</td><td>low after controls</td><td>Disabled by default, stdio adapter, owner-private socket/pipe, per-launch nonce, bounded schemas, no v1 file/export tools.</td></tr>
+      <tr><td>Renderer and shared planner disagree</td><td>existing boundary</td><td>Score with shared TypeScript planner; keep the renderer's approximation disclosure; regression-test preview metrics and geometry against shared fixtures.</td></tr>
+      <tr><td>Game manual changes during the season</td><td>medium</td><td>Versioned field pack with source date/checksum; update through reviewed fixtures; never fetch or reinterpret rules during a tool call.</td></tr>
+      <tr><td>Route search becomes a large optimizer project</td><td>medium</td><td>Bounded graph over named portals/lanes and topological alternatives; no general nonlinear optimizer in v1; ship vertical slices.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li><strong>Session unit/integration:</strong> revision increments, request timeouts, renderer reload, no active project, malformed response, stale proposal, Apply/Reject/Expire, undo, dirty state, unique path naming, active-path selection.</li>
+    <li><strong>Field fixtures:</strong> coordinate transforms are involutive; red/blue landmarks mirror correctly; official named geometry aligns with calibrated renderer fixtures; TRENCH portals and obstacle polygons stay inside the field.</li>
+    <li><strong>Resolver goldens:</strong> official capitalization and common phrases; our/their; scoring-table/non-scoring-table; near/far with and without start context; front/back/left/right at fixed, moving, and <code>driveBackward</code> poses; expected ambiguity cases.</li>
+    <li><strong>Analysis/repair:</strong> bounded raw samples, extrema/source attribution, neutral slowdown versus measured violation, exact finding IDs, targeted candidate improvement, no worse checks, preservation of markers/actions/ranges, stale imported projects, and no silent clamping.</li>
+    <li><strong>Route engine:</strong> straight, TRENCH, BUMP, out-and-back, blocked, tank versus swerve, robot too large for a portal, minimum clearance, cancellation, bounded candidate count, determinism, and no regression to existing planner IDs.</li>
+    <li><strong>MCP protocol:</strong> list/read resources, list/call tools, structured outputs, annotations, cancellation, oversized inputs, app unavailable, access disabled, stale runtime descriptor, multiple clients, app shutdown, and no stdout logging corruption.</li>
+    <li><strong>Java semantics:</strong> optional annotation fields generate deterministic catalogs/hashes; old annotations remain valid; ambiguous and missing capabilities never create an invocation.</li>
+    <li><strong>End to end:</strong> temporary userData app instance + stdio client stages the acceptance scenario, app test clicks Apply, session reports applied revision, undo restores the fixture, and save remains user-controlled.</li>
+  </ul>
+  <pre class="code">npm test
+npm run typecheck
+npm run build
+env -u ELECTRON_RUN_AS_NODE npm run test:smoke</pre>
+  <p>Before compatibility-sensitive edits, also run the focused geometry, reader, and LabVIEW compatibility tests required by <code>AGENTS.md</code>. Add an installed-package MCP smoke test on macOS and Windows CI before advertising the feature.</p>
+
+  <h2>Non-goals for the first release</h2>
+  <ul>
+    <li>Parsing the game manual at runtime, relying on an external LLM/API inside Bordeaux, or treating manual prose as exact CAD.</li>
+    <li>Opponent prediction, multi-robot collision avoidance, live FMS data, game-rule adjudication, or claiming a globally optimal strategy.</li>
+    <li>Autonomous save/export/deploy, Gradle execution, arbitrary robot command inference, or direct mutation without an in-app preview.</li>
+    <li>Changing the geometry or timing behavior of existing planners to make route generation easier.</li>
+  </ul>
+
+  <h2>Recommendation summary</h2>
+  <p>Build this as an app-backed authoring protocol, not a file-writing MCP server. Deliver coordinate-defined proposals first, then official 2026 vocabulary, then bounded route optimization, then team action semantics. That sequence creates a useful vertical slice early while preserving Bordeaux's file contracts, planner behavior, renderer ownership, and human review.</p>
+</article>
+</main>
+<script>
+  (function () {
+    const clearance = document.getElementById('clearance');
+    const tieWindow = document.getElementById('tie-window');
+    const candidateCap = document.getElementById('candidate-cap');
+    const traversal = document.getElementById('traversal');
+    const json = document.getElementById('policy-json');
+    const copyStatus = document.getElementById('copy-status');
+    function policy() {
+      return {
+        minimumClearanceM: Number(clearance.value),
+        nearTieWindowS: Number(tieWindow.value),
+        maximumCandidates: Number(candidateCap.value),
+        unspecifiedTraversal: traversal.value
+      };
+    }
+    function render() {
+      document.getElementById('clearance-out').textContent = Number(clearance.value).toFixed(2) + ' m';
+      document.getElementById('tie-window-out').textContent = Number(tieWindow.value).toFixed(2) + ' s';
+      document.getElementById('candidate-cap-out').textContent = candidateCap.value;
+      json.textContent = JSON.stringify(policy(), null, 2);
+      copyStatus.textContent = 'Safety and validity remain hard constraints.';
+    }
