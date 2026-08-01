@@ -358,3 +358,17 @@ env -u ELECTRON_RUN_AS_NODE npm run test:smoke</pre>
       json.textContent = JSON.stringify(policy(), null, 2);
       copyStatus.textContent = 'Safety and validity remain hard constraints.';
     }
+    [clearance, tieWindow, candidateCap, traversal].forEach(function (control) { control.addEventListener('input', render); });
+    document.getElementById('copy-policy').addEventListener('click', async function () {
+      try {
+        await navigator.clipboard.writeText(JSON.stringify(policy(), null, 2));
+        copyStatus.textContent = 'Copied route policy JSON.';
+      } catch (_) {
+        copyStatus.textContent = 'Clipboard unavailable; copy the JSON block above.';
+      }
+    });
+    render();
+  })();
+</script>
+</body>
+</html>
