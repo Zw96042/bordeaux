@@ -88,3 +88,93 @@
   .scores tr:first-child td { color: #ededed; }
   .model-actions { display: flex; gap: 8px; margin-top: 16px; }
   .model button { border: 1px solid #333; background: #111; color: #ededed; border-radius: 5px; padding: 7px 11px; cursor: pointer; }
+  .model button:hover { border-color: #555; }
+  .flow { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; align-items: stretch; margin: 18px 0; }
+  .flow div { border-block: 1px solid #222; padding: 14px 12px; }
+  .flow b { display: block; color: #ededed; font-size: 12.5px; margin-bottom: 3px; }
+  .flow span { color: #6b6b6b; font-size: 12px; }
+  .flow i { align-self: center; color: #4e9bfa; font-style: normal; padding: 0 8px; }
+  .phase { display: grid; grid-template-columns: 82px 1fr; border-top: 1px solid #222; padding: 14px 0; }
+  .phase:last-child { border-bottom: 1px solid #222; }
+  .phase > strong { font: 11px ui-monospace, Menlo, monospace; text-transform: uppercase; letter-spacing: .07em; }
+  .phase p { margin: 0; }
+  @media (max-width: 660px) {
+    .weights { grid-template-columns: 1fr; }
+    .flow { grid-template-columns: 1fr; }
+    .flow i { transform: rotate(90deg); justify-self: center; }
+  }
+</style>
+</head>
+<body>
+<main class="wrap">
+<article>
+  <h1>Editing Overlapping Visits in One Path</h1>
+
+  <!-- Plan meta: local-file chrome only — `lab publish` strips this whole section
+       from the published body (The Lab renders its own header + metadata rail). The
+       CLI fills the Version cell on publish (v1, v2, …). -->
+  <section class="plan-links">
+    <div class="tbl-scroll"><table class="data">
+      <tr><td>Project</td><td>bordeaux</td></tr>
+      <tr><td>Version</td><td id="thelab-version">v4</td></tr>
+      <tr><td>Status</td><td><span class="status st-active">active</span> · 2026-08-04</td></tr>
+    </table></div>
+  </section>
+
+  <p class="lede">Make overlapping passes selectable as distinct ordered visits, then keep every edit latched to the chosen visit without moving the authored geometry.</p>
+
+  <h2>Context</h2>
+  <p>A single Bordeaux path can cross the same field location several times. Those strokes may be visually identical while representing different segments, distances, times, headings, velocities, constraints, targets, or markers.</p>
+  <p>The current editor collapses that distinction in two places: SVG hit paths resolve by paint order, and <code>nearestFraction</code> returns one globally nearest sample. The result is unpredictable selection, constraint endpoints that can jump between passes, and coincident handles that steal pointer input from one another.</p>
+  <div class="callout"><strong>Constraint:</strong> this must work inside one ordered path. The primary workflow cannot require duplicate paths, permanent visual offsets, or a persisted layer taxonomy.</div>
+
+  <h2>Recommendation</h2>
+  <p>Implement <strong>visit-aware focus with conflict cycling</strong>. A visit is one occurrence of the trajectory at a field location, identified by ordered path distance and segment-local position. The pointer resolver returns every nearby visit, the user focuses one when there is a conflict, and drag operations remain latched to it.</p>
+  <div class="flow" aria-label="Recommended interaction flow">
+    <div><b>Resolve</b><span>Find every nearby visit, not one global nearest point.</span></div><i>→</i>
+    <div><b>Focus</b><span>Select one visit; cycle only when the location is ambiguous.</span></div><i>→</i>
+    <div><b>Latch</b><span>Keep constraints, markers, targets, and handles on that visit.</span></div>
+  </div>
+  <p>Simple paths retain the current one-click workflow. Only an actual overlap introduces a compact <code>1 of N visits</code> affordance, keyboard cycling, and muted competing hit areas.</p>
+
+  <h3>Interaction contract</h3>
+  <ul>
+    <li>Clicking an unambiguous stroke behaves exactly as it does now.</li>
+    <li>At a conflict, the closest visit is focused; repeated click, <code>[</code>/<code>]</code>, or previous/next controls cycle deterministically.</li>
+    <li>The focused visit uses the normal accent. Coincident alternatives stay visible, become pointer-inert, and never change overlay color semantics.</li>
+    <li>Selecting a segment, waypoint, constraint, target, or marker in the outline restores its visit focus on the field.</li>
+    <li><code>Escape</code> clears focus. Focus is transient editor state and is not serialized or exported to <code>.bdx</code>.</li>
+  </ul>
+
+  <h2>Options compared</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Model</th><th>Strength</th><th>Why it is not the primary model</th></tr></thead>
+    <tbody>
+      <tr><td>Repeated-click cycling</td><td>Small and compact</td><td>Hard to confirm, and it does not stop range drags from jumping after pointer-down.</td></tr>
+      <tr><td>Exploded visits</td><td>Every pass is visible</td><td>Distorts clearances and makes handle coordinates visually dishonest. Keep as a read-only inspection mode.</td></tr>
+      <tr><td>Manual layers</td><td>Useful organization</td><td>Adds maintenance work and still does not solve self-overlap inside one segment.</td></tr>
+      <tr><td>Timeline first</td><td>Completely unambiguous</td><td>Consumes permanent space and makes ordinary field edits indirect. Add later for long routines.</td></tr>
+      <tr><td>Visit-aware focus</td><td>True geometry and stable edits</td><td>Requires a multi-candidate resolver and transient focus state.</td></tr>
+    </tbody>
+  </table></div>
+
+  <section class="model" aria-labelledby="decision-model-title">
+    <div class="model-head"><h3 id="decision-model-title">Interactive decision model</h3><span>weights update locally</span></div>
+    <div class="weights">
+      <div class="weight"><label for="accuracy">Edit accuracy <output data-for="accuracy">5</output></label><input id="accuracy" data-weight type="range" min="1" max="5" value="5"></div>
+      <div class="weight"><label for="fidelity">Field fidelity <output data-for="fidelity">5</output></label><input id="fidelity" data-weight type="range" min="1" max="5" value="5"></div>
+      <div class="weight"><label for="compactness">Screen compactness <output data-for="compactness">4</output></label><input id="compactness" data-weight type="range" min="1" max="5" value="4"></div>
+      <div class="weight"><label for="simplicity">Implementation simplicity <output data-for="simplicity">2</output></label><input id="simplicity" data-weight type="range" min="1" max="5" value="2"></div>
+    </div>
+    <table class="scores" aria-live="polite"><tbody id="score-body"></tbody></table>
+    <div class="model-actions"><button type="button" id="copy-model">Copy recommendation as JSON</button><button type="button" id="reset-model">Reset weights</button></div>
+  </section>
+
+  <h2>Technical design</h2>
+  <h3>Candidate resolver</h3>
+  <p>Add a pure geometry helper that projects the pointer onto sampled polyline <em>edges</em>, not only sample points. It returns candidates containing screen distance, ordered path distance/fraction, segment index, and local segment parameter.</p>
+  <ol>
+    <li>Project onto every edge inside a screen-pixel tolerance so behavior stays stable across zoom levels.</li>
+    <li>Cluster adjacent samples that describe the same visit.</li>
+    <li>Keep candidates separate whenever their ordered path distances differ, even when field coordinates and segment index match.</li>
+    <li>Rank by screen distance, existing visit/segment affinity, then path order for deterministic ties.</li>
