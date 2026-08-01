@@ -88,3 +88,40 @@
     <thead><tr><th>Area</th><th>Result</th></tr></thead>
     <tbody>
       <tr><td>Project lifecycle</td><td>Native New, Open, Recent, Save, Save As, atomic replacement, dirty-state replacement guards, and an unsaved-close flow now operate against one project state.</td></tr>
+      <tr><td>Routine export</td><td><code>.bdx</code> v1.1 carries the authored routine and exported path IDs. Routine references use stable IDs and deletion cannot silently retarget them.</td></tr>
+      <tr><td>Planner safety</td><td>Total nested validation, finite-output assertions, diagnostic blocking, and sample-local optimized marker interpolation prevent invalid or mistimed exports.</td></tr>
+      <tr><td>Electron security</td><td>Electron 43.1.0, sandboxing, sender/main-frame checks, main-owned file intents, CSP, and navigation, popup, webview, and permission denial harden the desktop boundary.</td></tr>
+      <tr><td>Canonical renderer</td><td>The feature-complete committed legacy editor is now the sole production renderer. The incomplete typed renderer and destructive regeneration command were removed.</td></tr>
+      <tr><td>Accessibility</td><td>Native controls, programmatic names and states, landmarks, keyboard routes for canvas-equivalent edits and routine ordering, focus rings, and contrast-safe theme tokens cover Plan, Auto, and Robot.</td></tr>
+      <tr><td>Delivery confidence</td><td>Focused regressions, canonical-renderer verification, an Electron save/open/export/close-guard smoke flow, and GitHub Actions CI now cover the shipped artifact.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Independent review</h2>
+  <p>The first read-only review requested changes for six concrete gaps: exported path IDs, marker-group schema parity, full control naming, range and routine keyboard parity, renderer regeneration durability, and shipped workflow coverage. Each finding was addressed. A second blocker-only pass found four unnamed waypoint fields; those were labeled. The final pass returned <strong>approve</strong> with no blocking findings.</p>
+
+  <h2>Risks &amp; mitigations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>Committed renderer assets are edited directly</td><td>medium</td><td>The prior extraction command was removed, the renderer verifier checks every referenced asset and CSP, and the Electron smoke loads the exact production entrypoint.</td></tr>
+      <tr><td>No commit reference yet</td><td>expected</td><td>The worktree contains pre-existing owner changes. Issue closures record verification rather than inventing or mixing a commit.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li><code>npm test</code> — 24 tests passed.</li>
+    <li><code>npm run typecheck</code> — renderer-adjacent shared types and Electron compilation passed.</li>
+    <li><code>npm run build</code> — canonical renderer verification and Electron build passed.</li>
+    <li><code>npm audit --audit-level=high</code> — zero vulnerabilities.</li>
+    <li><code>npm run test:smoke</code> — Electron loaded the shipped renderer, found zero unnamed exposed controls across pages, saved and reopened a routine-bearing project, exported <code>.bdx</code>, enforced CSP/sandbox/popup policy, wrote both files, and triggered the dirty close guard.</li>
+    <li><code>git diff --check</code> — passed.</li>
+  </ul>
+
+  <h2>Open questions</h2>
+  <p>None blocking. The implementation is ready for owner review and an intentional commit.</p>
+</article>
+</main>
+</body>
+</html>
