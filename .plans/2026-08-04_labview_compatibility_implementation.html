@@ -88,3 +88,70 @@
     <tbody>
       <tr><td>Geometry</td><td>Quintic C² Bézier and vertex-blend Euler spiral modules</td><td>New planner IDs; current cubic/G¹ geometry remains available.</td></tr>
       <tr><td>Timing</td><td>Fixed-period, jerk-aware LabVIEW profile adapter</td><td>Uses persisted sample period; defaults to 20 ms for old projects.</td></tr>
+      <tr><td>Files</td><td>Strict v4.4 binary reader plus existing writer</td><td>Unknown/older binary schemas fail clearly rather than being guessed.</td></tr>
+      <tr><td>Projects</td><td>Optional per-path compatibility settings</td><td>Missing fields normalize to stable defaults; schema remains 1.0.</td></tr>
+      <tr><td>UI</td><td>Two additional planner choices and compatibility controls</td><td>Existing planner selection and segment editing remain intact.</td></tr>
+      <tr><td>Documentation</td><td>Repository <code>AGENTS.md</code> contract</td><td>Future changes must preserve units, binary order, and planner distinctions.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Implementation sequence</h2>
+  <ol>
+    <li>Add dependency-free typed math modules with direct formula tests: degree-five Bernstein evaluation, shared join derivatives, signed curvature, 24-point quadrature, normalized Euler-spiral integration, reflection, extra arcs, and conservative overlap handling.</li>
+    <li>Integrate <code>labviewBezier</code> and <code>labviewClothoid</code> planners behind the existing planner interface, including fixed-time samples and endpoint/constraint diagnostics.</li>
+    <li>Persist and validate <code>samplePeriodS</code>, <code>minTurnRadiusM</code>, Bézier tangent interpretation, and the editable v4.4 file flags with backwards-compatible defaults.</li>
+    <li>Make binary export derive Path Type from the explicit compatibility planner and sample period from the selected path. Add a strict v4.4 reader/import path, preserve modeled top-level values, and share hard resource limits.</li>
+    <li>Expose the new choices in the canonical renderer and identify compatibility preview limitations honestly.</li>
+    <li>Record invariants and unsupported command-array behavior in <code>AGENTS.md</code>, then run unit, type, build, Electron smoke, binary round-trip, and independent review checks.</li>
+  </ol>
+
+  <h2>Implemented result</h2>
+  <ul>
+    <li>Added opt-in <code>labviewBezier</code> and <code>labviewClothoid</code> planners while leaving both existing planners and the missing-<code>plannerId</code> fallback unchanged.</li>
+    <li>Added degree-five C² Bézier geometry, signed curvature, order-24 Gauss–Legendre arc length/inversion, and vertex-blend clothoids with reflected exits and extra constant-radius arcs beyond 90°.</li>
+    <li>Fixed-period timing now preserves exact interior stop ticks, leaves authored waits unscaled, applies reverse heading after every heading mode, and enforces local angular acceleration plus directional angular deceleration.</li>
+    <li>Added strict raw big-endian v4.4 reading, editable import with forced Save As, selected-path export, shared reader/writer bounds, and round trips for Reverse Path, Zero Velocity, Pickup Balls, Current Limit, Zero Translational Velocity, Correct at Beginning, and StoopidFast.</li>
+    <li>Added compatibility controls and a truthful approximate-preview disclosure to the canonical static renderer, plus durable maintenance invariants in <code>AGENTS.md</code>.</li>
+  </ul>
+
+  <h2>Real fixture validation</h2>
+  <p>The user supplied <code>2CycleDepotPart1.bdx</code>, a real rebuilt-LabVIEW v4.4 export (SHA-256 <code>5ee07b8aa234f9ec19613245af25ee38fd9ff1b701f2e7b745b4d79dab7ee64f</code>). It contains a straight clothoid trajectory and one serialized command.</p>
+  <ul>
+    <li>The artifact directly confirms big-endian framing, the v4.4 field order, <code>Linear 0</code> / Segment Type 0 for a straight clothoid, an empty terminal trajectory cluster, array-length no-deceleration sentinel, authored endpoint Conditions, and inverted screen-space velocity-vector Y.</li>
+    <li>The writer now follows those conventions. A command-free equivalent has the same 2,645-byte size and aligned structural boundaries.</li>
+    <li>The original remains intentionally rejected at its nonempty command record. Command payloads include LabVIEW Variant, type-descriptor, and Path data; this one fixture is not enough to define a safe generic parser.</li>
+    <li>Numeric trajectory bytes still differ because the LabVIEW file begins at a nonzero sampled velocity, extends beyond its updated endpoint, and reports 0.82 s for 43 samples at 20 ms. These are recorded as unresolved timing/integration behavior, not copied as fixture-specific constants.</li>
+  </ul>
+
+  <h2>Risks &amp; mitigations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>“Compatible” implies byte-identical LabVIEW math</td><td>high</td><td>Separate proven file compatibility from best-effort numerical parity; retain the golden-fixture requirement.</td></tr>
+      <tr><td>New modes change old projects</td><td>medium</td><td>Never remap old planner IDs; optional settings have defaults and are omitted from legacy assumptions.</td></tr>
+      <tr><td>Clothoid blends overlap</td><td>medium</td><td>Scale adjacent trims conservatively, emit diagnostics, and test consecutive signed turns.</td></tr>
+      <tr><td>Unsupported old BDX schema is misread</td><td>high</td><td>Version-check before payload parsing and reject schemas without a proven typedef map.</td></tr>
+      <tr><td>Static renderer preview drifts from export</td><td>medium</td><td>Label compatibility planners clearly and surface the exported planner/limitations in the UI until the renderer can share compiled math directly.</td></tr>
+      <tr><td>Long, slow paths exceed safe binary limits</td><td>medium</td><td>Share reader/writer ceilings and reject oversized fixed-period arrays before allocation; every successful export remains readable.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li>72 tests pass, including known-formula straight, left/right, 90°, &gt;90°, adjacent-turn, exact start/interior/repeated-coordinate stop dwell, angular range/deceleration, low-limit preservation, unsupported-value rejection, oversized-array cases, and the real-fixture metadata conventions.</li>
+    <li>Binary writer → reader round trips consume EOF exactly, preserve units and editable flags, and keep imported files on Save As.</li>
+    <li>Legacy project fixtures still normalize to the original planner and defaults.</li>
+    <li><code>npm run typecheck</code>, <code>npm run build</code>, and the real Electron smoke export/import pass.</li>
+    <li>Independent read-only review of schema, numerical edge cases, backwards behavior, and UI truthfulness.</li>
+  </ul>
+
+  <h2>Deliberate limits</h2>
+  <ul>
+    <li>Nonempty LabVIEW command arrays remain out of scope. The supplied artifact exposes a real command payload, but one serialized Variant/type graph and workstation Path does not establish safe record boundaries for every command.</li>
+    <li>Exact <code>S-Curve2</code> floating-point parity remains unprovable without the missing LabVIEW <code>Sigmoid.vi</code> dependency and runtime fixtures.</li>
+    <li>Older BDX versions are rejected until their exact versioned payload typedefs are reconstructed; “backwards compatible” must not mean speculative parsing.</li>
+  </ul>
+</article>
+</main>
+</body>
+</html>
