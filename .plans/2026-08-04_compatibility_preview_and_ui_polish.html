@@ -88,3 +88,40 @@
   <p>Route <code>plannerId</code> through every renderer derivation, mirror the shared degree-five Bezier and vertex-blend clothoid geometry in the static renderer, and use the same DC-motor torque-speed envelope in browser and export timing. Keep StoopidFast in the compatibility model only, and move optional rotation/binary controls behind disclosures.</p>
   <div class="callout"><strong>Motor invariant.</strong> While speeding up, available acceleration is <code>activeMaxAccel × clamp(1 − |v| / robot.maxSpeed, 0, 1)</code>. The active constraint range is chosen before scaling. Deceleration remains independently limited.</div>
 
+  <h2>Implementation steps</h2>
+  <ol>
+    <li>Pass <code>plannerId</code> into the active path, path manager, and autonomous preview derivations.</li>
+    <li>Add renderer copies of the quintic shared-derivative Bezier and trimmed vertex-blend clothoid formulas, including 0.02 m densification for stable timing.</li>
+    <li>Apply the linear torque-speed envelope to both shared LabVIEW planners and the compatibility preview; leave existing planners untouched.</li>
+    <li>Hide irrelevant handles in clothoid and automatic-tangent modes, remove the StoopidFast input, and preserve its imported/exported value.</li>
+    <li>Collapse empty outline sections, compact the path summary, progressively disclose rotation and .bdx flags, and replace the large compatibility card with a quiet approximation label.</li>
+    <li>Give the telemetry graph scale headroom, current and peak readings, time labels, a curve-position marker, and keyboard seeking.</li>
+    <li>Track pointer-focused buttons so Space starts playback without leaving a white ring while Tab-focused buttons retain native keyboard activation.</li>
+  </ol>
+
+  <h2>Risks &amp; mitigations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>Renderer math drifts from shared planner</td><td>medium</td><td>Keep formulas documented in <code>AGENTS.md</code>, retain the approximation label, and run a renderer geometry regression test.</td></tr>
+      <tr><td>Motor fix changes v4.4 fixture timing</td><td>high</td><td>Preserve the byte schema and fixture metadata while testing the newer torque envelope as an intentional timing improvement. The reference introduced it with v4.5, so do not claim v4.4 numerical identity.</td></tr>
+      <tr><td>Global Space shortcut breaks keyboard buttons</td><td>low</td><td>Blur only the exact pointer-focused button; Tab clears that pointer provenance and leaves native Space/Enter activation intact.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li><code>npm test</code>: 76 tests, including distinct Bezier/clothoid renderer geometry, duplicate-waypoint resilience, and motor-envelope checks for both planners.</li>
+    <li><code>npm run typecheck</code>, <code>npm run build</code>, and Electron smoke.</li>
+    <li>Live Electron review: selector changes duration/limits, StoopidFast is absent, compact LabVIEW controls are present, the graph exposes time/current/peak data, and clicking its button then pressing Space starts playback without retained focus.</li>
+  </ul>
+
+  <h2>Open questions</h2>
+  <ul>
+    <li>Bit-identical timing remains impossible to claim without controlled curved LabVIEW fixtures; the public branch also contains known broken quotient/remainder limiter wiring.</li>
+    <li>When a future renderer build pipeline can bundle shared TypeScript directly, remove the duplicated browser geometry and then reconsider the approximation label.</li>
+  </ul>
+</article>
+</main>
+</body>
+</html>
