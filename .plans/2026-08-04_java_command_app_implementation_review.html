@@ -88,3 +88,38 @@
   <h2>Assessment</h2>
   <div class="callout"><strong>No blocking findings.</strong> The implementation is suitable for real-project validation. It uses read-only, streamed and bounded source inspection; keeps filesystem paths and access in Electron's main process; preserves unresolved saved commands and the last successful catalog; and keeps new invocation metadata out of the LabVIEW binary contract.</div>
   <ul>
+    <li><strong>Discovery:</strong> recognizes public command constructors and command-returning methods without executing Gradle or robot code. Streamed traversal plus directory, entry, depth, file-count, file-size, total-byte, type-count, command-count, schema-depth, object-field, and symlink ceilings bound untrusted input.</li>
+    <li><strong>Custom data:</strong> recursively models primitives, enums, records, constructor-shaped objects, collections, string-key maps, optionals, and opaque JSON values. Java <code>long</code>/<code>BigInteger</code>/<code>BigDecimal</code> values remain exact strings, with signed 64-bit validation for <code>long</code>.</li>
+    <li><strong>UX:</strong> persistent recent projects, searchable commands, stale last-known-good state, refresh/error notices, unresolved commands, explicit schema reconciliation, generated nested controls, late numeric validation, schema-aware JSON validation, associated labels, live status, large targets, and mobile-safe input sizing are present.</li>
+    <li><strong>Compatibility:</strong> native planner output carries the additive invocation object. LabVIEW <code>.bdx</code> continues writing an empty command array, and a byte-equality regression test proves marker invocation data does not alter that binary.</li>
+  </ul>
+
+  <h2>Findings resolved during review</h2>
+  <p>A command class that declared only a non-public constructor could be misclassified as having an implicit public no-argument constructor. Discovery now tracks declared constructors separately from the public constructors it can expose. Subsequent review also tightened source traversal so wide directories are streamed and rejected before an unbounded listing can be materialized, bounded Gradle settings reads, redacted filesystem paths at every IPC entry point, added exact large-number handling, validated custom JSON against discovered schemas, reconciled saved invocations after schema changes, exposed project scan status through a polite live region, and ensured every Java-specific control preserves the 44 px coarse-pointer target floor despite more-specific desktop sizing rules. Regression and smoke coverage exercise these cases.</p>
+
+  <h2>Remaining limitations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Limitation</th><th>Impact</th><th>Next step</th></tr></thead>
+    <tbody>
+      <tr><td>Source parsing is deliberately conservative</td><td>Generated, deeply nested, imported-ambiguous, or unusually formatted Java may be missed.</td><td>Exercise against real team projects, then add fixtures or an optional manual supplement before expanding the parser.</td></tr>
+      <tr><td>Recent entries persist bookmarks, not catalog contents</td><td>Reopening a project requires its source folder to remain readable and performs a fresh bounded scan.</td><td>Keep this freshness-first behavior unless real projects demonstrate a need for a separately versioned catalog cache or fingerprint.</td></tr>
+      <tr><td>Semantic metadata is not inferred</td><td>Units, recommended ranges, injected dependencies, and human descriptions may remain unknown even when the Java value shape is discoverable.</td><td>Validate with representative teams before adding an optional manual supplement or future annotation processor.</td></tr>
+      <tr><td>No robot execution contract yet</td><td>Authored invocations are data only.</td><td>Validate stable IDs and custom conversion rules with real projects before designing the Java registry/runtime.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li><code>npm test</code> — 10 files and 166 tests passed.</li>
+    <li><code>npm run typecheck</code> — renderer/shared and Electron TypeScript checks passed.</li>
+    <li><code>npm run build</code> — canonical renderer verification and Electron build passed.</li>
+    <li><code>env -u ELECTRON_RUN_AS_NODE npm run test:smoke</code> — Java project discovery, persistent recent reopening, command search, marker creation, schema-shaped JSON rejection, exact large-integer preservation, signed <code>long</code> range rejection, accessible names, project round trip, and LabVIEW export passed.</li>
+    <li><code>git diff --check</code> and canonical renderer JavaScript syntax checks passed.</li>
+  </ul>
+
+  <h2>Conclusion</h2>
+  <p>Proceed with representative real-project validation and keep robot runtime and third-party trajectory adapters deferred until the editor-side catalog and invocation contract have been exercised against those codebases.</p>
+</article>
+</main>
+</body>
+</html>
