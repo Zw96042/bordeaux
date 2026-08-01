@@ -88,3 +88,37 @@
   <h2>Recommendation</h2>
   <p>Add optional <code>waypoint.jiggle</code> metadata to the terminal waypoint. The shared post-processor and browser preview will expand that metadata into deterministic outbound/return samples after arrival and any turn-in-place. Each complete out-and-back stroke receives an authored minimum time; the planner lengthens it only when needed to satisfy velocity, acceleration, deceleration, and motor free-speed limits.</p>
   <div class="callout"><strong>Invariant:</strong> a jiggle never changes <code>path.waypoints.length</code>. Project files retain one compact action; LabVIEW export contains only the resulting flattened trajectory samples and cannot reconstruct the editor action on import.</div>
+
+  <h2>Implementation steps</h2>
+  <ol>
+    <li>Add and validate a terminal-only <code>JiggleAction</code> model with distance, stroke count, unique directions, and seconds per complete stroke.</li>
+    <li>Extend the shared waypoint-action post-processor to emit monotonic, accurately timed samples without modifying authored waypoints.</li>
+    <li>Mirror the action in the static renderer so preview and playback use the same radial positions and stroke timing.</li>
+    <li>Replace the geometry preview/apply flow with compact Apply/Remove controls on the endpoint inspector.</li>
+    <li>Preserve endpoint semantics when appending, reversing, duplicating, or reordering waypoints.</li>
+  </ol>
+
+  <h2>Risks &amp; mitigations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>Authored stroke time requests motion beyond normal path limits</td><td>medium</td><td>Treat it as a requested minimum and deterministically retime each stroke against the active velocity, acceleration, deceleration, and motor free-speed limits.</td></tr>
+      <tr><td>Browser preview diverges from exported samples</td><td>medium</td><td>Use the same radial position helper and four-phase out/return profile in both implementations, covered by fixture-style tests.</td></tr>
+      <tr><td>Endpoint edits strand action metadata on an interior waypoint</td><td>low</td><td>Transfer the action to the new terminal waypoint for append/reverse/reorder operations and validate terminal-only ownership.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li>A regression test proves applying a jiggle leaves the waypoint count unchanged.</li>
+    <li>Every planner emits the authored stroke count, returns exactly to the endpoint, uses strictly increasing time, and respects the active motor-aware linear limits.</li>
+    <li>Project encode/decode preserves the action; invalid or repeated directions are rejected.</li>
+    <li><code>npm test</code>, <code>npm run typecheck</code>, <code>npm run build</code>, and the Electron smoke test pass.</li>
+  </ul>
+
+  <h2>Open questions</h2>
+  <p>None. The requested behavior fixes the model choice: jiggle is an endpoint action, not authored waypoint geometry.</p>
+</article>
+</main>
+</body>
+</html>
