@@ -178,3 +178,90 @@
     <li>Cluster adjacent samples that describe the same visit.</li>
     <li>Keep candidates separate whenever their ordered path distances differ, even when field coordinates and segment index match.</li>
     <li>Rank by screen distance, existing visit/segment affinity, then path order for deterministic ties.</li>
+  </ol>
+
+  <h3>Latched editing</h3>
+  <p>On pointer-down, resolve a candidate tuple such as <code>{segment, localT, distance}</code>. During the drag, project against candidates nearest the previous ordered distance and use hysteresis to prevent branch changes. A user must cycle or restart the drag to intentionally switch visits.</p>
+  <p>Use the same projection for constraint endpoints, rotation targets, event markers, explicit insertion, and path scrubbing. Existing proportional and segment-local storage remain unchanged; visit-aware projection only chooses the correct fraction.</p>
+
+  <h3>Coincident controls</h3>
+  <p>Render the selected waypoint and its tangent handles last. When visit focus exists, competing coincident hit areas become inert while their geometry remains visible. Handles always stay in true field coordinates; no editing offset is introduced.</p>
+
+  <h2>Implementation steps</h2>
+  <div class="phase"><strong>Phase 1</strong><p><strong>Visit selection.</strong> Add and unit-test <code>nearestVisits</code>; introduce transient <code>activeVisit</code>; add conflict cycling; route segment selection, insertion, target placement, and marker placement through the chosen visit.</p></div>
+  <div class="phase"><strong>Phase 2</strong><p><strong>Stable feature drags.</strong> Latch constraint, rotation-target, and event-marker drags to one candidate; add continuity-aware projection and hysteresis; verify proportional and segment-local anchors through edits and reversal.</p></div>
+  <div class="phase"><strong>Phase 3</strong><p><strong>Coincident controls.</strong> Render selected nodes last, suppress competing hit areas, add waypoint cycling, and synchronize outline selection with field focus.</p></div>
+  <div class="phase"><strong>Phase 4</strong><p><strong>Optional inspection.</strong> Evaluate a compact sequence strip and read-only spread-visits view. Add persisted named layers only if real routines prove automatic focus insufficient.</p></div>
+
+  <h2>Implementation result</h2>
+  <div class="phase"><strong>Core interaction shipped</strong><p>The field now resolves every nearby ordered visit, highlights the active pass, cycles conflicts with repeated click or <code>[</code>/<code>]</code>, and restores focus from selected segments, features, and coincident waypoints.</p></div>
+  <div class="phase"><strong>Edits stay latched</strong><p>Constraint endpoints, new ranges, rotation targets, event markers, and explicit insertion carry the chosen path fraction through placement and drag projection. The focus remains transient and does not alter project or <code>.bdx</code> serialization.</p></div>
+  <div class="phase"><strong>Validated</strong><p>Exact retraces, coincident Start/End cycling, and selected-node dragging were exercised in the running editor. The renderer verification, 142-test suite, TypeScript checks, production build, and Electron smoke test pass; an independent read-only review found no remaining overlap-editing blocker. Phase 4 remains intentionally optional until real routines show that automatic focus needs a timeline accelerator.</p></div>
+
+  <h2>Risks &amp; mitigations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>Candidate flicker near crossings</td><td>medium</td><td>Use pixel-space tolerance, current-visit affinity, deterministic ties, and hysteresis during drags.</td></tr>
+      <tr><td>Self-overlap inside one segment collapses in clustering</td><td>medium</td><td>Cluster by adjacent ordered distance, not segment identity alone.</td></tr>
+      <tr><td>Selected handles remain hidden under later SVG nodes</td><td>medium</td><td>Render the active control group last and make competing hit regions inert.</td></tr>
+      <tr><td>New UI adds noise to simple paths</td><td>low</td><td>Render conflict controls only when two or more valid candidates exist.</td></tr>
+      <tr><td>Legacy export changes accidentally</td><td>low</td><td>Keep focus transient and retain existing feature storage and <code>.bdx</code> serialization.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li>Pure resolver tests cover exact retraces, same-segment self-intersection, adjacent sample clustering, and stable path ordering.</li>
+    <li>Running-editor checks confirm retraced visits can be selected and cycled, outline selection restores coincident waypoint focus, and the selected coincident waypoint drags without moving its neighbor.</li>
+    <li>Renderer regression checks assert that constraint, rotation-target, event-marker, and insertion placement carry the selected visit fraction or local parameter.</li>
+    <li>A continuous constraint or feature drag projects by its previous path fraction, preventing a normal drag from jumping to another visit.</li>
+    <li>Non-overlapping paths retain the current one-click behavior with no conflict UI.</li>
+    <li>Project round trips and <code>.bdx</code exports are unchanged for phases 1–3.</li>
+    <li>Run <code>npm test</code>, <code>npm run typecheck</code>, <code>npm run build</code>, and <code>env -u ELECTRON_RUN_AS_NODE npm run test:smoke</code>.</li>
+  </ul>
+
+  <h2>Open questions</h2>
+  <p>The owner choice attached to this plan asks whether visit-aware focus should lead, or whether Bordeaux should accept the permanent UI or project-structure cost of a timeline-first or manual-layer model. The recommendation is visit-aware focus first, with a sequence strip as a later accelerator for long routines.</p>
+</article>
+</main>
+<script>
+(() => {
+  const defaults = { accuracy: 5, fidelity: 5, compactness: 4, simplicity: 2 };
+  const options = [
+    { id: "visit-focus", label: "Visit-aware focus", scores: [5, 5, 4, 3] },
+    { id: "click-cycle", label: "Repeated-click cycling", scores: [2, 5, 5, 5] },
+    { id: "timeline", label: "Timeline first", scores: [5, 5, 2, 2] },
+    { id: "layers", label: "Manual layers", scores: [4, 5, 3, 2] },
+    { id: "explode", label: "Exploded visits", scores: [3, 1, 3, 3] }
+  ];
+  const fields = [...document.querySelectorAll("[data-weight]")];
+  const body = document.querySelector("#score-body");
+  const current = () => fields.map((field) => Number(field.value));
+  const results = () => options.map((option) => ({
+    id: option.id,
+    label: option.label,
+    score: option.scores.reduce((sum, score, index) => sum + score * current()[index], 0)
+  })).sort((a, b) => b.score - a.score);
+  const render = () => {
+    fields.forEach((field) => document.querySelector(`[data-for="${field.id}"]`).value = field.value);
+    body.innerHTML = results().map((item, index) => `<tr><td>${index + 1}. ${item.label}</td><td>${item.score}</td></tr>`).join("");
+  };
+  fields.forEach((field) => field.addEventListener("input", render));
+  document.querySelector("#reset-model").addEventListener("click", () => {
+    fields.forEach((field) => field.value = defaults[field.id]);
+    render();
+  });
+  document.querySelector("#copy-model").addEventListener("click", async (event) => {
+    const payload = JSON.stringify({ weights: Object.fromEntries(fields.map((field) => [field.id, Number(field.value)])), ranking: results() }, null, 2);
+    await navigator.clipboard.writeText(payload);
+    const button = event.currentTarget;
+    const old = button.textContent;
+    button.textContent = "Copied";
+    setTimeout(() => button.textContent = old, 1200);
+  });
+  render();
+})();
+</script>
+</body>
+</html>
