@@ -88,3 +88,56 @@
     <thead><tr><th>Planner</th><th>Measured reversal before fix</th><th>Source</th></tr></thead>
     <tbody>
       <tr><td>Profiled spline</td><td>10.959°</td><td>Shared native planner</td></tr>
+      <tr><td>Optimized trajectory</td><td>10.959°</td><td>Shared native planner</td></tr>
+      <tr><td>LabVIEW Bézier</td><td>11.003°</td><td>Compatibility planner</td></tr>
+      <tr><td>LabVIEW clothoid</td><td>10.873°</td><td>Compatibility planner</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Finding</h2>
+  <p><strong>Root cause:</strong> Manual and Targets anchors are interpolated across the entire path, even where another heading law is active. At the mode boundary, the continuity smoother used the first interpolated outgoing sample as its acquisition goal. If that hidden value lies on one side of the next authored target, the blend reaches it and the outgoing law immediately reverses toward the real target.</p>
+  <p>The timing-priority follower, angular constraints, playback interpolation, and transition placement controls were not the cause. The reversal was already present in the desired spatial heading law and was mirrored by the static browser planner.</p>
+
+  <h2>Recommendation</h2>
+  <p>When entering Manual or Targets mode, identify the first real pinned waypoint or rotation target within the contiguous outgoing law. Acquire that anchor directly on the shortest unwrapped arc with a minimum-jerk spatial blend. Complete the blend within the authored before/split/after distance, hold the acquired heading until the anchor, then resume ordinary anchor interpolation.</p>
+  <div class="callout"><strong>Invariant:</strong> A transition may change angular direction after reaching an authored anchor, but it must not invent an angular reversal before that anchor.</div>
+
+  <h2>Implementation steps</h2>
+  <ol>
+    <li>Add shared hard-anchor goal resolution and monotonic acquisition to <code>src/shared/planners/headingTransitions.ts</code>.</li>
+    <li>Supply Manual and Targets anchors from both the native PM planner and LabVIEW-compatible timeline builder.</li>
+    <li>Mirror the same algorithm in the canonical static browser renderer.</li>
+    <li>Add direct minimum-jerk, four-planner, and live browser-preview regression coverage.</li>
+  </ol>
+
+  <h2>Risks &amp; mitigations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>Changing paths that intentionally relied on the hidden interpolated value</td><td>low</td><td>Limit the behavior change to boundaries entering Manual or Targets; paths that remain in one law are unchanged.</td></tr>
+      <tr><td>Breaking before/split/after placement</td><td>medium</td><td>Run the same monotonic acquisition assertion for all three placements.</td></tr>
+      <tr><td>Browser/shared planner drift</td><td>medium</td><td>Execute the static renderer in a VM and assert its sampled heading law, not only source strings.</td></tr>
+      <tr><td>Changing LabVIEW file compatibility</td><td>low</td><td>The binary contract is unchanged; only the already-flattened heading samples change.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li>The desired heading is monotonic from the incoming tangent to the first target for before, split, and after placement.</li>
+    <li>Profiled, optimized, LabVIEW Bézier, and LabVIEW clothoid planners do not reverse before the target.</li>
+    <li>The browser preview executes the same scenario and remains monotonic.</li>
+    <li><code>npm test</code> — 276 tests passed across 19 files.</li>
+    <li><code>npm run typecheck</code> — passed.</li>
+    <li><code>npm run build</code> — renderer, Java support, and Electron builds passed.</li>
+    <li><code>env -u ELECTRON_RUN_AS_NODE npm run test:smoke</code> — passed with <code>BORDEAUX_SMOKE_OK</code>.</li>
+    <li>An independent read-only Codex review found and prompted fixes for exact-boundary targets and overlapping later blends; its re-review found no remaining blocker.</li>
+  </ul>
+
+  <h2>Open questions</h2>
+  <ul>
+    <li>None for this correction. Explicit user-authored rotation direction would be a separate feature; this fix keeps the existing shortest-arc convention.</li>
+  </ul>
+</article>
+</main>
+</body>
+</html>
