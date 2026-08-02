@@ -88,3 +88,36 @@
   <h2>Recommendation</h2>
   <p>Add <code>examples/bordeaux-template-robot</code> as a minimal command-based Java 17 robot. Keep the robot behavior intentionally simple, but make every Bordeaux integration point real: annotated factories, a generated registry, trajectory loading from deploy, elapsed-time event polling, path-end cancellation, and simulation-safe command behavior.</p>
 
+  <h2>Implementation steps</h2>
+  <ol>
+    <li>Create the standard GradleRIO project structure, wrapper, build configuration, robot entry point, subsystem, command provider, container, and deploy directory.</li>
+    <li>Document the exact link → install → build catalog → author marker → export → simulate/deploy workflow.</li>
+    <li>Add a repository integration check that copies the template, installs the same bundled support as the app, builds the real catalog, and validates the generated command metadata.</li>
+    <li>Run Java, TypeScript, build, smoke, and template-specific checks; complete an independent read-only review.</li>
+  </ol>
+
+  <h2>Risks &amp; mitigations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>Template fails before support installation</td><td>expected</td><td>State this clearly and provide one canonical setup path through the Bordeaux app.</td></tr>
+      <tr><td>Example implies drivetrain ownership</td><td>low</td><td>Use a timing-only autonomous shell and explain where a team connects its actual path follower.</td></tr>
+      <tr><td>Example drifts from the processor contract</td><td>medium</td><td>Use the app installer and actual annotation processor in automated integration verification.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li><code>npm run test:java-integration</code> copied the template, installed app support, generated an authoritative catalog, exported all four pre-authored events, and built the clean GradleRIO project.</li>
+    <li><code>npm run test:java</code>, <code>npm test</code>, <code>npm run typecheck</code>, and <code>npm run build</code> passed.</li>
+    <li>Source and packaged Electron smoke tests passed.</li>
+    <li>The packaged runtime JAR contains the clean-build <code>BordeauxBindings</code> bootstrap.</li>
+    <li>An independent read-only review found no remaining blocking or material issues after lifecycle, unit-label, and provider-inheritance fixes.</li>
+  </ul>
+
+  <h2>Open questions</h2>
+  <p>None. The template deliberately demonstrates Bordeaux command timing rather than prescribing a drivetrain implementation.</p>
+</article>
+</main>
+</body>
+</html>
