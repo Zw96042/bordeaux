@@ -88,3 +88,59 @@
   <h2>Delivered system</h2>
   <div class="tbl-scroll"><table class="data">
     <thead><tr><th>Area</th><th>Implemented behavior</th></tr></thead>
+    <tbody>
+      <tr><td>Desktop app</td><td>Links and remembers GradleRIO Java projects; previews managed support changes; installs or updates support; runs one fixed, explicitly trusted Gradle catalog task; exposes cancellation and bounded failure states.</td></tr>
+      <tr><td>Command UI</td><td>Searches generated commands, shows descriptions and parameter metadata, applies defaults, recursively validates structured values and exact numbers, reconciles changed schemas, and supports per-event cancel-at-path-end.</td></tr>
+      <tr><td>Annotations</td><td><code>@BordeauxCommand</code> and <code>@BordeauxParam</code> define stable IDs, labels, descriptions, units, defaults, and ranges. The aggregating processor validates factory signatures and emits a catalog plus compiled bindings.</td></tr>
+      <tr><td>Trajectory contract</td><td><code>bordeaux-trajectory/1.0</code> exports all planned paths, samples, and stable command events. Catalog ID, support version, and canonical command hash bind an export to the exact generated robot registry.</td></tr>
+      <tr><td>Robot runtime</td><td>A strict bounded reader validates the native JSON, generated bindings construct commands from typed arguments, and the event runner catches up missed ticks, schedules each event once, and only cancels opted-in commands at path end.</td></tr>
+      <tr><td>Packaging</td><td>The application build produces and bundles <code>bordeaux-runtime.jar</code> and <code>bordeaux-processor.jar</code>. Installation writes only the reviewed managed block and <code>.bordeaux</code> support files; deployment remains GradleRIO-owned.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Review findings resolved</h2>
+  <p>An independent read-only review focused on boundary safety and cross-language compatibility. The implementation was tightened before verification.</p>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Finding</th><th>Resolution</th></tr></thead>
+    <tbody>
+      <tr><td>Runtime coercion</td><td>Arguments are recursively validated before Jackson conversion, preventing permissive scalar or container coercion.</td></tr>
+      <tr><td>Exact numeric denial of service</td><td>Exact integers and decimals stay strings and share 1,024-character and exponent-magnitude limits in TypeScript, the processor, and runtime.</td></tr>
+      <tr><td>Collection ceiling mismatch</td><td>Shared export and renderer validation now reject arrays over 1,024 items and maps over 256 entries, matching the robot runtime before a file can be exported.</td></tr>
+      <tr><td>Unsupported optionals and defaults</td><td>Nested optionals fail compilation; annotation defaults must satisfy the emitted schema and authored range.</td></tr>
+      <tr><td>Catalog identity</td><td>A stable catalog ID and deterministic semantic hash are emitted, compiled, exported, and checked before any event is scheduled.</td></tr>
+      <tr><td>Support integrity</td><td>The install manifest records artifact and script hashes; inspection compares both installed and bundled artifacts and requires a compatible version.</td></tr>
+      <tr><td>Disconnected managed block</td><td>Support readiness requires the complete dialect-specific Gradle block, including the apply line and both markers; marker-only tampering is covered for Groovy and Kotlin.</td></tr>
+      <tr><td>Untrusted Gradle execution</td><td>Only fixed arguments are allowed after an explicit prompt, output and duration are bounded, concurrent builds are rejected, and TERM escalates to KILL.</td></tr>
+      <tr><td>Platform command quoting</td><td>The Windows wrapper path is validated against command-shell metacharacters before execution.</td></tr>
+      <tr><td>Real integration coverage</td><td>A temporary Gradle project runs the actual installed processor and feeds its generated catalog through the TypeScript parser and hash verification.</td></tr>
+      <tr><td>Annotation rounds</td><td>The processor aggregates through every round, with a second processor regression test that generates a command in a later round.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Operational boundaries</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Boundary</th><th>Reason</th><th>User path</th></tr></thead>
+    <tbody>
+      <tr><td>RobotContainer remains team-owned</td><td>Subsystem construction and dependency ownership cannot be inferred safely.</td><td>The installed integration guide includes a complete minimal wiring example using generated bindings and the event runner.</td></tr>
+      <tr><td>No automatic deployment</td><td>Deploying changes external robot state and belongs to the team's normal GradleRIO workflow.</td><td>Linked export writes under <code>src/main/deploy/bordeaux</code>, so the next normal deploy carries the file.</td></tr>
+      <tr><td>Source discovery is not executable</td><td>Java syntax scanning cannot prove processor/runtime compatibility.</td><td>Source-only commands are labeled as previews and remain disabled until catalog generation succeeds.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li><code>npm test</code> — 13 TypeScript test files and 203 tests passed.</li>
+    <li><code>npm run test:java</code> — all annotation processor, Gradle plugin, and runtime tests passed.</li>
+    <li><code>npm run typecheck</code> and <code>npm run build</code> — shared and Electron compilation plus the canonical renderer and Java artifacts passed.</li>
+    <li><code>npm run test:java-integration</code> — installed support processed a real temporary Java command and the app accepted its generated identity and hash.</li>
+    <li><code>env -u ELECTRON_RUN_AS_NODE npm run test:smoke</code> — the complete source Electron UI workflow passed.</li>
+    <li><code>npm run package:dir</code> plus packaged-app smoke — the distributable app contains both JARs and completes the same command workflow.</li>
+    <li><code>git diff --check</code> and syntax checks for the modified canonical renderer scripts passed.</li>
+  </ul>
+
+  <h2>Open questions</h2>
+  <p>None for this implementation. Robot-specific provider construction and deployment are intentionally explicit integration steps, not unfinished application behavior.</p>
+</article>
+</main>
+</body>
+</html>
