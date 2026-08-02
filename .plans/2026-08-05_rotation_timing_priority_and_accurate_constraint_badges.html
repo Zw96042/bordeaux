@@ -88,3 +88,48 @@
 
   <h2>Recommendation</h2>
   <p>Add optional <code>rotationPriority: "heading" | "translation"</code> metadata to constraint ranges. Omission means <code>heading</code>, preserving every existing project. The inspector calls this control <strong>Timing priority</strong>:</p>
+  <ul>
+    <li><strong>Heading</strong> adjusts translation so rotation stays on schedule.</li>
+    <li><strong>Translation</strong> preserves translational timing while rotation catches up when needed.</li>
+  </ul>
+  <div class="callout"><strong>Physical tradeoff:</strong> fixed translation timing, exact heading-at-position, and bounded angular motion cannot all be guaranteed for an impossible demand. Translation priority intentionally gives up exact spatial heading tracking rather than silently exceeding the robot limits.</div>
+  <p>The option is swerve-only. Tank paths continue following the path tangent. When ranges overlap, any active Heading-priority range wins, matching the existing conservative tightest-limit rule.</p>
+  <p>Range badges compare each local value with the global baseline, rank only genuinely tightened limits by normalized ratio, and show the strongest one. The stable tie order is velocity, acceleration, deceleration, angular velocity, then angular acceleration.</p>
+
+  <h2>Implementation steps</h2>
+  <ol>
+    <li>Extend the project type and validation with the optional priority enum, preserve it through normalized ranges, and document the compatibility invariant.</li>
+    <li>Skip angular translation caps only where every active range requests Translation priority. Apply a shared fixed-timestamp, braking-aware angular follower after planner generation so profiled, optimized, LabVIEW Bezier, and LabVIEW clothoid outputs obey the same omega/alpha semantics without overshooting settled headings.</li>
+    <li>Mirror the policy and follower in the canonical legacy renderer so preview, path checks, playback, and exported samples agree.</li>
+    <li>Add the compact Timing priority segmented control to the constraint-range inspector with direct tradeoff copy.</li>
+    <li>Add a shared label helper and use it on the field badge, outline row, and segment inspector. Do not draw a numeric badge when no local numeric limit is tighter than its baseline.</li>
+    <li>Add regression coverage for defaults, validation, speed preservation, bounded continuous heading lag, no-overshoot catch-up, endpoint convergence, overlap behavior, tank rejection, and honest range labeling.</li>
+  </ol>
+
+  <h2>Risks &amp; mitigations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>Heading snaps at a policy boundary</td><td>medium</td><td>Track angular state causally and continue catch-up after the range; never replace actual heading with the target at a boundary.</td></tr>
+      <tr><td>Angular follower violates omega or alpha</td><td>medium</td><td>Use active per-sample limits, directional acceleration/deceleration, and numeric regression tests.</td></tr>
+      <tr><td>Existing paths change timing</td><td>low</td><td>Return the legacy path unchanged unless at least one range explicitly selects Translation priority.</td></tr>
+      <tr><td>Compatibility preview and shared planners diverge</td><td>medium</td><td>Keep the mirrored formulas aligned and run the legacy renderer regression test.</td></tr>
+      <tr><td>Badge hides a stronger angular constraint</td><td>low</td><td>Rank tightened limits by value-to-baseline ratio with a deterministic tie order.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li><code>npm test</code></li>
+    <li><code>npm run typecheck</code></li>
+    <li><code>npm run build</code></li>
+    <li><code>env -u ELECTRON_RUN_AS_NODE npm run test:smoke</code></li>
+    <li>Manual preview: an omega-only range displays an omega badge; Translation priority retains greater translational speed and shows continuous lag/catch-up without the rotation-slowdown note.</li>
+  </ul>
+
+  <h2>Open questions</h2>
+  <p>None. The requested per-area option defaults to the existing behavior and exposes the unavoidable physical tradeoff in the inspector.</p>
+</article>
+</main>
+</body>
+</html>
