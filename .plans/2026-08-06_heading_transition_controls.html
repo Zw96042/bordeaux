@@ -88,3 +88,92 @@
       <tr><td>Status</td><td><span class="status st-done">done</span> · 2026-08-06</td></tr>
     </table></div>
   </section>
+
+  <p class="lede">Make every heading-law boundary explicit: the user chooses where the transition occurs, whether heading or translation keeps its schedule, and how much path length is available for the blend.</p>
+
+  <h2>Context</h2>
+  <p>Today, switching heading laws always applies a minimum-jerk correction over the first 0.75 m of the new segment. Angular limits then reduce translational velocity so the corrected heading remains positionally exact. This is safe, but hidden and unnecessarily slow when two laws are already close.</p>
+  <p>The existing constraint-range timing priority remains useful for arbitrary stretches. This plan adds a boundary-specific policy so a heading-law change does not require creating a separate range.</p>
+
+  <h2>Recommendation</h2>
+  <p>Store an optional <code>headingTransition</code> object on the waypoint that starts the new outgoing segment. Omission preserves today’s behavior: transition after the boundary, heading timing priority, 0.75 m blend.</p>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Control</th><th>Meaning</th><th>Default</th></tr></thead>
+    <tbody>
+      <tr><td>Transition side</td><td>Use the previous segment, share both segments, or use the next segment.</td><td>After</td></tr>
+      <tr><td>Timing priority</td><td>Keep heading spatially exact by retiming translation, or preserve translation timing and allow bounded heading lag.</td><td>Heading</td></tr>
+      <tr><td>Blend distance</td><td>Path length available for the minimum-jerk transition.</td><td>0.75 m</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="model" aria-label="Heading transition policy model">
+    <h3>Try the transition policy</h3>
+    <div class="control"><label>Transition side</label><div class="choice" data-choice="placement">
+      <button type="button" data-value="before" aria-pressed="false">Before</button><button type="button" data-value="split" aria-pressed="false">Split</button><button type="button" data-value="after" aria-pressed="true">After</button>
+    </div></div>
+    <div class="control"><label>Timing priority</label><div class="choice" data-choice="priority">
+      <button type="button" data-value="heading" aria-pressed="true">Heading</button><button type="button" data-value="translation" aria-pressed="false">Translation</button>
+    </div></div>
+    <div class="control"><label for="blend">Blend distance <span id="blend-value">0.75 m</span></label><input id="blend" type="range" min="0.05" max="12" step="0.05" value="0.75"></div>
+    <div class="result" id="result"></div>
+    <button class="export" type="button" id="export">Copy policy as JSON</button>
+  </div>
+
+  <h2>Implementation steps</h2>
+  <ol>
+    <li>Add the typed boundary policy, validation, project round-trip support, and reversal remapping.</li>
+    <li>Generalize heading smoothing in the shared planner, LabVIEW compatibility planner, and browser preview to blend before, after, or across both sides.</li>
+    <li>Merge transition timing priority with constraint-range priority. Heading wins on any overlap unless every active policy selects translation.</li>
+    <li>Add compact controls to the segment inspector only when the selected segment begins with a heading-law change.</li>
+    <li>Add regression coverage for defaults, each placement, translation priority, validation, reversal, and browser/shared parity.</li>
+  </ol>
+
+  <h2>Risks &amp; mitigations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>Overlapping transitions conflict</td><td>medium</td><td>Use deterministic conservative priority: any active heading policy retimes translation.</td></tr>
+      <tr><td>Translation priority ends with unresolved heading</td><td>medium</td><td>Use the existing causal braking-aware follower; stationary endpoints may catch up, moving endpoints remain invalid.</td></tr>
+      <tr><td>Old paths change</td><td>low</td><td>Omitted metadata resolves to the existing after/heading/0.75 m behavior.</td></tr>
+      <tr><td>Tank drive receives an impossible policy</td><td>low</td><td>Keep tank tangent-only and reject translation-priority transition metadata.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li>106 focused motion and renderer tests prove placement, minimum-distance transitions, continuity, no overshoot, priority, validation, and browser/shared parity.</li>
+    <li>The full 269-test suite passes.</li>
+    <li><code>npm run typecheck</code>, <code>npm run build</code>, and Electron smoke (<code>BORDEAUX_SMOKE_OK</code>) pass.</li>
+  </ul>
+
+  <h2>Decisions</h2>
+  <ul>
+    <li>The policy belongs to the boundary waypoint, not the path or a constraint range.</li>
+    <li>Split divides the authored blend distance equally across the two adjacent segments.</li>
+    <li>Changing heading mode does not silently rewrite the boundary policy.</li>
+    <li>LabVIEW <code>.bdx</code> receives flattened samples but cannot reconstruct this editor-only metadata.</li>
+  </ul>
+</article>
+</main>
+<script>
+  const state = { placement: 'after', priority: 'heading', distanceM: 0.75 };
+  const render = () => {
+    document.getElementById('blend-value').textContent = state.distanceM.toFixed(2) + ' m';
+    const side = state.placement === 'before' ? 'the previous segment' : state.placement === 'split' ? 'both adjacent segments' : 'the next segment';
+    const timing = state.priority === 'heading' ? 'Translation may slow so heading remains exact along the field.' : 'Translation keeps its schedule; heading may lag and catch up without overshoot.';
+    document.getElementById('result').textContent = 'Use ' + side + ' for a ' + state.distanceM.toFixed(2) + ' m minimum-jerk blend. ' + timing;
+  };
+  document.querySelectorAll('[data-choice]').forEach((group) => group.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-value]'); if (!button) return;
+    const key = group.dataset.choice; state[key] = button.dataset.value;
+    group.querySelectorAll('button').forEach((item) => item.setAttribute('aria-pressed', String(item === button))); render();
+  }));
+  document.getElementById('blend').addEventListener('input', (event) => { state.distanceM = Number(event.target.value); render(); });
+  document.getElementById('export').addEventListener('click', async (event) => {
+    const value = JSON.stringify({ placement: state.placement, rotationPriority: state.priority, distanceM: state.distanceM }, null, 2);
+    await navigator.clipboard.writeText(value); event.currentTarget.textContent = 'Copied'; setTimeout(() => { event.currentTarget.textContent = 'Copy policy as JSON'; }, 1200);
+  });
+  render();
+</script>
+</body>
+</html>
