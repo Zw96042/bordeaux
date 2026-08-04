@@ -88,5 +88,5 @@ export function previewBdxExport(project: BordeauxProject, options: BdxExportOpt
   const issues: ValidationIssue[] = [];
   const validation = validateProject(project);
   issues.push(...validation.issues);
-  return { ok: !hasBlocking, pathCount, sampleCount, totalTimeS, issues };
-}
+
+  let pathCount = 0;
