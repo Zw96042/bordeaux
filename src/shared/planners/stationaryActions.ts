@@ -268,3 +268,70 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
         accelerationMps2: 0,
         angularVelocityRadps: 0,
       });
+    }
+    const waitHeading = turn ? targetHeading : arrival.headingRad;
+    const jiggleSamples: TrajectorySample[] = [];
+    if (jiggle && jigglePositions) {
+      for (let stroke = 0; stroke < jiggle.strokes; stroke += 1) {
+        const angle = jiggleHeading + (jiggle.startDeg + jiggle.stepDeg * stroke) * DEG;
+        for (let tick = 1; tick <= jiggleTicks; tick += 1) {
+          const u = tick / jiggleTicks;
+          const phase = jigglePhase(u);
+          const radialDistance = jiggle.distanceM * phase.position;
+          jiggleSamples.push({
+            ...arrival,
+            i: 0,
+            t: arrivalTime + turnDuration + stroke * jiggleStrokeDuration + tick * period,
+            s: arrival.s + addedDistance + stroke * jiggle.distanceM * 2 + jiggle.distanceM * phase.travel,
+            f: 1,
+            x: arrival.x + Math.cos(angle) * radialDistance,
+            y: arrival.y + Math.sin(angle) * radialDistance,
+            headingRad: jiggleHeading,
+            velocityMps: Math.abs(phase.velocity) * jiggle.distanceM / jiggleStrokeDuration,
+            accelerationMps2: tick === jiggleTicks ? 0 : phase.acceleration * jiggle.distanceM / (jiggleStrokeDuration * jiggleStrokeDuration),
+            angularVelocityRadps: 0,
+            curvatureInvM: 0,
+          });
+        }
+      }
+      addedDistance += jiggle.distanceM * 2 * jiggle.strokes;
+    }
+    const waitSamples: TrajectorySample[] = [];
+    for (let tick = 1; tick <= waitTicks; tick += 1) {
+      waitSamples.push({
+        ...arrival,
+        i: 0,
+        t: arrivalTime + turnDuration + jiggleDuration + tick * period,
+        s: arrival.s + addedDistance,
+        f: 1,
+        headingRad: jiggleSamples.at(-1)?.headingRad ?? waitHeading,
+        velocityMps: 0,
+        accelerationMps2: 0,
+        angularVelocityRadps: 0,
+      });
+    }
+    samples.splice(boundary + 1, 0, ...turnSamples, ...jiggleSamples, ...waitSamples);
+    inserted += turnSamples.length + jiggleSamples.length + waitSamples.length;
+  });
+
+  if (samples.length > LABVIEW_BDX_MAX_TRAJECTORY_POINTS) throw new Error(`Stationary actions require ${samples.length} samples, exceeding the LabVIEW .bdx limit of ${LABVIEW_BDX_MAX_TRAJECTORY_POINTS}`);
+  samples.forEach((sample, index) => {
+    sample.i = index;
+    if (index === 0) sample.angularVelocityRadps = 0;
+    else {
+      const before = samples[index - 1];
+      sample.headingRad = before.headingRad + wrapRadians(sample.headingRad - before.headingRad);
+      sample.angularVelocityRadps = (sample.headingRad - before.headingRad) / Math.max(EPSILON, sample.t - before.t);
+    }
+  });
+  const totalTimeS = samples.at(-1)?.t ?? result.totalTimeS;
+  return {
+    ...result,
+    totalTimeS,
+    totalDistanceM: result.totalDistanceM + addedDistance,
+    samples,
+    markers,
+    diagnostics,
+    optimization: result.optimization ? { ...result.optimization, totalTimeS } : result.optimization,
+  };
+}
