@@ -268,3 +268,93 @@ function transitionWindowsForSamples(path: PathDoc, samples: readonly { x: numbe
 }
 
 function headingTargets(path: PathDoc, geometry: readonly GeometryPoint[], waypointIndices: readonly number[], includeTargets: boolean): Array<{ f: number; heading: number }> {
+  const totalDistance = geometry.at(-1)?.s ?? 0;
+  const entries: Array<{ f: number; heading: number }> = [];
+  path.waypoints.forEach((waypoint, index) => {
+    const endpoint = index === 0 || index === path.waypoints.length - 1;
+    if (endpoint || waypoint.thetaOn) {
+      entries.push({ f: geometry[waypointIndices[index]].s / Math.max(totalDistance, EPSILON), heading: waypoint.theta * Math.PI / 180 });
+    }
+  });
+  if (includeTargets) {
+    path.targets.forEach((target) => {
+      const fraction = target.anchor === "dist"
+        ? (target.d ?? target.f * totalDistance) / Math.max(totalDistance, EPSILON)
+        : target.f;
+      entries.push({ f: clamp(fraction, 0, 1), heading: target.deg * Math.PI / 180 });
+    });
+  }
+  entries.sort((a, b) => a.f - b.f);
+  if (entries.length === 0) entries.push({ f: 0, heading: 0 }, { f: 1, heading: 0 });
+  const deduplicated: Array<{ f: number; heading: number }> = [];
+  entries.forEach((entry) => {
+    const previous = deduplicated.at(-1);
+    const heading = previous ? unwrapFrom(previous.heading, entry.heading) : entry.heading;
+    if (previous && Math.abs(previous.f - entry.f) < EPSILON) previous.heading = heading;
+    else deduplicated.push({ f: entry.f, heading });
+  });
+  return deduplicated;
+}
+
+function segmentAtGeometryIndex(index: number, waypointIndices: readonly number[]): number {
+  let segment = 0;
+  while (segment < waypointIndices.length - 2 && index >= waypointIndices[segment + 1]) segment += 1;
+  return segment;
+}
+
+function headingAtFraction(entries: readonly { f: number; heading: number }[], fraction: number): number {
+  if (fraction <= entries[0].f) return entries[0].heading;
+  const last = entries[entries.length - 1];
+  if (fraction >= last.f) return last.heading;
+  let index = 1;
+  while (entries[index].f < fraction) index += 1;
+  const before = entries[index - 1];
+  const after = entries[index];
+  const ratio = (fraction - before.f) / Math.max(EPSILON, after.f - before.f);
+  const smooth = ratio * ratio * (3 - 2 * ratio);
+  return before.heading + (after.heading - before.heading) * smooth;
+}
+
+function buildTimeline(input: PlannerInput, geometry: readonly GeometryPoint[]): PlanningTimeline {
+  const { path, robot } = input;
+  const totalDistance = geometry.at(-1)?.s ?? 0;
+  const waypointIndices = nearestGeometryIndices(path, geometry);
+  const ranges = rangeFractions(path, totalDistance, waypointIndices, geometry);
+  const manualHeadings = headingTargets(path, geometry, waypointIndices, false);
+  const targetHeadings = headingTargets(path, geometry, waypointIndices, true);
+  const rawRobotHeadings: number[] = [];
+  const segmentModes = path.waypoints.slice(0, -1).map((waypoint) => robot.drive === "tank"
+    ? "tangent"
+    : waypoint.segmentHeadingMode ?? path.headingMode ?? "targets");
+  geometry.forEach((point, index) => {
+    const segment = segmentAtGeometryIndex(index, waypointIndices);
+    const headingMode = segmentModes[segment];
+    const fraction = point.s / Math.max(totalDistance, EPSILON);
+    let baseHeading: number;
+    if (headingMode === "lookAt") {
+      const target = path.waypoints[segment]?.segmentLookAt;
+      const dx = target ? target.x - point.x : 0;
+      const dy = target ? target.y - point.y : 0;
+      baseHeading = Math.hypot(dx, dy) > EPSILON
+        ? Math.atan2(dy, dx)
+        : (rawRobotHeadings.at(-1) ?? point.heading);
+    } else {
+      baseHeading = headingMode === "tangent"
+        ? point.heading
+        : headingAtFraction(headingMode === "targets" ? targetHeadings : manualHeadings, fraction);
+    }
+    rawRobotHeadings.push(baseHeading + (path.driveBackward ? Math.PI : 0));
+  });
+  const segmentLaws = path.waypoints.slice(0, -1).map((waypoint, segment) => {
+    if (segmentModes[segment] !== "lookAt") return segmentModes[segment];
+    return `lookAt:${waypoint.segmentLookAt?.x ?? ""}:${waypoint.segmentLookAt?.y ?? ""}`;
+  });
+  const transitionBreaks = path.waypoints.slice(0, -1).map((waypoint) => Boolean(waypoint.turnInPlace));
+  const backwardOffset = path.driveBackward ? Math.PI : 0;
+  const transitionGoals = headingTransitionGoals(
+    segmentLaws,
+    transitionBreaks,
+    waypointIndices,
+    geometry,
+    {
+      manual: manualHeadings.map((anchor) => ({ f: anchor.f, heading: anchor.heading + backwardOffset })),
