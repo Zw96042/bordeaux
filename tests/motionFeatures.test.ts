@@ -538,3 +538,93 @@ describe("motion features", () => {
     path.constraints.maxAngDecel = 30;
     path.waypoints = buildWaypoints([
       { x: 0.5, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 5.5, y: 2, theta: 90, thetaOn: true, segType: "line" },
+      { x: 15.5, y: 2, theta: 90, thetaOn: true },
+    ]);
+    path.ranges = [{
+      anchor: "param", f0: 0.72, f1: 0.9,
+      maxVel: 4, maxAccel: 5, maxDecel: 5, maxAngVel: 180, maxAngAccel: 30,
+      rotationPriority: "translation",
+    }];
+    const result = getPlanner("labviewBezier").generate({ path, robot: project.robot });
+    const prefix = result.samples.filter((sample) => sample.f <= 0.5);
+    const prefixAcceleration = prefix.slice(1).map((sample, index) => (
+      Math.abs(sample.angularVelocityRadps - prefix[index].angularVelocityRadps)
+      / Math.max(1e-9, sample.t - prefix[index].t)
+    ));
+    expect(result.diagnostics.some((issue) => issue.severity === "error" && issue.message.includes("angular"))).toBe(false);
+    expect(Math.max(...prefix.map((sample) => Math.abs(sample.angularVelocityRadps))))
+      .toBeLessThanOrEqual(path.constraints.maxAngVel * Math.PI / 180 * 1.02);
+    expect(Math.max(...prefixAcceleration))
+      .toBeLessThanOrEqual(path.constraints.maxAngAccel * Math.PI / 180 * 1.04);
+  });
+
+  it("does not silently exceed angular jerk when LabVIEW Translation priority is active later", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxAngJerk = 1;
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 5, y: 2, theta: 90, thetaOn: true, segType: "line" },
+      { x: 9, y: 2, theta: 90, thetaOn: true },
+    ]);
+    path.ranges = [{
+      anchor: "param", f0: 0.7, f1: 0.9,
+      maxVel: path.constraints.maxVel,
+      maxAccel: path.constraints.maxAccel,
+      maxDecel: path.constraints.maxDecel,
+      maxAngVel: path.constraints.maxAngVel,
+      maxAngAccel: path.constraints.maxAngAccel,
+      rotationPriority: "translation",
+    }];
+    const result = getPlanner("labviewBezier").generate({ path, robot: project.robot });
+
+    expect(result.diagnostics.some((issue) => issue.severity === "error" && issue.message.includes("angular limits"))).toBe(true);
+  });
+
+  it.each(PLANNERS)("tracks a field point with %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints[0].segmentHeadingMode = "lookAt";
+    path.waypoints[0].segmentLookAt = { x: 3.6, y: 6 };
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+    const first = result.samples[0], last = result.samples.at(-1)!;
+
+    expect(first.headingRad).toBeCloseTo(Math.atan2(2, 1.4), 3);
+    expect(last.headingRad).toBeCloseTo(Math.atan2(2, -1.4), 3);
+    expect(result.samples.every((sample) => Number.isFinite(sample.headingRad))).toBe(true);
+  });
+
+  it.each(PLANNERS)("keeps a track-point to tangent transition continuous with %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.waypoints = buildWaypoints([
+      { x: 2, y: 2, theta: 45, thetaOn: true, segType: "line", segmentHeadingMode: "lookAt", segmentLookAt: { x: 4, y: 4 } },
+      { x: 4, y: 2, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "tangent" },
+      { x: 7, y: 2, theta: 0, thetaOn: true },
+    ]);
+
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+    let boundary = 1;
+    for (let index = 1; index < result.samples.length; index += 1) {
+      if (Math.abs(result.samples[index].x - 4) < Math.abs(result.samples[boundary].x - 4)) boundary = index;
+    }
+    const jump = Math.abs(PM.angWrap(result.samples[boundary].headingRad - result.samples[boundary - 1].headingRad));
+
+    expect(jump).toBeLessThan(0.12);
+    expect(result.samples.at(-1)!.headingRad).toBeCloseTo(0, 2);
+    expect(Math.max(...result.samples.map((sample) => Math.abs(sample.angularVelocityRadps)))).toBeLessThanOrEqual(path.constraints.maxAngVel * Math.PI / 180 * 1.03);
+  });
+
+  it.each(PLANNERS)("keeps track-point heading continuous through a stopped sharp corner with %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.waypoints = buildWaypoints([
+      { x: 2, y: 2, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "lookAt", segmentLookAt: { x: 6, y: 2.2 } },
+      { x: 4, y: 2, theta: 90, thetaOn: true, stop: true, segType: "line", segmentHeadingMode: "tangent" },
+      { x: 4, y: 5, theta: 90, thetaOn: true },
+    ]);
+
