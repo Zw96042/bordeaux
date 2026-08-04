@@ -898,3 +898,13 @@ describe("motion features", () => {
     const project = createDemoProject();
     project.plannerId = "labviewBezier";
     project.paths[0].waypoints.at(-1)!.jiggle = { distanceM: 0.18, strokes: 4, startDeg: 90, stepDeg: -90, strokeTimeS: 0.4 };
+
+    const encoded = buildLabviewBdx(project, project.paths[0].id);
+    const decoded = parseLabviewBdx(encoded.buffer);
+    const velocities = decoded.trajectory[0].velocities;
+
+    expect(decoded.trajectory[0].positions).toHaveLength(encoded.sampleCount);
+    expect(velocities.some((sample) => sample.velocityFps > 0.5)).toBe(true);
+    expect(decoded.trajectory[0].positions.at(-1)!.xFt).toBeCloseTo(project.paths[0].waypoints.at(-1)!.x / 0.3048, 5);
+  });
+});
