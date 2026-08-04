@@ -721,3 +721,93 @@
       const remapLocal = (segment, local) => {
         const authored = Number.isInteger(segment) ? segment : 0;
         const oldSegment = Math.max(0, Math.min(oldToNew.length - 2, authored));
+        const oldLocal = Math.max(0, Math.min(1, local != null ? local : (authored >= oldToNew.length - 1 ? 1 : 0)));
+        const a = oldToNew[oldSegment], b = oldToNew[oldSegment + 1];
+        if (!Number.isInteger(a) || !Number.isInteger(b) || newCount < 2) {
+          const fallback = Number.isInteger(a) ? a : Math.max(0, Math.min(last, oldSegment));
+          return { segment: Math.max(0, Math.min(Math.max(0, newCount - 2), fallback)), local: oldLocal };
+        }
+        const position = Math.max(0, Math.min(last, a + (b - a) * oldLocal));
+        const mappedSegment = Math.min(Math.max(0, newCount - 2), Math.floor(position));
+        return { segment: mappedSegment, local: position >= last ? 1 : position - mappedSegment };
+      };
+      let start = remapLocal(range.w0, range.t0), end = remapLocal(range.w1, range.t1);
+      if (start.segment + start.local > end.segment + end.local) { const swap = start; start = end; end = swap; }
+      next.w0 = start.segment; next.t0 = start.local; next.w1 = end.segment; next.t1 = end.local;
+      return next;
+    }
+    const oldStart = Number.isInteger(range.w0) ? range.w0 : 0;
+    const oldEnd = Number.isInteger(range.w1) ? range.w1 : oldToNew.length - 1;
+    const resolve = (value, start) => {
+      const mapped = oldToNew[value];
+      if (Number.isInteger(mapped)) return mapped;
+      if (value === removedIndex) return start ? Math.min(value, last) : Math.max(0, value - 1);
+      return Math.max(0, Math.min(last, value));
+    };
+    if (oldStart === removedIndex && oldEnd === removedIndex) {
+      next.w0 = next.w1 = Math.min(removedIndex, last);
+      return next;
+    }
+    const a = resolve(oldStart, true), b = resolve(oldEnd, false);
+    next.w0 = Math.min(a, b); next.w1 = Math.max(a, b);
+    return next;
+  }
+
+  // ---- one-call derivation: everything the field + panels need for a path ----
+  function derivePath(doc, robot, perSeg, options) {
+    perSeg = perSeg || 56;
+    const smp = sample(doc.waypoints, perSeg);
+    const pts = smp.pts;
+    const nWp = doc.waypoints.length;
+    const lastI = Math.max(0, pts.length - 1);
+    const wpIdx = doc.waypoints.map((_, k) => Math.min(lastI, k * perSeg));
+    const total = smp.length || 1;
+    const wpFrac = wpIdx.map((i) => (pts.length ? pts[i].s / total : 0));
+    const stopIdx = [];
+    doc.waypoints.forEach((w, k) => { if (w.stop) stopIdx.push(wpIdx[k]); });
+    const cap = (robot && robot.maxSpeed) || doc.constraints.maxVel;
+    const vmax = Math.min(doc.constraints.maxVel, cap);
+    const sv = doc.waypoints[0] && doc.waypoints[0].stop ? 0 : doc.startVel;
+    const gv = doc.waypoints[nWp - 1] && doc.waypoints[nWp - 1].stop ? 0 : doc.goalVel;
+    const effRanges = effectiveRanges(doc, smp);
+    // Heading mode is owned by the outgoing segment; omitted overrides inherit the path default.
+    const headingMode = (robot && robot.drive === 'tank') ? 'tangent' : (doc.headingMode || 'targets');
+    const effectiveHeadingMode = (segment) => (robot && robot.drive === 'tank')
+      ? 'tangent'
+      : ((doc.waypoints[segment] && doc.waypoints[segment].segmentHeadingMode) || headingMode);
+    const manualEntries = [], targetEntries = [];
+    doc.waypoints.forEach((w, k) => {
+      const isEnd = k === 0 || k === nWp - 1;
+      if (isEnd || w.thetaOn) {
+        const entry = { f: wpFrac[k], rad: (w.theta || 0) * D2R };
+        manualEntries.push(entry); targetEntries.push({ ...entry });
+      }
+    });
+    (doc.targets || []).forEach((t) => targetEntries.push({ f: featureFraction(t, smp), rad: t.deg * D2R }));
+    const manualAnchors = buildAnchors(manualEntries), targetAnchors = buildAnchors(targetEntries);
+    const rawHead: number[] = [];
+    const segmentModes = doc.waypoints.slice(0, -1).map((_, segment) => effectiveHeadingMode(segment));
+    pts.forEach((p, pointIndex) => {
+      const f = total > 1e-6 ? p.s / total : 0;
+      let segment = 0;
+      while (segment < nWp - 2 && pointIndex >= wpIdx[segment + 1]) segment++;
+      const segmentMode = effectiveHeadingMode(segment);
+      if (segmentMode === 'lookAt') {
+        const target = doc.waypoints[segment] && doc.waypoints[segment].segmentLookAt;
+        const dx = target ? target.x - p.x : 0, dy = target ? target.y - p.y : 0;
+        rawHead.push(Math.hypot(dx, dy) > 1e-6 ? Math.atan2(dy, dx) : (rawHead.length ? rawHead[rawHead.length - 1] : p.heading));
+      } else {
+        rawHead.push(segmentMode === 'tangent' ? p.heading : headingAt(f, segmentMode === 'targets' ? targetAnchors : manualAnchors));
+      }
+    });
+    const segmentLaws = doc.waypoints.slice(0, -1).map((w, segment) => segmentModes[segment] === 'lookAt' ? 'lookAt:' + (w.segmentLookAt ? w.segmentLookAt.x : '') + ':' + (w.segmentLookAt ? w.segmentLookAt.y : '') : segmentModes[segment]);
+    const transitionBreaks = doc.waypoints.slice(0, -1).map((w) => !!w.turnInPlace);
+    const headingTransitions = headingTransitionWindows(doc.waypoints, segmentLaws, transitionBreaks, wpFrac, total);
+    const transitionGoals = headingTransitionGoals(segmentLaws, transitionBreaks, wpIdx, pts, {
+      manual: manualAnchors,
+      targets: targetAnchors,
+    });
+    const head = smoothHeadingTransitions(rawHead, segmentLaws, transitionBreaks, wpIdx, pts, doc.waypoints, transitionGoals);
+    const allTangent = doc.waypoints.slice(0, -1).every((_, segment) => effectiveHeadingMode(segment) === 'tangent');
+    const mode = allTangent ? 'tank' : 'swerve';
+    const anchors = mode === 'tank' ? [] : buildAnchors(pts.map((p, i) => ({ f: total > 1e-6 ? p.s / total : 0, rad: head[i] })));
