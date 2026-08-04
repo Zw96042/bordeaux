@@ -448,51 +448,51 @@
     let dx = next.x - prev.x, dy = next.y - prev.y;
     const len = Math.hypot(dx, dy) || 1;
     dx /= len; dy /= len;
+    const handle = Math.max(0.6, len * 0.28);
+    return {
+      prevC: { x: w.x - dx * handle, y: w.y - dy * handle },
+      nextC: { x: w.x + dx * handle, y: w.y + dy * handle },
+    };
   }
 
-  // Path type belongs to the SEGMENT between two waypoints. The list stays honest:
-  // only true geometry types live here, grouped Basic / Spline. Snapping, heading-hold,
-  // approach and auto-smooth are tooling/constraint behaviours and live elsewhere.
-  const SEGTYPES = [
-    { id: 'line', label: 'Straight', abbr: 'LIN', group: 'Basic', hint: 'Straight line \u2014 control handles ignored.' },
-    { id: 'arc', label: 'Arc', abbr: 'ARC', group: 'Basic', hint: 'Constant-radius turn, tangent to the out-handle.' },
-    { id: 'bezier', label: 'B\u00e9zier', abbr: 'BEZ', group: 'Spline', hint: 'Hand-shaped spline driven by the control handles.' },
-    { id: 'clothoid', label: 'Clothoid', abbr: 'CLO', group: 'Spline', hint: 'Euler spiral \u2014 curvature ramps smoothly (swerve-friendly).' },
-  ];
-
-  // ---- constraint-range anchoring -------------------------------------------
-  // A range can be anchored three ways (the memo's request). We resolve each to
-  // concrete arclength fractions [f0,f1] against the CURRENT path so the profile
-  // engine + overlays stay simple, while the stored anchor keeps the range
-  // attached the way the user intends as the path is edited.
-  //   param : fixed percent of the path        {f0,f1}
-  //   dist  : fixed metres of travel           {d0,d1}
-  //   wp    : pinned to a waypoint span        {w0,w1}
-  function waypointFracs(doc, smp) {
-    const pts = smp.pts; const total = smp.length || 1; const n = doc.waypoints.length;
-    if (!pts.length) return doc.waypoints.map(() => 0);
-    const perSeg = (pts.length - 1) / Math.max(1, n - 1);
-    return doc.waypoints.map((_, k) => { const i = Math.min(pts.length - 1, Math.round(k * perSeg)); return pts[i].s / total; });
-  }
-  function effectiveRanges(doc, smp) {
-    const ranges = doc.ranges || []; const total = smp.length || 1;
-    const wf = ranges.some((r) => r.anchor === 'wp') ? waypointFracs(doc, smp) : null;
-    return ranges.map((r) => {
-      let f0 = r.f0, f1 = r.f1;
-      if (r.anchor === 'dist') { f0 = (r.d0 != null ? r.d0 : (r.f0 || 0) * total) / total; f1 = (r.d1 != null ? r.d1 : (r.f1 || 0) * total) / total; }
-      else if (r.anchor === 'wp' && wf) { const lo = Math.max(0, Math.min(wf.length - 1, r.w0 != null ? r.w0 : 0)); const hi = Math.max(0, Math.min(wf.length - 1, r.w1 != null ? r.w1 : wf.length - 1)); f0 = wf[lo]; f1 = wf[hi]; }
-      f0 = Math.max(0, Math.min(1, f0 || 0)); f1 = Math.max(0, Math.min(1, f1 || 0));
-      return { f0, f1, maxVel: r.maxVel, maxAccel: r.maxAccel, maxDecel: r.maxDecel, maxAngVel: r.maxAngVel, maxAngAccel: r.maxAngAccel, anchor: r.anchor || 'param', name: r.name };
-    });
+  // ---- per-point engineering metrics aligned to the sampled path ----
+  // returns arrays + maxima for velocity / acceleration / angular velocity / curvature
+  function metrics(pts, prof, anchors, mode) {
+    const n = pts.length;
+    const v = prof.v && prof.v.length ? prof.v : new Array(n).fill(0);
+    const t = prof.t && prof.t.length ? prof.t : new Array(n).fill(0);
+    const accel = new Array(n).fill(0), omega = new Array(n).fill(0), curv = new Array(n).fill(0), head = new Array(n).fill(0);
+    const totalS = n ? pts[n - 1].s : 0;
+    for (let i = 0; i < n; i++) {
+      const f = totalS > 1e-6 ? pts[i].s / totalS : 0;
+      head[i] = mode === 'tank' ? pts[i].heading : headingAt(f, anchors);
+      curv[i] = pts[i].curv || 0;
+    }
+    for (let i = 1; i < n; i++) {
+      const dt = t[i] - t[i - 1];
+      accel[i] = dt > 1e-5 ? (v[i] - v[i - 1]) / dt : 0;
+      omega[i] = dt > 1e-5 ? angWrap(head[i] - head[i - 1]) / dt : 0;
+    }
+    if (n > 1) { accel[0] = accel[1]; omega[0] = omega[1]; }
+    let vMax = 0.1, aMax = 0.1, wMax = 0.01, kMax = 0.01;
+    for (let i = 0; i < n; i++) {
+      vMax = Math.max(vMax, v[i]); aMax = Math.max(aMax, Math.abs(accel[i]));
+      wMax = Math.max(wMax, Math.abs(omega[i])); kMax = Math.max(kMax, curv[i]);
+    }
+    return { v, accel, omega, curv, head, vMax, aMax, wMax, kMax };
   }
 
-  // ---- one-call derivation: everything the field + panels need for a path ----
-  function derivePath(doc, robot, perSeg) {
-    perSeg = perSeg || 56;
-    const smp = sample(doc.waypoints, perSeg);
-    const pts = smp.pts;
-    const nWp = doc.waypoints.length;
-    const lastI = Math.max(0, pts.length - 1);
+  // ---- colour scales for the metric overlays ----
+  function hex2rgb(hx) { return [parseInt(hx.slice(1, 3), 16), parseInt(hx.slice(3, 5), 16), parseInt(hx.slice(5, 7), 16)]; }
+  const RAMPS_M = {
+    velocity:  [[0, '#3f6fd0'], [0.4, '#2fa36b'], [0.7, '#d28f37'], [1, '#cf4f4a']],
+    accel:     [[0, '#3f6fd0'], [0.5, '#4d535e'], [1, '#cf4f4a']],
+    angvel:    [[0, '#343d47'], [0.5, '#2f8fa6'], [1, '#5fcfe6']],
+    curvature: [[0, '#39342b'], [0.5, '#a87c30'], [1, '#edbf5c']],
+  };
+  function metricColor(mode, tt) {
+    const s = RAMPS_M[mode] || RAMPS_M.velocity;
+    let t = Math.max(0, Math.min(1, tt));
     const wpIdx = doc.waypoints.map((_, k) => Math.min(lastI, k * perSeg));
     const total = smp.length || 1;
     const wpFrac = wpIdx.map((i) => (pts.length ? pts[i].s / total : 0));
