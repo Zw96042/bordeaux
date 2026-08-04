@@ -178,3 +178,93 @@ function hasAngularViolation(path: PathDoc, ranges: readonly EffectiveRange[], s
     if (previousAcceleration !== undefined && (path.constraints.maxAngJerk ?? 0) > 0) {
       const jerk = Math.abs(signedAcceleration - previousAcceleration) / dt;
       if (jerk > path.constraints.maxAngJerk! * DEG * 1.02) return true;
+    }
+    previousAcceleration = signedAcceleration;
+  }
+  return false;
+}
+
+/**
+ * Preserves fixed translational timestamps while causally slewing heading under
+ * the active angular limits. Existing paths are returned byte-for-byte unless a
+ * range or heading-law boundary explicitly gives translation timing priority.
+ */
+export function applyRotationPriority(path: PathDoc, result: PlannerResult, robot: RobotConfig): PlannerResult {
+  if (result.samples.length < 2) return result;
+  const ranges = effectiveRanges(path, result.samples, result.totalDistanceM);
+  const waypointF = waypointFractions(path, result.samples);
+  const laws = segmentHeadingLaws(path, false);
+  const breaks = path.waypoints.slice(0, -1).map((waypoint) => Boolean(waypoint.turnInPlace));
+  const transitions = headingTransitionWindows(path.waypoints, laws, breaks, waypointF, result.totalDistanceM);
+  if (!ranges.some((range) => range.rotationPriority === "translation")
+    && !transitions.some((transition) => transition.rotationPriority === "translation")) return result;
+  if (robot.drive === "tank") {
+    return {
+      ...result,
+      diagnostics: [...result.diagnostics, {
+        severity: "error",
+        path: `paths.${path.name}.waypoints`,
+        message: "Translation timing priority requires a swerve drivetrain",
+      }],
+    };
+  }
+
+  const desired: number[] = [];
+  result.samples.forEach((sample, index) => {
+    desired.push(index === 0
+      ? sample.headingRad
+      : desired[index - 1] + wrapRadians(sample.headingRad - desired[index - 1]));
+  });
+  const samples = result.samples.map((sample) => ({ ...sample }));
+  let following = false;
+  let actual = desired[0];
+  let omega = 0;
+
+  samples[0].headingRad = actual;
+  samples[0].angularVelocityRadps = 0;
+  for (let index = 1; index < samples.length; index += 1) {
+    const dt = samples[index].t - samples[index - 1].t;
+    const priorityHere = translationHasPriorityForInterval(
+      ranges,
+      transitions,
+      samples[index - 1].f,
+      samples[index].f,
+    );
+    if (priorityHere) following = true;
+    if (!following || dt <= EPSILON) {
+      actual = desired[index];
+      omega = samples[index].angularVelocityRadps;
+      continue;
+    }
+
+    const limits = intervalAngularLimits(path, ranges, samples[index - 1].f, samples[index].f);
+    ({ actual, omega } = trackedStep(actual, omega, desired[index], desired[index - 1], limits, dt));
+
+    samples[index].headingRad = actual;
+    samples[index].angularVelocityRadps = omega;
+  }
+
+  const diagnostics = [...result.diagnostics];
+  const target = desired.at(-1)!;
+  const period = samplePeriod(path, samples);
+  const last = samples.at(-1)!;
+  if (Math.abs(last.velocityMps) <= 1e-3) {
+    const limits = angularLimits(path, ranges, 1);
+    while (Math.abs(target - actual) > 0.05 * DEG || Math.abs(omega) > 0.05 * DEG) {
+      if (samples.length >= LABVIEW_BDX_MAX_TRAJECTORY_POINTS) {
+        throw new Error(`Heading catch-up requires more than ${LABVIEW_BDX_MAX_TRAJECTORY_POINTS} samples`);
+      }
+      ({ actual, omega } = trackedStep(actual, omega, target, target, limits, period));
+      samples.push({
+        ...samples.at(-1)!,
+        i: samples.length,
+        t: samples.at(-1)!.t + period,
+        headingRad: actual,
+        velocityMps: 0,
+        accelerationMps2: 0,
+        angularVelocityRadps: omega,
+      });
+    }
+  } else if (Math.abs(target - actual) > 1 * DEG) {
+    diagnostics.push({
+      severity: "error",
