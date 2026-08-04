@@ -268,3 +268,93 @@ describe("additive LabVIEW planner compatibility", () => {
       { x: 3.7, y: 2.4, stop: true, wait: 1, prevC: { x: 2.9, y: 2.1 }, nextC: { x: 4.1, y: 3.3 } },
       { x: 6.4, y: 5.2, prevC: { x: 5.8, y: 4.7 } },
     ]);
+    const result = getPlanner("labviewBezier").generate({ path: project.paths[0], robot: project.robot });
+    const stopped = result.samples.filter((sample) => Math.hypot(sample.x - 3.7, sample.y - 2.4) < 1e-7 && Math.abs(sample.velocityMps) < 1e-9);
+    expect(stopped.length).toBeGreaterThanOrEqual(51);
+    expect(stopped.at(-1)!.t - stopped[0].t).toBeCloseTo(1, 8);
+
+    project.paths[0].waypoints[1].wait = 0;
+    const noWait = getPlanner("labviewBezier").generate({ path: project.paths[0], robot: project.robot });
+    expect(noWait.samples.some((sample) => Math.hypot(sample.x - 3.7, sample.y - 2.4) < 1e-7 && Math.abs(sample.velocityMps) < 1e-9)).toBe(true);
+  });
+
+  it("keeps start waits and stops at a later repeated coordinate", () => {
+    const project = createDemoProject();
+    project.plannerId = "labviewBezier";
+    project.paths[0].constraints.maxJerk = 10;
+    project.paths[0].waypoints = buildWaypoints([
+      { x: 1, y: 1, stop: true, wait: 1 },
+      { x: 4, y: 1 },
+      { x: 1, y: 1, stop: true, wait: 1 },
+      { x: 1, y: 4 },
+    ]);
+    const result = getPlanner("labviewBezier").generate({ path: project.paths[0], robot: project.robot });
+    const atStart = result.samples.filter((sample) => Math.hypot(sample.x - 1, sample.y - 1) < 1e-7 && Math.abs(sample.velocityMps) < 1e-9);
+    expect(atStart.some((sample) => sample.t === 1)).toBe(true);
+    const revisit = atStart.filter((sample) => sample.t > 1.01);
+    expect(revisit.length).toBeGreaterThanOrEqual(51);
+    expect(revisit.at(-1)!.t - revisit[0].t).toBeCloseTo(1, 8);
+  });
+
+  it("enforces angular range acceleration, angular deceleration, and reverse target headings", () => {
+    const project = createDemoProject();
+    project.plannerId = "labviewBezier";
+    const pathDoc = project.paths[0];
+    pathDoc.headingMode = "targets";
+    pathDoc.driveBackward = true;
+    pathDoc.constraints.maxAngAccel = 40;
+    pathDoc.constraints.maxAngDecel = 20;
+    pathDoc.constraints.maxAngJerk = 0;
+    pathDoc.waypoints[0].theta = 0;
+    pathDoc.waypoints[1].theta = 90;
+    pathDoc.ranges = [{ anchor: "param", f0: 0, f1: 1, maxVel: 4, maxAccel: 6, maxAngVel: 300, maxAngAccel: 30 }];
+    const result = getPlanner("labviewBezier").generate({ path: pathDoc, robot: project.robot });
+    expect(result.samples[0].headingRad).toBeCloseTo(Math.PI, 8);
+    const angularAcceleration = result.samples.slice(2).map((sample, index) => {
+      const previousOmega = result.samples[index + 1].angularVelocityRadps;
+      return {
+        value: (sample.angularVelocityRadps - previousOmega) / 0.02,
+        decelerating: Math.abs(sample.angularVelocityRadps) < Math.abs(previousOmega),
+      };
+    });
+    expect(Math.max(...angularAcceleration.filter((item) => !item.decelerating).map((item) => Math.abs(item.value)))).toBeLessThanOrEqual(30 * Math.PI / 180 * 1.03);
+    expect(Math.max(...angularAcceleration.filter((item) => item.decelerating).map((item) => Math.abs(item.value)))).toBeLessThanOrEqual(20 * Math.PI / 180 * 1.03);
+  });
+
+  it("rejects trajectories too large for its own strict reader", () => {
+    const project = createDemoProject();
+    project.plannerId = "labviewBezier";
+    project.paths[0].labview = { ...project.paths[0].labview, samplePeriodS: 0.001 };
+    project.paths[0].constraints.maxVel = 0.01;
+    project.robot.maxSpeed = 0.01;
+    expect(() => buildLabviewBdx(project, project.paths[0].id)).toThrow(/250000|250,000|limit/i);
+  });
+
+  it("rejects negative endpoint velocities instead of silently clamping them", () => {
+    const project = createDemoProject();
+    project.plannerId = "labviewBezier";
+    const binary = Buffer.from(buildLabviewBdx(project, project.paths[0].id).buffer);
+    const nameLength = binary.readUInt32BE(13);
+    let offset = 17 + nameLength + 2;
+    const positionCount = binary.readUInt32BE(offset);
+    offset += 4 + positionCount * 24;
+    const velocityCount = binary.readUInt32BE(offset);
+    offset += 4 + velocityCount * 32 + 8;
+    const conditionsOffset = offset + 4;
+    binary.writeDoubleBE(-1, conditionsOffset + 40);
+    expect(() => decodeLabviewBdxProject(binary)).toThrow(/negative endpoint velocities/i);
+  });
+
+  it("preserves low positive v4.4 limits without clamping", () => {
+    const project = createDemoProject();
+    project.plannerId = "labviewBezier";
+    project.robot.maxSpeed = 0.05;
+    Object.assign(project.paths[0].constraints, {
+      maxVel: 0.05,
+      maxAccel: 0.05,
+      maxDecel: 0.05,
+      maxJerk: 0.05,
+      maxAngVel: 0.05,
+      maxAngAccel: 0.05,
+      maxAngDecel: 0.05,
+      maxAngJerk: 0.05,
