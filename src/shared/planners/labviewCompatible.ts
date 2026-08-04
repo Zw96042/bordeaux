@@ -448,3 +448,93 @@ function buildTimeline(input: PlannerInput, geometry: readonly GeometryPoint[]):
       const headingRatePerMeter = Math.abs(robotHeadings[index] - robotHeadings[index - 1]) / distance;
       if (headingRatePerMeter > EPSILON) velocityCaps[index] = Math.min(velocityCaps[index], reachableOmega[index] / headingRatePerMeter);
     }
+  }
+
+  const stopIndices = new Map<number, number>();
+  path.waypoints.forEach((waypoint, index) => {
+    if (waypoint.stop) stopIndices.set(waypointIndices[index], Math.max(0, waypoint.wait ?? 0));
+  });
+  stopIndices.forEach((_wait, index) => { velocityCaps[index] = 0; });
+
+  const acceleration = geometry.map((point) => {
+    const fraction = point.s / Math.max(totalDistance, EPSILON);
+    let limit = path.constraints.maxAccel;
+    ranges.forEach((range) => { if (fraction >= range.f0 - EPSILON && fraction <= range.f1 + EPSILON) limit = Math.min(limit, range.maxAccel); });
+    return limit;
+  });
+  const deceleration = geometry.map((point) => {
+    const fraction = point.s / Math.max(totalDistance, EPSILON);
+    let limit = path.constraints.maxDecel || path.constraints.maxAccel;
+    ranges.forEach((range) => {
+      if (fraction >= range.f0 - EPSILON && fraction <= range.f1 + EPSILON) limit = Math.min(limit, range.maxDecel ?? range.maxAccel);
+    });
+    return limit;
+  });
+
+  const velocity = [...velocityCaps];
+  velocity[0] = Math.min(velocity[0], path.waypoints[0].stop ? 0 : path.startVel);
+  for (let index = 1; index < velocity.length; index += 1) {
+    const ds = Math.max(0, geometry[index].s - geometry[index - 1].s);
+    const availableAcceleration = motorAccelerationLimit(acceleration[index - 1], velocity[index - 1], robot.maxSpeed);
+    velocity[index] = Math.min(velocity[index], Math.sqrt(Math.max(0, velocity[index - 1] ** 2 + 2 * availableAcceleration * ds)));
+  }
+  velocity[velocity.length - 1] = Math.min(velocity[velocity.length - 1], path.waypoints.at(-1)!.stop ? 0 : path.goalVel);
+  for (let index = velocity.length - 2; index >= 0; index -= 1) {
+    const ds = Math.max(0, geometry[index + 1].s - geometry[index].s);
+    velocity[index] = Math.min(velocity[index], Math.sqrt(Math.max(0, velocity[index + 1] ** 2 + 2 * deceleration[index + 1] * ds)));
+  }
+
+  const timeline: TimelinePoint[] = [{ ...geometry[0], heading: robotHeadings[0], t: 0, velocity: velocity[0] }];
+  let time = 0;
+  for (let index = 1; index < geometry.length; index += 1) {
+    const ds = Math.max(0, geometry[index].s - geometry[index - 1].s);
+    const averageVelocity = (velocity[index - 1] + velocity[index]) / 2;
+    time += averageVelocity > EPSILON ? ds / averageVelocity : 0;
+    timeline.push({ ...geometry[index], heading: robotHeadings[index], t: time, velocity: velocity[index] });
+  }
+  const expanded: TimelinePoint[] = [];
+  const expandedStops = new Map<number, number>();
+  const rotationBreaks = new Set<number>();
+  const turnsByIndex = new Map<number, Waypoint>();
+  path.waypoints.forEach((waypoint, index) => {
+    if (waypoint.stop && waypoint.turnInPlace && index < path.waypoints.length - 1) turnsByIndex.set(waypointIndices[index], waypoint);
+  });
+  timeline.forEach((point, index) => {
+    const turn = turnsByIndex.get(index);
+    const incoming = turn && index > 0 ? { ...point, heading: timeline[index - 1].heading } : point;
+    const expandedIndex = expanded.push(incoming) - 1;
+    if (stopIndices.has(index)) expandedStops.set(expandedIndex, stopIndices.get(index)!);
+    if (turn) {
+      expanded.push({ ...incoming, heading: unwrapFrom(incoming.heading, point.heading) });
+      rotationBreaks.add(expandedIndex);
+    }
+  });
+  return { points: expanded, stops: expandedStops, rotationBreaks };
+}
+
+function interpolateTimeline(timeline: readonly TimelinePoint[], time: number): TimelinePoint {
+  if (time <= 0) return timeline[0];
+  const last = timeline[timeline.length - 1];
+  if (time >= last.t) return last;
+  let low = 1;
+  let high = timeline.length - 1;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (timeline[middle].t < time) low = middle + 1;
+    else high = middle;
+  }
+  const before = timeline[low - 1];
+  const after = timeline[low];
+  const ratio = (time - before.t) / Math.max(EPSILON, after.t - before.t);
+  const lerp = (a: number, b: number) => a + (b - a) * ratio;
+  return {
+    x: lerp(before.x, after.x),
+    y: lerp(before.y, after.y),
+    s: lerp(before.s, after.s),
+    heading: lerp(before.heading, after.heading),
+    curvature: lerp(before.curvature, after.curvature),
+    t: time,
+    velocity: lerp(before.velocity, after.velocity),
+  };
+}
+
