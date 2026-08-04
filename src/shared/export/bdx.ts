@@ -1,4 +1,5 @@
 import { getPlanner } from "../planners";
+import { clone } from "../project/defaults";
 import type {
   BdxExport,
   BdxPath,
@@ -30,7 +31,11 @@ export function buildBdxExport(project: BordeauxProject, options: BdxExportOptio
     if (result.samples.length < 2) {
       throw new Error(`Path "${path.name}" generated fewer than two samples`);
     }
+    const blockingDiagnostic = result.diagnostics.find((item) => item.severity === "error" || (options.includeWarningsAsBlocking && item.severity === "warning"));
+    if (blockingDiagnostic) throw new Error(`${path.name}: ${blockingDiagnostic.message}`);
+    assertFinitePlannerResult(path.name, result);
     return {
+      id: path.id,
       name: path.name,
       planner: result.planner,
       totalTimeS: result.totalTimeS,
@@ -38,11 +43,6 @@ export function buildBdxExport(project: BordeauxProject, options: BdxExportOptio
       samples: result.samples,
       markers: result.markers,
       diagnostics: result.diagnostics,
-      optimization: result.optimization,
-    };
-  });
-
-  return {
     schemaVersion: "1.0",
     generator: "bordeaux",
     units: {
