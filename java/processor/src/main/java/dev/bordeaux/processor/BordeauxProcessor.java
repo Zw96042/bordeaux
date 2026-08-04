@@ -178,3 +178,93 @@ public final class BordeauxProcessor extends AbstractProcessor {
             Parameter inspected = inspectParameter(parameter);
             if (inspected == null) valid = false;
             else parameters.add(inspected);
+        }
+        if (!valid) return null;
+        String label = annotation.label().isBlank() ? humanize(method.getSimpleName().toString()) : annotation.label();
+        if (label.length() > 256 || annotation.description().length() > 2_048) {
+            error(method, "Bordeaux command labels and descriptions exceed catalog limits");
+            return null;
+        }
+        List<String> aliases = boundedTerms(method, annotation.aliases(), "aliases", false);
+        List<String> semanticTags = boundedTerms(method, annotation.semanticTags(), "semantic tags", true);
+        if (aliases == null || semanticTags == null) return null;
+        return new CommandMethod(id, label, annotation.description(), aliases, semanticTags, ownerName,
+                method.getSimpleName().toString(), method.getModifiers().contains(Modifier.STATIC), parameters);
+    }
+
+    private List<String> boundedTerms(Element element, String[] values, String label, boolean kebabCase) {
+        if (values.length > 16) {
+            error(element, "Bordeaux command " + label + " cannot exceed 16 entries");
+            return null;
+        }
+        List<String> result = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (String raw : values) {
+            String value = raw.trim();
+            if (value.isEmpty() || value.length() > 64 || (kebabCase && !value.matches("[a-z0-9]+(?:-[a-z0-9]+)*"))) {
+                error(element, "Bordeaux command " + label + " must contain bounded" + (kebabCase ? " lowercase kebab-case" : " nonblank") + " values");
+                return null;
+            }
+            String key = value.toLowerCase(Locale.ROOT);
+            if (!seen.add(key)) {
+                error(element, "Bordeaux command " + label + " cannot contain duplicates");
+                return null;
+            }
+            result.add(value);
+        }
+        return result;
+    }
+
+    private Parameter inspectParameter(VariableElement parameter) {
+        String unsupported = unsupportedReason(parameter.asType(), new HashSet<>(), 0);
+        if (unsupported != null) {
+            error(parameter, "Unsupported authored parameter type '" + parameter.asType() + "': " + unsupported);
+            return null;
+        }
+        String parameterSchema = schema(parameter.asType(), new HashSet<>(), 0);
+        BordeauxParam metadata = parameter.getAnnotation(BordeauxParam.class);
+        if (metadata != null && (metadata.label().length() > 256 || metadata.description().length() > 2_048
+                || metadata.unit().length() > 64 || metadata.defaultValue().length() > 262_144
+                || metadata.min().length() > 128 || metadata.max().length() > 128)) {
+            error(parameter, "@BordeauxParam metadata exceeds catalog limits");
+            return null;
+        }
+        String defaultValue = metadata == null ? "" : metadata.defaultValue().trim();
+        if (!defaultValue.isEmpty()) {
+            try {
+                defaultValue = CanonicalJson.canonicalize(defaultValue);
+            } catch (IllegalArgumentException exception) {
+                error(parameter, "@BordeauxParam defaultValue must be valid JSON: " + exception.getMessage());
+                return null;
+            }
+            if (isExactIntegerType(parameter.asType().toString())
+                    && (!defaultValue.matches("\"[+-]?\\d+\"") || defaultValue.length() - 2 > 1_024)) {
+                error(parameter, "@BordeauxParam defaultValue for long and BigInteger must be a signed digit JSON string");
+                return null;
+            }
+            if (isExactDecimalType(parameter.asType().toString())) {
+                if (!defaultValue.matches("\"[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?\"")
+                        || defaultValue.length() - 2 > 1_024) {
+                    error(parameter, "@BordeauxParam defaultValue for BigDecimal must be a decimal JSON string");
+                    return null;
+                }
+                if (!decimalExponentWithinLimit(defaultValue.substring(1, defaultValue.length() - 1))) {
+                    error(parameter, "@BordeauxParam defaultValue decimal exponent cannot exceed 10000");
+                    return null;
+                }
+            }
+            String defaultError = defaultValueError(parameter.asType(), defaultValue, 0);
+            if (defaultError != null) {
+                error(parameter, "@BordeauxParam defaultValue " + defaultError);
+                return null;
+            }
+        }
+        if (metadata != null) {
+            try {
+                if ((!metadata.min().isBlank() || !metadata.max().isBlank()) && !isNumericType(parameter.asType().toString())) {
+                    error(parameter, "@BordeauxParam min and max may only constrain scalar numeric parameters");
+                    return null;
+                }
+                boolean exactInteger = isExactIntegerType(parameter.asType().toString());
+                if (exactInteger && (!validSignedIntegerBound(metadata.min()) || !validSignedIntegerBound(metadata.max()))) {
+                    error(parameter, "@BordeauxParam bounds for long and BigInteger must be signed digit strings without fractions or exponents");
