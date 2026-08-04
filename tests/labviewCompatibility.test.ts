@@ -88,3 +88,93 @@ describe("additive LabVIEW planner compatibility", () => {
     expect(outgoing.headingRad).toBeCloseTo(Math.PI / 2, 6);
   });
 
+  it("resolves heading mode independently for each segment", () => {
+    const project = createDemoProject();
+    project.plannerId = "labviewBezier";
+    const pathDoc = project.paths[0];
+    pathDoc.headingMode = "tangent";
+    pathDoc.constraints.maxJerk = 100;
+    pathDoc.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 90, nextC: { x: 2, y: 2 }, segmentHeadingMode: "tangent" },
+      { x: 4, y: 2, theta: 90, prevC: { x: 3, y: 2 }, nextC: { x: 5, y: 2 }, segmentHeadingMode: "targets" },
+      { x: 7, y: 2, theta: 90, prevC: { x: 6, y: 2 } },
+    ]);
+    pathDoc.targets = [{ f: 0.75, deg: 180 }];
+
+    const result = getPlanner("labviewBezier").generate({ path: pathDoc, robot: project.robot });
+    const firstSegment = result.samples.find((sample) => sample.f > 0.2)!;
+    const secondSegment = result.samples.find((sample) => sample.f > 0.7)!;
+
+    expect(firstSegment.headingRad).toBeCloseTo(0, 5);
+    expect(secondSegment.headingRad).toBeGreaterThan(Math.PI / 2);
+  });
+
+  it("generates signed vertex-blend clothoids without removing the current G1 option", () => {
+    const project = createDemoProject();
+    project.plannerId = "labviewClothoid";
+    project.paths[0].labview = { samplePeriodS: 0.02, minTurnRadiusM: 0.4, bezierTangentMode: "handles" };
+    project.paths[0].constraints.maxJerk = 100;
+    project.paths[0].waypoints = buildWaypoints([
+      { x: 1, y: 1 },
+      { x: 4, y: 1 },
+      { x: 4, y: 4 },
+    ]);
+    const result = getPlanner("labviewClothoid").generate({ path: project.paths[0], robot: project.robot });
+
+    expect(result.planner).toBe("labviewClothoid");
+    expect(result.samples[0]).toMatchObject({ x: 1, y: 1 });
+    expect(result.samples.at(-1)!.x).toBeCloseTo(4, 8);
+    expect(result.samples.at(-1)!.y).toBeCloseTo(4, 8);
+    expect(Math.max(...result.samples.map((sample) => sample.curvatureInvM))).toBeGreaterThan(0.5);
+    expect(getPlanner("profiledSpline").id).toBe("profiledSpline");
+
+    const decoded = parseLabviewBdx(buildLabviewBdx(project, project.paths[0].id).buffer);
+    expect(decoded.pathType).toBe("clothoid");
+    expect(decoded.trajectory[0].type).toBe("blend");
+  });
+
+  it.each(["labviewBezier", "labviewClothoid"] as const)("reduces %s acceleration along the motor torque-speed line", (plannerId) => {
+    const project = createDemoProject();
+    project.plannerId = plannerId;
+    project.robot.maxSpeed = 5;
+    const pathDoc = project.paths[0];
+    pathDoc.constraints.maxVel = 5;
+    pathDoc.constraints.maxAccel = 6;
+    pathDoc.constraints.maxDecel = 6;
+    pathDoc.constraints.maxJerk = 1_000;
+    pathDoc.ranges = [{ anchor: "param", f0: 0, f1: 1, maxVel: 5, maxAccel: 3, maxDecel: 6, maxAngVel: 540, maxAngAccel: 720 }];
+    pathDoc.labview = { ...pathDoc.labview, samplePeriodS: 0.01 };
+    pathDoc.waypoints = buildWaypoints([{ x: 0.5, y: 1 }, { x: 15.5, y: 1 }]);
+
+    const result = getPlanner(plannerId).generate({ path: pathDoc, robot: project.robot });
+    const accelerating = result.samples.slice(1).map((sample, index) => ({ sample, previous: result.samples[index] }))
+      .filter(({ sample, previous }) => sample.velocityMps > previous.velocityMps + 1e-6);
+
+    expect(accelerating.length).toBeGreaterThan(20);
+    accelerating.forEach(({ sample, previous }) => {
+      const motorLimit = pathDoc.ranges[0].maxAccel * Math.max(0, 1 - previous.velocityMps / project.robot.maxSpeed);
+      expect(sample.accelerationMps2).toBeLessThanOrEqual(motorLimit * 1.04 + 1e-3);
+    });
+    const lowSpeed = accelerating.filter(({ previous }) => previous.velocityMps < 1);
+    const highSpeed = accelerating.filter(({ previous }) => previous.velocityMps > 3);
+    expect(highSpeed.length).toBeGreaterThan(0);
+    expect(Math.max(...highSpeed.map(({ sample }) => sample.accelerationMps2)))
+      .toBeLessThan(Math.max(...lowSpeed.map(({ sample }) => sample.accelerationMps2)));
+  });
+
+  it("uses fixture-backed LabVIEW metadata for a straight clothoid path", () => {
+    // Conventions confirmed by LabVIEW-generated 2CycleDepotPart1.bdx
+    // (SHA-256 5ee07b8aa234f9ec19613245af25ee38fd9ff1b701f2e7b745b4d79dab7ee64f).
+    const metersPerFoot = 0.3048;
+    const project = createDemoProject();
+    project.plannerId = "labviewClothoid";
+    project.robot.maxSpeed = 14 * metersPerFoot;
+    const pathDoc = project.paths[0];
+    pathDoc.waypoints = buildWaypoints([
+      { x: 1.9662723541259766 * metersPerFoot, y: 14.616308212280273 * metersPerFoot, theta: 360, segType: "clothoid" },
+      { x: 1.966299057006836 * metersPerFoot, y: 22.961009979248047 * metersPerFoot, theta: 360 },
+    ]);
+    pathDoc.startVel = 0;
+    pathDoc.goalVel = 14 * metersPerFoot;
+    pathDoc.constraints = {
+      maxVel: 14 * metersPerFoot,
