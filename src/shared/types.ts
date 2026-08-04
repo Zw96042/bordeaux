@@ -88,51 +88,51 @@ export interface Waypoint {
   thetaOn: boolean;
   linked: boolean;
   stop: boolean;
-  scale?: number;
-  funcRef?: string;
-  op?: string;
-  target?: string;
+  wait?: number;
+  corner?: boolean;
+  segType?: SegmentType;
+  /** Heading law for the outgoing segment. Omitted to inherit PathDoc.headingMode. */
+  segmentHeadingMode?: SegmentHeadingMode;
+  /** Field point continuously faced by the outgoing segment when segmentHeadingMode is lookAt. */
+  segmentLookAt?: ControlPoint;
+  /** Continuity policy at the boundary into this waypoint's outgoing segment. */
+  headingTransition?: HeadingTransition;
+  /** Stationary angular move performed after arriving at this stopped waypoint. */
+  turnInPlace?: TurnInPlace;
+  /** Rapid terminal translation action expanded into samples without authored waypoints. */
+  jiggle?: JiggleAction;
+  prevC: ControlPoint;
+  nextC: ControlPoint;
 }
 
-export interface RoutinePathNode {
-  id: string;
-  type: "path";
-  ref: number;
+export interface RotationTarget {
+  f: number;
+  deg: number;
+  anchor?: "param" | "dist";
+  d?: number;
 }
 
-export interface RoutineDecisionNode {
-  id: string;
-  type: "decision";
-  cond: string;
-  thenLabel: string;
-  elseLabel: string;
-  then: RoutineNode[];
-  else: RoutineNode[];
-}
-
-export type RoutineNode = RoutineFunctionNode | RoutinePathNode | RoutineDecisionNode;
-
-export interface AutonomousRoutine {
+export interface Marker {
+  id?: string;
+  f: number;
   name: string;
-  nodes: RoutineNode[];
+  cmd?: string;
+  invocation?: CommandInvocation;
+  /** Requested endpoint action retained until an authoritative command is bound. */
+  actionIntent?: {
+    semanticTag: string;
+    description: string;
+  };
+  group?: "sequential" | "parallel" | "deadline";
+  anchor?: "param" | "dist";
+  d?: number;
 }
 
-export interface BordeauxProject {
-  schemaVersion: string;
-  name: string;
-  robot: RobotConfig;
-  paths: PathDoc[];
-  routine?: AutonomousRoutine;
-  plannerId?: TrajectoryPlannerId;
-}
-
-export interface ProjectFile {
-  path: string | null;
-  project: BordeauxProject;
-}
-
-export interface SaveResult {
-  path: string;
+export type CommandArgumentValue =
+  | null
+  | boolean
+  | number
+  | string
   canceled?: boolean;
 }
 
