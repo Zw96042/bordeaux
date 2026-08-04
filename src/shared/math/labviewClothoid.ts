@@ -358,3 +358,37 @@ export function generateLabviewClothoidPath(
     kind: "straight",
   }];
 
+  for (let index = 1; index < waypoints.length - 1; index += 1) {
+    const recipe = recipes[index];
+    if (recipe && recipe.scale > POSITION_EPSILON) {
+      appendBlend(output, waypoints[index], recipe);
+    } else {
+      const direction = unit(subtract(waypoints[index], waypoints[index - 1]));
+      appendPoint(output, {
+        x: waypoints[index].x,
+        y: waypoints[index].y,
+        heading: Math.atan2(direction.y, direction.x),
+        curvature: 0,
+        kind: "straight",
+      });
+    }
+  }
+
+  const lastIndex = waypoints.length - 1;
+  const lastDirection = unit(subtract(waypoints[lastIndex], waypoints[lastIndex - 1]));
+  appendPoint(output, {
+    x: waypoints[lastIndex].x,
+    y: waypoints[lastIndex].y,
+    heading: Math.atan2(lastDirection.y, lastDirection.x),
+    curvature: 0,
+    kind: "straight",
+  });
+
+  // Keep headings continuous across atan2's branch cut.
+  for (let index = 1; index < output.length; index += 1) {
+    output[index].heading = output[index - 1].heading
+      + wrapRadians(output[index].heading - output[index - 1].heading);
+  }
+  return output;
+}
+
