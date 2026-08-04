@@ -718,3 +718,93 @@ describe("motion features", () => {
     expect(Math.max(...terminal.map((sample) => Math.abs(sample.angularVelocityRadps)))).toBeLessThanOrEqual(path.constraints.maxAngVel * Math.PI / 180 * 1.02);
     const angularAcceleration = terminal.slice(1).map((sample, index) => (sample.angularVelocityRadps - terminal[index].angularVelocityRadps) / (sample.t - terminal[index].t));
     expect(Math.max(...angularAcceleration.map(Math.abs))).toBeLessThanOrEqual(path.constraints.maxAngAccel * Math.PI / 180 * 1.03);
+    expect(result.markers[0].timeS).toBeCloseTo(result.totalTimeS, 6);
+  });
+
+  it.each(PLANNERS)("keeps an interior %s turn continuous with its outgoing segment", (plannerId) => {
+    const project = interiorTurnProject();
+    const path = project.paths[0];
+    const withoutTurn = structuredClone(path);
+    delete withoutTurn.waypoints[1].turnInPlace;
+    withoutTurn.waypoints[1].segmentHeadingMode = "tangent";
+    withoutTurn.waypoints[1].theta = 0;
+    withoutTurn.waypoints[2].theta = 0;
+    const baseline = getPlanner(plannerId).generate({ path: withoutTurn, robot: project.robot });
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+
+    expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+    expect(result.totalTimeS - baseline.totalTimeS).toBeGreaterThan(0.7);
+    expect(result.totalTimeS - baseline.totalTimeS).toBeLessThan(1.05);
+    expect(result.samples.every((sample, index) => index === 0 || sample.t > result.samples[index - 1].t)).toBe(true);
+
+    const boundarySamples = result.samples.filter((sample) => Math.hypot(sample.x - 4, sample.y - 2) < 1e-5);
+    expect(boundarySamples.length).toBeGreaterThan(2);
+    expect(boundarySamples.every((sample) => Math.abs(sample.velocityMps) < 1e-8)).toBe(true);
+    expect(boundarySamples.at(-1)!.headingRad).toBeCloseTo(Math.PI / 2, 6);
+    const firstAtTarget = boundarySamples.findIndex((sample) => Math.abs(PM.angWrap(sample.headingRad - Math.PI / 2)) < 1e-6);
+    expect(firstAtTarget).toBeGreaterThanOrEqual(0);
+    expect(boundarySamples.at(-1)!.t - boundarySamples[firstAtTarget].t).toBeGreaterThanOrEqual(path.waypoints[1].wait! - 1e-6);
+
+    let lastBoundary = -1;
+    for (let index = result.samples.length - 1; index >= 0; index -= 1) {
+      if (Math.hypot(result.samples[index].x - 4, result.samples[index].y - 2) < 1e-5) { lastBoundary = index; break; }
+    }
+    const outgoing = result.samples[lastBoundary + 1];
+    expect(outgoing).toBeDefined();
+    expect(PM.angWrap(outgoing.headingRad - Math.PI / 2)).toBeCloseTo(0, 2);
+    expect(Math.abs(outgoing.angularVelocityRadps)).toBeLessThanOrEqual(path.constraints.maxAngVel * Math.PI / 180 * 1.02);
+  });
+
+  it.each(PLANNERS)("rejects an interior %s turn that disagrees with the outgoing heading", (plannerId) => {
+    const project = interiorTurnProject();
+    const path = project.paths[0];
+    path.waypoints[1].turnInPlace = { headingDeg: 45 };
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+
+    expect(result.diagnostics.some((issue) => issue.severity === "error" && issue.message.includes("outgoing segment heading"))).toBe(true);
+  });
+
+  it("places a LabVIEW-compatible wait after an interior stationary turn", () => {
+    const project = interiorTurnProject();
+    const path = project.paths[0];
+    const result = getPlanner("labviewBezier").generate({ path, robot: project.robot });
+    const boundary = result.samples.filter((sample) => Math.hypot(sample.x - 4, sample.y - 2) < 1e-5);
+    const targetSamples = boundary.filter((sample) => Math.abs(PM.angWrap(sample.headingRad - Math.PI / 2)) < 1e-6);
+
+    expect(targetSamples.length).toBeGreaterThanOrEqual(Math.ceil(path.waypoints[1].wait! / path.labview!.samplePeriodS!));
+    expect(targetSamples.every((sample) => Math.abs(sample.velocityMps) < 1e-8)).toBe(true);
+  });
+
+  it.each(PLANNERS)("preserves an interior wait with %s even without a turn", (plannerId) => {
+    const project = interiorTurnProject();
+    const path = project.paths[0];
+    delete path.waypoints[1].turnInPlace;
+    path.waypoints[1].segmentHeadingMode = "tangent";
+    path.waypoints[1].theta = 0;
+    path.waypoints[2].theta = 0;
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+    const boundary = result.samples.filter((sample) => Math.hypot(sample.x - 4, sample.y - 2) < 1e-5);
+
+    expect(boundary.length).toBeGreaterThan(2);
+    expect(boundary.at(-1)!.t - boundary[0].t).toBeGreaterThanOrEqual(path.waypoints[1].wait! - 1e-6);
+    expect(boundary.every((sample) => Math.abs(sample.velocityMps) < 1e-8)).toBe(true);
+  });
+
+  it("validates track points and stopped turns without changing path-wide heading modes", () => {
+    const project = createDemoProject();
+    const segment = project.paths[0].waypoints[0];
+    segment.segmentHeadingMode = "lookAt";
+    expect(validateProject(project).issues.some((issue) => issue.path.endsWith("segmentLookAt"))).toBe(true);
+    segment.segmentLookAt = { x: 3, y: 6 };
+    project.paths[0].waypoints[1].turnInPlace = { headingDeg: 90 };
+    expect(validateProject(project).issues.some((issue) => issue.message.includes("requires a stopped waypoint"))).toBe(true);
+    project.paths[0].waypoints[1].stop = true;
+    expect(validateProject(project).ok).toBe(true);
+    const decoded = decodeProjectFile(JSON.stringify(project)).project.paths[0];
+    expect(decoded.waypoints[0].segmentLookAt).toEqual({ x: 3, y: 6 });
+    expect(decoded.waypoints[1].turnInPlace).toEqual({ headingDeg: 90 });
+  });
+
+  it("builds a deterministic multi-direction jiggle and rejects repeated directions", () => {
+    const anchor = { x: 5, y: 4 };
+    const positions = PM.jigglePositions(anchor, 0, { distanceM: 0.2, strokes: 4, startDeg: 90, stepDeg: -90 });
