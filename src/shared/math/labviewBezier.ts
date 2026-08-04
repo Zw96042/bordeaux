@@ -178,3 +178,93 @@ function cubicEndpointSecondDerivatives(
 
 /**
  * Reconstructs the reference's shared second derivative heuristic: build the
+ * adjacent cubic Beziers, then average their join derivatives with weights
+ * inversely proportional to the adjacent chord lengths.
+ */
+export function deriveLabviewSecondDerivatives(
+  waypoints: readonly LabviewBezierWaypoint[],
+  tangents: readonly BezierPoint[],
+  epsilon = DEFAULT_EPSILON,
+): BezierPoint[] {
+  if (waypoints.length < 2 || tangents.length !== waypoints.length) {
+    throw new RangeError("Waypoints and tangents must have the same length of at least two.");
+  }
+
+  const cubicDerivatives: CubicEndpointDerivatives[] = [];
+  const chordLengths: number[] = [];
+  for (let index = 0; index < waypoints.length - 1; index += 1) {
+    cubicDerivatives.push(
+      cubicEndpointSecondDerivatives(
+        waypoints[index],
+        waypoints[index + 1],
+        tangents[index],
+        tangents[index + 1],
+      ),
+    );
+    chordLengths.push(distance(waypoints[index], waypoints[index + 1]));
+  }
+
+  const result: BezierPoint[] = [cubicDerivatives[0].start];
+  for (let index = 1; index < waypoints.length - 1; index += 1) {
+    const leftWeight = 1 / Math.max(chordLengths[index - 1], epsilon);
+    const rightWeight = 1 / Math.max(chordLengths[index], epsilon);
+    result.push(
+      weightedMean(
+        cubicDerivatives[index - 1].end,
+        leftWeight,
+        cubicDerivatives[index].start,
+        rightWeight,
+      ),
+    );
+  }
+  result.push(cubicDerivatives[cubicDerivatives.length - 1].end);
+  return result;
+}
+
+export function makeLabviewQuinticControlPoints(
+  start: BezierPoint,
+  end: BezierPoint,
+  startTangent: BezierPoint,
+  endTangent: BezierPoint,
+  startSecondDerivative: BezierPoint,
+  endSecondDerivative: BezierPoint,
+): QuinticControlPoints {
+  const p0 = { ...start };
+  const p1 = add(start, scale(startTangent, 1 / 5));
+  const p2 = add(add(scale(startSecondDerivative, 1 / 20), scale(p1, 2)), scale(start, -1));
+  const p5 = { ...end };
+  const p4 = subtract(end, scale(endTangent, 1 / 5));
+  const p3 = add(add(scale(endSecondDerivative, 1 / 20), scale(p4, 2)), scale(end, -1));
+  return [p0, p1, p2, p3, p4, p5];
+}
+
+function evaluateBezier(controlPoints: readonly BezierPoint[], t: number): BezierPoint {
+  const points = controlPoints.map((point) => ({ ...point }));
+  for (let level = points.length - 1; level > 0; level -= 1) {
+    for (let index = 0; index < level; index += 1) {
+      points[index] = {
+        x: points[index].x + (points[index + 1].x - points[index].x) * t,
+        y: points[index].y + (points[index + 1].y - points[index].y) * t,
+      };
+    }
+  }
+  return points[0];
+}
+
+function derivativeControlPoints(controlPoints: readonly BezierPoint[]): BezierPoint[] {
+  const degree = controlPoints.length - 1;
+  return controlPoints.slice(0, -1).map((point, index) => scale(subtract(controlPoints[index + 1], point), degree));
+}
+
+export function evaluateLabviewQuintic(segment: LabviewQuinticSegment, t: number): BezierPoint {
+  return evaluateBezier(segment.controlPoints, Math.max(0, Math.min(1, t)));
+}
+
+export function evaluateLabviewQuinticDerivative(segment: LabviewQuinticSegment, t: number): BezierPoint {
+  return evaluateBezier(derivativeControlPoints(segment.controlPoints), Math.max(0, Math.min(1, t)));
+}
+
+export function evaluateLabviewQuinticSecondDerivative(segment: LabviewQuinticSegment, t: number): BezierPoint {
+  const firstDerivative = derivativeControlPoints(segment.controlPoints);
+  return evaluateBezier(derivativeControlPoints(firstDerivative), Math.max(0, Math.min(1, t)));
+}
