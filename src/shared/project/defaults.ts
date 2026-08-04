@@ -86,3 +86,26 @@ export function blankPath(name = "NewPath"): PathDoc {
       { x: 5.0, y: 4.0, theta: 0 },
     ]),
     targets: [],
+    markers: [],
+    ranges: [],
+    constraints: clone(DEFAULT_CONSTRAINTS),
+    headingMode: "targets",
+    startVel: 0,
+    goalVel: 0,
+    exportable: true,
+    labview: clone(DEFAULT_LABVIEW_OPTIONS),
+  };
+}
+
+export function createDemoProject(): BordeauxProject {
+  return {
+    schemaVersion: "1.0",
+    name: "Untitled",
+    robot: { drive: "swerve", w: 0.84, l: 0.84, heightM: 0.5, maxSpeed: 5.0 },
+    paths: [blankPath("NewPath")],
+    routine: {
+      name: "Autonomous Routine",
+      nodes: [],
+    },
+  };
+}
