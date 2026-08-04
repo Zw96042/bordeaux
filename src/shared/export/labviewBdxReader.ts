@@ -268,3 +268,93 @@ function readTrajectorySegment(reader: LabviewBinaryReader): LabviewTrajectorySe
 function readConditions(reader: LabviewBinaryReader): LabviewBdxConditions {
   const samplePeriodS = reader.f64("sample period");
   const limits = {
+    velocityFps: reader.f64("linear velocity limit"),
+    accelerationFps2: reader.f64("linear acceleration limit"),
+    jerkFps3: reader.f64("linear jerk limit"),
+    stoopidFastFps: reader.f64("StoopidFast velocity limit"),
+  };
+  const initialVelocityFps = reader.f64("initial velocity");
+  const finalVelocityFps = reader.f64("final velocity");
+  const overrideOffset = reader.offset;
+  const overrideCount = reader.u32("override count");
+  if (overrideCount !== 0) {
+    throw new LabviewBdxUnsupportedError(
+      `Non-empty LabVIEW Bordeaux overrides are not supported (found ${overrideCount})`,
+      overrideOffset,
+    );
+  }
+  const angularLimits = {
+    velocityDegPerS: reader.f64("angular velocity limit"),
+    accelerationDegPerS2: reader.f64("angular acceleration limit"),
+    jerkDegPerS3: reader.f64("angular jerk limit"),
+  };
+  return {
+    samplePeriodS,
+    limits,
+    initialVelocityFps,
+    finalVelocityFps,
+    overrides: [],
+    angularLimits,
+  };
+}
+
+function readDriveType(reader: LabviewBinaryReader): { code: 0 | 1; type: LabviewDriveType } {
+  const offset = reader.offset;
+  const code = reader.u16("drive type");
+  if (code !== 0 && code !== 1) throw new LabviewBdxParseError(`Unknown drive type ${code}`, offset);
+  return { code, type: code === 0 ? "nonholonomic" : "holonomic" };
+}
+
+function readPathType(reader: LabviewBinaryReader): { code: 0 | 1; type: LabviewPathType } {
+  const offset = reader.offset;
+  const code = reader.u16("path type");
+  if (code !== 0 && code !== 1) throw new LabviewBdxParseError(`Unknown path type ${code}`, offset);
+  return { code, type: code === 0 ? "clothoid" : "bezier" };
+}
+
+/**
+ * Parse the raw big-endian flattened stream emitted by Bordeaux Versioned Write.vi v4.4.
+ *
+ * Historical versions are deliberately rejected: the recovered v3.1 files confirm the
+ * framing convention, but their complete field schema has not been proven. Non-empty
+ * commands and overrides are likewise rejected instead of guessing at LabVIEW Variant data.
+ * This import boundary also rejects non-finite DBLs and non-canonical Boolean bytes even
+ * though the underlying LabVIEW scalar representation can express them.
+ */
+export function parseLabviewBdx(input: Uint8Array): LabviewBdxV44 {
+  const reader = new LabviewBinaryReader(input);
+  const version = reader.string("Bordeaux version");
+  if (version !== LABVIEW_BDX_VERSION) {
+    throw new LabviewBdxUnsupportedError(
+      `Unsupported LabVIEW Bordeaux .bdx version ${JSON.stringify(version)}; only v4.4 has a proven complete schema`,
+      0,
+    );
+  }
+
+  const robotBackwards = reader.boolean("Robot Backwards");
+  const reversePath = reader.boolean("Reverse Path");
+  const trajectoryCount = reader.count("trajectory array", 22, MAX_TRAJECTORY_SEGMENTS);
+  const trajectory = Array.from({ length: trajectoryCount }, () => readTrajectorySegment(reader));
+
+  const commandOffset = reader.offset;
+  const commandCount = reader.u32("command count");
+  if (commandCount !== 0) {
+    throw new LabviewBdxUnsupportedError(
+      `Non-empty LabVIEW Bordeaux commands are not supported (found ${commandCount}); command records contain LabVIEW Variant and Path values`,
+      commandOffset,
+    );
+  }
+
+  const conditions = readConditions(reader);
+  const waypointCount = reader.count("updated waypoint array", 24, LABVIEW_BDX_MAX_WAYPOINTS);
+  const updatedWaypoints = Array.from({ length: waypointCount }, () => ({
+    xFt: reader.f64("waypoint x"),
+    yFt: reader.f64("waypoint y"),
+    thetaDeg: reader.f64("waypoint theta"),
+  }));
+  const timeS = reader.f64("path time");
+  const distanceFt = reader.f64("path distance");
+  const zeroVelocity = reader.boolean("Zero Velocity");
+  const drive = readDriveType(reader);
+  const path = readPathType(reader);
+  const pickupBalls = reader.boolean("Pickup Balls");
