@@ -1,48 +1,48 @@
-import type { BordeauxProject, ValidationIssue, ValidationResult } from "./types";
+import type { ValidationIssue, ValidationResult } from "./types";
 import { FIELD_H, FIELD_W } from "./math/fieldBounds";
+
+type RecordValue = Record<string, unknown>;
 
 function issue(path: string, message: string, severity: "error" | "warning" = "error"): ValidationIssue {
   return { path, message, severity };
 }
 
-export function validateProject(project: unknown): ValidationResult {
-  const issues: ValidationIssue[] = [];
+function isRecord(value: unknown): value is RecordValue {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
-  if (!project || typeof project !== "object") {
-    return { ok: false, issues: [issue("$", "Project must be a JSON object")] };
+function finite(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function validateFinite(issues: ValidationIssue[], value: unknown, path: string, label: string, options: { positive?: boolean; nonnegative?: boolean } = {}) {
+  if (!finite(value)) {
+    issues.push(issue(path, `${label} must be a finite number`));
+  } else if (options.positive && value <= 0) {
+    issues.push(issue(path, `${label} must be greater than zero`));
+  } else if (options.nonnegative && value < 0) {
+    issues.push(issue(path, `${label} cannot be negative`));
   }
+}
 
-  const p = project as BordeauxProject;
-  if (!p.name || typeof p.name !== "string") issues.push(issue("$.name", "Project name is required"));
-  if (!p.robot || typeof p.robot !== "object") issues.push(issue("$.robot", "Robot config is required"));
-  if (!Array.isArray(p.paths)) issues.push(issue("$.paths", "Project paths must be an array"));
+function validateOptionalFinite(issues: ValidationIssue[], value: unknown, path: string, label: string, options: { positive?: boolean; nonnegative?: boolean } = {}) {
+  if (value !== undefined) validateFinite(issues, value, path, label, options);
+}
 
-  if (p.robot) {
-    if (p.robot.drive !== "swerve" && p.robot.drive !== "tank") issues.push(issue("$.robot.drive", "Drive must be swerve or tank"));
-    if (!(p.robot.w > 0)) issues.push(issue("$.robot.w", "Robot width must be greater than zero"));
-    if (!(p.robot.l > 0)) issues.push(issue("$.robot.l", "Robot length must be greater than zero"));
-    if (!(p.robot.maxSpeed > 0)) issues.push(issue("$.robot.maxSpeed", "Robot max speed must be greater than zero"));
+function validatePoint(issues: ValidationIssue[], value: unknown, path: string, label: string) {
+  if (!isRecord(value)) {
+    issues.push(issue(path, `${label} is required`));
+    return;
   }
+  validateFinite(issues, value.x, `${path}.x`, `${label} X`);
+  validateFinite(issues, value.y, `${path}.y`, `${label} Y`);
+}
 
-  (p.paths || []).forEach((path, pi) => {
-    const base = `$.paths[${pi}]`;
-    if (!path.name) issues.push(issue(`${base}.name`, "Path name is required"));
-    if (!Array.isArray(path.waypoints) || path.waypoints.length < 2) {
-      issues.push(issue(`${base}.waypoints`, "Path must contain at least two waypoints"));
-    }
-    (path.waypoints || []).forEach((wp, wi) => {
-      if (!Number.isFinite(wp.x) || !Number.isFinite(wp.y)) issues.push(issue(`${base}.waypoints[${wi}]`, "Waypoint position must be finite"));
-      else if (wp.x < 0 || wp.x > FIELD_W || wp.y < 0 || wp.y > FIELD_H) {
-        issues.push(issue(`${base}.waypoints[${wi}]`, "Waypoint must stay inside the FRC field bounds"));
-      }
-      if (!wp.prevC || !wp.nextC) issues.push(issue(`${base}.waypoints[${wi}]`, "Waypoint handles are required"));
-    });
-    if (!path.constraints) {
-      issues.push(issue(`${base}.constraints`, "Path constraints are required"));
-    } else {
-      if (!(path.constraints.maxVel > 0)) issues.push(issue(`${base}.constraints.maxVel`, "Max velocity must be greater than zero"));
-      if (!(path.constraints.maxAccel > 0)) issues.push(issue(`${base}.constraints.maxAccel`, "Max acceleration must be greater than zero"));
-      if (!(path.constraints.maxDecel > 0)) issues.push(issue(`${base}.constraints.maxDecel`, "Max deceleration must be greater than zero"));
+function validateRobotFootprint(issues: ValidationIssue[], robot: RecordValue): void {
+  if (robot.footprint === undefined) return;
+  const path = "$.robot.footprint";
+  if (!isRecord(robot.footprint)) {
+    issues.push(issue(path, "Robot footprint must be an object"));
     }
   });
 
