@@ -313,51 +313,51 @@
       const ds = pts[i].s - pts[i - 1].s;
       const vm = (v[i] + v[i - 1]) / 2;
       t[i] = t[i - 1] + (vm > 1e-4 ? ds / vm : 0);
-
-  // build heading anchors from a flat list of {f, rad} entries (waypoint thetas + rotation targets)
-  // ensures coverage of f=0 and f=1 so heading is defined across the whole path
-  function buildAnchors(entries) {
-    const arr = (entries || [])
-      .filter(e => e && isFinite(e.f) && isFinite(e.rad))
-      .map(e => ({ f: Math.max(0, Math.min(1, e.f)), rad: e.rad }))
-      .sort((a, b) => a.f - b.f);
-    if (!arr.length) return [{ f: 0, rad: 0 }, { f: 1, rad: 0 }];
-    if (arr[0].f > 1e-6) arr.unshift({ f: 0, rad: arr[0].rad });
-    if (arr[arr.length - 1].f < 1 - 1e-6) arr.push({ f: 1, rad: arr[arr.length - 1].rad });
-    return arr;
-  }
-
-  // point + fraction lookup by arclength fraction f (for placing markers/targets)
-  function pointAtFraction(f, pts) {
-    const n = pts.length; if (!n) return { x: 0, y: 0, heading: 0 };
-    const target = f * pts[n - 1].s;
-    let lo = 1, hi = n - 1;
-    if (target <= 0) return { ...pts[0] };
-    if (target >= pts[n - 1].s) return { ...pts[n - 1] };
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (pts[mid].s < target) lo = mid + 1; else hi = mid; }
-    const a = pts[lo - 1], b = pts[lo];
-    const u = (target - a.s) / Math.max(1e-6, b.s - a.s);
-    return { x: lerp(a.x, b.x, u), y: lerp(a.y, b.y, u), heading: angLerp(a.heading, b.heading, u) };
-  }
-
-  // nearest fraction on path to a world point (for placing markers by click)
-  function nearestFraction(wx, wy, pts) {
-    let best = 0, bd = Infinity;
-    for (let i = 0; i < pts.length; i++) {
-      const dx = pts[i].x - wx, dy = pts[i].y - wy; const d = dx * dx + dy * dy;
-      if (d < bd) { bd = d; best = i; }
     }
-    return pts.length > 1 ? pts[best].s / pts[pts.length - 1].s : 0;
+    // Stationary turns happen after arrival and before any wait.
+    const turns = [], turnDelay = new Map(); let terminalDelay = 0;
+    (opts.turns || []).slice().sort((a, b) => a.idx - b.idx).forEach((turn) => {
+      if (turn.idx < 0 || turn.idx >= n) return;
+      let delta = angWrap(turn.end - turn.start);
+      if (turn.direction === 'clockwise' && delta > 0) delta -= Math.PI * 2;
+      if (turn.direction === 'counterclockwise' && delta < 0) delta += Math.PI * 2;
+      if (Math.abs(delta) < 1e-9) return;
+      const wMax = Math.max(1e-6, (turn.maxAngVel || 540) * D2R), aMax = Math.max(1e-6, (turn.maxAngAccel || 720) * D2R), jMax = Math.max(0, (turn.maxAngJerk || 0) * D2R);
+      const duration = Math.max(Math.abs(delta) * 1.875 / wMax, Math.sqrt(Math.abs(delta) * 5.77351 / aMax), jMax > 1e-9 ? Math.cbrt(Math.abs(delta) * 60 / jMax) : 0);
+      const t0 = t[turn.idx]; turns.push({ idx: turn.idx, t0, t1: t0 + duration, start: turn.start, delta }); turnDelay.set(turn.idx, duration);
+      for (let j = turn.idx + 1; j < n; j++) t[j] += duration;
+      if (turn.idx === n - 1) terminalDelay += duration;
+    });
+    // dwell / wait-at-waypoint holds (memo §15) — only meaningful at stop points
+    const holds = [];
+    const dwell = (opts.dwell || []).slice().sort((a, b) => a.idx - b.idx);
+    for (let d = 0; d < dwell.length; d++) {
+      const dw = dwell[d]; if (!(dw.wait > 0) || dw.idx < 0 || dw.idx >= n) continue;
+      const t0 = t[dw.idx] + (turnDelay.get(dw.idx) || 0); holds.push({ idx: dw.idx, t0, t1: t0 + dw.wait });
+      for (let j = dw.idx + 1; j < n; j++) t[j] += dw.wait;
+      if (dw.idx === n - 1) terminalDelay += dw.wait;
+    }
+    return { v, t, totalTime: t[n - 1] + terminalDelay, holds, turns, rotLimited };
   }
 
-  // auto control handles for a fresh waypoint (smooth Catmull-Rom-ish)
-  function autoHandles(waypoints, i) {
-    const w = waypoints[i];
-    const prev = waypoints[i - 1] || w, next = waypoints[i + 1] || w;
-    let dx = next.x - prev.x, dy = next.y - prev.y;
-    const len = Math.hypot(dx, dy) || 1;
-    dx /= len; dy /= len;
-    const handle = Math.max(0.6, len * 0.28);
+  // heading anchors -> continuous heading along arclength fraction f in [0,1]
+  // anchors: [{f, rad}] must include f=0 and f=1, sorted
+  function headingAt(f, anchors) {
+    if (!anchors.length) return 0;
+    if (f <= anchors[0].f) return anchors[0].rad;
+    for (let i = 0; i < anchors.length - 1; i++) {
+      const a = anchors[i], b = anchors[i + 1];
+      if (f >= a.f && f <= b.f) {
+        const tt = (b.f - a.f) < 1e-6 ? 0 : (f - a.f) / (b.f - a.f);
+        // smoothstep for nicer rotation
+        const ss = tt * tt * (3 - 2 * tt);
+        return angLerp(a.rad, b.rad, ss);
+      }
+    }
+    return anchors[anchors.length - 1].rad;
+  }
+
+  // pose at time given sampled pts, profile times, and heading anchors / mode
     return {
       prevC: { x: w.x - dx * handle, y: w.y - dy * handle },
       nextC: { x: w.x + dx * handle, y: w.y + dy * handle },
