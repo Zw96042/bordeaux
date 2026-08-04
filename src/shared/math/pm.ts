@@ -358,51 +358,51 @@
   }
 
   // pose at time given sampled pts, profile times, and heading anchors / mode
-    return {
-      prevC: { x: w.x - dx * handle, y: w.y - dy * handle },
-      nextC: { x: w.x + dx * handle, y: w.y + dy * handle },
-    };
-  }
-
-  // ---- per-point engineering metrics aligned to the sampled path ----
-  // returns arrays + maxima for velocity / acceleration / angular velocity / curvature
-  function metrics(pts, prof, anchors, mode) {
+  function poseAtTime(time, pts, prof, anchors, mode, rev) {
     const n = pts.length;
-    const v = prof.v && prof.v.length ? prof.v : new Array(n).fill(0);
-    const t = prof.t && prof.t.length ? prof.t : new Array(n).fill(0);
-    const accel = new Array(n).fill(0), omega = new Array(n).fill(0), curv = new Array(n).fill(0), head = new Array(n).fill(0);
-    const totalS = n ? pts[n - 1].s : 0;
-    for (let i = 0; i < n; i++) {
-      const f = totalS > 1e-6 ? pts[i].s / totalS : 0;
-      head[i] = mode === 'tank' ? pts[i].heading : headingAt(f, anchors);
-      curv[i] = pts[i].curv || 0;
+    if (n < 2) return null;
+    const T = prof.t;
+    // wait/dwell hold: robot is stationary at the stop point for the dwell window (memo §15)
+    if (prof.holds && prof.holds.length) {
+      for (let k = 0; k < prof.holds.length; k++) {
+        const hd = prof.holds[k];
+        if (time >= hd.t0 - 1e-9 && time <= hd.t1 + 1e-9) {
+          const p = pts[hd.idx]; const f = pts[n - 1].s > 1e-6 ? p.s / pts[n - 1].s : 0;
+          let heading = mode === 'tank' ? p.heading : headingAt(f, anchors); if (rev) heading += Math.PI;
+          return { x: p.x, y: p.y, heading, speed: 0, s: p.s, f, hold: true };
+        }
+      }
     }
-    for (let i = 1; i < n; i++) {
-      const dt = t[i] - t[i - 1];
-      accel[i] = dt > 1e-5 ? (v[i] - v[i - 1]) / dt : 0;
-      omega[i] = dt > 1e-5 ? angWrap(head[i] - head[i - 1]) / dt : 0;
+    if (prof.turns && prof.turns.length) {
+      for (let k = 0; k < prof.turns.length; k++) {
+        const turn = prof.turns[k];
+        if (time >= turn.t0 - 1e-9 && time <= turn.t1 + 1e-9) {
+          const p = pts[turn.idx], u = Math.max(0, Math.min(1, (time - turn.t0) / Math.max(1e-9, turn.t1 - turn.t0)));
+          const q = 10 * u ** 3 - 15 * u ** 4 + 6 * u ** 5, f = pts[n - 1].s > 1e-6 ? p.s / pts[n - 1].s : 0;
+          let heading = turn.start + turn.delta * q; if (rev) heading += Math.PI;
+          return { x: p.x, y: p.y, heading, speed: 0, s: p.s, f, turn: true };
+        }
+      }
     }
-    if (n > 1) { accel[0] = accel[1]; omega[0] = omega[1]; }
-    let vMax = 0.1, aMax = 0.1, wMax = 0.01, kMax = 0.01;
-    for (let i = 0; i < n; i++) {
-      vMax = Math.max(vMax, v[i]); aMax = Math.max(aMax, Math.abs(accel[i]));
-      wMax = Math.max(wMax, Math.abs(omega[i])); kMax = Math.max(kMax, curv[i]);
+    let i = 1;
+    if (time <= 0) i = 1; else if (time >= T[n - 1]) i = n - 1;
+    else { // binary search
+      let lo = 1, hi = n - 1;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (T[mid] < time) lo = mid + 1; else hi = mid; }
+      i = lo;
     }
-    return { v, accel, omega, curv, head, vMax, aMax, wMax, kMax };
-  }
-
-  // ---- colour scales for the metric overlays ----
-  function hex2rgb(hx) { return [parseInt(hx.slice(1, 3), 16), parseInt(hx.slice(3, 5), 16), parseInt(hx.slice(5, 7), 16)]; }
-  const RAMPS_M = {
-    velocity:  [[0, '#3f6fd0'], [0.4, '#2fa36b'], [0.7, '#d28f37'], [1, '#cf4f4a']],
-    accel:     [[0, '#3f6fd0'], [0.5, '#4d535e'], [1, '#cf4f4a']],
-    angvel:    [[0, '#343d47'], [0.5, '#2f8fa6'], [1, '#5fcfe6']],
-    curvature: [[0, '#39342b'], [0.5, '#a87c30'], [1, '#edbf5c']],
-  };
-  function metricColor(mode, tt) {
-    const s = RAMPS_M[mode] || RAMPS_M.velocity;
-    let t = Math.max(0, Math.min(1, tt));
-    for (let i = 0; i < s.length - 1; i++) {
+    const t0 = T[i - 1], t1 = T[i];
+    const u = t1 - t0 > 1e-6 ? Math.max(0, Math.min(1, (time - t0) / (t1 - t0))) : 0;
+    const a = pts[i - 1], b = pts[i];
+    const x = lerp(a.x, b.x, u), y = lerp(a.y, b.y, u);
+    const s = lerp(a.s, b.s, u);
+    const f = pts[n - 1].s > 1e-6 ? s / pts[n - 1].s : 0;
+    let heading;
+    if (mode === 'tank') heading = Math.atan2(b.y - a.y, b.x - a.x);
+    else heading = headingAt(f, anchors);
+    if (rev) heading += Math.PI;
+    const speed = lerp(prof.v[i - 1], prof.v[i], u);
+    return { x, y, heading, speed, s, f };
       const a = s[i], b = s[i + 1];
       if (t >= a[0] && t <= b[0]) {
         const u = (t - a[0]) / Math.max(1e-6, b[0] - a[0]);
