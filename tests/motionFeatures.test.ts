@@ -628,3 +628,93 @@ describe("motion features", () => {
       { x: 4, y: 5, theta: 90, thetaOn: true },
     ]);
 
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+    const adjacentJumps = result.samples.slice(1).map((sample, index) =>
+      Math.abs(PM.angWrap(sample.headingRad - result.samples[index].headingRad)));
+
+    expect(Math.max(...adjacentJumps)).toBeLessThan(0.2);
+    expect(result.samples.at(-1)!.headingRad).toBeCloseTo(Math.PI / 2, 2);
+  });
+
+  it.each(PLANNERS)("keeps adjacent tracked points continuous with %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      { x: 2, y: 2, theta: 45, segType: "line", segmentHeadingMode: "lookAt", segmentLookAt: { x: 4, y: 4 } },
+      { x: 4, y: 2, theta: 0, segType: "line", segmentHeadingMode: "lookAt", segmentLookAt: { x: 8, y: 0 } },
+      { x: 7, y: 2, theta: 0 },
+    ]);
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+    let boundary = 1;
+    for (let index = 1; index < result.samples.length; index += 1) {
+      if (Math.abs(result.samples[index].x - 4) < Math.abs(result.samples[boundary].x - 4)) boundary = index;
+    }
+
+    expect(Math.abs(PM.angWrap(result.samples[boundary].headingRad - result.samples[boundary - 1].headingRad))).toBeLessThan(0.12);
+  });
+
+  it.each(["profiledSpline", "labviewBezier"] as TrajectoryPlannerId[])("rejects a track point on the driven segment with %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints[0].segmentHeadingMode = "lookAt";
+    path.waypoints[0].segmentLookAt = { x: 3.6, y: 4 };
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+    expect(result.diagnostics.some((issue) => issue.severity === "error" && issue.message.includes("lies on the driven segment"))).toBe(true);
+  });
+
+  it("applies drive backward after resolving a tracked point", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints[0].segmentHeadingMode = "lookAt";
+    path.waypoints[0].segmentLookAt = { x: 3.6, y: 6 };
+    const forward = getPlanner("labviewBezier").generate({ path, robot: project.robot });
+    path.driveBackward = true;
+    const reverse = getPlanner("labviewBezier").generate({ path, robot: project.robot });
+    expect(Math.abs(PM.angWrap(reverse.samples[0].headingRad - forward.samples[0].headingRad))).toBeCloseTo(Math.PI, 6);
+  });
+
+  it("rejects malformed local constraint segment anchors", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    const range = {
+      anchor: "wp" as const,
+      f0: 0.2,
+      f1: 0.8,
+      w0: 0.5,
+      t0: 0.2,
+      w1: path.waypoints.length - 1,
+      t1: 0.8,
+      maxVel: 2,
+      maxAccel: 2,
+      maxDecel: 2,
+      maxAngVel: 180,
+      maxAngAccel: 360,
+    };
+    path.ranges = [range];
+
+    const issues = validateProject(project).issues;
+    expect(issues.some((issue) => issue.path.endsWith(".w0") && issue.message.includes("integer"))).toBe(true);
+    expect(issues.some((issue) => issue.path.endsWith(".w1") && issue.message.includes("outside"))).toBe(true);
+  });
+
+  it.each(PLANNERS)("adds a constrained stationary turn after %s planning", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    const end = path.waypoints.at(-1)!;
+    end.stop = true;
+    end.wait = 0.12;
+    end.turnInPlace = { headingDeg: 90, direction: "counterclockwise" };
+    path.markers = [{ id: "shoot", f: 1, name: "Shoot" }];
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+    const terminal = result.samples.filter((sample) => Math.hypot(sample.x - end.x, sample.y - end.y) < 1e-5);
+
+    expect(terminal.length).toBeGreaterThan(2);
+    expect(terminal.every((sample) => Math.abs(sample.velocityMps) < 1e-8 && Math.abs(sample.accelerationMps2) < 1e-8)).toBe(true);
+    expect(terminal.at(-1)!.headingRad).toBeCloseTo(Math.PI / 2, 6);
+    const firstAtTarget = terminal.findIndex((sample) => Math.abs(PM.angWrap(sample.headingRad - Math.PI / 2)) < 1e-6);
+    expect(firstAtTarget).toBeGreaterThanOrEqual(0);
+    expect(terminal.at(-1)!.t - terminal[firstAtTarget].t).toBeGreaterThanOrEqual(end.wait - 1e-6);
+    expect(result.samples.every((sample, index) => index === 0 || sample.t > result.samples[index - 1].t)).toBe(true);
+    expect(Math.max(...terminal.map((sample) => Math.abs(sample.angularVelocityRadps)))).toBeLessThanOrEqual(path.constraints.maxAngVel * Math.PI / 180 * 1.02);
+    const angularAcceleration = terminal.slice(1).map((sample, index) => (sample.angularVelocityRadps - terminal[index].angularVelocityRadps) / (sample.t - terminal[index].t));
+    expect(Math.max(...angularAcceleration.map(Math.abs))).toBeLessThanOrEqual(path.constraints.maxAngAccel * Math.PI / 180 * 1.03);
