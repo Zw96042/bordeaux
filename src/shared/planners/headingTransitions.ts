@@ -178,3 +178,69 @@ export function smoothHeadingTransitions(
         policy.distanceM * beforeShare,
         Math.max(0, boundaryDistance - points[previousBoundary].s),
       );
+      const goalAtBoundary = transitionGoal.distanceM <= boundaryDistance + EPSILON;
+      const afterDistance = Math.min(policy.distanceM * afterShare, Math.max(0,
+        (goalAtBoundary ? points[transitionGoal.spanEndIndex].s : transitionGoal.distanceM) - boundaryDistance,
+      ));
+      const requestedStart = boundaryDistance - beforeDistance;
+      const requestedEnd = goalAtBoundary
+        ? boundaryDistance + afterDistance
+        : Math.min(transitionGoal.distanceM, boundaryDistance + afterDistance);
+      let startIndex = previousBoundary;
+      while (startIndex < boundaryIndex && points[startIndex].s < requestedStart - EPSILON) startIndex += 1;
+      if (protectedBefore >= startIndex && protectedBefore < boundaryIndex) startIndex = protectedBefore + 1;
+      let anchorIndex = boundaryIndex;
+      while (anchorIndex < transitionGoal.spanEndIndex && points[anchorIndex].s < transitionGoal.distanceM - EPSILON) anchorIndex += 1;
+      let endIndex = startIndex;
+      while (endIndex < transitionGoal.spanEndIndex && points[endIndex].s < requestedEnd - EPSILON) endIndex += 1;
+      const goalIndex = goalAtBoundary ? endIndex : anchorIndex;
+
+      const startHeading = startIndex < boundaryIndex ? headings[startIndex] : incoming;
+      const goalHeading = unwrapFrom(startHeading, transitionGoal.heading);
+      const startDistance = points[startIndex].s;
+      const endDistance = points[endIndex].s;
+      for (let index = startIndex; index <= goalIndex; index += 1) {
+        const progress = endDistance > startDistance + EPSILON
+          ? (points[index].s - startDistance) / (endDistance - startDistance)
+          : 1;
+        headings[index] = startHeading + (goalHeading - startHeading) * smootherStep(progress);
+      }
+
+      if (goalIndex < transitionGoal.spanEndIndex) {
+        const nextIndex = goalIndex + 1;
+        const branchOffset = unwrapFrom(goalHeading, rawHeadings[nextIndex]) - unwrappedRaw[nextIndex];
+        for (let index = nextIndex; index <= transitionGoal.spanEndIndex; index += 1) {
+          headings[index] = unwrappedRaw[index] + branchOffset;
+        }
+      }
+      protectedAnchorIndices.add(goalIndex);
+      continue;
+    }
+
+    const outgoing = unwrapFrom(incoming, rawHeadings[outgoingStart]);
+    const delta = outgoing - incoming;
+
+    const beforeDistance = Math.min(policy.distanceM * beforeShare, Math.max(0, points[boundaryIndex].s - points[previousBoundary].s));
+    if (beforeDistance > EPSILON) {
+      const startDistance = points[boundaryIndex].s - beforeDistance;
+      for (let index = previousBoundary; index < boundaryIndex; index += 1) {
+        if (points[index].s < startDistance - EPSILON) continue;
+        if (index <= protectedBefore) continue;
+        const progress = (points[index].s - startDistance) / beforeDistance;
+        headings[index] += delta * beforeShare * smootherStep(progress);
+      }
+    }
+
+    const boundaryHeading = incoming + delta * beforeShare;
+    const afterDistance = Math.min(policy.distanceM * afterShare, Math.max(0, points[nextBoundary].s - points[boundaryIndex].s));
+    let previous = boundaryHeading;
+    const afterStartIndex = boundaryProtected ? boundaryIndex + 1 : boundaryIndex;
+    for (let index = afterStartIndex; index <= nextBoundary; index += 1) {
+      const base = unwrapFrom(previous, rawHeadings[index === boundaryIndex ? outgoingStart : index]);
+      const progress = afterDistance > EPSILON ? (points[index].s - points[boundaryIndex].s) / afterDistance : 1;
+      headings[index] = base + (boundaryHeading - outgoing) * (1 - smootherStep(progress));
+      previous = headings[index];
+    }
+  }
+  return headings;
+}
