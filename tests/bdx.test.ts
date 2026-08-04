@@ -43,51 +43,51 @@ function readEndpointVelocities(buffer: Buffer): { first: number; last: number; 
   for (let index = 0; index < velocityCount; index += 1) {
     const velocity = reader.f64();
     if (index === 0) first = velocity;
-  it("starts with one blank path and no routine preset", () => {
-    const project = createDemoProject();
-    expect(project.name).toBe("Untitled");
-    expect(project.paths.map((p) => p.name)).toEqual(["NewPath"]);
-    expect(project.routine?.nodes).toEqual([]);
-    expect(validateProject(project).ok).toBe(true);
-  });
+    if (index === velocityCount - 1) last = velocity;
+    reader.skip(3 * 8);
+  }
+  reader.i32(); reader.i32();
+  if (reader.u32() !== 0) throw new Error("Test reader does not support commands");
+  reader.f64();
+  reader.skip(4 * 8);
+  return { first, last, initial: reader.f64(), final: reader.f64() };
+}
 
-  it("rejects paths with fewer than two waypoints", () => {
-    const project = createDemoProject();
-    project.paths[0].waypoints = [project.paths[0].waypoints[0]];
-    const validation = validateProject(project);
-    expect(validation.ok).toBe(false);
-    expect(validation.issues.some((issue) => issue.message.includes("at least two waypoints"))).toBe(true);
-  });
+function projectWithPaths(paths: PathDoc[]): BordeauxProject {
+  return {
+    schemaVersion: "1.0",
+    name: "TestProject",
+    robot: { drive: "swerve", w: 0.84, l: 0.84, maxSpeed: 5.0 },
+    paths,
+    routine: { name: "Autonomous Routine", nodes: [] },
+  };
+}
 
-  it("clamps world points to the true field dimensions", () => {
-    expect(clampWorldPoint({ x: -3, y: FIELD_H + 2 })).toEqual({ x: 0, y: FIELD_H });
-    expect(clampWorldPoint({ x: FIELD_W + 1, y: -1 })).toEqual({ x: FIELD_W, y: 0 });
-  });
-});
+function richPath(name = "RichPath"): PathDoc {
+  const path = blankPath(name);
+  path.waypoints = buildWaypoints([
+    { x: 2.2, y: 4.0, theta: 0, segType: "clothoid" },
+    { x: 3.2, y: 4.7, stop: true, segType: "bezier" },
+    { x: 5.4, y: 4.0, theta: 0 },
+  ]);
+  path.markers = [{ f: 0.66, name: "score_L4", cmd: "scoreL4", group: "sequential" }];
+  path.ranges = [
+    {
+      anchor: "param",
+      f0: 0.35,
+      f1: 0.8,
+      maxVel: 1.5,
+      maxAccel: 2.4,
+      maxDecel: 2,
+      maxAngVel: 220,
+      maxAngAccel: 400,
+      name: "Approach",
+    },
+  ];
+  return path;
+}
 
-describe(".bdx export", () => {
-  it("exports the blank default project", () => {
-    const exportData = buildBdxExport(createDemoProject());
-    expect(exportData.paths).toHaveLength(1);
-    expect(exportData.paths[0].name).toBe("NewPath");
-    expect(exportData.paths[0].samples.length).toBeGreaterThan(2);
-  });
-
-  it("exports eligible paths in project order", () => {
-    const project = projectWithPaths([blankPath("First"), richPath("Second"), blankPath("Third")]);
-    const exportData = buildBdxExport(project);
-    expect(exportData.paths.map((path) => path.name)).toEqual(["First", "Second", "Third"]);
-    expect(exportData.generator).toBe("bordeaux");
-    expect(exportData.units.velocity).toBe("meters_per_second");
-  });
-
-  it("includes full sampled trajectory fields", () => {
-    const sample = buildBdxExport(projectWithPaths([richPath()])).paths[0].samples[0];
-    expect(sample).toEqual(
-      expect.objectContaining({
-        i: expect.any(Number),
-        t: expect.any(Number),
-        s: expect.any(Number),
+describe("project defaults and validation", () => {
         f: expect.any(Number),
         x: expect.any(Number),
         y: expect.any(Number),
