@@ -43,16 +43,26 @@ function markersFor(input: PlannerInput, pts: Array<{ s: number }>, times: numbe
   const length = pts[pts.length - 1]?.s ?? 0;
   return (input.path.markers || []).map((marker, index) => {
     const fraction = marker.anchor === "dist" && length > 1e-9
-    group: marker.group ?? null,
-    timeS: R(timeAtFraction(marker.f, pts, times), 4),
-    fraction: R(marker.f, 5),
-  }));
+      ? Math.max(0, Math.min(1, (marker.d ?? marker.f * length) / length))
+      : marker.f;
+    return {
+      id: marker.id ?? `${input.path.id}:event:${index}`,
+      name: marker.name,
+      command: marker.cmd ?? null,
+      ...(marker.invocation ? { invocation: marker.invocation } : {}),
+      group: marker.group ?? null,
+      timeS: R(timeAtFraction(fraction, pts, times), 4),
+      fraction: R(fraction, 5),
+    };
+  });
 }
 
 export const profiledSplinePlanner: TrajectoryPlanner = {
   id: "profiledSpline",
   generate(input: PlannerInput): PlannerResult {
-    const derived = PM.derivePath(input.path, input.robot, input.samplesPerSegment ?? SAMPLES_PER_SEGMENT);
+    // Stationary rotations are sampled by the shared post-processor. Keep the
+    // authored turn visible to heading continuity, but do not time it here.
+    const derived = PM.derivePath(input.path, input.robot, input.samplesPerSegment ?? SAMPLES_PER_SEGMENT, { skipStationaryActions: true });
     const pts = derived.sample.pts || [];
     const metrics = derived.metrics || {};
     const times = derived.prof.t || [];
@@ -72,13 +82,3 @@ export const profiledSplinePlanner: TrajectoryPlanner = {
       curvatureInvM: R(metrics.curv?.[i] ?? point.curv ?? 0, 5),
     }));
 
-    return {
-      planner: "profiledSpline",
-      totalTimeS: R(derived.prof.totalTime || 0, 4),
-      totalDistanceM: R(totalDistanceM, 4),
-      samples,
-      markers: markersFor(input, pts, times),
-      diagnostics: diagnosticsFor(input.path.name, derived),
-    };
-  },
-};
