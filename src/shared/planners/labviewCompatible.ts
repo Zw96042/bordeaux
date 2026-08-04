@@ -358,3 +358,93 @@ function buildTimeline(input: PlannerInput, geometry: readonly GeometryPoint[]):
     geometry,
     {
       manual: manualHeadings.map((anchor) => ({ f: anchor.f, heading: anchor.heading + backwardOffset })),
+      targets: targetHeadings.map((anchor) => ({ f: anchor.f, heading: anchor.heading + backwardOffset })),
+    },
+  );
+  const robotHeadings = smoothHeadingTransitions(
+    rawRobotHeadings,
+    segmentLaws,
+    transitionBreaks,
+    waypointIndices,
+    geometry,
+    path.waypoints,
+    transitionGoals,
+  );
+  const waypointFractions = waypointIndices.map((index) => geometry[index].s / Math.max(totalDistance, EPSILON));
+  const transitions = headingTransitionWindows(path.waypoints, segmentLaws, transitionBreaks, waypointFractions, totalDistance);
+
+  const globalMaxVelocity = Math.min(path.constraints.maxVel, robot.maxSpeed);
+  const velocityCaps = geometry.map((point, index) => {
+    let cap = globalMaxVelocity;
+    const curvature = Math.abs(point.curvature);
+    if (curvature > EPSILON) {
+      cap = Math.min(cap, Math.sqrt(path.constraints.maxAccel / curvature));
+    }
+    const fraction = point.s / Math.max(totalDistance, EPSILON);
+    const range = ranges.filter((candidate) => fraction >= candidate.f0 - EPSILON && fraction <= candidate.f1 + EPSILON);
+    range.forEach((candidate) => { cap = Math.min(cap, candidate.maxVel); });
+    const previousFraction = index > 0 ? geometry[index - 1].s / Math.max(totalDistance, EPSILON) : fraction;
+    const translationInterval = index > 0
+      && translationPriorityForInterval(ranges, transitions, previousFraction, fraction);
+    if (index > 0 && !translationInterval) {
+      const ds = Math.max(EPSILON, point.s - geometry[index - 1].s);
+      const headingRatePerMeter = Math.abs(robotHeadings[index] - robotHeadings[index - 1]) / ds;
+      let angularLimit = path.constraints.maxAngVel * Math.PI / 180;
+      range.forEach((candidate) => { angularLimit = Math.min(angularLimit, candidate.maxAngVel * Math.PI / 180); });
+      if (headingRatePerMeter > EPSILON) cap = Math.min(cap, angularLimit / headingRatePerMeter);
+    }
+    return Math.max(0, cap);
+  });
+  if (ranges.some((range) => range.rotationPriority === "translation") || transitions.some((transition) => transition.rotationPriority === "translation")) {
+    const omegaCaps = geometry.map((point, index) => {
+      const fraction = point.s / Math.max(totalDistance, EPSILON);
+      let limit = path.constraints.maxAngVel * Math.PI / 180;
+      ranges.forEach((range) => {
+        if (fraction >= range.f0 - EPSILON && fraction <= range.f1 + EPSILON) {
+          limit = Math.min(limit, range.maxAngVel * Math.PI / 180);
+        }
+      });
+      if (index > 0 && Math.abs(robotHeadings[index] - robotHeadings[index - 1]) <= EPSILON) return 0;
+      return limit;
+    });
+    const reachableOmega = [...omegaCaps];
+    if (path.startVel <= EPSILON) reachableOmega[0] = 0;
+    for (let index = 1; index < geometry.length; index += 1) {
+      const before = geometry[index - 1].s / Math.max(totalDistance, EPSILON);
+      const after = geometry[index].s / Math.max(totalDistance, EPSILON);
+      if (translationPriorityForInterval(ranges, transitions, before, after)) continue;
+      // Leave headroom for the subsequent fixed-period resampling, whose
+      // finite differences otherwise land slightly above the spatial bound.
+      let angularAcceleration = path.constraints.maxAngAccel * Math.PI / 180 * 0.6;
+      ranges.forEach((range) => {
+        if ((before >= range.f0 - EPSILON && before <= range.f1 + EPSILON)
+          || (after >= range.f0 - EPSILON && after <= range.f1 + EPSILON)) {
+          angularAcceleration = Math.min(angularAcceleration, range.maxAngAccel * Math.PI / 180 * 0.6);
+        }
+      });
+      const headingDelta = Math.abs(robotHeadings[index] - robotHeadings[index - 1]);
+      reachableOmega[index] = Math.min(reachableOmega[index], Math.sqrt(Math.max(0, reachableOmega[index - 1] ** 2 + 2 * angularAcceleration * headingDelta)));
+    }
+    if (path.goalVel <= EPSILON) reachableOmega[reachableOmega.length - 1] = 0;
+    for (let index = geometry.length - 2; index >= 0; index -= 1) {
+      const before = geometry[index].s / Math.max(totalDistance, EPSILON);
+      const after = geometry[index + 1].s / Math.max(totalDistance, EPSILON);
+      if (translationPriorityForInterval(ranges, transitions, before, after)) continue;
+      let angularDeceleration = (path.constraints.maxAngDecel ?? path.constraints.maxAngAccel) * Math.PI / 180 * 0.6;
+      ranges.forEach((range) => {
+        if ((before >= range.f0 - EPSILON && before <= range.f1 + EPSILON)
+          || (after >= range.f0 - EPSILON && after <= range.f1 + EPSILON)) {
+          angularDeceleration = Math.min(angularDeceleration, range.maxAngAccel * Math.PI / 180 * 0.6);
+        }
+      });
+      const headingDelta = Math.abs(robotHeadings[index + 1] - robotHeadings[index]);
+      reachableOmega[index] = Math.min(reachableOmega[index], Math.sqrt(Math.max(0, reachableOmega[index + 1] ** 2 + 2 * angularDeceleration * headingDelta)));
+    }
+    for (let index = 1; index < geometry.length; index += 1) {
+      const before = geometry[index - 1].s / Math.max(totalDistance, EPSILON);
+      const after = geometry[index].s / Math.max(totalDistance, EPSILON);
+      if (translationPriorityForInterval(ranges, transitions, before, after)) continue;
+      const distance = Math.max(EPSILON, geometry[index].s - geometry[index - 1].s);
+      const headingRatePerMeter = Math.abs(robotHeadings[index] - robotHeadings[index - 1]) / distance;
+      if (headingRatePerMeter > EPSILON) velocityCaps[index] = Math.min(velocityCaps[index], reachableOmega[index] / headingRatePerMeter);
+    }
