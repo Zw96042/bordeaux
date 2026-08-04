@@ -448,3 +448,93 @@ public final class BordeauxProcessor extends AbstractProcessor {
         if (type.getKind() != TypeKind.DECLARED) return "type variables, wildcards, and intersection types are not supported";
         DeclaredType declared = (DeclaredType) type;
         TypeElement element = (TypeElement) declared.asElement();
+        String raw = element.getQualifiedName().toString();
+        if (raw.equals("java.lang.Character")) return "Character values are ambiguous in JSON; use String or an enum";
+        if (scalarKind(raw) != null) return null;
+        if (element.getKind() == ElementKind.ENUM) {
+            long constants = element.getEnclosedElements().stream()
+                    .filter(value -> value.getKind() == ElementKind.ENUM_CONSTANT).count();
+            return constants > MAX_ENUM_VALUES ? "enums cannot exceed " + MAX_ENUM_VALUES + " values" : null;
+        }
+        if (raw.equals("java.util.Optional")) {
+            if (depth > 0) return "Optional is supported only as a top-level command parameter";
+            return declared.getTypeArguments().size() == 1
+                    ? unsupportedReason(declared.getTypeArguments().get(0), visiting, depth + 1)
+                    : "Optional must declare one value type";
+        }
+        if (isAssignableErasure(type, "java.util.Map")) {
+            if (declared.getTypeArguments().size() != 2) return "maps must declare String keys and a value type";
+            if (!declared.getTypeArguments().get(0).toString().equals("java.lang.String")) return "map keys must be String";
+            return unsupportedReason(declared.getTypeArguments().get(1), visiting, depth + 1);
+        }
+        if (isAssignableErasure(type, "java.util.Collection")) {
+            return declared.getTypeArguments().size() == 1
+                    ? unsupportedReason(declared.getTypeArguments().get(0), visiting, depth + 1)
+                    : "collections must declare one element type";
+        }
+        if (raw.startsWith("java.")) return "this JDK type has no defined JSON conversion";
+        if (element.getKind().isInterface() || element.getModifiers().contains(Modifier.ABSTRACT)) {
+            return "custom objects must be concrete Jackson-deserializable classes or records";
+        }
+        if (!element.getModifiers().contains(Modifier.PUBLIC)) return "custom objects must be public";
+        if (element.getNestingKind().isNested() && !element.getModifiers().contains(Modifier.STATIC)) {
+            return "nested custom objects must be static";
+        }
+        String key = type.toString();
+        if (!visiting.add(key)) return "recursive custom object schemas are not supported";
+        List<SchemaField> shape = objectShape(element);
+        if (shape.isEmpty()) return "custom objects need record components or public data fields";
+        if (shape.size() > MAX_OBJECT_FIELDS) return "custom objects cannot exceed " + MAX_OBJECT_FIELDS + " fields";
+        if (element.getKind() != ElementKind.RECORD && !hasPublicNoArgConstructor(element)) {
+            return "custom objects with public fields need a public no-argument constructor";
+        }
+        for (SchemaField field : shape) {
+                String reason = unsupportedReason(field.type(), visiting, depth + 1);
+                if (reason != null) return reason;
+        }
+        visiting.remove(key);
+        return null;
+    }
+
+    private String schema(TypeMirror type, Set<String> visiting, int depth) {
+        String javaType = type.toString();
+        if (depth > MAX_SCHEMA_DEPTH) return schemaLeaf("opaque", javaType);
+        if (type.getKind().isPrimitive()) {
+            return schemaLeaf(primitiveKind(type.getKind()), javaType);
+        }
+        if (type.getKind() == TypeKind.ARRAY) {
+            return "{\"element\":" + schema(((ArrayType) type).getComponentType(), visiting, depth + 1)
+                    + ",\"javaType\":" + quote(javaType) + ",\"kind\":\"array\"}";
+        }
+        DeclaredType declared = (DeclaredType) type;
+        TypeElement element = (TypeElement) declared.asElement();
+        String raw = element.getQualifiedName().toString();
+        String scalar = scalarKind(raw);
+        if (scalar != null) return schemaLeaf(scalar, javaType);
+        if (element.getKind() == ElementKind.ENUM) {
+            List<String> constants = element.getEnclosedElements().stream()
+                    .filter(value -> value.getKind() == ElementKind.ENUM_CONSTANT)
+                    .map(value -> quote(value.getSimpleName().toString())).toList();
+            if (constants.size() > MAX_ENUM_VALUES) return schemaLeaf("opaque", javaType);
+            return "{\"enumValues\":[" + String.join(",", constants) + "],\"javaType\":" + quote(javaType)
+                    + ",\"kind\":\"enum\"}";
+        }
+        if (raw.equals("java.util.Optional")) {
+            return "{\"element\":" + schema(declared.getTypeArguments().get(0), visiting, depth + 1)
+                    + ",\"javaType\":" + quote(javaType) + ",\"kind\":\"optional\"}";
+        }
+        if (isAssignableErasure(type, "java.util.Map")) {
+            return "{\"javaType\":" + quote(javaType) + ",\"kind\":\"map\",\"value\":"
+                    + schema(declared.getTypeArguments().get(1), visiting, depth + 1) + "}";
+        }
+        if (isAssignableErasure(type, "java.util.Collection")) {
+            return "{\"element\":" + schema(declared.getTypeArguments().get(0), visiting, depth + 1)
+                    + ",\"javaType\":" + quote(javaType) + ",\"kind\":\"array\"}";
+        }
+        if (visiting.add(javaType)) {
+            List<String> fields = new ArrayList<>();
+            for (SchemaField field : objectShape(element)) {
+                fields.add("{\"name\":" + quote(field.name()) + ",\"schema\":"
+                        + schema(field.type(), visiting, depth + 1) + "}");
+            }
+            visiting.remove(javaType);
