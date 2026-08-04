@@ -248,3 +248,93 @@ export interface ConstraintRange {
   f1: number;
   d0?: number;
   d1?: number;
+  w0?: number;
+  w1?: number;
+  /** Local fraction within segment w0/w1. Omitted on legacy whole-waypoint spans. */
+  t0?: number;
+  t1?: number;
+  maxVel: number;
+  maxAccel: number;
+  maxDecel?: number;
+  maxAngVel: number;
+  maxAngAccel: number;
+  /** Which motion stays on schedule when heading demand exceeds angular limits. */
+  rotationPriority?: "heading" | "translation";
+  name?: string;
+}
+
+export interface PathDoc {
+  id: string;
+  name: string;
+  waypoints: Waypoint[];
+  targets: RotationTarget[];
+  markers: Marker[];
+  ranges: ConstraintRange[];
+  constraints: PathConstraints;
+  headingMode?: HeadingMode;
+  folderId?: string;
+  driveBackward?: boolean;
+  startVel: number;
+  goalVel: number;
+  exportable?: boolean;
+  labview?: LabviewPathOptions;
+}
+
+export interface PathFolder {
+  id: string;
+  name: string;
+}
+
+export interface LabviewPathOptions {
+  samplePeriodS?: number;
+  minTurnRadiusM?: number;
+  bezierTangentMode?: "handles" | "automatic";
+  reversePath?: boolean;
+  zeroVelocity?: boolean;
+  pickupBalls?: boolean;
+  currentLimit?: number;
+  zeroTranslationalVelocity?: boolean;
+  correctAtBeginningOfPath?: boolean;
+  /** LabVIEW's independent linear velocity ceiling. Defaults to maxVel when omitted. */
+  stoopidFastMps?: number;
+}
+
+export interface PathConstraints {
+  maxVel: number;
+  maxAccel: number;
+  maxDecel: number;
+  maxAngVel: number;
+  maxAngAccel: number;
+  maxAngDecel?: number;
+  maxJerk?: number;
+  maxAngJerk?: number;
+}
+
+export interface RoutineFunctionNode {
+  id: string;
+  type: "function";
+  cat: "terminate" | "sequence" | "generate" | "velocity";
+  title?: string;
+  trigger?: string;
+  note?: string;
+  scale?: number;
+  funcRef?: string;
+  op?: string;
+  target?: string;
+}
+
+export interface RoutinePathNode {
+  id: string;
+  type: "path";
+  ref: string;
+}
+
+export interface RoutineDecisionNode {
+  id: string;
+  type: "decision";
+  cond: string;
+  thenLabel: string;
+  elseLabel: string;
+  then: RoutineNode[];
+  else: RoutineNode[];
+}
