@@ -358,3 +358,93 @@ describe("motion features", () => {
     path.ranges = [{
       anchor: "param", f0: 0, f1: 0.5,
       maxVel: path.constraints.maxVel, maxAccel: path.constraints.maxAccel, maxDecel: path.constraints.maxDecel,
+      maxAngVel: 30, maxAngAccel: 60, rotationPriority: "translation",
+    }];
+    const dt = 0.02;
+    const samples = Array.from({ length: 101 }, (_, index) => ({
+      i: index, t: index * dt, s: index * dt, f: index / 100, x: index * dt, y: 0,
+      headingRad: index / 100 * Math.PI, velocityMps: index === 100 ? 0 : 1,
+      accelerationMps2: 0, angularVelocityRadps: 0, curvatureInvM: 0,
+    }));
+    const tracked = applyRotationPriority(path, {
+      planner: "profiledSpline", samples, markers: [], diagnostics: [], totalDistanceM: 2, totalTimeS: 2,
+    }, project.robot);
+    const firstOutside = tracked.samples.findIndex((sample) => sample.f > 0.5);
+    const before = tracked.samples[firstOutside - 1], outside = tracked.samples[firstOutside];
+
+    expect(Math.abs(outside.angularVelocityRadps)).toBeLessThanOrEqual(30 * Math.PI / 180 * 1.001);
+    expect(Math.abs(outside.angularVelocityRadps - before.angularVelocityRadps) / dt)
+      .toBeLessThanOrEqual(60 * Math.PI / 180 * 1.001);
+    expect(tracked.diagnostics.some((issue) => issue.message.includes("angular limits"))).toBe(false);
+  });
+
+  it.each(PLANNERS)("lets translation timing take priority without breaking angular limits in %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxVel = 4;
+    path.constraints.maxAccel = 5;
+    path.constraints.maxDecel = 5;
+    path.constraints.maxAngVel = 60;
+    path.constraints.maxAngAccel = 120;
+    path.constraints.maxAngDecel = 120;
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 8, y: 2, theta: 180, thetaOn: true },
+    ]);
+    path.ranges = [{
+      anchor: "param", f0: 0.05, f1: 0.95,
+      maxVel: 4, maxAccel: 5, maxDecel: 5, maxAngVel: 60, maxAngAccel: 120,
+    }];
+
+    const headingPriority = getPlanner(plannerId).generate({ path: structuredClone(path), robot: project.robot });
+    path.ranges[0].rotationPriority = "translation";
+    const translationPriority = getPlanner(plannerId).generate({ path, robot: project.robot });
+    const peakHeadingSpeed = Math.max(...headingPriority.samples.map((sample) => sample.velocityMps));
+    const peakTranslationSpeed = Math.max(...translationPriority.samples.map((sample) => sample.velocityMps));
+
+    expect(peakTranslationSpeed).toBeGreaterThan(peakHeadingSpeed + 0.2);
+    expect(translationPriority.totalTimeS).toBeLessThan(headingPriority.totalTimeS);
+    expect(translationPriority.diagnostics.some((issue) => issue.severity === "error" && issue.message.includes("velocity or acceleration limits"))).toBe(false);
+    expect(Math.max(...translationPriority.samples.map((sample) => Math.abs(sample.angularVelocityRadps))))
+      .toBeLessThanOrEqual(path.constraints.maxAngVel * Math.PI / 180 * 1.02);
+    const angularAcceleration = translationPriority.samples.slice(1).map((sample, index) => {
+      const previous = translationPriority.samples[index];
+      return (sample.angularVelocityRadps - previous.angularVelocityRadps) / Math.max(1e-9, sample.t - previous.t);
+    });
+    expect(Math.max(...angularAcceleration.map(Math.abs)))
+      .toBeLessThanOrEqual(path.constraints.maxAngAccel * Math.PI / 180 * 1.04);
+    expect(Math.abs(PM.angWrap(translationPriority.samples.at(-1)!.headingRad - Math.PI)))
+      .toBeLessThan(0.1 * Math.PI / 180);
+    if (plannerId === "labviewBezier" || plannerId === "labviewClothoid") {
+      translationPriority.samples.slice(1).forEach((sample, index) => {
+        expect(sample.t - translationPriority.samples[index].t).toBeCloseTo(path.labview?.samplePeriodS ?? 0.02, 9);
+      });
+    }
+    translationPriority.samples.slice(1).forEach((sample, index) => {
+      const previous = translationPriority.samples[index];
+      expect(PM.angWrap(sample.headingRad - previous.headingRad))
+        .toBeCloseTo(sample.angularVelocityRadps * (sample.t - previous.t), 4);
+    });
+  });
+
+  it("validates timing priority and keeps it swerve-only", () => {
+    const project = createDemoProject();
+    project.paths[0].ranges = [{
+      anchor: "param", f0: 0.2, f1: 0.8,
+      maxVel: 4.2, maxAccel: 6.5, maxDecel: 6.5, maxAngVel: 180, maxAngAccel: 360,
+      rotationPriority: "translation",
+    }];
+    expect(validateProject(project).ok).toBe(true);
+    expect(decodeProjectFile(JSON.stringify(project)).project.paths[0].ranges[0].rotationPriority).toBe("translation");
+
+    project.robot.drive = "tank";
+    expect(validateProject(project).issues.some((issue) => issue.path.endsWith("rotationPriority") && issue.message.includes("swerve"))).toBe(true);
+    (project.paths[0].ranges[0] as unknown as { rotationPriority: string }).rotationPriority = "fastest";
+    expect(validateProject(project).issues.some((issue) => issue.path.endsWith("rotationPriority") && issue.message.includes("heading or translation"))).toBe(true);
+  });
+
+  it.each(PLANNERS)("keeps omitted timing priority identical to explicit heading priority in %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.ranges = [{
