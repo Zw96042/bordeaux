@@ -631,3 +631,93 @@
       if (transitionGoal) {
         const boundaryDistance = pts[boundary].s;
         const beforeDistance = Math.min(policy.distanceM * beforeShare, Math.max(0, boundaryDistance - pts[previousBoundary].s));
+        const goalAtBoundary = transitionGoal.distanceM <= boundaryDistance + 1e-9;
+        const afterDistance = Math.min(policy.distanceM * (1 - beforeShare), Math.max(0, (goalAtBoundary ? pts[transitionGoal.spanEndIndex].s : transitionGoal.distanceM) - boundaryDistance));
+        const requestedStart = boundaryDistance - beforeDistance;
+        const requestedEnd = goalAtBoundary ? boundaryDistance + afterDistance : Math.min(transitionGoal.distanceM, boundaryDistance + afterDistance);
+        let startIndex = previousBoundary;
+        while (startIndex < boundary && pts[startIndex].s < requestedStart - 1e-9) startIndex++;
+        if (protectedBefore >= startIndex && protectedBefore < boundary) startIndex = protectedBefore + 1;
+        let anchorIndex = boundary;
+        while (anchorIndex < transitionGoal.spanEndIndex && pts[anchorIndex].s < transitionGoal.distanceM - 1e-9) anchorIndex++;
+        let endIndex = startIndex;
+        while (endIndex < transitionGoal.spanEndIndex && pts[endIndex].s < requestedEnd - 1e-9) endIndex++;
+        const goalIndex = goalAtBoundary ? endIndex : anchorIndex;
+        const startHeading = startIndex < boundary ? out[startIndex] : incoming;
+        const goalHeading = startHeading + angWrap(transitionGoal.heading - startHeading);
+        const startDistance = pts[startIndex].s, endDistance = pts[endIndex].s;
+        for (let i = startIndex; i <= goalIndex; i++) {
+          const t = endDistance > startDistance + 1e-9 ? Math.max(0, Math.min(1, (pts[i].s - startDistance) / (endDistance - startDistance))) : 1;
+          const smooth = t * t * t * (t * (t * 6 - 15) + 10);
+          out[i] = startHeading + (goalHeading - startHeading) * smooth;
+        }
+        if (goalIndex < transitionGoal.spanEndIndex) {
+          const nextIndex = goalIndex + 1;
+          const branchOffset = goalHeading + angWrap(raw[nextIndex] - goalHeading) - unwrappedRaw[nextIndex];
+          for (let i = nextIndex; i <= transitionGoal.spanEndIndex; i++) out[i] = unwrappedRaw[i] + branchOffset;
+        }
+        protectedAnchorIndices.add(goalIndex);
+        continue;
+      }
+      const outgoing = incoming + angWrap(raw[outgoingStart] - incoming), delta = outgoing - incoming;
+      const beforeDistance = Math.min(policy.distanceM * beforeShare, Math.max(0, pts[boundary].s - pts[previousBoundary].s));
+      if (beforeDistance > 1e-9) {
+        const startDistance = pts[boundary].s - beforeDistance;
+        for (let i = previousBoundary; i < boundary; i++) {
+          if (pts[i].s < startDistance - 1e-9) continue;
+          if (i <= protectedBefore) continue;
+          const t = Math.max(0, Math.min(1, (pts[i].s - startDistance) / beforeDistance));
+          const smooth = t * t * t * (t * (t * 6 - 15) + 10);
+          out[i] += delta * beforeShare * smooth;
+        }
+      }
+      const boundaryHeading = incoming + delta * beforeShare;
+      const afterDistance = Math.min(policy.distanceM * (1 - beforeShare), Math.max(0, pts[nextBoundary].s - pts[boundary].s));
+      let previous = boundaryHeading;
+      const afterStartIndex = boundaryProtected ? boundary + 1 : boundary;
+      for (let i = afterStartIndex; i <= nextBoundary; i++) {
+        const base = previous + angWrap(raw[i === boundary ? outgoingStart : i] - previous);
+        const t = afterDistance > 1e-9 ? Math.max(0, Math.min(1, (pts[i].s - pts[boundary].s) / afterDistance)) : 1;
+        const smooth = t * t * t * (t * (t * 6 - 15) + 10);
+        out[i] = base + (boundaryHeading - outgoing) * (1 - smooth);
+        previous = out[i];
+      }
+    }
+    return out;
+  }
+  function effectiveRanges(doc, smp) {
+    const ranges = doc.ranges || []; const total = smp.length || 1;
+    const wf = ranges.some((r) => r.anchor === 'wp') ? waypointFracs(doc, smp) : null;
+    return ranges.map((r) => {
+      let f0 = r.f0, f1 = r.f1;
+      if (r.anchor === 'dist') { f0 = (r.d0 != null ? r.d0 : (r.f0 || 0) * total) / total; f1 = (r.d1 != null ? r.d1 : (r.f1 || 0) * total) / total; }
+      else if (r.anchor === 'wp' && wf) {
+        const localFraction = (waypoint, local, fallback) => {
+          if (local == null) return wf[Math.max(0, Math.min(wf.length - 1, waypoint != null ? waypoint : fallback))];
+          const segment = Math.max(0, Math.min(wf.length - 2, Math.round(waypoint != null ? waypoint : 0)));
+          const t = Math.max(0, Math.min(1, local));
+          return wf[segment] + (wf[segment + 1] - wf[segment]) * t;
+        };
+        f0 = localFraction(r.w0, r.t0, 0); f1 = localFraction(r.w1, r.t1, wf.length - 1);
+      }
+      f0 = Math.max(0, Math.min(1, f0 || 0)); f1 = Math.max(0, Math.min(1, f1 || 0));
+      return { f0, f1, maxVel: r.maxVel, maxAccel: r.maxAccel, maxDecel: r.maxDecel, maxAngVel: r.maxAngVel, maxAngAccel: r.maxAngAccel, rotationPriority: r.rotationPriority, anchor: r.anchor || 'param', name: r.name };
+    });
+  }
+
+  function featureFraction(feature, smp) {
+    const total = smp.length || 1;
+    const raw = feature && feature.anchor === 'dist'
+      ? (feature.d != null ? feature.d : (feature.f || 0) * total) / total
+      : (feature && feature.f) || 0;
+    return Math.max(0, Math.min(1, raw));
+  }
+
+  function remapWaypointRange(range, oldToNew, removedIndex, newCount) {
+    if (!range || range.anchor !== 'wp') return range;
+    const next = { ...range };
+    const last = Math.max(0, newCount - 1);
+    if (range.t0 != null || range.t1 != null) {
+      const remapLocal = (segment, local) => {
+        const authored = Number.isInteger(segment) ? segment : 0;
+        const oldSegment = Math.max(0, Math.min(oldToNew.length - 2, authored));
