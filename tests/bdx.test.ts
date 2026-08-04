@@ -211,3 +211,93 @@ describe(".bdx export", () => {
     expect(marker.name).toBe("score_L4");
     expect(marker.command).toBe("scoreL4");
     expect(marker.fraction).toBeCloseTo(0.66, 5);
+    expect(marker.timeS).toBeGreaterThan(0);
+  });
+
+  it("omits non-exportable routine preview paths", () => {
+    const hidden = clone(richPath("runtime_preview"));
+    hidden.exportable = false;
+    const exportData = buildBdxExport(projectWithPaths([blankPath("Real"), hidden]));
+    expect(exportData.paths.map((path) => path.name)).toEqual(["Real"]);
+  });
+
+  it("provides an export preview summary", () => {
+    const preview = previewBdxExport(createDemoProject());
+    expect(preview.ok).toBe(true);
+    expect(preview.pathCount).toBe(1);
+    expect(preview.sampleCount).toBeGreaterThan(2);
+    expect(preview.totalTimeS).toBeGreaterThan(0);
+  });
+
+  it("exports optimized trajectory samples with planner diagnostics", () => {
+    const project = projectWithPaths([richPath("Optimized")]);
+    project.plannerId = "optimizedTrajectory";
+    const exportData = buildBdxExport(project);
+    expect(exportData.paths[0].planner).toBe("optimizedTrajectory");
+    expect(exportData.paths[0].samples.length).toBeGreaterThan(2);
+    expect(exportData.paths[0].optimization).toEqual(
+      expect.objectContaining({
+        plannerUsed: "optimizedTrajectory",
+        fallback: false,
+        solveTimeMs: expect.any(Number),
+        maxVelocityMps: expect.any(Number),
+      }),
+    );
+  });
+
+  it("blocks trajectories with error diagnostics in preview and direct export", () => {
+    const project = createDemoProject();
+    project.paths[0].waypoints = buildWaypoints([
+      { x: 1, y: 1, theta: 0, segType: "bezier" },
+      { x: 1.05, y: 7, theta: 0, segType: "bezier" },
+      { x: 1.1, y: 1, theta: 0 },
+    ]);
+    expect(previewBdxExport(project).ok).toBe(false);
+    expect(() => buildBdxExport(project)).toThrow(/radius|curvature|turn/i);
+  });
+
+  it("interpolates optimized marker timestamps from the final retimed samples", () => {
+    const project = createDemoProject();
+    project.plannerId = "optimizedTrajectory";
+    project.paths[0].waypoints = buildWaypoints([
+      { x: 2.2, y: 4, theta: 0, segType: "bezier" },
+      { x: 3.2, y: 4, stop: true, segType: "bezier" },
+      { x: 5.4, y: 4, theta: 0 },
+    ]);
+    project.paths[0].markers = [{ f: 0.66, name: "m" }];
+    const path = buildBdxExport(project).paths[0];
+    const index = path.samples.findIndex((sample) => sample.f >= 0.66);
+    const previous = path.samples[index - 1];
+    const current = path.samples[index];
+    const expected = previous.t + ((0.66 - previous.f) / (current.f - previous.f)) * (current.t - previous.t);
+    expect(path.markers[0].timeS).toBeCloseTo(expected, 4);
+  });
+
+  it("keeps distance-locked marker travel fixed when the path is extended", () => {
+    const project = createDemoProject();
+    project.paths[0].waypoints = buildWaypoints([{ x: 1, y: 2 }, { x: 11, y: 2 }]);
+    project.paths[0].markers = [{ f: 0.5, anchor: "dist", d: 2, name: "fixed" }];
+    expect(buildBdxExport(project).paths[0].markers[0].fraction).toBeCloseTo(0.2, 2);
+    project.paths[0].waypoints = buildWaypoints([{ x: 1, y: 2 }, { x: 15, y: 2 }]);
+    expect(buildBdxExport(project).paths[0].markers[0].fraction).toBeCloseTo(2 / 14, 2);
+  });
+
+  it("exports the authored routine with stable path references", () => {
+    const project = createDemoProject();
+    project.routine!.nodes = [{ id: "routine_path", type: "path", ref: project.paths[0].id }];
+    const exported = buildBdxExport(project);
+    expect(exported.schemaVersion).toBe("1.1");
+    expect(exported.routine).toEqual(project.routine);
+    expect((exported.routine!.nodes[0] as { ref: string }).ref).toBe(project.paths[0].id);
+    expect(exported.paths.filter((path) => path.id === (exported.routine!.nodes[0] as { ref: string }).ref)).toHaveLength(1);
+  });
+});
+
+describe("LabVIEW .bdx compatibility", () => {
+  it("writes Bordeaux 4.4 fields in LabVIEW big-endian binary order", () => {
+    const project = createDemoProject();
+    project.paths[0].waypoints = buildWaypoints([{ x: 1, y: 2 }, { x: 2, y: 2 }]);
+    const result = buildLabviewBdx(project, project.paths[0].id);
+    const reader = new BinaryReader(result.buffer);
+
+    expect(result.buffer[0]).toBe(0);
