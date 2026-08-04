@@ -1,48 +1,48 @@
 import fs from "node:fs";
+import { promises as fsp } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildBdxExport, previewBdxExport } from "../src/shared/export/bdx";
+import { buildLabviewBdx } from "../src/shared/export/labviewBdx";
 import { clampWorldPoint, FIELD_H, FIELD_W } from "../src/shared/math/fieldBounds";
 import { PM } from "../src/shared/math/pm";
 import { blankPath, buildWaypoints, clone, createDemoProject } from "../src/shared/project/defaults";
 import type { BordeauxProject, PathDoc } from "../src/shared/types";
 import { validateProject } from "../src/shared/validation";
+import { parseProject, readProject, saveTargetForOpenedProject, writeBufferAtomically, writeProject } from "../src/electron/projectFiles";
 
-function projectWithPaths(paths: PathDoc[]): BordeauxProject {
-  return {
-    schemaVersion: "1.0",
-    name: "TestProject",
-    robot: { drive: "swerve", w: 0.84, l: 0.84, maxSpeed: 5.0 },
-    paths,
-    routine: { name: "Autonomous Routine", nodes: [] },
-  };
+class BinaryReader {
+  offset = 0;
+
+  constructor(readonly buffer: Buffer) {}
+
+  string(): string {
+    const length = this.u32();
+    const value = this.buffer.toString("utf8", this.offset, this.offset + length);
+    this.offset += length;
+    return value;
+  }
+
+  boolean(): boolean { return this.buffer.readUInt8(this.offset++) !== 0; }
+  u16(): number { const value = this.buffer.readUInt16BE(this.offset); this.offset += 2; return value; }
+  i32(): number { const value = this.buffer.readInt32BE(this.offset); this.offset += 4; return value; }
+  u32(): number { const value = this.buffer.readUInt32BE(this.offset); this.offset += 4; return value; }
+  f64(): number { const value = this.buffer.readDoubleBE(this.offset); this.offset += 8; return value; }
+  skip(bytes: number): void { this.offset += bytes; }
 }
 
-function richPath(name = "RichPath"): PathDoc {
-  const path = blankPath(name);
-  path.waypoints = buildWaypoints([
-    { x: 2.2, y: 4.0, theta: 0, segType: "clothoid" },
-    { x: 3.2, y: 4.7, stop: true, segType: "bezier" },
-    { x: 5.4, y: 4.0, theta: 0 },
-  ]);
-  path.markers = [{ f: 0.66, name: "score_L4", cmd: "scoreL4", group: "sequential" }];
-  path.ranges = [
-    {
-      anchor: "param",
-      f0: 0.35,
-      f1: 0.8,
-      maxVel: 1.5,
-      maxAccel: 2.4,
-      maxDecel: 2,
-      maxAngVel: 220,
-      maxAngAccel: 400,
-      name: "Approach",
-    },
-  ];
-  return path;
-}
-
-describe("project defaults and validation", () => {
+function readEndpointVelocities(buffer: Buffer): { first: number; last: number; initial: number; final: number } {
+  const reader = new BinaryReader(buffer);
+  reader.string(); reader.boolean(); reader.boolean(); reader.u32(); reader.string(); reader.u16();
+  const positionCount = reader.u32();
+  reader.skip(positionCount * 3 * 8);
+  const velocityCount = reader.u32();
+  let first = 0;
+  let last = 0;
+  for (let index = 0; index < velocityCount; index += 1) {
+    const velocity = reader.f64();
+    if (index === 0) first = velocity;
   it("starts with one blank path and no routine preset", () => {
     const project = createDemoProject();
     expect(project.name).toBe("Untitled");
