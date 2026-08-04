@@ -178,3 +178,93 @@ describe("motion features", () => {
     expect(Math.max(...unwrapped)).toBeLessThanOrEqual(7 * Math.PI / 4 + 0.25 * Math.PI / 180);
   });
 
+  it("places a heading-law blend before, across, or after its boundary", () => {
+    const raw = [0, 0, 0, Math.PI / 2, Math.PI / 2, Math.PI / 2, Math.PI / 2];
+    const points = raw.map((_, index) => ({ s: index }));
+    const base = buildWaypoints([
+      { x: 0, y: 0, theta: 0, segmentHeadingMode: "manual" },
+      { x: 3, y: 0, theta: 90, segmentHeadingMode: "tangent" },
+      { x: 6, y: 0, theta: 90 },
+    ]);
+    const headingsFor = (placement: "before" | "split" | "after") => {
+      base[1].headingTransition = { placement, rotationPriority: "heading", distanceM: 2 };
+      return smoothHeadingTransitions(raw, ["manual", "tangent"], [false, false], [0, 3, 6], points, base);
+    };
+
+    expect(headingsFor("before")[3]).toBeCloseTo(Math.PI / 2, 8);
+    expect(headingsFor("split")[3]).toBeCloseTo(Math.PI / 4, 8);
+    expect(headingsFor("after")[3]).toBeCloseTo(0, 8);
+
+    base[1].headingTransition = { placement: "split", rotationPriority: "translation", distanceM: 2 };
+    const [window] = headingTransitionWindows(base, ["manual", "tangent"], [false, false], [0, 0.5, 1], 6);
+    expect(window).toMatchObject({ waypointIndex: 1, placement: "split", rotationPriority: "translation", distanceM: 2 });
+    expect(window.start).toBeCloseTo(1 / 3, 10);
+    expect(window.end).toBeCloseTo(2 / 3, 10);
+  });
+
+  it.each(PLANNERS)("lets a heading transition preserve translational timing with %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.constraints.maxVel = 4;
+    path.constraints.maxAccel = 5;
+    path.constraints.maxDecel = 5;
+    path.constraints.maxAngVel = 90;
+    path.constraints.maxAngAccel = 180;
+    path.constraints.maxAngDecel = 180;
+    path.headingMode = "manual";
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: -90, thetaOn: true, segType: "line", segmentHeadingMode: "manual" },
+      { x: 4, y: 2, theta: -90, thetaOn: true, segType: "line", segmentHeadingMode: "tangent" },
+      { x: 9, y: 2, theta: 0, thetaOn: true },
+    ]);
+    path.waypoints[1].headingTransition = { placement: "after", rotationPriority: "heading", distanceM: 0.05 };
+    const headingResult = getPlanner(plannerId).generate({ path: structuredClone(path), robot: project.robot });
+    path.waypoints[1].headingTransition.rotationPriority = "translation";
+    const translationResult = getPlanner(plannerId).generate({ path, robot: project.robot });
+
+    expect(translationResult.totalTimeS).toBeLessThan(headingResult.totalTimeS);
+    const settled = translationResult.samples.filter((sample) => sample.x >= 4);
+    expect(Math.max(...settled.map((sample) => sample.headingRad))).toBeLessThanOrEqual(1 * Math.PI / 180);
+    expect(Math.abs(translationResult.samples.at(-1)!.headingRad)).toBeLessThan(0.1 * Math.PI / 180);
+  });
+
+  it("validates and round-trips authored heading-transition controls", () => {
+    const project = createDemoProject();
+    project.paths[0].waypoints = buildWaypoints([
+      { x: 2, y: 2, theta: 0, segmentHeadingMode: "manual" },
+      { x: 4, y: 2, theta: 0, segmentHeadingMode: "tangent" },
+      { x: 6, y: 2, theta: 0 },
+    ]);
+    const transition = project.paths[0].waypoints[1];
+    transition.headingTransition = { placement: "split", rotationPriority: "translation", distanceM: 1.1 };
+
+    expect(validateProject(project).ok).toBe(true);
+    expect(decodeProjectFile(JSON.stringify(project)).project.paths[0].waypoints[1].headingTransition).toEqual(transition.headingTransition);
+
+    transition.headingTransition.distanceM = 4;
+    expect(validateProject(project).ok).toBe(true);
+    transition.headingTransition.distanceM = 0.04;
+    expect(validateProject(project).issues.some((issue) => issue.path.endsWith("headingTransition.distanceM"))).toBe(true);
+    transition.headingTransition = { placement: "after", rotationPriority: "translation", distanceM: 0.75 };
+    project.robot.drive = "tank";
+    expect(validateProject(project).issues.some((issue) => issue.path.endsWith("headingTransition.rotationPriority") && issue.message.includes("swerve"))).toBe(true);
+  });
+
+  it("catches up to a settled heading without overshooting and oscillating", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.constraints.maxAngVel = 180;
+    path.constraints.maxAngAccel = 360;
+    path.constraints.maxAngDecel = 360;
+    path.ranges = [{
+      anchor: "param", f0: 0, f1: 1,
+      maxVel: path.constraints.maxVel,
+      maxAccel: path.constraints.maxAccel,
+      maxDecel: path.constraints.maxDecel,
+      maxAngVel: path.constraints.maxAngVel,
+      maxAngAccel: path.constraints.maxAngAccel,
+      rotationPriority: "translation",
+    }];
+    const dt = 0.02;
+    const sampleCount = 151;
+    const samples = Array.from({ length: sampleCount }, (_, index) => {
