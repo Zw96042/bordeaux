@@ -43,7 +43,13 @@ export function buildBdxExport(project: BordeauxProject, options: BdxExportOptio
       samples: result.samples,
       markers: result.markers,
       diagnostics: result.diagnostics,
-    schemaVersion: "1.0",
+      optimization: result.optimization,
+    };
+  });
+  assertFiniteValue(project.routine, "routine");
+
+  return {
+    schemaVersion: "1.1",
     generator: "bordeaux",
     units: {
       distance: "meters",
@@ -56,37 +62,31 @@ export function buildBdxExport(project: BordeauxProject, options: BdxExportOptio
       drive: project.robot.drive,
       widthM: project.robot.w,
       lengthM: project.robot.l,
+      ...(project.robot.heightM === undefined ? {} : { heightM: project.robot.heightM }),
+      ...(project.robot.footprint === undefined ? {} : { footprint: clone(project.robot.footprint) }),
       maxSpeedMps: project.robot.maxSpeed,
     },
     paths,
+    routine: project.routine ?? null,
   };
+}
+
+function assertFiniteValue(value: unknown, valuePath: string): void {
+  const inspect = (value: unknown, valuePath: string): void => {
+    if (typeof value === "number" && !Number.isFinite(value)) throw new Error(`${valuePath} is not finite`);
+    if (Array.isArray(value)) value.forEach((item, index) => inspect(item, `${valuePath}[${index}]`));
+    else if (value && typeof value === "object") Object.entries(value).forEach(([key, item]) => inspect(item, `${valuePath}.${key}`));
+  };
+  inspect(value, valuePath);
+}
+
+function assertFinitePlannerResult(pathName: string, result: ReturnType<ReturnType<typeof getPlanner>["generate"]>): void {
+  assertFiniteValue(result, `Path "${pathName}" planner output`);
 }
 
 export function previewBdxExport(project: BordeauxProject, options: BdxExportOptions = {}): ExportPreview {
   const issues: ValidationIssue[] = [];
   const validation = validateProject(project);
   issues.push(...validation.issues);
-
-  let pathCount = 0;
-  let sampleCount = 0;
-  let totalTimeS = 0;
-
-  if (validation.ok) {
-    try {
-      const exportData = buildBdxExport(project, options);
-      pathCount = exportData.paths.length;
-      sampleCount = exportData.paths.reduce((sum, path) => sum + path.samples.length, 0);
-      totalTimeS = Number(exportData.paths.reduce((sum, path) => sum + path.totalTimeS, 0).toFixed(4));
-      for (const path of exportData.paths) issues.push(...path.diagnostics);
-    } catch (error) {
-      issues.push({
-        severity: "error",
-        path: "$.export",
-        message: error instanceof Error ? error.message : "Failed to build export",
-      });
-    }
-  }
-
-  const hasBlocking = issues.some((issue) => issue.severity === "error" || (options.includeWarningsAsBlocking && issue.severity === "warning"));
   return { ok: !hasBlocking, pathCount, sampleCount, totalTimeS, issues };
 }
