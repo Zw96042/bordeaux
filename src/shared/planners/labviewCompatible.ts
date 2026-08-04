@@ -718,3 +718,93 @@ function markersFor(path: PathDoc, samples: readonly TrajectorySample[]): BdxMar
     while (index < samples.length && samples[index].s < target) index += 1;
     const after = samples[Math.min(index, samples.length - 1)];
     const before = samples[Math.max(0, index - 1)];
+    const ratio = (target - before.s) / Math.max(EPSILON, after.s - before.s);
+    return {
+      id: marker.id ?? `${path.id}:event:${markerIndex}`,
+      name: marker.name,
+      command: marker.cmd ?? null,
+      ...(marker.invocation ? { invocation: marker.invocation } : {}),
+      group: marker.group ?? null,
+      timeS: before.t + (after.t - before.t) * clamp(ratio, 0, 1),
+      fraction,
+    };
+  });
+}
+
+function diagnosticsFor(kind: "bezier" | "clothoid", path: PathDoc, robotMaxSpeed: number, samples: readonly TrajectorySample[]): ValidationIssue[] {
+  const diagnostics: ValidationIssue[] = [];
+  const waypointIndices = nearestGeometryIndices(path, samples);
+  path.waypoints.slice(0, -1).forEach((waypoint, segment) => {
+    if (waypoint.segmentHeadingMode !== "lookAt" || !waypoint.segmentLookAt) return;
+    let nearest = Infinity;
+    for (let index = waypointIndices[segment]; index <= waypointIndices[segment + 1] && index < samples.length; index += 1) {
+      nearest = Math.min(nearest, Math.hypot(samples[index].x - waypoint.segmentLookAt.x, samples[index].y - waypoint.segmentLookAt.y));
+    }
+    if (nearest < 0.05) diagnostics.push({ severity: "error", path: `paths.${path.name}.waypoints[${segment}].segmentLookAt`, message: "Tracked field point lies on the driven segment" });
+  });
+  if (kind === "clothoid") {
+    const requestedRadius = path.labview?.minTurnRadiusM ?? DEFAULT_MIN_TURN_RADIUS_M;
+    if (requestedRadius < 0.1) {
+      diagnostics.push({ severity: "warning", path: `paths.${path.name}.labview.minTurnRadiusM`, message: "Very small LabVIEW clothoid radius may exceed robot steering limits" });
+    }
+    const maximumCurvature = Math.max(...samples.map((sample) => Math.abs(sample.curvatureInvM)));
+    if (maximumCurvature > 1 / requestedRadius * 1.01) {
+      diagnostics.push({ severity: "warning", path: `paths.${path.name}.waypoints`, message: "Adjacent LabVIEW clothoid blends overlap; compatibility mode reduced their effective radius to fit" });
+    }
+  }
+  if ((path.constraints.maxJerk ?? 0) === 0) {
+    diagnostics.push({ severity: "warning", path: `paths.${path.name}.constraints.maxJerk`, message: "LabVIEW compatibility timing has no translational jerk cap because Max jerk is zero" });
+  }
+  const totalDistance = samples.at(-1)?.s ?? 0;
+  const ranges = normalizedRangesForSamples(path, samples);
+  const transitions = transitionWindowsForSamples(path, samples);
+  const finalFollowerOwnsAngularValidation = ranges.some((range) => range.rotationPriority === "translation")
+    || transitions.some((transition) => transition.rotationPriority === "translation");
+  const angularAcceleration = samples.slice(1).map((sample, index) => {
+    const dt = Math.max(EPSILON, sample.t - samples[index].t);
+    return (sample.angularVelocityRadps - samples[index].angularVelocityRadps) / dt;
+  });
+  const violatesVelocityOrAcceleration = samples.some((sample, index) => {
+    const fraction = sample.s / Math.max(totalDistance, EPSILON);
+    const previousFraction = index === 0 ? fraction : samples[index - 1].s / Math.max(totalDistance, EPSILON);
+    const translationInterval = index > 0 && translationPriorityForInterval(ranges, transitions, previousFraction, fraction);
+    const limits = index === 0 ? activeLimits(path, fraction, ranges) : intervalLimits(path, previousFraction, fraction, ranges);
+    if (Math.abs(sample.velocityMps) > limits.maxVel * 1.02
+      || (!finalFollowerOwnsAngularValidation && !translationInterval && Math.abs(sample.angularVelocityRadps) > limits.maxAngVel * 1.02)) return true;
+    if (index === 0) return false;
+    const accelerating = Math.abs(sample.velocityMps) >= Math.abs(samples[index - 1].velocityMps);
+    const linearLimit = accelerating
+      ? motorAccelerationLimit(limits.maxAccel, samples[index - 1].velocityMps, robotMaxSpeed)
+      : limits.maxDecel;
+    if (Math.abs(sample.accelerationMps2) > linearLimit * 1.02) return true;
+    if (index === 1) return false;
+    const angularLimit = Math.abs(sample.angularVelocityRadps) >= Math.abs(samples[index - 1].angularVelocityRadps)
+      ? limits.maxAngAccel
+      : limits.maxAngDecel;
+    return !finalFollowerOwnsAngularValidation && !translationInterval && Math.abs(angularAcceleration[index - 1]) > angularLimit * 1.02;
+  });
+  if (violatesVelocityOrAcceleration) {
+    diagnostics.push({ severity: "error", path: `paths.${path.name}.constraints`, message: "LabVIEW compatibility timing could not satisfy the configured velocity or acceleration limits" });
+  }
+  if ((path.constraints.maxJerk ?? 0) > 0 && samples.length > 2) {
+    const jerk = samples.slice(2).map((sample, index) => {
+      const dt = Math.max(EPSILON, sample.t - samples[index + 1].t);
+      return Math.abs(sample.accelerationMps2 - samples[index + 1].accelerationMps2) / dt;
+    });
+    if (Math.max(...jerk) > path.constraints.maxJerk! * 1.03) {
+      diagnostics.push({ severity: "error", path: `paths.${path.name}.constraints.maxJerk`, message: "LabVIEW compatibility timing could not satisfy the configured jerk limit" });
+    }
+  }
+  if (!finalFollowerOwnsAngularValidation && (path.constraints.maxAngJerk ?? 0) > 0 && angularAcceleration.length > 1) {
+    const angularJerk = angularAcceleration.slice(1).flatMap((value, index) => {
+      const sampleIndex = index + 2;
+      const fraction = samples[sampleIndex].s / Math.max(totalDistance, EPSILON);
+      const previousFraction = samples[sampleIndex - 1].s / Math.max(totalDistance, EPSILON);
+      if (translationPriorityForInterval(ranges, transitions, previousFraction, fraction)) return [];
+      const dt = Math.max(EPSILON, samples[index + 2].t - samples[index + 1].t);
+      return [Math.abs(value - angularAcceleration[index]) / dt];
+    });
+    const angularJerkLimit = path.constraints.maxAngJerk! * Math.PI / 180;
+    if (angularJerk.length > 0 && Math.max(...angularJerk) > angularJerkLimit * 1.03) {
+      diagnostics.push({ severity: "error", path: `paths.${path.name}.constraints.maxAngJerk`, message: "LabVIEW compatibility timing could not satisfy the configured angular jerk limit" });
+    }
