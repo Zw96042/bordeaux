@@ -178,36 +178,36 @@ describe(".bdx export", () => {
     expect(exportData.paths.map((path) => path.name)).toEqual(["First", "Second", "Third"]);
     expect(exportData.generator).toBe("bordeaux");
     expect(exportData.units.velocity).toBe("meters_per_second");
-        theta: 0,
-        thetaOn: false,
-        linked: false,
-        stop: false,
-        segType: "clothoid",
-        prevC: { x: 1, y: 1 },
-        nextC: { x: 3, y: 2 },
-      },
-      {
-        x: 4,
-        y: 1,
-        theta: 0,
-        thetaOn: true,
-        linked: true,
-        stop: false,
-        prevC: { x: 3, y: 0 },
-        nextC: { x: 5, y: 1 },
-      },
-    ];
-
-    const sampled = PM.sample(waypoints, 80);
-    const joint = sampled.pts.find((point: any) => point.seg === 0 && point.t === 1);
-    const firstAfterJoint = sampled.pts.find((point: any) => point.seg === 1);
-    const expectedBlend = Math.PI / 8;
-
-    if (!joint || !firstAfterJoint) throw new Error("Expected sampled clothoid joint points");
-    expect(joint.heading).toBeCloseTo(expectedBlend, 2);
-    expect(firstAfterJoint.heading).toBeCloseTo(expectedBlend, 1);
-    expect(Math.abs(PM.angWrap(firstAfterJoint.heading - joint.heading))).toBeLessThan(0.08);
-    expect(Math.abs(firstAfterJoint.curv - joint.curv)).toBeLessThan(0.8);
   });
-});
 
+  it("includes full sampled trajectory fields", () => {
+    const sample = buildBdxExport(projectWithPaths([richPath()])).paths[0].samples[0];
+    expect(sample).toEqual(
+      expect.objectContaining({
+        i: expect.any(Number),
+        t: expect.any(Number),
+        s: expect.any(Number),
+        f: expect.any(Number),
+        x: expect.any(Number),
+        y: expect.any(Number),
+        headingRad: expect.any(Number),
+        velocityMps: expect.any(Number),
+        accelerationMps2: expect.any(Number),
+        angularVelocityRadps: expect.any(Number),
+        curvatureInvM: expect.any(Number),
+      }),
+    );
+  });
+
+  it("forces stop waypoint velocity to zero", () => {
+    const path = richPath("StopPath");
+    const exportData = buildBdxExport(projectWithPaths([path]));
+    const stopIndex = Math.round((path.waypoints.length - 2) / Math.max(1, path.waypoints.length - 1) * (exportData.paths[0].samples.length - 1));
+    expect(exportData.paths[0].samples[stopIndex].velocityMps).toBeCloseTo(0, 4);
+  });
+
+  it("resolves markers to exported timestamps and fractions", () => {
+    const marker = buildBdxExport(projectWithPaths([richPath()])).paths[0].markers[0];
+    expect(marker.name).toBe("score_L4");
+    expect(marker.command).toBe("scoreL4");
+    expect(marker.fraction).toBeCloseTo(0.66, 5);
