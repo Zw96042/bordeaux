@@ -133,34 +133,34 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
     const solveTimeMs = performance.now() - started;
 
     if (base.samples.length < 2) {
+      const fallbackReason = "Profiled spline did not produce enough samples for optimization.";
+      const issue: ValidationIssue = {
+        severity: "warning",
+        path: `paths.${input.path.name}.planner`,
+        message: fallbackReason,
+      };
+      return {
+        ...base,
+        planner: "profiledSpline",
+        diagnostics: [...base.diagnostics, issue],
+        optimization: diagnostics(base.samples, solveTimeMs, fallbackReason),
+      };
+    }
+
+    try {
       const velocities = smoothVelocities(input, base.samples);
       const samples = remapTiming(base.samples, velocities);
       const totalTimeS = R(samples[samples.length - 1]?.t ?? base.totalTimeS, 4);
-      const markerScale = base.totalTimeS > 1e-9 ? totalTimeS / base.totalTimeS : 1;
 
       return {
         planner: "optimizedTrajectory",
         totalTimeS,
         totalDistanceM: base.totalDistanceM,
         samples,
-        markers: base.markers.map((marker) => ({ ...marker, timeS: R(marker.timeS * markerScale, 4) })),
+        markers: base.markers.map((marker) => ({ ...marker, timeS: R(timeAtFraction(samples, marker.fraction), 4) })),
         diagnostics: base.diagnostics,
         optimization: diagnostics(samples, performance.now() - started),
       };
     } catch (error) {
       const fallbackReason = error instanceof Error ? error.message : "Optimizer failed.";
       const issue: ValidationIssue = {
-        severity: "warning",
-        path: `paths.${input.path.name}.planner`,
-        message: `Optimized trajectory fell back to profiled spline: ${fallbackReason}`,
-      };
-      return {
-        ...base,
-        planner: "profiledSpline",
-        diagnostics: [...base.diagnostics, issue],
-        optimization: diagnostics(base.samples, performance.now() - started, fallbackReason),
-      };
-    }
-  },
-};
-
