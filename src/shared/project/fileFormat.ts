@@ -88,3 +88,39 @@ export function decodeProjectValue(value: unknown): DecodedProjectFile {
         robot,
         paths: [path],
         routine: { name: "Autonomous Routine", nodes: [] },
+        plannerId: "profiledSpline",
+      },
+      "browser-path-2.0",
+      true,
+    );
+  }
+
+  return validatedProject(value, "bordeaux-project-1.0", false);
+}
+
+export function decodeProjectFile(contents: string): DecodedProjectFile {
+  let value: unknown;
+  try {
+    value = JSON.parse(contents) as unknown;
+  } catch {
+    throw new Error("Invalid Bordeaux project: the file is not valid JSON.");
+  }
+  return decodeProjectValue(value);
+}
+
+function stripEditorState(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripEditorState);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !TRANSIENT_EDITOR_KEYS.has(key))
+      .map(([key, item]) => [key, stripEditorState(item)]),
+  );
+}
+
+export function encodeProjectFile(value: unknown): { project: BordeauxProject; contents: string } {
+  const clean = stripEditorState(value);
+  const decoded = decodeProjectValue(clean);
+  const project = { ...decoded.project, schemaVersion: CURRENT_PROJECT_SCHEMA_VERSION };
+  return { project, contents: `${JSON.stringify(project, null, 2)}\n` };
+}
