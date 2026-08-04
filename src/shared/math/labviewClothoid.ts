@@ -268,3 +268,93 @@ function resolveOverlaps(
   }
 }
 
+function appendPoint(
+  output: LabviewClothoidPoint[],
+  point: Omit<LabviewClothoidPoint, "s">,
+): void {
+  const previous = output[output.length - 1];
+  if (!previous) {
+    output.push({ ...point, s: 0 });
+    return;
+  }
+  const distance = Math.hypot(point.x - previous.x, point.y - previous.y);
+  if (distance <= POSITION_EPSILON) return;
+  output.push({ ...point, s: previous.s + distance });
+}
+
+function appendBlend(
+  output: LabviewClothoidPoint[],
+  vertex: LabviewClothoidWaypoint,
+  recipe: CornerRecipe,
+): void {
+  const scale = recipe.scale;
+  const entry = {
+    x: vertex.x - recipe.incoming.x * recipe.entryTrim * scale,
+    y: vertex.y - recipe.incoming.y * recipe.entryTrim * scale,
+  };
+  appendPoint(output, {
+    ...entry,
+    heading: recipe.incomingHeading,
+    curvature: 0,
+    kind: "straight",
+  });
+
+  for (let index = 1; index < recipe.local.length; index += 1) {
+    const local = recipe.local[index];
+    const transformed = rotate({ x: local.x * scale, y: local.y * scale }, recipe.incomingHeading);
+    appendPoint(output, {
+      x: entry.x + transformed.x,
+      y: entry.y + transformed.y,
+      heading: recipe.incomingHeading + local.heading,
+      curvature: scale > POSITION_EPSILON ? local.curvature / scale : 0,
+      kind: local.kind,
+    });
+  }
+}
+
+/**
+ * Generate a dense Bordeaux-style vertex-blend path.
+ *
+ * Waypoint coordinates and minRadius must use the same distance unit. Output
+ * curvature is the inverse of that unit. Straight legs contain their boundary
+ * points; clothoid and arc portions use the rebuilt VI's 0.001 parameter step.
+ */
+export function generateLabviewClothoidPath(
+  rawWaypoints: readonly LabviewClothoidWaypoint[],
+  minRadius: number,
+): LabviewClothoidPoint[] {
+  if (!Number.isFinite(minRadius) || minRadius <= 0) {
+    throw new Error("LabVIEW clothoid minRadius must be a finite positive number");
+  }
+  if (rawWaypoints.length < 2) {
+    throw new Error("LabVIEW clothoid requires at least two waypoints");
+  }
+  rawWaypoints.forEach((waypoint) => {
+    if (!Number.isFinite(waypoint.x) || !Number.isFinite(waypoint.y)) {
+      throw new Error("LabVIEW clothoid waypoints must contain finite coordinates");
+    }
+  });
+
+  const waypoints = rawWaypoints.filter((waypoint, index) => (
+    index === 0 || length(subtract(waypoint, rawWaypoints[index - 1])) > POSITION_EPSILON
+  ));
+  if (waypoints.length < 2) {
+    throw new Error("LabVIEW clothoid requires at least two distinct waypoints");
+  }
+
+  const recipes: Array<CornerRecipe | null> = new Array(waypoints.length).fill(null);
+  for (let index = 1; index < waypoints.length - 1; index += 1) {
+    recipes[index] = cornerRecipe(waypoints, index, minRadius);
+  }
+  resolveOverlaps(waypoints, recipes);
+
+  const firstDirection = unit(subtract(waypoints[1], waypoints[0]));
+  const output: LabviewClothoidPoint[] = [{
+    x: waypoints[0].x,
+    y: waypoints[0].y,
+    heading: Math.atan2(firstDirection.y, firstDirection.x),
+    curvature: 0,
+    s: 0,
+    kind: "straight",
+  }];
+
