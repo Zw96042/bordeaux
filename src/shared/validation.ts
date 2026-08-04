@@ -498,3 +498,41 @@ function validateProjectInner(project: unknown): ValidationResult {
         });
         validateOptionalFinite(issues, location.headingDeg, `${base}.headingDeg`, "Strategy heading");
         if (location.kind === "pose") {
+          validateFinite(issues, location.x, `${base}.x`, "Strategy pose X");
+          validateFinite(issues, location.y, `${base}.y`, "Strategy pose Y");
+          if (finite(location.x) && finite(location.y) && (location.x < 0 || location.x > FIELD_W || location.y < 0 || location.y > FIELD_H)) issues.push(issue(base, "Strategy pose must stay inside the FRC field bounds"));
+        } else if (location.kind === "region") {
+          if (!isRecord(location.bounds)) issues.push(issue(`${base}.bounds`, "Strategy region bounds are required"));
+          else {
+            const bounds = location.bounds;
+            ["xMin", "xMax", "yMin", "yMax"].forEach((key) => validateFinite(issues, bounds[key], `${base}.bounds.${key}`, `Strategy region ${key}`));
+            if (finite(bounds.xMin) && finite(bounds.xMax) && finite(bounds.yMin) && finite(bounds.yMax)
+              && (bounds.xMin < 0 || bounds.xMax > FIELD_W || bounds.yMin < 0 || bounds.yMax > FIELD_H || bounds.xMin >= bounds.xMax || bounds.yMin >= bounds.yMax)) {
+              issues.push(issue(`${base}.bounds`, "Strategy region bounds must be ordered inside the FRC field"));
+            }
+          }
+        } else issues.push(issue(`${base}.kind`, "Strategy location kind must be pose or region"));
+      });
+      const bindingTags = new Set<string>();
+      if (project.strategy.actionBindings !== undefined && !Array.isArray(project.strategy.actionBindings)) issues.push(issue("$.strategy.actionBindings", "Strategy action bindings must be an array"));
+      else if (Array.isArray(project.strategy.actionBindings)) project.strategy.actionBindings.forEach((binding, index) => {
+        const base = `$.strategy.actionBindings[${index}]`;
+        if (!isRecord(binding)) { issues.push(issue(base, "Strategy action binding must be an object")); return; }
+        if (typeof binding.semanticTag !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(binding.semanticTag)) issues.push(issue(`${base}.semanticTag`, "Strategy semantic tag must be lowercase kebab-case"));
+        else if (bindingTags.has(binding.semanticTag)) issues.push(issue(`${base}.semanticTag`, "Strategy semantic tags must be unique"));
+        else bindingTags.add(binding.semanticTag);
+        if (typeof binding.commandId !== "string" || !binding.commandId.trim()) issues.push(issue(`${base}.commandId`, "Strategy command ID is required"));
+      });
+    }
+  }
+
+  return { ok: issues.every((item) => item.severity !== "error"), issues };
+}
+
+export function validateProject(project: unknown): ValidationResult {
+  try {
+    return validateProjectInner(project);
+  } catch {
+    return { ok: false, issues: [issue("$", "Project contains an unreadable value")] };
+  }
+}
