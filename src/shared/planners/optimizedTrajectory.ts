@@ -88,6 +88,21 @@ function smoothVelocities(input: PlannerInput, samples: TrajectorySample[]): num
   }
 
   for (let i = 1; i < samples.length; i += 1) {
+    const ds = Math.max(0, samples[i].s - samples[i - 1].s);
+    velocities[i] = Math.min(velocities[i], Math.sqrt(velocities[i - 1] ** 2 + 2 * maxAccel * ds));
+  }
+
+  for (let i = samples.length - 2; i >= 0; i -= 1) {
+    const ds = Math.max(0, samples[i + 1].s - samples[i].s);
+    velocities[i] = Math.min(velocities[i], Math.sqrt(velocities[i + 1] ** 2 + 2 * maxDecel * ds));
+  }
+
+  const passes = input.smoothingPasses ?? 2;
+  for (let pass = 0; pass < passes; pass += 1) {
+    const next = velocities.slice();
+    for (let i = 1; i < velocities.length - 1; i += 1) {
+      if (velocities[i] <= 1e-6) continue;
+      next[i] = Math.min(velocities[i], velocities[i - 1] * 0.22 + velocities[i] * 0.56 + velocities[i + 1] * 0.22);
     }
     velocities.splice(0, velocities.length, ...next);
   }
@@ -118,21 +133,6 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
     const solveTimeMs = performance.now() - started;
 
     if (base.samples.length < 2) {
-      const fallbackReason = "Profiled spline did not produce enough samples for optimization.";
-      const issue: ValidationIssue = {
-        severity: "warning",
-        path: `paths.${input.path.name}.planner`,
-        message: fallbackReason,
-      };
-      return {
-        ...base,
-        planner: "profiledSpline",
-        diagnostics: [...base.diagnostics, issue],
-        optimization: diagnostics(base.samples, solveTimeMs, fallbackReason),
-      };
-    }
-
-    try {
       const velocities = smoothVelocities(input, base.samples);
       const samples = remapTiming(base.samples, velocities);
       const totalTimeS = R(samples[samples.length - 1]?.t ?? base.totalTimeS, 4);
