@@ -318,3 +318,93 @@ function validateProjectInner(project: unknown): ValidationResult {
               if (waypoint.stop !== true) issues.push(issue(`${wpBase}.turnInPlace`, "Turn in place requires a stopped waypoint"));
             }
           }
+          if (waypoint.jiggle !== undefined) {
+            if (!isRecord(waypoint.jiggle)) issues.push(issue(`${wpBase}.jiggle`, "Jiggle must be an object"));
+            else {
+              validateFinite(issues, waypoint.jiggle.distanceM, `${wpBase}.jiggle.distanceM`, "Jiggle distance", { positive: true });
+              validateFinite(issues, waypoint.jiggle.strokes, `${wpBase}.jiggle.strokes`, "Jiggle stroke count", { positive: true });
+              validateFinite(issues, waypoint.jiggle.startDeg, `${wpBase}.jiggle.startDeg`, "Jiggle first direction");
+              validateFinite(issues, waypoint.jiggle.stepDeg, `${wpBase}.jiggle.stepDeg`, "Jiggle direction step");
+              validateFinite(issues, waypoint.jiggle.strokeTimeS, `${wpBase}.jiggle.strokeTimeS`, "Jiggle stroke time", { positive: true });
+              if (finite(waypoint.jiggle.strokes) && (!Number.isInteger(waypoint.jiggle.strokes) || waypoint.jiggle.strokes < 2 || waypoint.jiggle.strokes > 12)) {
+                issues.push(issue(`${wpBase}.jiggle.strokes`, "Jiggle stroke count must be an integer from 2 to 12"));
+              }
+              if (finite(waypoint.jiggle.distanceM) && (waypoint.jiggle.distanceM < 0.03 || waypoint.jiggle.distanceM > 1.5)) {
+                issues.push(issue(`${wpBase}.jiggle.distanceM`, "Jiggle distance must be from 0.03 to 1.5 meters"));
+              }
+              if (finite(waypoint.jiggle.strokeTimeS) && (waypoint.jiggle.strokeTimeS < 0.08 || waypoint.jiggle.strokeTimeS > 5)) {
+                issues.push(issue(`${wpBase}.jiggle.strokeTimeS`, "Jiggle stroke time must be from 0.08 to 5 seconds"));
+              }
+              if (wi !== waypointCount - 1) issues.push(issue(`${wpBase}.jiggle`, "Jiggle is only supported on the final waypoint"));
+              if (isRecord(project.robot) && project.robot.drive === "tank") issues.push(issue(`${wpBase}.jiggle`, "Arbitrary-direction jiggle requires a swerve drivetrain"));
+              if (finite(path.goalVel) && path.goalVel > 1e-9) issues.push(issue(`${base}.goalVel`, "Goal velocity must be zero when the endpoint has a jiggle"));
+              if (finite(waypoint.jiggle.strokes) && finite(waypoint.jiggle.startDeg) && finite(waypoint.jiggle.stepDeg)) {
+                const directions = new Set<number>();
+                for (let stroke = 0; stroke < Math.max(0, Math.min(12, Math.floor(waypoint.jiggle.strokes))); stroke += 1) {
+                  const direction = Math.round((((waypoint.jiggle.startDeg + waypoint.jiggle.stepDeg * stroke) % 360) + 360) % 360 * 1000) / 1000;
+                  if (directions.has(direction)) {
+                    issues.push(issue(`${wpBase}.jiggle.stepDeg`, "Jiggle directions must not repeat"));
+                    break;
+                  }
+                  directions.add(direction);
+                }
+              }
+            }
+          }
+        });
+      }
+
+      const collections: Array<[string, unknown]> = [["targets", path.targets], ["markers", path.markers], ["ranges", path.ranges]];
+      collections.forEach(([name, value]) => { if (!Array.isArray(value)) issues.push(issue(`${base}.${name}`, `${name[0].toUpperCase()}${name.slice(1)} must be an array`)); });
+      if (Array.isArray(path.targets)) path.targets.forEach((target, i) => {
+        const targetBase = `${base}.targets[${i}]`;
+        if (!isRecord(target)) return issues.push(issue(targetBase, "Rotation target must be an object"));
+        validateFinite(issues, target.f, `${targetBase}.f`, "Target fraction");
+        validateFinite(issues, target.deg, `${targetBase}.deg`, "Target angle");
+        if (target.anchor !== undefined && target.anchor !== "param" && target.anchor !== "dist") issues.push(issue(`${targetBase}.anchor`, "Target position lock is invalid"));
+        validateOptionalFinite(issues, target.d, `${targetBase}.d`, "Target distance", { nonnegative: true });
+        if (finite(target.f) && (target.f < 0 || target.f > 1)) issues.push(issue(`${targetBase}.f`, "Target fraction must be between 0 and 1"));
+      });
+      if (Array.isArray(path.markers)) path.markers.forEach((marker, i) => {
+        const markerBase = `${base}.markers[${i}]`;
+        if (!isRecord(marker)) return issues.push(issue(markerBase, "Marker must be an object"));
+        if (marker.id !== undefined) {
+          if (typeof marker.id !== "string" || !marker.id.trim()) issues.push(issue(`${markerBase}.id`, "Marker ID must be a nonempty string"));
+          else if (markerIds.has(marker.id)) issues.push(issue(`${markerBase}.id`, "Marker IDs must be unique"));
+          else markerIds.add(marker.id);
+        }
+        validateFinite(issues, marker.f, `${markerBase}.f`, "Marker fraction");
+        if (marker.anchor !== undefined && marker.anchor !== "param" && marker.anchor !== "dist") issues.push(issue(`${markerBase}.anchor`, "Marker position lock is invalid"));
+        validateOptionalFinite(issues, marker.d, `${markerBase}.d`, "Marker distance", { nonnegative: true });
+        if (finite(marker.f) && (marker.f < 0 || marker.f > 1)) issues.push(issue(`${markerBase}.f`, "Marker fraction must be between 0 and 1"));
+        if (typeof marker.name !== "string" || !marker.name.trim()) issues.push(issue(`${markerBase}.name`, "Marker name is required"));
+        if (marker.cmd !== undefined && typeof marker.cmd !== "string") issues.push(issue(`${markerBase}.cmd`, "Legacy marker command must be a string"));
+        if (marker.group !== undefined && marker.group !== "sequential" && marker.group !== "parallel" && marker.group !== "deadline") issues.push(issue(`${markerBase}.group`, "Marker group is invalid"));
+        if (marker.invocation !== undefined) {
+          if (!isRecord(marker.invocation)) {
+            issues.push(issue(`${markerBase}.invocation`, "Command invocation must be an object"));
+          } else {
+            if (typeof marker.invocation.commandId !== "string" || !marker.invocation.commandId.trim()) {
+              issues.push(issue(`${markerBase}.invocation.commandId`, "Command ID is required"));
+            }
+            if (!isRecord(marker.invocation.arguments)) {
+              issues.push(issue(`${markerBase}.invocation.arguments`, "Command arguments must be an object"));
+            } else {
+              validateCommandArgumentValue(issues, marker.invocation.arguments, `${markerBase}.invocation.arguments`);
+            }
+            if (marker.invocation.cancelOnPathEnd !== undefined && typeof marker.invocation.cancelOnPathEnd !== "boolean") {
+              issues.push(issue(`${markerBase}.invocation.cancelOnPathEnd`, "Cancel on path end must be true or false"));
+            }
+          }
+        }
+        if (marker.actionIntent !== undefined) {
+          if (!isRecord(marker.actionIntent)) {
+            issues.push(issue(`${markerBase}.actionIntent`, "Action intent must be an object"));
+          } else {
+            if (typeof marker.actionIntent.semanticTag !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(marker.actionIntent.semanticTag)) {
+              issues.push(issue(`${markerBase}.actionIntent.semanticTag`, "Action intent semantic tag is invalid"));
+            }
+            if (typeof marker.actionIntent.description !== "string" || !marker.actionIntent.description.trim()) {
+              issues.push(issue(`${markerBase}.actionIntent.description`, "Action intent description is required"));
+            }
+          }
