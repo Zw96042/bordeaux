@@ -268,3 +268,25 @@ export function applyRotationPriority(path: PathDoc, result: PlannerResult, robo
   } else if (Math.abs(target - actual) > 1 * DEG) {
     diagnostics.push({
       severity: "error",
+      path: `paths.${path.name}.waypoints`,
+      message: "Translation timing priority reaches the endpoint before the final heading; stop at the endpoint or extend the path",
+    });
+  }
+
+  if (hasAngularViolation(path, ranges, samples)) {
+    diagnostics.push({
+      severity: "error",
+      path: `paths.${path.name}.waypoints`,
+      message: "Translation timing priority could not satisfy the configured angular limits",
+    });
+  }
+
+  const finalTime = samples.at(-1)?.t ?? result.totalTimeS;
+  return {
+    ...result,
+    totalTimeS: finalTime,
+    samples,
+    diagnostics,
+    optimization: result.optimization ? { ...result.optimization, totalTimeS: finalTime } : result.optimization,
+  };
+}
