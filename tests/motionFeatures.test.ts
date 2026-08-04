@@ -268,3 +268,93 @@ describe("motion features", () => {
     const dt = 0.02;
     const sampleCount = 151;
     const samples = Array.from({ length: sampleCount }, (_, index) => {
+      const t = index * dt;
+      const progress = Math.min(1, t / 0.2);
+      const headingRad = (-90 + progress * 90) * Math.PI / 180;
+      return {
+        i: index,
+        t,
+        s: t,
+        f: index / (sampleCount - 1),
+        x: t,
+        y: 0,
+        headingRad,
+        velocityMps: 1,
+        accelerationMps2: 0,
+        angularVelocityRadps: t > 0 && t <= 0.2 ? 450 * Math.PI / 180 : 0,
+        curvatureInvM: 0,
+      };
+    });
+    const raw: PlannerResult = {
+      planner: "profiledSpline",
+      samples,
+      markers: [],
+      diagnostics: [],
+      totalDistanceM: samples.at(-1)!.x,
+      totalTimeS: samples.at(-1)!.t,
+    };
+
+    const tracked = applyRotationPriority(path, raw, project.robot);
+    const settled = tracked.samples.filter((sample) => sample.t >= 0.2);
+    const maxHeading = Math.max(...settled.map((sample) => sample.headingRad));
+    const angularAcceleration = tracked.samples.slice(1).map((sample, index) =>
+      (sample.angularVelocityRadps - tracked.samples[index].angularVelocityRadps) / dt);
+
+    expect(maxHeading).toBeLessThanOrEqual(0.5 * Math.PI / 180);
+    expect(Math.abs(tracked.samples.at(-1)!.headingRad)).toBeLessThan(0.1 * Math.PI / 180);
+    expect(Math.max(...angularAcceleration.map(Math.abs)))
+      .toBeLessThanOrEqual(path.constraints.maxAngAccel * Math.PI / 180 * 1.01);
+  });
+
+  it("uses the acceleration limit after reversing angular direction", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.constraints.maxAngVel = 240;
+    path.constraints.maxAngAccel = 120;
+    path.constraints.maxAngDecel = 720;
+    path.ranges = [{
+      anchor: "param", f0: 0, f1: 1,
+      maxVel: path.constraints.maxVel, maxAccel: path.constraints.maxAccel, maxDecel: path.constraints.maxDecel,
+      maxAngVel: path.constraints.maxAngVel, maxAngAccel: path.constraints.maxAngAccel,
+      rotationPriority: "translation",
+    }];
+    const dt = 0.02;
+    const samples = Array.from({ length: 201 }, (_, index) => {
+      const t = index * dt;
+      const headingDeg = t < 0.2 ? 450 * t : t < 0.6 ? 90 : t < 0.8 ? 90 - 900 * (t - 0.6) : -90;
+      return {
+        i: index, t, s: t, f: index / 200, x: t, y: 0,
+        headingRad: headingDeg * Math.PI / 180,
+        velocityMps: index === 200 ? 0 : 1,
+        accelerationMps2: 0, angularVelocityRadps: 0, curvatureInvM: 0,
+      };
+    });
+    const tracked = applyRotationPriority(path, {
+      planner: "profiledSpline", samples, markers: [], diagnostics: [], totalDistanceM: 4, totalTimeS: 4,
+    }, project.robot);
+
+    tracked.samples.slice(1).forEach((sample, index) => {
+      const previous = tracked.samples[index];
+      const acceleration = Math.abs(sample.angularVelocityRadps - previous.angularVelocityRadps) / (sample.t - previous.t);
+      const reversing = Math.sign(sample.angularVelocityRadps) !== 0
+        && Math.sign(previous.angularVelocityRadps) !== 0
+        && Math.sign(sample.angularVelocityRadps) !== Math.sign(previous.angularVelocityRadps);
+      const limitDeg = reversing
+        ? Math.min(path.constraints.maxAngAccel, path.constraints.maxAngDecel!)
+        : Math.abs(sample.angularVelocityRadps) > Math.abs(previous.angularVelocityRadps)
+          ? path.constraints.maxAngAccel
+          : path.constraints.maxAngDecel!;
+      expect(acceleration).toBeLessThanOrEqual(limitDeg * Math.PI / 180 * 1.01);
+    });
+    expect(tracked.diagnostics.some((issue) => issue.message.includes("angular limits"))).toBe(false);
+  });
+
+  it("keeps a range's angular limits through its ending interval", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.constraints.maxAngVel = 240;
+    path.constraints.maxAngAccel = 720;
+    path.constraints.maxAngDecel = 720;
+    path.ranges = [{
+      anchor: "param", f0: 0, f1: 0.5,
+      maxVel: path.constraints.maxVel, maxAccel: path.constraints.maxAccel, maxDecel: path.constraints.maxDecel,
