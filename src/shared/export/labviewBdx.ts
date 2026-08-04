@@ -178,3 +178,93 @@ function writeTrajectory(writer: LabviewBinaryWriter, path: BdxPath, kind: Labvi
 
   writer.u32(clothoid ? 2 : 1); // Rebuilt clothoid output retains an empty terminal cluster.
   writer.string(straight ? "Linear 0" : clothoid ? "Blend" : "Bezier");
+  writer.u16(straight ? 0 : clothoid ? 2 : 4); // Segment Type: Accel Straight, Blend, or Bezier.
+
+  writer.u32(samples.length);
+  for (const sample of samples) {
+    writer.f64(sample.xFt);
+    writer.f64(sample.yFt);
+    writer.f64(sample.headingDeg);
+  }
+
+  writer.u32(samples.length);
+  samples.forEach((sample, index) => {
+    const vector = velocityVector(samples, index);
+    writer.f64(sample.velocityFps);
+    writer.f64(sample.omegaDegps);
+    writer.f64(vector.y); // LabVIEW Trajectory Data.ctl stores V vector as y, then x.
+    writer.f64(vector.x);
+  });
+  writer.i32(indices.accel);
+  writer.i32(indices.decel);
+  if (clothoid) writeEmptyClothoidTerminator(writer);
+  return { sampleCount: samples.length };
+}
+
+function writeLimits(writer: LabviewBinaryWriter, path: PathDoc, samplePeriodS: number, initialVelocityFps: number, finalVelocityFps: number): void {
+  const constraints = path.constraints;
+  writer.f64(samplePeriodS);
+  writer.f64(constraints.maxVel * FEET_PER_METER);
+  writer.f64(constraints.maxAccel * FEET_PER_METER);
+  writer.f64((constraints.maxJerk ?? 0) * FEET_PER_METER);
+  writer.f64((path.labview?.stoopidFastMps ?? constraints.maxVel) * FEET_PER_METER);
+  writer.f64(initialVelocityFps);
+  writer.f64(finalVelocityFps);
+  writer.u32(0); // Per-waypoint overrides have no direct editor equivalent yet.
+  writer.f64(constraints.maxAngVel);
+  writer.f64(constraints.maxAngAccel);
+  writer.f64(constraints.maxAngJerk ?? 0);
+}
+
+function writeWaypoints(writer: LabviewBinaryWriter, path: PathDoc): void {
+  writer.u32(path.waypoints.length);
+  for (const waypoint of path.waypoints) {
+    writer.f64(waypoint.x * FEET_PER_METER);
+    writer.f64(waypoint.y * FEET_PER_METER);
+    writer.f64(waypoint.theta);
+  }
+}
+
+export interface LabviewBdxResult {
+  buffer: Buffer;
+  pathName: string;
+  samplePeriodS: number;
+  sampleCount: number;
+  version: typeof BDX_VERSION;
+}
+
+/** Encode the active path using the field order written by LabVIEW Bordeaux's Versioned Write.vi. */
+export function buildLabviewBdx(project: BordeauxProject, pathId?: string): LabviewBdxResult {
+  const source = pathId
+    ? project.paths.find((path) => path.id === pathId && path.exportable !== false)
+    : project.paths.find((path) => path.exportable !== false);
+  if (!source) throw new Error(pathId ? "The selected path is not exportable" : "The project has no exportable paths");
+  if (source.waypoints.length > LABVIEW_BDX_MAX_WAYPOINTS) {
+    throw new Error(`Path "${source.name}" has ${source.waypoints.length} waypoints, exceeding the LabVIEW .bdx limit of ${LABVIEW_BDX_MAX_WAYPOINTS}`);
+  }
+  const kind = labviewPathKind(source, project.plannerId);
+  const configuredSamplePeriod = source.labview?.samplePeriodS;
+  const samplePeriodS = Number.isFinite(configuredSamplePeriod) && configuredSamplePeriod! >= 0.001 && configuredSamplePeriod! <= 0.1
+    ? configuredSamplePeriod!
+    : DEFAULT_SAMPLE_PERIOD_S;
+  const exportData = buildBdxExport({ ...project, paths: [source], routine: undefined });
+  const selected = exportData.paths[0];
+  if (!selected) throw new Error("The selected path did not generate a trajectory");
+
+  const writer = new LabviewBinaryWriter();
+  writer.string(BDX_VERSION);
+  writer.boolean(Boolean(source.driveBackward)); // Robot Backwards
+  writer.boolean(Boolean(source.labview?.reversePath));
+  const trajectory = writeTrajectory(writer, selected, kind, samplePeriodS);
+  writer.u32(0); // Commands in
+  const endpointVelocityLimit = Math.min(source.constraints.maxVel, project.robot.maxSpeed);
+  const initialVelocityFps = (source.waypoints[0].stop ? 0 : Math.min(source.startVel, endpointVelocityLimit)) * FEET_PER_METER;
+  const finalVelocityFps = (source.waypoints.at(-1)!.stop ? 0 : Math.min(source.goalVel, endpointVelocityLimit)) * FEET_PER_METER;
+  writeLimits(writer, source, samplePeriodS, initialVelocityFps, finalVelocityFps);
+  writeWaypoints(writer, source);
+  writer.f64((trajectory.sampleCount - 1) * samplePeriodS);
+  writer.f64(selected.totalDistanceM * FEET_PER_METER);
+  writer.boolean(Boolean(source.labview?.zeroVelocity));
+  writer.u16(project.robot.drive === "tank" ? 0 : 1); // Drive Type
+  writer.u16(kind === "clothoid" ? 0 : 1); // Path Type
+  writer.boolean(Boolean(source.labview?.pickupBalls));
