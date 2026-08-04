@@ -358,3 +358,93 @@ public final class BordeauxProcessor extends AbstractProcessor {
                 }
                 return null;
             }
+            if (type.getKind() != TypeKind.DECLARED) return "has an unsupported Java type";
+            DeclaredType declared = (DeclaredType) type;
+            TypeElement element = (TypeElement) declared.asElement();
+            if (element.getKind() == ElementKind.ENUM) {
+                String value = CanonicalJson.stringValue(json);
+                boolean known = element.getEnclosedElements().stream()
+                        .anyMatch(candidate -> candidate.getKind() == ElementKind.ENUM_CONSTANT
+                                && candidate.getSimpleName().contentEquals(value));
+                return known ? null : "is not a declared enum value";
+            }
+            String raw = element.getQualifiedName().toString();
+            if (raw.equals("java.util.Optional")) {
+                return defaultValueError(declared.getTypeArguments().get(0), json, depth + 1);
+            }
+            if (isAssignableErasure(type, "java.util.Map")) {
+                Map<String, String> values = CanonicalJson.objectValues(json);
+                if (values.size() > MAX_OBJECT_FIELDS) return "exceeds the object-field limit of " + MAX_OBJECT_FIELDS;
+                for (Map.Entry<String, String> entry : values.entrySet()) {
+                    String error = defaultValueError(declared.getTypeArguments().get(1), entry.getValue(), depth + 1);
+                    if (error != null) return "map value '" + entry.getKey() + "' " + error;
+                }
+                return null;
+            }
+            if (isAssignableErasure(type, "java.util.Collection")) {
+                List<String> values = CanonicalJson.arrayValues(json);
+                if (values.size() > 1_024) return "exceeds the array limit of 1024";
+                for (String value : values) {
+                    String error = defaultValueError(declared.getTypeArguments().get(0), value, depth + 1);
+                    if (error != null) return "array element " + error;
+                }
+                return null;
+            }
+            Map<String, String> values = CanonicalJson.objectValues(json);
+            List<SchemaField> fields = objectShape(element);
+            Set<String> expected = fields.stream().map(SchemaField::name).collect(java.util.stream.Collectors.toSet());
+            if (!values.keySet().equals(expected)) return "must contain exactly the declared object fields";
+            for (SchemaField field : fields) {
+                String error = defaultValueError(field.type(), values.get(field.name()), depth + 1);
+                if (error != null) return "field '" + field.name() + "' " + error;
+            }
+            return null;
+        } catch (IllegalArgumentException exception) {
+            return "does not match " + javaType + ": " + exception.getMessage();
+        }
+    }
+
+    private static BigDecimal numericDefault(TypeMirror type, String json) {
+        String javaType = type.toString();
+        return isExactIntegerType(javaType) || isExactDecimalType(javaType)
+                ? new BigDecimal(CanonicalJson.stringValue(json)) : new BigDecimal(json);
+    }
+
+    private static boolean validSignedIntegerBound(String value) {
+        return value.isBlank() || value.matches("[+-]?\\d+");
+    }
+
+    private static boolean decimalExponentWithinLimit(String value) {
+        if (value.isBlank()) return true;
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("[eE]([+-]?\\d+)$").matcher(value);
+        return !matcher.find() || new java.math.BigInteger(matcher.group(1)).abs()
+                .compareTo(java.math.BigInteger.valueOf(10_000)) <= 0;
+    }
+
+    private static boolean isExactIntegerType(String type) {
+        return type.equals("long") || type.equals("java.lang.Long") || type.equals("java.math.BigInteger");
+    }
+
+    private static boolean isExactDecimalType(String type) {
+        return type.equals("java.math.BigDecimal");
+    }
+
+    private static boolean isNumericType(String type) {
+        return switch (type) {
+            case "byte", "short", "int", "long", "float", "double",
+                    "java.lang.Byte", "java.lang.Short", "java.lang.Integer", "java.lang.Long",
+                    "java.lang.Float", "java.lang.Double", "java.math.BigInteger", "java.math.BigDecimal" -> true;
+            default -> false;
+        };
+    }
+
+    private String unsupportedReason(TypeMirror type, Set<String> visiting, int depth) {
+        if (depth > MAX_SCHEMA_DEPTH) return "type nesting exceeds " + MAX_SCHEMA_DEPTH;
+        if (type.getKind() == TypeKind.CHAR) return "char values are ambiguous in JSON; use String or an enum";
+        if (type.getKind().isPrimitive()) return null;
+        if (type.getKind() == TypeKind.ARRAY) {
+            return unsupportedReason(((ArrayType) type).getComponentType(), visiting, depth + 1);
+        }
+        if (type.getKind() != TypeKind.DECLARED) return "type variables, wildcards, and intersection types are not supported";
+        DeclaredType declared = (DeclaredType) type;
+        TypeElement element = (TypeElement) declared.asElement();
