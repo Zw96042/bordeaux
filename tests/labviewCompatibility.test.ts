@@ -178,3 +178,93 @@ describe("additive LabVIEW planner compatibility", () => {
     pathDoc.goalVel = 14 * metersPerFoot;
     pathDoc.constraints = {
       maxVel: 14 * metersPerFoot,
+      maxAccel: 30 * metersPerFoot,
+      maxDecel: 30 * metersPerFoot,
+      maxJerk: 2000 * metersPerFoot,
+      maxAngVel: 6,
+      maxAngAccel: 360,
+      maxAngDecel: 360,
+      maxAngJerk: 1000,
+    };
+    pathDoc.labview = { ...pathDoc.labview, samplePeriodS: 0.02, currentLimit: 70, stoopidFastMps: 14 * metersPerFoot };
+
+    const decoded = parseLabviewBdx(buildLabviewBdx(project, pathDoc.id).buffer);
+    expect(decoded.trajectory).toHaveLength(2);
+    expect(decoded.trajectory[0]).toMatchObject({ name: "Linear 0", type: "accelStraight" });
+    // The newer Bordeaux torque fix intentionally takes longer than the v4.4
+    // fixture's constant-torque timing while retaining its binary structure.
+    expect(decoded.trajectory[0].accelIndex).toBeGreaterThan(24);
+    expect(decoded.trajectory[0].decelIndex).toBe(decoded.trajectory[0].positions.length);
+    expect(decoded.trajectory[1]).toMatchObject({ name: "", type: "accelStraight", positions: [], velocities: [], accelIndex: 0, decelIndex: 0 });
+    const moving = decoded.trajectory[0].velocities.find((velocity) => velocity.velocityFps > 0)!;
+    expect(moving.vectorYFps).toBeLessThan(0);
+    expect(decoded.conditions.initialVelocityFps).toBe(0);
+    expect(decoded.conditions.finalVelocityFps).toBeCloseTo(14, 12);
+    expect(decoded.currentLimit).toBe(70);
+  });
+
+  it("imports a v4.4 path as an editable compatibility project and forces Save As", async () => {
+    const source = createDemoProject();
+    source.name = "Round Trip";
+    source.plannerId = "labviewBezier";
+    source.paths[0].labview = {
+      samplePeriodS: 0.015,
+      minTurnRadiusM: 0.6,
+      bezierTangentMode: "automatic",
+      reversePath: true,
+      zeroVelocity: true,
+      pickupBalls: true,
+      currentLimit: 37,
+      zeroTranslationalVelocity: true,
+      correctAtBeginningOfPath: true,
+      stoopidFastMps: 5.5,
+    };
+    const binary = buildLabviewBdx(source, source.paths[0].id).buffer;
+    const decoded = decodeLabviewBdxProject(binary, "/tmp/Imported Path.bdx");
+
+    expect(decoded.sourceFormat).toBe("labview-bdx-4.4");
+    expect(decoded.migrated).toBe(true);
+    expect(decoded.project.name).toBe("Imported Path");
+    expect(decoded.project.plannerId).toBe("labviewBezier");
+    expect(decoded.project.paths[0].labview?.samplePeriodS).toBe(0.015);
+    expect(decoded.project.paths[0].labview).toMatchObject({
+      reversePath: true,
+      zeroVelocity: true,
+      pickupBalls: true,
+      currentLimit: 37,
+      zeroTranslationalVelocity: true,
+      correctAtBeginningOfPath: true,
+    });
+    expect(decoded.project.paths[0].labview?.stoopidFastMps).toBeCloseTo(5.5, 10);
+    expect(decoded.project.robot.maxSpeed).toBeCloseTo(5.5, 10);
+    expect(decoded.project.paths[0].waypoints).toHaveLength(source.paths[0].waypoints.length);
+    expect(decoded.project.paths[0].waypoints[0].x).toBeCloseTo(source.paths[0].waypoints[0].x, 8);
+    const reexported = parseLabviewBdx(buildLabviewBdx(decoded.project, decoded.project.paths[0].id).buffer);
+    expect(reexported).toMatchObject({
+      reversePath: true,
+      zeroVelocity: true,
+      pickupBalls: true,
+      currentLimit: 37,
+      zeroTranslationalVelocity: true,
+      correctAtBeginningOfPath: true,
+    });
+    expect(reexported.conditions.limits.stoopidFastFps * 0.3048).toBeCloseTo(5.5, 10);
+
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-bdx-import-"));
+    const file = path.join(directory, "Imported Path.bdx");
+    await fs.writeFile(file, binary);
+    const opened = await readProject(file);
+    expect(opened.sourceFormat).toBe("labview-bdx-4.4");
+    expect(opened.migrated).toBe(true);
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  it("keeps hard stops on fixed ticks and does not time-scale waits", () => {
+    const project = createDemoProject();
+    project.plannerId = "labviewBezier";
+    project.paths[0].constraints.maxJerk = 0.2;
+    project.paths[0].waypoints = buildWaypoints([
+      { x: 1, y: 1, nextC: { x: 1.8, y: 1.1 } },
+      { x: 3.7, y: 2.4, stop: true, wait: 1, prevC: { x: 2.9, y: 2.1 }, nextC: { x: 4.1, y: 3.3 } },
+      { x: 6.4, y: 5.2, prevC: { x: 5.8, y: 4.7 } },
+    ]);
