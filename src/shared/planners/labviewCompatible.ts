@@ -808,3 +808,41 @@ function diagnosticsFor(kind: "bezier" | "clothoid", path: PathDoc, robotMaxSpee
     if (angularJerk.length > 0 && Math.max(...angularJerk) > angularJerkLimit * 1.03) {
       diagnostics.push({ severity: "error", path: `paths.${path.name}.constraints.maxAngJerk`, message: "LabVIEW compatibility timing could not satisfy the configured angular jerk limit" });
     }
+  }
+  if (samples.some((sample) => !Number.isFinite(sample.x + sample.y + sample.t + sample.velocityMps))) {
+    diagnostics.push({ severity: "error", path: `paths.${path.name}`, message: "LabVIEW compatibility planner produced a non-finite sample" });
+  }
+  return diagnostics;
+}
+
+function createLabviewPlanner(kind: "bezier" | "clothoid", id: TrajectoryPlannerId): TrajectoryPlanner {
+  return {
+    id,
+    generate(input: PlannerInput): PlannerResult {
+      const maximumPlannableWaypoints = Math.floor((LABVIEW_BDX_MAX_TRAJECTORY_POINTS - 1) / 240) + 1;
+      if (input.path.waypoints.length > maximumPlannableWaypoints) {
+        throw new Error(`Path "${input.path.name}" has too many waypoints for bounded LabVIEW compatibility planning`);
+      }
+      const geometry = densifyGeometry(kind === "bezier" ? bezierGeometry(input.path) : clothoidGeometry(input.path));
+      if (geometry.length > LABVIEW_BDX_MAX_TRAJECTORY_POINTS) {
+        throw new Error(`Path "${input.path.name}" requires ${geometry.length} geometry points, exceeding the compatibility limit of ${LABVIEW_BDX_MAX_TRAJECTORY_POINTS}`);
+      }
+      if (geometry.length < 2 || (geometry.at(-1)?.s ?? 0) <= EPSILON) throw new Error(`Path "${input.path.name}" has no usable LabVIEW ${kind} geometry`);
+      const timeline = buildTimeline(input, geometry);
+      const samplePeriod = finiteSamplePeriod(input.path);
+      const samples = finalSamples(timeline, input.path, input.robot.maxSpeed, samplePeriod);
+      const diagnostics = diagnosticsFor(kind, input.path, input.robot.maxSpeed, samples);
+      return {
+        planner: id,
+        totalTimeS: samples.at(-1)!.t,
+        totalDistanceM: geometry.at(-1)!.s,
+        samples,
+        markers: markersFor(input.path, samples),
+        diagnostics,
+      };
+    },
+  };
+}
+
+export const labviewBezierPlanner = createLabviewPlanner("bezier", "labviewBezier");
+export const labviewClothoidPlanner = createLabviewPlanner("clothoid", "labviewClothoid");
