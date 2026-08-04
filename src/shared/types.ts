@@ -133,51 +133,51 @@ export type CommandArgumentValue =
   | boolean
   | number
   | string
-  canceled?: boolean;
+  | CommandArgumentValue[]
+  | { [key: string]: CommandArgumentValue };
+
+export interface CommandInvocation {
+  commandId: string;
+  arguments: Record<string, CommandArgumentValue>;
+  cancelOnPathEnd?: boolean;
 }
 
-export interface ExportResult {
-  path: string;
-  export: BdxExport;
-  canceled?: boolean;
+export type JavaValueSchemaKind =
+  | "boolean"
+  | "integer"
+  | "integerString"
+  | "decimalString"
+  | "number"
+  | "string"
+  | "enum"
+  | "array"
+  | "map"
+  | "optional"
+  | "object"
+  | "opaque";
+
+export interface JavaValueField {
+  name: string;
+  schema: JavaValueSchema;
 }
 
-export interface ValidationIssue {
-  severity: "error" | "warning";
-  path: string;
-  message: string;
+export interface JavaValueSchema {
+  kind: JavaValueSchemaKind;
+  javaType: string;
+  enumValues?: string[];
+  element?: JavaValueSchema;
+  value?: JavaValueSchema;
+  fields?: JavaValueField[];
 }
 
-export interface ValidationResult {
-  ok: boolean;
-  issues: ValidationIssue[];
-}
-
-export type TrajectoryPlannerId = "profiledSpline" | "optimizedTrajectory";
-
-export interface PlannerInput {
-  path: PathDoc;
-  robot: RobotConfig;
-  plannerId?: TrajectoryPlannerId;
-  samplesPerSegment?: number;
-  smoothingPasses?: number;
-}
-
-export interface TrajectorySample {
-  i: number;
-  t: number;
-  s: number;
-  f: number;
-  x: number;
-  y: number;
-  headingRad: number;
-  velocityMps: number;
-  accelerationMps2: number;
-  angularVelocityRadps: number;
-  curvatureInvM: number;
-}
-
-export interface BdxMarker {
+export interface JavaCommandParameter {
+  name: string;
+  label?: string;
+  description?: string;
+  unit?: string;
+  defaultValue?: CommandArgumentValue;
+  min?: number | string;
+  max?: number | string;
   name: string;
   command: string | null;
   group: string | null;
