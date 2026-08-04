@@ -493,51 +493,51 @@
   function metricColor(mode, tt) {
     const s = RAMPS_M[mode] || RAMPS_M.velocity;
     let t = Math.max(0, Math.min(1, tt));
-    const wpIdx = doc.waypoints.map((_, k) => Math.min(lastI, k * perSeg));
-    const total = smp.length || 1;
-    const wpFrac = wpIdx.map((i) => (pts.length ? pts[i].s / total : 0));
-    const stopIdx = [];
-    doc.waypoints.forEach((w, k) => { if (w.stop) stopIdx.push(wpIdx[k]); });
-    const cap = (robot && robot.maxSpeed) || doc.constraints.maxVel;
-    const vmax = Math.min(doc.constraints.maxVel, cap);
-    const sv = doc.waypoints[0] && doc.waypoints[0].stop ? 0 : doc.startVel;
-    const gv = doc.waypoints[nWp - 1] && doc.waypoints[nWp - 1].stop ? 0 : doc.goalVel;
-    const effRanges = effectiveRanges(doc, smp);
-    // heading-generation mode (memo §3/§5): tank always follows tangent; swerve uses the path mode
-    const headingMode = (robot && robot.drive === 'tank') ? 'tangent' : (doc.headingMode || 'targets');
-    const mode = headingMode === 'tangent' ? 'tank' : 'swerve';
-    const entries = [];
-    if (headingMode !== 'tangent') {
-      doc.waypoints.forEach((w, k) => { const isEnd = k === 0 || k === nWp - 1; if (isEnd || w.thetaOn) entries.push({ f: wpFrac[k], rad: (w.theta || 0) * D2R }); });
-      if (headingMode === 'targets') (doc.targets || []).forEach((t) => entries.push({ f: t.f, rad: t.deg * D2R }));
+    for (let i = 0; i < s.length - 1; i++) {
+      const a = s[i], b = s[i + 1];
+      if (t >= a[0] && t <= b[0]) {
+        const u = (t - a[0]) / Math.max(1e-6, b[0] - a[0]);
+        const ca = hex2rgb(a[1]), cb = hex2rgb(b[1]);
+        return `rgb(${Math.round(ca[0] + (cb[0] - ca[0]) * u)},${Math.round(ca[1] + (cb[1] - ca[1]) * u)},${Math.round(ca[2] + (cb[2] - ca[2]) * u)})`;
+      }
     }
-    const anchors = buildAnchors(entries);
-    const head = pts.map((p) => { const f = total > 1e-6 ? p.s / total : 0; return mode === 'tank' ? p.heading : headingAt(f, anchors); });
-    const dwell = [];
-    doc.waypoints.forEach((w, k) => { if (w.stop && w.wait > 0) dwell.push({ idx: wpIdx[k], wait: w.wait }); });
-    const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, heading: head, dwell });
-    const mtr = metrics(pts, prof, anchors, mode);
-    const warnings = analyze(pts, prof, mtr, robot || {});
-    // rotational diagnostics: flag contiguous rotation-limited stretches (memo §16)
-    if (prof.rotLimited) {
-      const rl = prof.rotLimited;
-      const pushRun = (a, b) => { const mid = Math.floor((a + b) / 2); warnings.push({ f: pts[mid].s / total, kind: 'rot', sev: 'med', text: 'Rotation-limited \u00b7 heading can\u2019t keep up at speed' }); };
-      let run = -1;
-      for (let i = 0; i < rl.length; i++) { if (rl[i]) { if (run < 0) run = i; } else if (run >= 0) { if (i - run > 3) pushRun(run, i - 1); run = -1; } }
-      if (run >= 0 && rl.length - run > 3) pushRun(run, rl.length - 1);
+    return s[s.length - 1][1];
+  }
+  function metricGradient(mode) {
+    const s = RAMPS_M[mode] || RAMPS_M.velocity;
+    return 'linear-gradient(90deg,' + s.map((x) => x[1] + ' ' + Math.round(x[0] * 100) + '%').join(',') + ')';
+  }
+  const METRICS = [
+    { id: 'velocity', label: 'Velocity', unit: 'm/s', kind: 'seq' },
+    { id: 'accel', label: 'Acceleration', unit: 'm/s\u00b2', kind: 'div' },
+    { id: 'angvel', label: 'Angular velocity', unit: '\u00b0/s', kind: 'div' },
+    { id: 'curvature', label: 'Curvature', unit: '1/m', kind: 'seq' },
+  ];
+
+  // ---- safety analysis: flag tight curvature + sharp velocity dips ----
+  function analyze(pts, prof, m, robot) {
+    const n = pts.length; const out = [];
+    if (n < 3) return out;
+    const totalS = pts[n - 1].s || 1;
+    const vCap = (robot && robot.maxSpeed) || 5;
+    // tight curvature: radius below ~0.7 m is hard on a drivetrain
+    let cuf = -1, cuMax = 0, cuAt = 0;
+    for (let i = 1; i < n - 1; i++) {
+      const rad = pts[i].curv > 1e-4 ? 1 / pts[i].curv : Infinity;
+      if (rad < 0.7) { const sev = rad < 0.4 ? 1 : 0.6; if (pts[i].curv > cuMax) { cuMax = pts[i].curv; cuAt = i; } if (cuf < 0) cuf = i; }
+      else if (cuf >= 0) { out.push({ f: pts[cuAt].s / totalS, kind: 'curv', sev: cuMax > 2.5 ? 'high' : 'med', text: 'Tight curvature \u00b7 R\u2248' + (1 / cuMax).toFixed(2) + ' m' }); cuf = -1; cuMax = 0; }
     }
-    // locate each warning to a segment + attach suggested fixes
-    warnings.forEach((wn) => {
-      let seg = 0;
-      for (let i = 0; i < wpFrac.length - 1; i++) { if (wn.f >= wpFrac[i] - 1e-4) seg = i; }
-      wn.seg = Math.max(0, Math.min(doc.waypoints.length - 2, seg));
-      wn.fixes = wn.kind === 'curv'
-        ? [{ id: 'clothoid', label: 'Convert segment to clothoid' }, { id: 'handles', label: 'Increase handle length' }, { id: 'cap', label: 'Cap velocity on this stretch' }, { id: 'insert', label: 'Insert a waypoint here' }]
-        : wn.kind === 'rot'
-        ? [{ id: 'cap', label: 'Cap speed on this stretch' }, { id: 'angvel', label: 'Raise max angular velocity' }]
-        : [{ id: 'cap', label: 'Lower the speed cap around here' }, { id: 'handles', label: 'Lengthen handles to ease the curve' }, { id: 'insert', label: 'Insert a waypoint here' }];
-    });
-    return { sample: smp, prof, anchors, metrics: mtr, warnings, wpFrac, wpIdx, mode, effRanges, headingMode, rev: !!doc.driveBackward };
+    if (cuf >= 0) out.push({ f: pts[cuAt].s / totalS, kind: 'curv', sev: cuMax > 2.5 ? 'high' : 'med', text: 'Tight curvature \u00b7 R\u2248' + (1 / cuMax).toFixed(2) + ' m' });
+    // velocity dip: local minimum well below surrounding speed (slow-down the user may not intend)
+    const v = m.v;
+    for (let i = 6; i < n - 6; i++) {
+      const local = v[i];
+      const around = Math.max(v[i - 6], v[i + 6]);
+      if (around > 1.2 && local < around * 0.45 && local < vCap * 0.5) {
+        // ensure it's a genuine trough
+        if (v[i] <= v[i - 1] && v[i] <= v[i + 1]) { out.push({ f: pts[i].s / totalS, kind: 'vel', sev: local < around * 0.3 ? 'high' : 'med', text: 'Velocity dip \u00b7 ' + local.toFixed(1) + ' m/s' }); i += 10; }
+      }
+    }
   }
 export const PM = { bez, bezD, sample, profile, poseAtTime, headingAt, metrics, analyze, metricColor, metricGradient, METRICS, SEGTYPES, buildAnchors, pointAtFraction, nearestFraction, autoHandles, angWrap, angLerp, D2R, R2D, lerp, derivePath, effectiveRanges, waypointFracs };
 export default PM;
