@@ -358,3 +358,45 @@ describe("additive LabVIEW planner compatibility", () => {
       maxAngAccel: 0.05,
       maxAngDecel: 0.05,
       maxAngJerk: 0.05,
+    });
+    const imported = decodeLabviewBdxProject(buildLabviewBdx(project, project.paths[0].id).buffer).project;
+    const decoded = parseLabviewBdx(buildLabviewBdx(imported, imported.paths[0].id).buffer);
+    expect(decoded.conditions.limits.velocityFps * 0.3048).toBeCloseTo(0.05, 10);
+    expect(decoded.conditions.limits.accelerationFps2 * 0.3048).toBeCloseTo(0.05, 10);
+    expect(decoded.conditions.limits.jerkFps3 * 0.3048).toBeCloseTo(0.05, 10);
+    expect(decoded.conditions.angularLimits).toEqual({
+      velocityDegPerS: 0.05,
+      accelerationDegPerS2: 0.05,
+      jerkDegPerS3: 0.05,
+    });
+  });
+
+  it("rejects out-of-field coordinates instead of silently moving them", () => {
+    const project = createDemoProject();
+    project.plannerId = "labviewBezier";
+    const binary = Buffer.from(buildLabviewBdx(project, project.paths[0].id).buffer);
+    const nameLength = binary.readUInt32BE(13);
+    let offset = 17 + nameLength + 2;
+    const positionCount = binary.readUInt32BE(offset);
+    offset += 4 + positionCount * 24;
+    const velocityCount = binary.readUInt32BE(offset);
+    offset += 4 + velocityCount * 32 + 8 + 4;
+    const waypointCountOffset = offset + 84;
+    binary.writeDoubleBE(-1, waypointCountOffset + 4);
+    expect(() => decodeLabviewBdxProject(binary)).toThrow(/outside the editable FRC field/i);
+  });
+
+  it("rejects non-positive v4.4 limits instead of normalizing them", () => {
+    const project = createDemoProject();
+    project.plannerId = "labviewBezier";
+    const binary = Buffer.from(buildLabviewBdx(project, project.paths[0].id).buffer);
+    const nameLength = binary.readUInt32BE(13);
+    let offset = 17 + nameLength + 2;
+    const positionCount = binary.readUInt32BE(offset);
+    offset += 4 + positionCount * 24;
+    const velocityCount = binary.readUInt32BE(offset);
+    const conditionsOffset = offset + 4 + velocityCount * 32 + 8 + 4;
+    binary.writeDoubleBE(0, conditionsOffset + 8);
+    expect(() => decodeLabviewBdxProject(binary)).toThrow(/greater than zero/i);
+  });
+});
