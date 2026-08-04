@@ -661,3 +661,47 @@ describe("clothoid chains", () => {
     const waypoints = [
       {
         x: 0,
+        y: 0,
+        theta: 0,
+        thetaOn: true,
+        linked: true,
+        stop: false,
+        segType: "clothoid",
+        prevC: { x: -1, y: 0 },
+        nextC: { x: 1, y: 0 },
+      },
+      {
+        x: 2,
+        y: 1,
+        theta: 0,
+        thetaOn: false,
+        linked: false,
+        stop: false,
+        segType: "clothoid",
+        prevC: { x: 1, y: 1 },
+        nextC: { x: 3, y: 2 },
+      },
+      {
+        x: 4,
+        y: 1,
+        theta: 0,
+        thetaOn: true,
+        linked: true,
+        stop: false,
+        prevC: { x: 3, y: 0 },
+        nextC: { x: 5, y: 1 },
+      },
+    ];
+
+    const sampled = PM.sample(waypoints, 80);
+    const joint = sampled.pts.find((point: any) => point.seg === 0 && point.t === 1);
+    const firstAfterJoint = sampled.pts.find((point: any) => point.seg === 1);
+    const expectedBlend = Math.PI / 8;
+
+    if (!joint || !firstAfterJoint) throw new Error("Expected sampled clothoid joint points");
+    expect(joint.heading).toBeCloseTo(expectedBlend, 2);
+    expect(firstAfterJoint.heading).toBeCloseTo(expectedBlend, 1);
+    expect(Math.abs(PM.angWrap(firstAfterJoint.heading - joint.heading))).toBeLessThan(0.08);
+    expect(Math.abs(firstAfterJoint.curv - joint.curv)).toBeLessThan(0.8);
+  });
+});
