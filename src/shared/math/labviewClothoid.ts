@@ -178,3 +178,93 @@ function canonicalBlend(turn: number, minRadius: number): LocalPoint[] {
 
   // Bordeaux reflects the entry deltas in reverse order to form the exit.
   const reflectionAxis = turn / 2;
+  let current = exitStart;
+  for (let index = entry.length - 1; index > 0; index -= 1) {
+    const delta = {
+      x: entry[index].x - entry[index - 1].x,
+      y: entry[index].y - entry[index - 1].y,
+    };
+    const reflected = reflectVector(delta, reflectionAxis);
+    current = {
+      x: current.x + reflected.x,
+      y: current.y + reflected.y,
+      heading: turn - entry[index - 1].heading,
+      curvature: entry[index - 1].curvature,
+      kind: "clothoid-exit",
+    };
+    local.push(current);
+  }
+
+  return local;
+}
+
+function tangentTrims(local: readonly LocalPoint[], turn: number): { entry: number; exit: number } {
+  const endpoint = local[local.length - 1];
+  const outgoing = { x: Math.cos(turn), y: Math.sin(turn) };
+  const denominator = outgoing.y;
+  if (Math.abs(denominator) <= ANGLE_EPSILON) {
+    throw new Error("LabVIEW clothoid cannot construct a tangent blend for a 180-degree reversal");
+  }
+
+  // Intersection of y=0 with endpoint - exit*Uout.
+  const exit = endpoint.y / denominator;
+  const entry = endpoint.x - exit * outgoing.x;
+  if (!(entry > 0) || !(exit > 0) || !Number.isFinite(entry + exit)) {
+    throw new Error("LabVIEW clothoid produced an invalid tangent intersection");
+  }
+  return { entry, exit };
+}
+
+function cornerRecipe(
+  waypoints: readonly LabviewClothoidWaypoint[],
+  waypointIndex: number,
+  minRadius: number,
+): CornerRecipe | null {
+  const previous = waypoints[waypointIndex - 1];
+  const vertex = waypoints[waypointIndex];
+  const next = waypoints[waypointIndex + 1];
+  const incoming = unit(subtract(vertex, previous));
+  const outgoing = unit(subtract(next, vertex));
+  const turn = Math.atan2(cross(incoming, outgoing), dot(incoming, outgoing));
+  if (Math.abs(turn) <= ANGLE_EPSILON) return null;
+  if (Math.abs(Math.PI - Math.abs(turn)) <= ANGLE_EPSILON) {
+    throw new Error("LabVIEW clothoid does not support a 180-degree waypoint reversal");
+  }
+
+  const local = canonicalBlend(turn, minRadius);
+  const trims = tangentTrims(local, turn);
+  return {
+    waypointIndex,
+    incoming,
+    outgoing,
+    incomingHeading: Math.atan2(incoming.y, incoming.x),
+    turn,
+    local,
+    entryTrim: trims.entry,
+    exitTrim: trims.exit,
+    scale: 1,
+  };
+}
+
+/**
+ * Reduce adjacent recipes together until their trims fit each polyline leg.
+ * The rebuilt overlap VI's exact preference rules are not recoverable from its
+ * binary dataflow, so this deterministic policy conservatively avoids crossing
+ * trims and preserves both tangent directions and blend symmetry.
+ */
+function resolveOverlaps(
+  waypoints: readonly LabviewClothoidWaypoint[],
+  recipes: readonly (CornerRecipe | null)[],
+): void {
+  for (let edgeIndex = 0; edgeIndex < waypoints.length - 1; edgeIndex += 1) {
+    const edgeLength = length(subtract(waypoints[edgeIndex + 1], waypoints[edgeIndex]));
+    const left = edgeIndex > 0 ? recipes[edgeIndex] : null;
+    const right = edgeIndex + 1 < waypoints.length - 1 ? recipes[edgeIndex + 1] : null;
+    const required = (left ? left.exitTrim * left.scale : 0) + (right ? right.entryTrim * right.scale : 0);
+    if (required <= edgeLength || required <= POSITION_EPSILON) continue;
+    const reduction = Math.max(0, (edgeLength - POSITION_EPSILON) / required);
+    if (left) left.scale *= reduction;
+    if (right) right.scale *= reduction;
+  }
+}
+
