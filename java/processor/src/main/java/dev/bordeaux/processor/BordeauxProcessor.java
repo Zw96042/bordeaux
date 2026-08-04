@@ -628,3 +628,93 @@ public final class BordeauxProcessor extends AbstractProcessor {
     }
 
     private String commandsJson(List<CommandMethod> methods) {
+        List<String> commands = new ArrayList<>();
+        for (CommandMethod method : methods) {
+            List<Parameter> sortedParameters = method.parameters().stream()
+                    .sorted(Comparator.comparing(Parameter::name)).toList();
+            List<String> parameters = new ArrayList<>();
+            for (Parameter parameter : sortedParameters) {
+                BordeauxParam metadata = parameter.metadata();
+                List<String> fields = new ArrayList<>();
+                if (!parameter.defaultValue().isEmpty()) fields.add("\"defaultValue\":" + parameter.defaultValue());
+                if (metadata != null && !metadata.description().isBlank()) fields.add("\"description\":" + quote(metadata.description()));
+                fields.add("\"javaType\":" + quote(parameter.type().toString()));
+                if (metadata != null && !metadata.label().isBlank()) fields.add("\"label\":" + quote(metadata.label()));
+                if (metadata != null && !metadata.max().isBlank()) fields.add("\"max\":" + boundJson(parameter, metadata.max()));
+                if (metadata != null && !metadata.min().isBlank()) fields.add("\"min\":" + boundJson(parameter, metadata.min()));
+                fields.add("\"name\":" + quote(parameter.name()));
+                fields.add("\"role\":\"argument\"");
+                fields.add("\"schema\":" + parameter.schema());
+                if (metadata != null && !metadata.unit().isBlank()) fields.add("\"unit\":" + quote(metadata.unit()));
+                parameters.add("{" + String.join(",", fields) + "}");
+            }
+            List<String> fields = new ArrayList<>();
+            if (!method.aliases().isEmpty()) fields.add("\"aliases\":[" + method.aliases().stream().map(BordeauxProcessor::quote).reduce((a, b) -> a + "," + b).orElse("") + "]");
+            fields.add("\"confidence\":\"confirmed\"");
+            if (!method.description().isBlank()) fields.add("\"description\":" + quote(method.description()));
+            fields.add("\"id\":" + quote(method.id()));
+            fields.add("\"kind\":\"factory\"");
+            fields.add("\"label\":" + quote(method.label()));
+            fields.add("\"member\":" + quote(method.member()));
+            fields.add("\"ownerType\":" + quote(method.owner()));
+            fields.add("\"parameters\":[" + String.join(",", parameters) + "]");
+            if (!method.semanticTags().isEmpty()) fields.add("\"semanticTags\":[" + method.semanticTags().stream().map(BordeauxProcessor::quote).reduce((a, b) -> a + "," + b).orElse("") + "]");
+            fields.add("\"source\":{\"file\":" + quote(method.owner().replace('.', '/') + ".java") + ",\"line\":0}");
+            commands.add("{" + String.join(",", fields) + "}");
+        }
+        return "[" + String.join(",", commands) + "]";
+    }
+
+    private static String boundJson(Parameter parameter, String value) {
+        String type = parameter.type().toString();
+        return isExactIntegerType(type) || isExactDecimalType(type)
+                ? quote(value) : CanonicalJson.canonicalize(value);
+    }
+
+    private static String semanticHash(String canonicalCommandsJson) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(canonicalCommandsJson.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder("sha256:");
+            for (byte value : digest) hex.append(String.format("%02x", value & 0xff));
+            return hex.toString();
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("Java runtime does not provide SHA-256", exception);
+        }
+    }
+
+    private String argumentExpression(Parameter parameter) {
+        String name = quoteJava(parameter.name());
+        String type = parameter.type().toString();
+        BordeauxParam metadata = parameter.metadata();
+        String minimum = metadata == null || metadata.min().isBlank() ? "null" : quoteJava(metadata.min());
+        String maximum = metadata == null || metadata.max().isBlank() ? "null" : quoteJava(metadata.max());
+        boolean bounded = !minimum.equals("null") || !maximum.equals("null");
+        String bounds = ", " + minimum + ", " + maximum;
+        if (type.equals("long") || type.equals("java.lang.Long")) return "args.requireLong(" + name + (bounded ? bounds : "") + ")";
+        if (type.equals("java.math.BigInteger")) return "args.requireBigInteger(" + name + (bounded ? bounds : "") + ")";
+        if (type.equals("java.math.BigDecimal")) return "args.requireBigDecimal(" + name + (bounded ? bounds : "") + ")";
+        if (type.equals("double") || type.equals("java.lang.Double")) return "args.requireDouble(" + name + (bounded ? bounds : "") + ")";
+        if (type.equals("float") || type.equals("java.lang.Float")) return "args.requireFloat(" + name + (bounded ? bounds : "") + ")";
+        if (type.startsWith("java.util.Optional<")) {
+            String inner = type.substring("java.util.Optional<".length(), type.length() - 1);
+            return "args.optional(" + name + ", new com.fasterxml.jackson.core.type.TypeReference<" + inner + ">() {})";
+        }
+        if (bounded && isNumericType(type)) {
+            return "args.requireNumber(" + name + ", new com.fasterxml.jackson.core.type.TypeReference<" + boxed(type)
+                    + ">() {}" + bounds + ")";
+        }
+        return "args.require(" + name + ", new com.fasterxml.jackson.core.type.TypeReference<" + boxed(type) + ">() {})";
+    }
+
+    private boolean isAssignableErasure(TypeMirror type, String targetName) {
+        TypeElement target = processingEnv.getElementUtils().getTypeElement(targetName);
+        return target != null && processingEnv.getTypeUtils().isAssignable(
+                processingEnv.getTypeUtils().erasure(type), processingEnv.getTypeUtils().erasure(target.asType()));
+    }
+
+    private static String boxed(String type) {
+        return switch (type) {
+            case "boolean" -> "java.lang.Boolean";
+            case "byte" -> "java.lang.Byte";
+            case "short" -> "java.lang.Short";
