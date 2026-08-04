@@ -164,3 +164,16 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
     } catch (error) {
       const fallbackReason = error instanceof Error ? error.message : "Optimizer failed.";
       const issue: ValidationIssue = {
+        severity: "warning",
+        path: `paths.${input.path.name}.planner`,
+        message: `Optimized trajectory fell back to profiled spline: ${fallbackReason}`,
+      };
+      return {
+        ...base,
+        planner: "profiledSpline",
+        diagnostics: [...base.diagnostics, issue],
+        optimization: diagnostics(base.samples, performance.now() - started, fallbackReason),
+      };
+    }
+  },
+};
