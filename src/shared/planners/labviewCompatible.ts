@@ -628,3 +628,93 @@ function intervalLimits(path: PathDoc, before: number, after: number, ranges: re
   };
 }
 
+function requiredTimeScale(samples: readonly DraftSample[], path: PathDoc, robotMaxSpeed: number, samplePeriod: number): number {
+  let maxJerk = 0;
+  let maxAngularJerk = 0;
+  let previousAcceleration = 0;
+  let previousOmega = 0;
+  let previousAngularAcceleration = 0;
+  const totalDistance = samples.at(-1)?.s ?? 0;
+  const ranges = normalizedRangesForSamples(path, samples);
+  const transitions = transitionWindowsForSamples(path, samples);
+  const allowAngularRescale = !ranges.some((range) => range.rotationPriority === "translation")
+    && !transitions.some((transition) => transition.rotationPriority === "translation");
+  let scale = 1;
+  for (let index = 0; index < samples.length; index += 1) {
+    const fraction = samples[index].s / Math.max(totalDistance, EPSILON);
+    const previousFraction = index === 0 ? fraction : samples[index - 1].s / Math.max(totalDistance, EPSILON);
+    const translationInterval = translationPriorityForInterval(ranges, transitions, previousFraction, fraction);
+    const limits = index === 0 ? activeLimits(path, fraction, ranges) : intervalLimits(path, previousFraction, fraction, ranges);
+    scale = Math.max(scale, Math.abs(samples[index].velocity) / Math.max(EPSILON, limits.maxVel));
+    if (index === 0) continue;
+    const acceleration = (samples[index].velocity - samples[index - 1].velocity) / samplePeriod;
+    const omega = samples[index].rotationBreak ? 0 : (samples[index].robotHeading - samples[index - 1].robotHeading) / samplePeriod;
+    const accelerating = Math.abs(samples[index].velocity) >= Math.abs(samples[index - 1].velocity);
+    const accelerationLimit = accelerating
+      ? motorAccelerationLimit(limits.maxAccel, samples[index - 1].velocity, robotMaxSpeed)
+      : limits.maxDecel;
+    scale = Math.max(scale, Math.sqrt(Math.abs(acceleration) / Math.max(EPSILON, accelerationLimit)));
+    if (allowAngularRescale && !translationInterval) scale = Math.max(scale, Math.abs(omega) / Math.max(EPSILON, limits.maxAngVel));
+    if (index > 1) {
+      maxJerk = Math.max(maxJerk, Math.abs(acceleration - previousAcceleration) / samplePeriod);
+      const angularAcceleration = (omega - previousOmega) / samplePeriod;
+      const angularAccelerationLimit = Math.abs(omega) >= Math.abs(previousOmega) ? limits.maxAngAccel : limits.maxAngDecel;
+      if (allowAngularRescale && !translationInterval) {
+        scale = Math.max(scale, Math.sqrt(Math.abs(angularAcceleration) / Math.max(EPSILON, angularAccelerationLimit)));
+        if (index > 2) maxAngularJerk = Math.max(maxAngularJerk, Math.abs(angularAcceleration - previousAngularAcceleration) / samplePeriod);
+      }
+      previousAngularAcceleration = angularAcceleration;
+    }
+    previousAcceleration = acceleration;
+    previousOmega = omega;
+  }
+
+  if ((path.constraints.maxJerk ?? 0) > 0) scale = Math.max(scale, Math.cbrt(maxJerk / path.constraints.maxJerk!));
+  if (allowAngularRescale && (path.constraints.maxAngJerk ?? 0) > 0 && maxAngularJerk > 0) {
+    scale = Math.max(scale, Math.cbrt(maxAngularJerk / (path.constraints.maxAngJerk! * Math.PI / 180)));
+  }
+  return Number.isFinite(scale) ? scale : 1;
+}
+
+function finalSamples(timeline: PlanningTimeline, path: PathDoc, robotMaxSpeed: number, samplePeriod: number): TrajectorySample[] {
+  let requestedScale = 1;
+  let draft = draftSamples(timeline, samplePeriod, requestedScale);
+  for (let iteration = 0; iteration < 10; iteration += 1) {
+    const additionalScale = requiredTimeScale(draft, path, robotMaxSpeed, samplePeriod);
+    if (additionalScale <= 1.001) break;
+    requestedScale *= additionalScale * 1.01;
+    draft = draftSamples(timeline, samplePeriod, requestedScale);
+  }
+  const samples = draft;
+  const totalDistance = timeline.points.at(-1)!.s;
+  return samples.map((sample, index) => {
+    const previous = samples[Math.max(0, index - 1)];
+    const acceleration = index === 0 ? 0 : (sample.velocity - previous.velocity) / samplePeriod;
+    const angularVelocity = index === 0 || sample.rotationBreak ? 0 : (sample.robotHeading - previous.robotHeading) / samplePeriod;
+    return {
+      i: index,
+      t: sample.t,
+      s: sample.s,
+      f: totalDistance > EPSILON ? sample.s / totalDistance : 0,
+      x: sample.x,
+      y: sample.y,
+      headingRad: sample.robotHeading,
+      velocityMps: sample.velocity,
+      accelerationMps2: acceleration,
+      angularVelocityRadps: angularVelocity,
+      curvatureInvM: sample.curvature,
+    };
+  });
+}
+
+function markersFor(path: PathDoc, samples: readonly TrajectorySample[]): BdxMarker[] {
+  const totalDistance = samples.at(-1)?.s ?? 0;
+  return path.markers.map((marker, markerIndex) => {
+    const fraction = marker.anchor === "dist"
+      ? clamp((marker.d ?? marker.f * totalDistance) / Math.max(totalDistance, EPSILON), 0, 1)
+      : clamp(marker.f, 0, 1);
+    const target = fraction * totalDistance;
+    let index = 1;
+    while (index < samples.length && samples[index].s < target) index += 1;
+    const after = samples[Math.min(index, samples.length - 1)];
+    const before = samples[Math.max(0, index - 1)];
