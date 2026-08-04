@@ -718,3 +718,84 @@ public final class BordeauxProcessor extends AbstractProcessor {
             case "boolean" -> "java.lang.Boolean";
             case "byte" -> "java.lang.Byte";
             case "short" -> "java.lang.Short";
+            case "int" -> "java.lang.Integer";
+            case "float" -> "java.lang.Float";
+            case "double" -> "java.lang.Double";
+            case "char" -> "java.lang.Character";
+            default -> type;
+        };
+    }
+
+    private static String primitiveKind(TypeKind kind) {
+        return switch (kind) {
+            case BOOLEAN -> "boolean";
+            case BYTE, SHORT, INT, LONG -> kind == TypeKind.LONG ? "integerString" : "integer";
+            case CHAR -> "string";
+            case FLOAT, DOUBLE -> "number";
+            default -> "opaque";
+        };
+    }
+
+    private static String scalarKind(String raw) {
+        return switch (raw) {
+            case "java.lang.Boolean" -> "boolean";
+            case "java.lang.Byte", "java.lang.Short", "java.lang.Integer" -> "integer";
+            case "java.lang.Character" -> "string";
+            case "java.lang.Long", "java.math.BigInteger" -> "integerString";
+            case "java.math.BigDecimal" -> "decimalString";
+            case "java.lang.Float", "java.lang.Double" -> "number";
+            case "java.lang.String" -> "string";
+            default -> null;
+        };
+    }
+
+    private static String schemaLeaf(String kind, String javaType) {
+        return "{\"javaType\":" + quote(javaType) + ",\"kind\":" + quote(kind) + "}";
+    }
+
+    private static String optionalJson(String name, String value) {
+        return value == null || value.isBlank() ? "" : "," + quote(name) + ":" + quote(value);
+    }
+
+    private static String humanize(String value) {
+        return value.replaceAll("([a-z0-9])([A-Z])", "$1 $2").replace('_', ' ')
+                .replaceFirst("^.", value.substring(0, 1).toUpperCase(Locale.ROOT));
+    }
+
+    private static String quote(String value) {
+        return quoteJava(value);
+    }
+
+    private static String quoteJava(String value) {
+        StringBuilder result = new StringBuilder("\"");
+        for (int index = 0; index < value.length(); index++) {
+            char ch = value.charAt(index);
+            switch (ch) {
+                case '\\' -> result.append("\\\\");
+                case '"' -> result.append("\\\"");
+                case '\n' -> result.append("\\n");
+                case '\r' -> result.append("\\r");
+                case '\t' -> result.append("\\t");
+                default -> {
+                    if (ch < 0x20) result.append(String.format("\\u%04x", (int) ch));
+                    else result.append(ch);
+                }
+            }
+        }
+        return result.append('"').toString();
+    }
+
+    private void error(Element element, String message) {
+        processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR, message, element);
+    }
+
+    private record CommandMethod(
+            String id, String label, String description, List<String> aliases, List<String> semanticTags, String owner, String member,
+            boolean isStatic, List<Parameter> parameters) {}
+
+    private record Parameter(
+            String name, TypeMirror type, BordeauxParam metadata, String defaultValue, String schema) {}
+
+    private record SchemaField(String name, TypeMirror type) {}
+
+}
