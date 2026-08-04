@@ -178,3 +178,93 @@ function clothoidGeometry(path: PathDoc): GeometryPoint[] {
 
 function densifyGeometry(points: readonly GeometryPoint[], maximumSpacing = 0.02): GeometryPoint[] {
   const output: GeometryPoint[] = [{ ...points[0], s: 0 }];
+  for (let index = 1; index < points.length; index += 1) {
+    const before = points[index - 1];
+    const after = points[index];
+    const distance = Math.hypot(after.x - before.x, after.y - before.y);
+    const count = Math.max(1, Math.ceil(distance / maximumSpacing));
+    for (let part = 1; part <= count; part += 1) {
+      const ratio = part / count;
+      const previous = output.at(-1)!;
+      const point = {
+        x: before.x + (after.x - before.x) * ratio,
+        y: before.y + (after.y - before.y) * ratio,
+        heading: before.heading + wrapRadians(after.heading - before.heading) * ratio,
+        curvature: before.curvature + (after.curvature - before.curvature) * ratio,
+      };
+      output.push({ ...point, s: previous.s + Math.hypot(point.x - previous.x, point.y - previous.y) });
+    }
+  }
+  return output;
+}
+
+function nearestGeometryIndices(path: PathDoc, geometry: readonly { x: number; y: number; s: number }[]): number[] {
+  let minimumIndex = 0;
+  return path.waypoints.map((waypoint) => {
+    let bestIndex = minimumIndex;
+    let bestDistance = Infinity;
+    for (let index = minimumIndex; index < geometry.length; index += 1) {
+      const point = geometry[index];
+      const distance = (point.x - waypoint.x) ** 2 + (point.y - waypoint.y) ** 2;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = index;
+      }
+    }
+    minimumIndex = bestIndex;
+    return bestIndex;
+  });
+}
+
+function rangeFractions(path: PathDoc, totalDistance: number, waypointIndices: readonly number[], geometry: readonly { s: number }[]): NormalizedRange[] {
+  return path.ranges.map((range) => {
+    let f0 = range.f0;
+    let f1 = range.f1;
+    if (range.anchor === "dist") {
+      f0 = (range.d0 ?? range.f0 * totalDistance) / Math.max(totalDistance, EPSILON);
+      f1 = (range.d1 ?? range.f1 * totalDistance) / Math.max(totalDistance, EPSILON);
+    } else if (range.anchor === "wp") {
+      const first = clamp(Math.round(range.w0 ?? 0), 0, waypointIndices.length - 1);
+      const last = clamp(Math.round(range.w1 ?? waypointIndices.length - 1), 0, waypointIndices.length - 1);
+      const localFraction = (segment: number, local: number | undefined) => {
+        if (local == null) return geometry[waypointIndices[segment]].s / Math.max(totalDistance, EPSILON);
+        const start = clamp(segment, 0, waypointIndices.length - 2);
+        const startDistance = geometry[waypointIndices[start]].s;
+        const endDistance = geometry[waypointIndices[start + 1]].s;
+        return (startDistance + (endDistance - startDistance) * clamp(local, 0, 1)) / Math.max(totalDistance, EPSILON);
+      };
+      f0 = localFraction(first, range.t0);
+      f1 = localFraction(last, range.t1);
+    }
+    return { ...range, f0: clamp(Math.min(f0, f1), 0, 1), f1: clamp(Math.max(f0, f1), 0, 1) };
+  });
+}
+
+function translationPriorityForInterval(
+  ranges: readonly NormalizedRange[],
+  transitions: readonly HeadingTransitionWindow[],
+  before: number,
+  after: number,
+): boolean {
+  const start = Math.min(before, after);
+  const end = Math.max(before, after);
+  const overlaps = (candidateStart: number, candidateEnd: number) => (
+    Math.min(end, candidateEnd) - Math.max(start, candidateStart) >= -EPSILON
+  );
+  const activeRanges = ranges.filter((range) => overlaps(range.f0, range.f1));
+  const activeTransitions = transitions.filter((transition) => overlaps(transition.start, transition.end));
+  return activeRanges.length + activeTransitions.length > 0
+    && activeRanges.every((range) => range.rotationPriority === "translation")
+    && activeTransitions.every((transition) => transition.rotationPriority === "translation");
+}
+
+function transitionWindowsForSamples(path: PathDoc, samples: readonly { x: number; y: number; s: number }[]): HeadingTransitionWindow[] {
+  const totalDistance = samples.at(-1)?.s ?? 0;
+  const waypointIndices = nearestGeometryIndices(path, samples);
+  const fractions = waypointIndices.map((index) => (samples[index]?.s ?? 0) / Math.max(totalDistance, EPSILON));
+  const laws = segmentHeadingLaws(path, false);
+  const breaks = path.waypoints.slice(0, -1).map((waypoint) => Boolean(waypoint.turnInPlace));
+  return headingTransitionWindows(path.waypoints, laws, breaks, fractions, totalDistance);
+}
+
+function headingTargets(path: PathDoc, geometry: readonly GeometryPoint[], waypointIndices: readonly number[], includeTargets: boolean): Array<{ f: number; heading: number }> {
