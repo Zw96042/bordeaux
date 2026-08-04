@@ -268,51 +268,51 @@
         const before = candidateIndex === index - 1 ? candidate : v[index - 1];
         const after = candidateIndex === index ? candidate : v[index];
         return 2 * ds / Math.max(1e-6, before + after);
-        const tt = (b.f - a.f) < 1e-6 ? 0 : (f - a.f) / (b.f - a.f);
-        // smoothstep for nicer rotation
-        const ss = tt * tt * (3 - 2 * tt);
-        return angLerp(a.rad, b.rad, ss);
-      }
-    }
-    return anchors[anchors.length - 1].rad;
-  }
-
-  // pose at time given sampled pts, profile times, and heading anchors / mode
-  function poseAtTime(time, pts, prof, anchors, mode, rev) {
-    const n = pts.length;
-    if (n < 2) return null;
-    const T = prof.t;
-    // wait/dwell hold: robot is stationary at the stop point for the dwell window (memo §15)
-    if (prof.holds && prof.holds.length) {
-      for (let k = 0; k < prof.holds.length; k++) {
-        const hd = prof.holds[k];
-        if (time >= hd.t0 - 1e-9 && time <= hd.t1 + 1e-9) {
-          const p = pts[hd.idx]; const f = pts[n - 1].s > 1e-6 ? p.s / pts[n - 1].s : 0;
-          let heading = mode === 'tank' ? p.heading : headingAt(f, anchors); if (rev) heading += Math.PI;
-          return { x: p.x, y: p.y, heading, speed: 0, s: p.s, f, hold: true };
+      };
+      const intervalOmega = (index, candidate, candidateIndex) => {
+        if (index <= 0 || index >= n) return 0;
+        const dt = intervalDt(index, candidate, candidateIndex);
+        return dt > 1e-9 ? Math.abs(angWrap(head[index] - head[index - 1])) / dt : 0;
+      };
+      const capInterval = (interval, referenceInterval, variableIndex, referenceDtInterval) => {
+        const referenceOmega = intervalOmega(referenceInterval, v[variableIndex], -1);
+        const allowed = (candidate) => intervalOmega(interval, candidate, variableIndex) <= referenceOmega + angularBudget * intervalDt(referenceDtInterval, candidate, variableIndex) + 1e-9;
+        if (allowed(v[variableIndex])) return false;
+        let low = 0, high = v[variableIndex];
+        for (let iteration = 0; iteration < 28; iteration++) {
+          const candidate = (low + high) / 2;
+          if (allowed(candidate)) low = candidate; else high = candidate;
         }
+        v[variableIndex] = low;
+        return true;
+      };
+      const stopped = new Set(opts.stopIdx || []);
+      const translationInterval = (interval) => interval > 0 && interval < n && translationPriority[interval];
+      for (let pass = 0; pass < 20; pass++) {
+        let changed = false;
+        for (let interval = 2; interval < n; interval++) {
+          if (!stopped.has(interval - 1) && !translationInterval(interval)) changed = capInterval(interval, interval - 1, interval, interval) || changed;
+        }
+        for (let interval = n - 2; interval >= 1; interval--) {
+          if (!stopped.has(interval) && !translationInterval(interval)) changed = capInterval(interval, interval + 1, interval - 1, interval + 1) || changed;
+        }
+        for (let i = 1; i < n; i++) {
+          const ds = pts[i].s - pts[i - 1].s;
+          v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * aFwd[i] * ds)));
+        }
+        for (let i = n - 2; i >= 0; i--) {
+          const ds = pts[i + 1].s - pts[i].s;
+          v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i + 1] * v[i + 1] + 2 * aBack[i] * ds)));
+        }
+        if (!changed) break;
       }
     }
-    let i = 1;
-    if (time <= 0) i = 1; else if (time >= T[n - 1]) i = n - 1;
-    else { // binary search
-      let lo = 1, hi = n - 1;
-      while (lo < hi) { const mid = (lo + hi) >> 1; if (T[mid] < time) lo = mid + 1; else hi = mid; }
-      i = lo;
-    }
-    const t0 = T[i - 1], t1 = T[i];
-    const u = t1 - t0 > 1e-6 ? Math.max(0, Math.min(1, (time - t0) / (t1 - t0))) : 0;
-    const a = pts[i - 1], b = pts[i];
-    const x = lerp(a.x, b.x, u), y = lerp(a.y, b.y, u);
-    const s = lerp(a.s, b.s, u);
-    const f = pts[n - 1].s > 1e-6 ? s / pts[n - 1].s : 0;
-    let heading;
-    if (mode === 'tank') heading = Math.atan2(b.y - a.y, b.x - a.x);
-    else heading = headingAt(f, anchors);
-    if (rev) heading += Math.PI;
-    const speed = lerp(prof.v[i - 1], prof.v[i], u);
-    return { x, y, heading, speed, s, f };
-  }
+    // time
+    const t = new Array(n).fill(0);
+    for (let i = 1; i < n; i++) {
+      const ds = pts[i].s - pts[i - 1].s;
+      const vm = (v[i] + v[i - 1]) / 2;
+      t[i] = t[i - 1] + (vm > 1e-4 ? ds / vm : 0);
 
   // build heading anchors from a flat list of {f, rad} entries (waypoint thetas + rotation targets)
   // ensures coverage of f=0 and f=1 so heading is defined across the whole path
