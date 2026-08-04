@@ -43,6 +43,21 @@ function remapTiming(samples: TrajectorySample[], velocities: number[]): Traject
   });
 }
 
+function timeAtFraction(samples: TrajectorySample[], fraction: number): number {
+  if (samples.length === 0) return 0;
+  const target = Math.max(0, Math.min(1, fraction));
+  if (target <= samples[0].f) return samples[0].t;
+  for (let index = 1; index < samples.length; index += 1) {
+    const current = samples[index];
+    if (current.f >= target) {
+      const previous = samples[index - 1];
+      const span = Math.max(1e-9, current.f - previous.f);
+      return previous.t + (current.t - previous.t) * ((target - previous.f) / span);
+    }
+  }
+  return samples[samples.length - 1].t;
+}
+
 function smoothVelocities(input: PlannerInput, samples: TrajectorySample[]): number[] {
   const maxSpeed = Math.max(0.01, input.robot.maxSpeed || input.path.constraints.maxVel || 0.01);
   const maxVel = Math.max(0.01, Math.min(maxSpeed, input.path.constraints.maxVel || maxSpeed));
@@ -73,21 +88,6 @@ function smoothVelocities(input: PlannerInput, samples: TrajectorySample[]): num
   }
 
   for (let i = 1; i < samples.length; i += 1) {
-    const ds = Math.max(0, samples[i].s - samples[i - 1].s);
-    velocities[i] = Math.min(velocities[i], Math.sqrt(velocities[i - 1] ** 2 + 2 * maxAccel * ds));
-  }
-
-  for (let i = samples.length - 2; i >= 0; i -= 1) {
-    const ds = Math.max(0, samples[i + 1].s - samples[i].s);
-    velocities[i] = Math.min(velocities[i], Math.sqrt(velocities[i + 1] ** 2 + 2 * maxDecel * ds));
-  }
-
-  const passes = input.smoothingPasses ?? 2;
-  for (let pass = 0; pass < passes; pass += 1) {
-    const next = velocities.slice();
-    for (let i = 1; i < velocities.length - 1; i += 1) {
-      if (velocities[i] <= 1e-6) continue;
-      next[i] = Math.min(velocities[i], velocities[i - 1] * 0.22 + velocities[i] * 0.56 + velocities[i + 1] * 0.22);
     }
     velocities.splice(0, velocities.length, ...next);
   }
