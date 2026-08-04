@@ -223,6 +223,21 @@
         const activeRanges = ranges.filter((R) => overlaps(Math.min(R.f0, R.f1), Math.max(R.f0, R.f1)));
         const activeTransitions = headingTransitions.filter((policy) => overlaps(policy.start, policy.end));
         const activePolicies = activeRanges.length + activeTransitions.length;
+        translationPriority[i] = activePolicies > 0
+          && activeRanges.every((R) => R.rotationPriority === 'translation')
+          && activeTransitions.every((policy) => policy.rotationPriority === 'translation');
+      }
+    }
+    // ---- rotational limit: cap v so the commanded heading can actually be tracked ----
+    // omega = (dtheta/ds) * v ; enforce |omega| <= Wmax and |d omega/dt| <= Aang (memo §16)
+    const rotLimited = new Array(n).fill(0);
+    const head = opts.heading;
+    const Wmax = (c.maxAngVel || 0) * Math.PI / 180;
+    const Aang = (c.maxAngAccel || 0) * Math.PI / 180;
+    if (head && head.length === n && Wmax > 1e-4) {
+      const g = new Array(n).fill(0), dth = new Array(n).fill(0);
+      for (let i = 1; i < n; i++) { const ds = pts[i].s - pts[i - 1].s; const dd = angWrap(head[i] - head[i - 1]); dth[i] = Math.abs(dd); g[i] = ds > 1e-6 ? dd / ds : 0; }
+      g[0] = g[1] || 0;
       const w = new Array(n);
       for (let i = 0; i < n; i++) w[i] = Math.min(Wmax, rangeAngV[i]);
       stopSet.forEach(idx => { if (idx >= 0 && idx < n) w[idx] = 0; });
@@ -230,7 +245,7 @@
         for (let i = 1; i < n; i++) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i - 1] * w[i - 1] + 2 * Aang * dth[i])));
         for (let i = n - 2; i >= 0; i--) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i + 1] * w[i + 1] + 2 * Aang * dth[i + 1])));
       }
-      for (let i = 0; i < n; i++) { const gi = Math.abs(g[i]); if (gi > 1e-4) { const vr = w[i] / gi; if (vr < v[i] - 0.05) rotLimited[i] = 1; v[i] = Math.min(v[i], vr); } }
+      for (let i = 0; i < n; i++) { const gi = Math.abs(g[i]); const translationInterval = i > 0 && translationPriority[i]; if (!translationInterval && gi > 1e-4) { const vr = w[i] / gi; if (vr < v[i] - 0.05) rotLimited[i] = 1; v[i] = Math.min(v[i], vr); } }
     }
     // forward
     for (let i = 1; i < n; i++) {
@@ -242,32 +257,17 @@
       const ds = pts[i + 1].s - pts[i].s;
       v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i + 1] * v[i + 1] + 2 * aBack[i] * ds)));
     }
-    // time
-    const t = new Array(n).fill(0);
-    for (let i = 1; i < n; i++) {
-      const ds = pts[i].s - pts[i - 1].s;
-      const vm = (v[i] + v[i - 1]) / 2;
-      t[i] = t[i - 1] + (vm > 1e-4 ? ds / vm : 0);
-    }
-    // dwell / wait-at-waypoint holds (memo §15) — only meaningful at stop points
-    const holds = [];
-    const dwell = (opts.dwell || []).slice().sort((a, b) => a.idx - b.idx);
-    for (let d = 0; d < dwell.length; d++) {
-      const dw = dwell[d]; if (!(dw.wait > 0) || dw.idx < 0 || dw.idx >= n) continue;
-      const t0 = t[dw.idx]; holds.push({ idx: dw.idx, t0, t1: t0 + dw.wait });
-      for (let j = dw.idx + 1; j < n; j++) t[j] += dw.wait;
-    }
-    return { v, t, totalTime: t[n - 1], holds, rotLimited };
-  }
-
-  // heading anchors -> continuous heading along arclength fraction f in [0,1]
-  // anchors: [{f, rad}] must include f=0 and f=1, sorted
-  function headingAt(f, anchors) {
-    if (!anchors.length) return 0;
-    if (f <= anchors[0].f) return anchors[0].rad;
-    for (let i = 0; i < anchors.length - 1; i++) {
-      const a = anchors[i], b = anchors[i + 1];
-      if (f >= a.f && f <= b.f) {
+    // Enforce angular acceleration in the generated timing itself. A changing
+    // heading gradient can violate alpha even when omega is below its cap;
+    // solve the adjacent-sample bound against the interval time, then repeat
+    // the linear accel passes because either constraint may tighten the other.
+    if (head && head.length === n && Aang > 1e-4) {
+      const angularBudget = Aang * 0.8;
+      const intervalDt = (index, candidate, candidateIndex) => {
+        const ds = pts[index].s - pts[index - 1].s;
+        const before = candidateIndex === index - 1 ? candidate : v[index - 1];
+        const after = candidateIndex === index ? candidate : v[index];
+        return 2 * ds / Math.max(1e-6, before + after);
         const tt = (b.f - a.f) < 1e-6 ? 0 : (f - a.f) / (b.f - a.f);
         // smoothstep for nicer rotation
         const ss = tt * tt * (3 - 2 * tt);
