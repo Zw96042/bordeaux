@@ -88,3 +88,93 @@ public final class BordeauxProcessor extends AbstractProcessor {
             } catch (IOException exception) {
                 processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
                         "Could not generate Bordeaux command metadata: " + exception.getMessage());
+            }
+            return true;
+        }
+        Set<? extends Element> annotated = roundEnvironment.getElementsAnnotatedWith(BordeauxCommand.class);
+        if (annotated.isEmpty()) return false;
+        if (collectedMethods.size() + annotated.size() > MAX_COMMANDS) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    "Bordeaux command count exceeds " + MAX_COMMANDS);
+            invalid = true;
+            return true;
+        }
+
+        for (Element element : annotated) {
+            if (element.getKind() != ElementKind.METHOD) {
+                error(element, "@BordeauxCommand may only annotate methods");
+                invalid = true;
+                continue;
+            }
+            ExecutableElement method = (ExecutableElement) element;
+            CommandMethod command = inspect(method);
+            if (command == null) {
+                invalid = true;
+                continue;
+            }
+            ExecutableElement previous = collectedIds.putIfAbsent(command.id(), method);
+            if (previous != null) {
+                error(method, "Duplicate Bordeaux command ID '" + command.id() + "'");
+                error(previous, "Duplicate Bordeaux command ID '" + command.id() + "'");
+                invalid = true;
+                continue;
+            }
+            collectedMethods.add(command);
+        }
+        return true;
+    }
+
+    private CommandMethod inspect(ExecutableElement method) {
+        Elements elements = processingEnv.getElementUtils();
+        Types types = processingEnv.getTypeUtils();
+        TypeElement owner = (TypeElement) method.getEnclosingElement();
+        BordeauxCommand annotation = method.getAnnotation(BordeauxCommand.class);
+        boolean valid = true;
+        if (!method.getModifiers().contains(Modifier.PUBLIC)) {
+            error(method, "Bordeaux command factory methods must be public");
+            valid = false;
+        }
+        if (!owner.getModifiers().contains(Modifier.PUBLIC)) {
+            error(owner, "Bordeaux command provider types must be public");
+            valid = false;
+        }
+        if (!owner.getTypeParameters().isEmpty() || !method.getTypeParameters().isEmpty()) {
+            error(method, "Generic Bordeaux command providers and factory methods are not supported");
+            valid = false;
+        }
+        for (TypeMirror thrown : method.getThrownTypes()) {
+            error(method, "Bordeaux command factory methods must not declare checked exceptions");
+            valid = false;
+            break;
+        }
+        TypeElement commandElement = elements.getTypeElement(COMMAND_TYPE);
+        if (commandElement == null) {
+            error(method, "WPILib Command API was not found on the annotation processor classpath");
+            return null;
+        }
+        if (!types.isAssignable(types.erasure(method.getReturnType()), types.erasure(commandElement.asType()))) {
+            error(method, "@BordeauxCommand method must return " + COMMAND_TYPE + " or a subtype");
+            valid = false;
+        }
+        if (!method.getModifiers().contains(Modifier.STATIC)
+                && owner.getNestingKind().isNested()
+                && !owner.getModifiers().contains(Modifier.STATIC)) {
+            error(owner, "Nested Bordeaux command providers must be static");
+            valid = false;
+        }
+
+        String ownerName = owner.getQualifiedName().toString();
+        String id = annotation.id().isBlank() ? ownerName + "#" + method.getSimpleName() : annotation.id().trim();
+        if (id.length() > 256 || !id.matches("[A-Za-z0-9_.:#()$,-]+")) {
+            error(method, "Bordeaux command ID must be 1-256 stable identifier characters");
+            valid = false;
+        }
+        List<Parameter> parameters = new ArrayList<>();
+        if (method.getParameters().size() > MAX_PARAMETERS) {
+            error(method, "Bordeaux command methods cannot exceed " + MAX_PARAMETERS + " parameters");
+            return null;
+        }
+        for (VariableElement parameter : method.getParameters()) {
+            Parameter inspected = inspectParameter(parameter);
+            if (inspected == null) valid = false;
+            else parameters.add(inspected);
