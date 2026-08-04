@@ -268,3 +268,93 @@ public final class BordeauxProcessor extends AbstractProcessor {
                 boolean exactInteger = isExactIntegerType(parameter.asType().toString());
                 if (exactInteger && (!validSignedIntegerBound(metadata.min()) || !validSignedIntegerBound(metadata.max()))) {
                     error(parameter, "@BordeauxParam bounds for long and BigInteger must be signed digit strings without fractions or exponents");
+                    return null;
+                }
+                if (isExactDecimalType(parameter.asType().toString())
+                        && (!decimalExponentWithinLimit(metadata.min()) || !decimalExponentWithinLimit(metadata.max()))) {
+                    error(parameter, "@BordeauxParam BigDecimal bound exponent cannot exceed 10000");
+                    return null;
+                }
+                BigDecimal min = metadata.min().isBlank() ? null : new BigDecimal(metadata.min());
+                BigDecimal max = metadata.max().isBlank() ? null : new BigDecimal(metadata.max());
+                if (min != null && max != null && min.compareTo(max) > 0) {
+                    error(parameter, "@BordeauxParam min must not exceed max");
+                    return null;
+                }
+                if (!defaultValue.isEmpty() && isNumericType(parameter.asType().toString())) {
+                    BigDecimal value = numericDefault(parameter.asType(), defaultValue);
+                    if (min != null && value.compareTo(min) < 0) {
+                        error(parameter, "@BordeauxParam defaultValue must be at least min");
+                        return null;
+                    }
+                    if (max != null && value.compareTo(max) > 0) {
+                        error(parameter, "@BordeauxParam defaultValue must be at most max");
+                        return null;
+                    }
+                }
+            } catch (NumberFormatException exception) {
+                error(parameter, "@BordeauxParam min and max must be exact decimal strings");
+                return null;
+            }
+        }
+        return new Parameter(parameter.getSimpleName().toString(), parameter.asType(), metadata, defaultValue, parameterSchema);
+    }
+
+    private String defaultValueError(TypeMirror type, String json, int depth) {
+        if (depth > MAX_SCHEMA_DEPTH) return "exceeds the nesting limit of " + MAX_SCHEMA_DEPTH;
+        String javaType = type.toString();
+        if (json.equals("null")) {
+            return javaType.startsWith("java.util.Optional<") ? null : "must not be null";
+        }
+        try {
+            if (isExactIntegerType(javaType)) {
+                String value = CanonicalJson.stringValue(json);
+                java.math.BigInteger integer = new java.math.BigInteger(value);
+                if ((javaType.equals("long") || javaType.equals("java.lang.Long"))
+                        && (integer.compareTo(java.math.BigInteger.valueOf(Long.MIN_VALUE)) < 0
+                        || integer.compareTo(java.math.BigInteger.valueOf(Long.MAX_VALUE)) > 0)) {
+                    return "is outside the signed 64-bit range";
+                }
+                return null;
+            }
+            if (isExactDecimalType(javaType)) {
+                String value = CanonicalJson.stringValue(json);
+                new BigDecimal(value);
+                return decimalExponentWithinLimit(value) ? null : "decimal exponent cannot exceed 10000";
+            }
+            if (type.getKind() == TypeKind.BOOLEAN || javaType.equals("java.lang.Boolean")) {
+                return json.equals("true") || json.equals("false") ? null : "must be a JSON boolean";
+            }
+            if (type.getKind() == TypeKind.BYTE || type.getKind() == TypeKind.SHORT || type.getKind() == TypeKind.INT
+                    || javaType.equals("java.lang.Byte") || javaType.equals("java.lang.Short")
+                    || javaType.equals("java.lang.Integer")) {
+                if (!json.matches("-?(?:0|[1-9]\\d*)")) return "must be an integer JSON number";
+                java.math.BigInteger value = new java.math.BigInteger(json);
+                long minimum = type.getKind() == TypeKind.BYTE || javaType.equals("java.lang.Byte") ? Byte.MIN_VALUE
+                        : type.getKind() == TypeKind.SHORT || javaType.equals("java.lang.Short") ? Short.MIN_VALUE
+                        : Integer.MIN_VALUE;
+                long maximum = type.getKind() == TypeKind.BYTE || javaType.equals("java.lang.Byte") ? Byte.MAX_VALUE
+                        : type.getKind() == TypeKind.SHORT || javaType.equals("java.lang.Short") ? Short.MAX_VALUE
+                        : Integer.MAX_VALUE;
+                return value.compareTo(java.math.BigInteger.valueOf(minimum)) < 0
+                        || value.compareTo(java.math.BigInteger.valueOf(maximum)) > 0
+                        ? "is outside the Java integer range" : null;
+            }
+            if (type.getKind() == TypeKind.FLOAT || type.getKind() == TypeKind.DOUBLE
+                    || javaType.equals("java.lang.Float") || javaType.equals("java.lang.Double")) {
+                double value = Double.parseDouble(json);
+                return Double.isFinite(value) ? null : "must be a finite JSON number";
+            }
+            if (javaType.equals("java.lang.String")) {
+                CanonicalJson.stringValue(json);
+                return null;
+            }
+            if (type.getKind() == TypeKind.ARRAY) {
+                List<String> values = CanonicalJson.arrayValues(json);
+                if (values.size() > 1_024) return "exceeds the array limit of 1024";
+                for (String value : values) {
+                    String error = defaultValueError(((ArrayType) type).getComponentType(), value, depth + 1);
+                    if (error != null) return "array element " + error;
+                }
+                return null;
+            }
