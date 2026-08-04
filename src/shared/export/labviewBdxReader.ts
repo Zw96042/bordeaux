@@ -358,3 +358,29 @@ export function parseLabviewBdx(input: Uint8Array): LabviewBdxV44 {
   const drive = readDriveType(reader);
   const path = readPathType(reader);
   const pickupBalls = reader.boolean("Pickup Balls");
+  const currentLimit = reader.f64("Current Limit");
+  const zeroTranslationalVelocity = reader.boolean("Zero Translational Velocity");
+  const correctAtBeginningOfPath = reader.boolean("Correct at Beginning of Path");
+  reader.requireEnd();
+
+  return {
+    version: LABVIEW_BDX_VERSION,
+    robotBackwards,
+    reversePath,
+    trajectory,
+    commands: [],
+    conditions,
+    updatedWaypoints,
+    timeS,
+    distanceFt,
+    zeroVelocity,
+    driveTypeCode: drive.code,
+    driveType: drive.type,
+    pathTypeCode: path.code,
+    pathType: path.type,
+    pickupBalls,
+    currentLimit,
+    zeroTranslationalVelocity,
+    correctAtBeginningOfPath,
+  };
+}
