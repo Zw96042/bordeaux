@@ -571,3 +571,93 @@ describe("project file boundary", () => {
   });
 
   it("opens the browser fallback's version 2 .path format", () => {
+    const fixture = fs.readFileSync(path.join(process.cwd(), "tests/fixtures/projects/browser-path-v2.path"), "utf8");
+    const parsed = parseProject(fixture);
+    expect(parsed.schemaVersion).toBe("1.0");
+    expect(parsed.name).toBe("Legacy Browser Path");
+    expect(parsed.paths).toHaveLength(1);
+    expect(parsed.paths[0].name).toBe("Legacy Browser Path");
+    expect(parsed.paths[0].id).toMatch(/^path_/);
+    expect(parsed.robot).toEqual({ drive: "swerve", w: 0.84, l: 0.84, maxSpeed: 5 });
+    expect(parsed.paths[0].waypoints[0]).toEqual(expect.objectContaining({
+      x: 1,
+      y: 2,
+      prevC: { x: 0.75, y: 2 },
+      nextC: { x: 1.25, y: 2 },
+    }));
+    expect(parsed.paths[0].constraints).toEqual(expect.objectContaining({ maxVel: 4.2, maxAccel: 6.5 }));
+    expect(parsed.paths[0].headingMode).toBe("targets");
+    expect(parsed.paths[0].exportable).toBe(true);
+    expect(parsed.routine?.nodes).toEqual([]);
+  });
+
+  it("does not treat an unversioned standalone path as browser path 2.0", () => {
+    const pathDocument = blankPath("Ambiguous") as unknown as Record<string, unknown>;
+    expect(() => parseProject(JSON.stringify(pathDocument))).toThrow(/Invalid Bordeaux project/);
+  });
+
+  it("forces imported and migrated files to Save As without changing the source", async () => {
+    const directory = await fsp.mkdtemp(path.join(os.tmpdir(), "bordeaux-import-test-"));
+    const source = path.join(directory, "legacy.path");
+    const destination = path.join(directory, "imported.bordeaux.json");
+    const fixture = fs.readFileSync(path.join(process.cwd(), "tests/fixtures/projects/browser-path-v2.path"), "utf8");
+    await fsp.writeFile(source, fixture, "utf8");
+    const opened = await readProject(source);
+    expect(opened.migrated).toBe(true);
+    expect(saveTargetForOpenedProject(source, opened)).toBeNull();
+    await writeProject(destination, opened.project);
+    expect(await fsp.readFile(source, "utf8")).toBe(fixture);
+    expect(parseProject(await fsp.readFile(destination, "utf8")).name).toBe("Legacy Browser Path");
+    await fsp.rm(directory, { recursive: true, force: true });
+  });
+
+  it("reports corrupt JSON and unsupported versions clearly", () => {
+    expect(() => parseProject("{not json"))
+      .toThrow("Invalid Bordeaux project: the file is not valid JSON.");
+    expect(() => parseProject(JSON.stringify({ ...createDemoProject(), schemaVersion: "9.0" })))
+      .toThrow(/Unsupported Bordeaux project schema version "9\.0"/);
+  });
+
+  it("does not persist transient editor selection state", async () => {
+    const directory = await fsp.mkdtemp(path.join(os.tmpdir(), "bordeaux-test-"));
+    const file = path.join(directory, "project.json");
+    const project = createDemoProject() as unknown as Record<string, any>;
+    project.paths[0]._selR = 0;
+    project.paths[0].waypoints[0]._selAfter = true;
+    project.paths[0]._selectionPolicy = "preserve extension data";
+    project.paths[0].compatibilityNote = "preserve known-safe extension data";
+    await writeProject(file, project);
+    const saved = JSON.parse(await fsp.readFile(file, "utf8"));
+    expect(saved.paths[0]._selR).toBeUndefined();
+    expect(saved.paths[0].waypoints[0]._selAfter).toBeUndefined();
+    expect(saved.paths[0]._selectionPolicy).toBe("preserve extension data");
+    expect(saved.paths[0].compatibilityNote).toBe("preserve known-safe extension data");
+    await fsp.rm(directory, { recursive: true, force: true });
+  });
+
+  it("leaves an existing file untouched when validation fails", async () => {
+    const directory = await fsp.mkdtemp(path.join(os.tmpdir(), "bordeaux-test-"));
+    const file = path.join(directory, "project.json");
+    await fsp.writeFile(file, "original\n", "utf8");
+    await expect(writeProject(file, { paths: "bad" })).rejects.toThrow(/Invalid Bordeaux project/);
+    expect(await fsp.readFile(file, "utf8")).toBe("original\n");
+    await fsp.rm(directory, { recursive: true, force: true });
+  });
+
+  it("serializes same-target atomic saves in invocation order", async () => {
+    const directory = await fsp.mkdtemp(path.join(os.tmpdir(), "bordeaux-test-"));
+    const file = path.join(directory, "project.json");
+    const first = createDemoProject(); first.name = "First";
+    const second = createDemoProject(); second.name = "Second";
+    await Promise.all([writeProject(file, first), writeProject(file, second)]);
+    expect(JSON.parse(await fsp.readFile(file, "utf8")).name).toBe("Second");
+    expect((await fsp.readdir(directory)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    await fsp.rm(directory, { recursive: true, force: true });
+  });
+});
+
+describe("clothoid chains", () => {
+  it("blends the shared tangent across consecutive clothoid segments", () => {
+    const waypoints = [
+      {
+        x: 0,
