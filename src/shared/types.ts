@@ -428,3 +428,80 @@ export interface TrajectorySample {
   curvatureInvM: number;
 }
 
+export interface BdxMarker {
+  id: string;
+  name: string;
+  command: string | null;
+  invocation?: CommandInvocation;
+  group: string | null;
+  timeS: number;
+  fraction: number;
+}
+
+export interface BdxPath {
+  id: string;
+  name: string;
+  planner: TrajectoryPlannerId;
+  totalTimeS: number;
+  totalDistanceM: number;
+  samples: TrajectorySample[];
+  markers: BdxMarker[];
+  diagnostics: ValidationIssue[];
+  optimization?: PlannerOptimizationDiagnostics;
+}
+
+export interface PlannerResult {
+  planner: TrajectoryPlannerId;
+  totalTimeS: number;
+  totalDistanceM: number;
+  samples: TrajectorySample[];
+  markers: BdxMarker[];
+  diagnostics: ValidationIssue[];
+  optimization?: PlannerOptimizationDiagnostics;
+}
+
+export interface TrajectoryPlanner {
+  id: TrajectoryPlannerId;
+  generate(input: PlannerInput): PlannerResult;
+}
+
+export interface PlannerOptimizationDiagnostics {
+  plannerUsed: TrajectoryPlannerId;
+  solveTimeMs: number;
+  totalTimeS: number;
+  maxVelocityMps: number;
+  maxAccelerationMps2: number;
+  constraintViolations: number;
+  fallback: boolean;
+  fallbackReason?: string;
+}
+
+export interface BdxExport {
+  schemaVersion: string;
+  generator: "bordeaux";
+  units: {
+    distance: "meters";
+    time: "seconds";
+    angle: "radians";
+    velocity: "meters_per_second";
+    acceleration: "meters_per_second_squared";
+  };
+  robot: {
+    drive: DriveType;
+    widthM: number;
+    lengthM: number;
+    heightM?: number;
+    footprint?: RobotConfig["footprint"];
+    maxSpeedMps: number;
+  };
+  paths: BdxPath[];
+  routine: AutonomousRoutine | null;
+}
+
+export interface ExportPreview {
+  ok: boolean;
+  pathCount: number;
+  sampleCount: number;
+  totalTimeS: number;
+  issues: ValidationIssue[];
+}
