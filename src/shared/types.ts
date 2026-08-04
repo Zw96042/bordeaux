@@ -338,3 +338,93 @@ export interface RoutineDecisionNode {
   then: RoutineNode[];
   else: RoutineNode[];
 }
+
+export type RoutineNode = RoutineFunctionNode | RoutinePathNode | RoutineDecisionNode;
+
+export interface AutonomousRoutine {
+  name: string;
+  nodes: RoutineNode[];
+}
+
+export type StrategyLocation = {
+  id: string;
+  name: string;
+  aliases?: string[];
+  headingDeg?: number;
+} & (
+  | { kind: "pose"; x: number; y: number }
+  | { kind: "region"; bounds: { xMin: number; xMax: number; yMin: number; yMax: number } }
+);
+
+export interface StrategyActionBinding {
+  semanticTag: string;
+  commandId: string;
+}
+
+/** Optional team-owned vocabulary which supplements the season field pack. */
+export interface ProjectStrategyOverlay {
+  locations?: StrategyLocation[];
+  actionBindings?: StrategyActionBinding[];
+}
+
+export interface BordeauxProject {
+  schemaVersion: string;
+  name: string;
+  robot: RobotConfig;
+  paths: PathDoc[];
+  pathFolders?: PathFolder[];
+  routine?: AutonomousRoutine;
+  plannerId?: TrajectoryPlannerId;
+  strategy?: ProjectStrategyOverlay;
+}
+
+export interface ProjectFile {
+  path: string | null;
+  project: BordeauxProject;
+}
+
+export interface SaveResult {
+  saved?: boolean;
+  canceled?: boolean;
+}
+
+export interface ExportResult {
+  exported?: boolean;
+  canceled?: boolean;
+}
+
+export interface ValidationIssue {
+  severity: "error" | "warning";
+  path: string;
+  message: string;
+}
+
+export interface ValidationResult {
+  ok: boolean;
+  issues: ValidationIssue[];
+}
+
+export type TrajectoryPlannerId = "profiledSpline" | "optimizedTrajectory" | "labviewBezier" | "labviewClothoid";
+
+export interface PlannerInput {
+  path: PathDoc;
+  robot: RobotConfig;
+  plannerId?: TrajectoryPlannerId;
+  samplesPerSegment?: number;
+  smoothingPasses?: number;
+}
+
+export interface TrajectorySample {
+  i: number;
+  t: number;
+  s: number;
+  f: number;
+  x: number;
+  y: number;
+  headingRad: number;
+  velocityMps: number;
+  accelerationMps2: number;
+  angularVelocityRadps: number;
+  curvatureInvM: number;
+}
+
