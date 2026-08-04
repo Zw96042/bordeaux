@@ -228,3 +228,93 @@ function validateProjectInner(project: unknown): ValidationResult {
   if (!Array.isArray(project.paths)) {
     issues.push(issue("$.paths", "Project paths must be an array"));
   } else if (project.paths.length === 0) {
+    issues.push(issue("$.paths", "Project must contain at least one path"));
+  } else {
+    project.paths.forEach((path, pi) => {
+      const base = `$.paths[${pi}]`;
+      if (!isRecord(path)) {
+        issues.push(issue(base, "Path must be an object"));
+        return;
+      }
+      if (typeof path.id !== "string" || !path.id.trim()) issues.push(issue(`${base}.id`, "Path ID is required"));
+      else if (pathIds.has(path.id)) issues.push(issue(`${base}.id`, "Path IDs must be unique"));
+      else pathIds.add(path.id);
+      if (typeof path.name !== "string" || !path.name.trim()) issues.push(issue(`${base}.name`, "Path name is required"));
+      if (path.folderId !== undefined && (typeof path.folderId !== "string" || !folderIds.has(path.folderId))) issues.push(issue(`${base}.folderId`, "Path folder does not exist"));
+      if (path.headingMode !== undefined && !["manual", "tangent", "targets"].includes(String(path.headingMode))) issues.push(issue(`${base}.headingMode`, "Heading mode is invalid"));
+      validateFinite(issues, path.startVel, `${base}.startVel`, "Start velocity", { nonnegative: true });
+      validateFinite(issues, path.goalVel, `${base}.goalVel`, "Goal velocity", { nonnegative: true });
+
+      if (!Array.isArray(path.waypoints)) {
+        issues.push(issue(`${base}.waypoints`, "Waypoints must be an array"));
+      } else {
+        const waypointCount = path.waypoints.length;
+        if (waypointCount < 2) issues.push(issue(`${base}.waypoints`, "Path must contain at least two waypoints"));
+        path.waypoints.forEach((waypoint, wi) => {
+          const wpBase = `${base}.waypoints[${wi}]`;
+          if (!isRecord(waypoint)) {
+            issues.push(issue(wpBase, "Waypoint must be an object"));
+            return;
+          }
+          validateFinite(issues, waypoint.x, `${wpBase}.x`, "Waypoint X");
+          validateFinite(issues, waypoint.y, `${wpBase}.y`, "Waypoint Y");
+          if (finite(waypoint.x) && finite(waypoint.y) && (waypoint.x < 0 || waypoint.x > FIELD_W || waypoint.y < 0 || waypoint.y > FIELD_H)) {
+            issues.push(issue(wpBase, "Waypoint must stay inside the FRC field bounds"));
+          }
+          validateFinite(issues, waypoint.theta, `${wpBase}.theta`, "Waypoint heading");
+          validateOptionalFinite(issues, waypoint.wait, `${wpBase}.wait`, "Waypoint wait", { nonnegative: true });
+          validatePoint(issues, waypoint.prevC, `${wpBase}.prevC`, "Previous control handle");
+          validatePoint(issues, waypoint.nextC, `${wpBase}.nextC`, "Next control handle");
+          if (wi > 0 && wi < waypointCount - 1 && waypoint.stop !== true) {
+            if (waypoint.linked !== true) issues.push(issue(`${wpBase}.linked`, "Moving waypoints must keep tangent handles linked"));
+            if (finite(waypoint.x) && finite(waypoint.y) && isRecord(waypoint.prevC) && isRecord(waypoint.nextC)
+              && finite(waypoint.prevC.x) && finite(waypoint.prevC.y) && finite(waypoint.nextC.x) && finite(waypoint.nextC.y)) {
+              const inX = waypoint.x - waypoint.prevC.x;
+              const inY = waypoint.y - waypoint.prevC.y;
+              const outX = waypoint.nextC.x - waypoint.x;
+              const outY = waypoint.nextC.y - waypoint.y;
+              const scale = Math.max(1e-9, Math.hypot(inX, inY) * Math.hypot(outX, outY));
+              if (Math.abs(inX * outY - inY * outX) / scale > 1e-3 || (inX * outX + inY * outY) <= 0) {
+                issues.push(issue(`${wpBase}.linked`, "Moving waypoint tangent handles must be collinear"));
+              }
+            }
+          }
+          if (waypoint.segType !== undefined && !["bezier", "line", "arc", "clothoid"].includes(String(waypoint.segType))) issues.push(issue(`${wpBase}.segType`, "Segment type is invalid"));
+          if (waypoint.segmentHeadingMode !== undefined && !["manual", "tangent", "targets", "lookAt"].includes(String(waypoint.segmentHeadingMode))) issues.push(issue(`${wpBase}.segmentHeadingMode`, "Segment heading mode is invalid"));
+          if (waypoint.segmentLookAt !== undefined) {
+            validatePoint(issues, waypoint.segmentLookAt, `${wpBase}.segmentLookAt`, "Tracked field point");
+            if (isRecord(waypoint.segmentLookAt) && finite(waypoint.segmentLookAt.x) && finite(waypoint.segmentLookAt.y)
+              && (waypoint.segmentLookAt.x < 0 || waypoint.segmentLookAt.x > FIELD_W || waypoint.segmentLookAt.y < 0 || waypoint.segmentLookAt.y > FIELD_H)) {
+              issues.push(issue(`${wpBase}.segmentLookAt`, "Tracked field point must stay inside the FRC field bounds"));
+            }
+          }
+          if (waypoint.segmentHeadingMode === "lookAt" && !isRecord(waypoint.segmentLookAt)) issues.push(issue(`${wpBase}.segmentLookAt`, "Track point heading requires a field point"));
+          if (waypoint.headingTransition !== undefined) {
+            if (!isRecord(waypoint.headingTransition)) issues.push(issue(`${wpBase}.headingTransition`, "Heading transition must be an object"));
+            else {
+              if (waypoint.headingTransition.placement !== undefined && !["before", "split", "after"].includes(String(waypoint.headingTransition.placement))) {
+                issues.push(issue(`${wpBase}.headingTransition.placement`, "Heading transition side must be before, split, or after"));
+              }
+              if (waypoint.headingTransition.rotationPriority !== undefined && !["heading", "translation"].includes(String(waypoint.headingTransition.rotationPriority))) {
+                issues.push(issue(`${wpBase}.headingTransition.rotationPriority`, "Heading transition timing priority must be heading or translation"));
+              }
+              if (waypoint.headingTransition.distanceM !== undefined) {
+                validateFinite(issues, waypoint.headingTransition.distanceM, `${wpBase}.headingTransition.distanceM`, "Heading transition distance", { positive: true });
+                if (finite(waypoint.headingTransition.distanceM) && waypoint.headingTransition.distanceM < 0.05) {
+                  issues.push(issue(`${wpBase}.headingTransition.distanceM`, "Heading transition distance must be at least 0.05 meters"));
+                }
+              }
+              if (wi === 0 || wi === waypointCount - 1) issues.push(issue(`${wpBase}.headingTransition`, "Heading transition belongs to an interior segment boundary"));
+              if (waypoint.headingTransition.rotationPriority === "translation" && isRecord(project.robot) && project.robot.drive === "tank") {
+                issues.push(issue(`${wpBase}.headingTransition.rotationPriority`, "Translation timing priority requires a swerve drivetrain"));
+              }
+            }
+          }
+          if (waypoint.turnInPlace !== undefined) {
+            if (!isRecord(waypoint.turnInPlace)) issues.push(issue(`${wpBase}.turnInPlace`, "Turn in place must be an object"));
+            else {
+              validateFinite(issues, waypoint.turnInPlace.headingDeg, `${wpBase}.turnInPlace.headingDeg`, "Turn heading");
+              if (waypoint.turnInPlace.direction !== undefined && !["shortest", "clockwise", "counterclockwise"].includes(String(waypoint.turnInPlace.direction))) issues.push(issue(`${wpBase}.turnInPlace.direction`, "Turn direction is invalid"));
+              if (waypoint.stop !== true) issues.push(issue(`${wpBase}.turnInPlace`, "Turn in place requires a stopped waypoint"));
+            }
+          }
