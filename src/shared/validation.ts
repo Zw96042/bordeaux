@@ -408,3 +408,93 @@ function validateProjectInner(project: unknown): ValidationResult {
               issues.push(issue(`${markerBase}.actionIntent.description`, "Action intent description is required"));
             }
           }
+        }
+      });
+      if (Array.isArray(path.ranges)) path.ranges.forEach((range, i) => {
+        const rangeBase = `${base}.ranges[${i}]`;
+        if (!isRecord(range)) return issues.push(issue(rangeBase, "Constraint range must be an object"));
+        if (!["param", "dist", "wp"].includes(String(range.anchor))) issues.push(issue(`${rangeBase}.anchor`, "Constraint range anchor is invalid"));
+        validateOptionalFinite(issues, range.t0, `${rangeBase}.t0`, "Constraint range start segment position", { nonnegative: true });
+        validateOptionalFinite(issues, range.t1, `${rangeBase}.t1`, "Constraint range end segment position", { nonnegative: true });
+        if (finite(range.t0) && range.t0 > 1) issues.push(issue(`${rangeBase}.t0`, "Constraint range start segment position cannot exceed one"));
+        if (finite(range.t1) && range.t1 > 1) issues.push(issue(`${rangeBase}.t1`, "Constraint range end segment position cannot exceed one"));
+        if (range.t0 !== undefined || range.t1 !== undefined) {
+          const segmentCount = Array.isArray(path.waypoints) ? Math.max(0, path.waypoints.length - 1) : 0;
+          (["w0", "w1"] as const).forEach((key) => {
+            const segmentIndex = range[key];
+            if (!Number.isInteger(segmentIndex)) issues.push(issue(`${rangeBase}.${key}`, "Local constraint range segment must be an integer"));
+            else if ((segmentIndex as number) < 0 || (segmentIndex as number) >= segmentCount) issues.push(issue(`${rangeBase}.${key}`, "Local constraint range segment is outside the path"));
+          });
+        }
+        ["f0", "f1", "maxVel", "maxAccel", "maxAngVel", "maxAngAccel"].forEach((key) => validateFinite(issues, range[key], `${rangeBase}.${key}`, `Range ${key}`, key.startsWith("max") ? { positive: true } : {}));
+        ["d0", "d1", "w0", "w1", "maxDecel"].forEach((key) => validateOptionalFinite(issues, range[key], `${rangeBase}.${key}`, `Range ${key}`, key === "maxDecel" ? { positive: true } : { nonnegative: true }));
+        if (range.rotationPriority !== undefined && range.rotationPriority !== "heading" && range.rotationPriority !== "translation") {
+          issues.push(issue(`${rangeBase}.rotationPriority`, "Timing priority must be heading or translation"));
+        }
+        if (range.rotationPriority === "translation" && isRecord(project.robot) && project.robot.drive === "tank") {
+          issues.push(issue(`${rangeBase}.rotationPriority`, "Translation timing priority requires a swerve drivetrain"));
+        }
+      });
+
+      if (!isRecord(path.constraints)) {
+        issues.push(issue(`${base}.constraints`, "Path constraints are required"));
+      } else {
+        const constraints = path.constraints;
+        ["maxVel", "maxAccel", "maxDecel", "maxAngVel", "maxAngAccel"].forEach((key) => validateFinite(issues, constraints[key], `${base}.constraints.${key}`, key, { positive: true }));
+        ["maxAngDecel", "maxJerk", "maxAngJerk"].forEach((key) => validateOptionalFinite(issues, constraints[key], `${base}.constraints.${key}`, key, { nonnegative: true }));
+      }
+      if (path.labview !== undefined) {
+        if (!isRecord(path.labview)) {
+          issues.push(issue(`${base}.labview`, "LabVIEW compatibility settings must be an object"));
+        } else {
+          const labview = path.labview;
+          validateOptionalFinite(issues, labview.samplePeriodS, `${base}.labview.samplePeriodS`, "LabVIEW sample period", { positive: true });
+          validateOptionalFinite(issues, labview.minTurnRadiusM, `${base}.labview.minTurnRadiusM`, "LabVIEW minimum turn radius", { positive: true });
+          if (finite(labview.samplePeriodS) && (labview.samplePeriodS < 0.001 || labview.samplePeriodS > 0.1)) {
+            issues.push(issue(`${base}.labview.samplePeriodS`, "LabVIEW sample period must be between 0.001 and 0.1 seconds"));
+          }
+          if (labview.bezierTangentMode !== undefined && labview.bezierTangentMode !== "handles" && labview.bezierTangentMode !== "automatic") {
+            issues.push(issue(`${base}.labview.bezierTangentMode`, "LabVIEW Bezier tangent mode must be handles or automatic"));
+          }
+          validateOptionalFinite(issues, labview.currentLimit, `${base}.labview.currentLimit`, "LabVIEW current limit", { nonnegative: true });
+          validateOptionalFinite(issues, labview.stoopidFastMps, `${base}.labview.stoopidFastMps`, "LabVIEW StoopidFast velocity", { positive: true });
+          ["reversePath", "zeroVelocity", "pickupBalls", "zeroTranslationalVelocity", "correctAtBeginningOfPath"].forEach((key) => {
+            if (labview[key] !== undefined && typeof labview[key] !== "boolean") {
+              issues.push(issue(`${base}.labview.${key}`, `LabVIEW ${key} must be true or false`));
+            }
+          });
+        }
+      }
+    });
+  }
+
+  if (project.routine !== undefined) {
+    if (!isRecord(project.routine)) issues.push(issue("$.routine", "Routine must be an object"));
+    else {
+      if (typeof project.routine.name !== "string" || !project.routine.name.trim()) issues.push(issue("$.routine.name", "Routine name is required"));
+      validateRoutineNodes(issues, project.routine.nodes, "$.routine.nodes", pathIds, new Set());
+    }
+  }
+
+  if (project.strategy !== undefined) {
+    if (!isRecord(project.strategy)) issues.push(issue("$.strategy", "Project strategy must be an object"));
+    else {
+      const locationIds = new Set<string>();
+      const locationTerms = new Set<string>();
+      if (project.strategy.locations !== undefined && !Array.isArray(project.strategy.locations)) issues.push(issue("$.strategy.locations", "Strategy locations must be an array"));
+      else if (Array.isArray(project.strategy.locations)) project.strategy.locations.forEach((location, index) => {
+        const base = `$.strategy.locations[${index}]`;
+        if (!isRecord(location)) { issues.push(issue(base, "Strategy location must be an object")); return; }
+        if (typeof location.id !== "string" || !location.id.trim()) issues.push(issue(`${base}.id`, "Strategy location ID is required"));
+        else if (locationIds.has(location.id)) issues.push(issue(`${base}.id`, "Strategy location IDs must be unique"));
+        else locationIds.add(location.id);
+        if (typeof location.name !== "string" || !location.name.trim()) issues.push(issue(`${base}.name`, "Strategy location name is required"));
+        const aliases = location.aliases === undefined ? [] : location.aliases;
+        if (!Array.isArray(aliases) || aliases.some((alias) => typeof alias !== "string" || !alias.trim())) issues.push(issue(`${base}.aliases`, "Strategy aliases must be non-empty strings"));
+        [location.name, ...(Array.isArray(aliases) ? aliases : [])].filter((term): term is string => typeof term === "string").forEach((term) => {
+          const normalized = term.toLocaleLowerCase("en-US").replace(/[^a-z0-9]+/g, " ").trim();
+          if (locationTerms.has(normalized)) issues.push(issue(base, `Strategy location term “${term}” is ambiguous`));
+          else locationTerms.add(normalized);
+        });
+        validateOptionalFinite(issues, location.headingDeg, `${base}.headingDeg`, "Strategy heading");
+        if (location.kind === "pose") {
