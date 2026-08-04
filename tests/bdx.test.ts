@@ -391,3 +391,93 @@ describe("LabVIEW .bdx compatibility", () => {
     expect(reader.f64()).toBeCloseTo(project.paths[0].goalVel * 3.280839895, 6);
     expect(durationS).toBeGreaterThanOrEqual(planned.totalTimeS);
     expect(durationS - planned.totalTimeS).toBeLessThan(result.samplePeriodS);
+  });
+
+  it("writes authored endpoint conditions clamped to semantic limits", () => {
+    const project = createDemoProject();
+    project.paths[0].startVel = project.paths[0].constraints.maxVel * 2;
+    project.paths[0].goalVel = 1;
+    project.paths[0].waypoints[project.paths[0].waypoints.length - 1].stop = true;
+    const velocities = readEndpointVelocities(buildLabviewBdx(project, project.paths[0].id).buffer);
+    expect(velocities.initial).toBeCloseTo(project.paths[0].constraints.maxVel * 3.280839895, 9);
+    expect(velocities.final).toBe(0);
+  });
+
+  it("labels only homogeneous LabVIEW path types", () => {
+    const clothoid = createDemoProject();
+    clothoid.paths[0].waypoints.slice(0, -1).forEach((waypoint) => { waypoint.segType = "clothoid"; });
+    const result = buildLabviewBdx(clothoid, clothoid.paths[0].id);
+    const reader = new BinaryReader(result.buffer);
+    reader.string(); reader.boolean(); reader.boolean(); reader.u32();
+    expect(reader.string()).toBe("Linear 0");
+    expect(reader.u16()).toBe(0);
+
+    const mixed = createDemoProject();
+    mixed.paths[0].waypoints[0].segType = "line";
+    expect(() => buildLabviewBdx(mixed, mixed.paths[0].id)).toThrow(/entirely Bezier or entirely clothoid/);
+  });
+
+  it("atomically preserves binary bytes", async () => {
+    const directory = await fsp.mkdtemp(path.join(os.tmpdir(), "bordeaux-bdx-test-"));
+    const file = path.join(directory, "path.bdx");
+    const expected = buildLabviewBdx(createDemoProject()).buffer;
+    await writeBufferAtomically(file, expected);
+    expect(await fsp.readFile(file)).toEqual(expected);
+    await fsp.rm(directory, { recursive: true, force: true });
+  });
+});
+
+describe("canonical shipped renderer", () => {
+  it("loads the maintained legacy editor with persistence, security, and accessibility hooks", () => {
+    const html = fs.readFileSync(path.join(process.cwd(), "public/legacy/index.html"), "utf8");
+    const app = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js"), "utf8");
+    const ui = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/760c13dd-1656-409e-a1f2-58b2285a7f6e.js"), "utf8");
+    expect(html).toContain("Content-Security-Policy");
+    expect(html).toContain(":focus-visible");
+    expect(html).toContain(".numbox .numinput:focus-visible");
+    expect(html).toContain("@container (max-width: 820px)");
+    expect(html).toContain(".tb-file { flex: 0 0 auto");
+    expect(html).toContain(".ctxinsp-t, .featnm");
+    expect(app).toContain("openRecentProject");
+    expect(app).toContain("saveProject");
+    expect(app).not.toContain("bordeaux-notice");
+    expect(ui).toContain("'aria-expanded': open");
+    expect(ui).toContain("htmlFor: id");
+    const panels = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js"), "utf8");
+    const inspector = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js"), "utf8");
+    expect(panels).toContain("'aria-label': 'Export .bdx'");
+    expect(panels).toContain("{ v: 'labviewBezier'");
+    expect(panels).toContain("{ v: 'labviewClothoid'");
+    expect(panels).toContain("exported samples remain authoritative");
+    expect(inspector).toContain("Advanced .bdx flags");
+    expect(inspector).not.toContain("StoopidFast");
+    expect(inspector).toContain("Sample period");
+    expect(inspector).toContain("Min radius");
+  });
+
+  it("lets the active constraint-range tool claim segment hit lines", () => {
+    const field = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js"), "utf8");
+    expect(field).toContain("if (tool === 'range' && pts.length > 1) { startRangeDrag(world, visit); return; }");
+    expect(field).toContain("tool === 'waypoint' || tool === 'rotation' || tool === 'marker'");
+    expect(field).toContain("tool === 'range' ? 'crosshair'");
+  });
+
+  it("renders waypoint and segment outline selection as compact flat list states", () => {
+    const html = fs.readFileSync(path.join(process.cwd(), "public/legacy/index.html"), "utf8");
+    const outline = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js"), "utf8");
+    expect(html).toContain(".wpfeatrow.sel,.segfeatrow.sel{background:transparent");
+    expect(outline).toContain("featrow wpfeatrow");
+    expect(outline).toContain("featrow segfeatrow");
+    expect(outline).toContain("className: 'featindent'");
+    expect(outline).toContain("typeName(w.segType)");
+    expect(outline).toContain("wps.length > 2 && h('button', { className: 'featdel'");
+  });
+
+  it("keeps playback, direct target rotation, and shift-delete wired into the editor", () => {
+    const app = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js"), "utf8");
+    const field = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js"), "utf8");
+    expect(app).toContain("const togglePlayback = useCallback");
+    expect(app).toContain("playRef.current >= totalNow - 1e-3");
+    expect(field).toContain("'data-role': 'rth'");
+    expect(field).toContain("actions.rotateTargetTo(d.idx, world, e.shiftKey)");
+    expect(field).toContain("(role === 'rt' || role === 'rth') && actions.delTarget");
