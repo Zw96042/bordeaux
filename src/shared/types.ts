@@ -1,48 +1,48 @@
 export type DriveType = "swerve" | "tank";
 
 export type SegmentType = "bezier" | "line" | "arc" | "clothoid";
-
-export interface RobotConfig {
-  drive: DriveType;
-  w: number;
-  l: number;
-  maxSpeed: number;
-}
+export type HeadingMode = "manual" | "tangent" | "targets";
+export type SegmentHeadingMode = HeadingMode | "lookAt";
 
 export interface ControlPoint {
   x: number;
   y: number;
 }
 
-export interface Waypoint {
-  x: number;
-  y: number;
-  theta: number;
-  thetaOn: boolean;
-  linked: boolean;
-  stop: boolean;
-  wait?: number;
-  corner?: boolean;
-  segType?: SegmentType;
-  prevC: ControlPoint;
-  nextC: ControlPoint;
+export interface RobotConfig {
+  drive: DriveType;
+  w: number;
+  l: number;
+  /** Overall robot height. Omitted on migrated projects where it is unknown. */
+  heightM?: number;
+  /**
+   * Convex bumper footprint in robot-local meters (+X forward, +Y left).
+   * Omission preserves the centered rectangle defined by l and w.
+   */
+  footprint?: {
+    kind: "polygon";
+    verticesM: ControlPoint[];
+  };
+  /** Optional strategy-facing mechanism details used only by agent-assisted planning. */
+  planning?: RobotPlanningProfile;
+  maxSpeed: number;
 }
 
-export interface RotationTarget {
-  f: number;
-  deg: number;
-}
-
-export interface Marker {
-  f: number;
+export interface RobotIntakeProfile {
+  /** Human-readable mechanism name, such as "Front intake". */
   name: string;
-  cmd?: string;
-  group?: "sequential" | "parallel";
+  /** Intake center in the robot-local frame (+X forward, +Y left). */
+  centerM: ControlPoint;
+  /** Outward collection direction relative to robot +X; front is 0 degrees. */
+  directionDeg: number;
+  /** Effective FUEL capture width at the intake opening. */
+  captureWidthM: number;
+  /** Fastest chassis speed the team trusts while collecting. */
+  maxCollectSpeedMps: number;
 }
 
-export interface ConstraintRange {
-  anchor: "param" | "dist" | "wp";
-  f0: number;
+export interface RobotShooterProfile {
+  /** Direction the shooter fires relative to robot +X; front is 0 degrees. */
   f1: number;
   d0?: number;
   d1?: number;
