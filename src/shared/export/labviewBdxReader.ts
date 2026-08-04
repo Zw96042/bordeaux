@@ -178,3 +178,93 @@ class LabviewBinaryReader {
   }
 
   f64(label: string): number {
+    this.require(8, label);
+    const offset = this.position;
+    const value = this.view.getFloat64(this.position, false);
+    this.position += 8;
+    if (!Number.isFinite(value)) {
+      throw new LabviewBdxParseError(`${label} must be finite`, offset);
+    }
+    return value;
+  }
+
+  string(label: string): string {
+    const lengthOffset = this.position;
+    const length = this.u32(`${label} length`);
+    if (length > MAX_STRING_BYTES) {
+      throw new LabviewBdxParseError(
+        `${label} length ${length} exceeds the supported ${MAX_STRING_BYTES}-byte limit`,
+        lengthOffset,
+      );
+    }
+    this.require(length, label);
+    const value = this.bytes.subarray(this.position, this.position + length);
+    this.position += length;
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(value);
+    } catch {
+      throw new LabviewBdxParseError(`${label} is not valid UTF-8`, lengthOffset + 4);
+    }
+  }
+
+  count(label: string, minimumElementSize: number, maximumCount: number): number {
+    const countOffset = this.position;
+    const count = this.u32(`${label} count`);
+    if (count > maximumCount) {
+      throw new LabviewBdxParseError(
+        `${label} count ${count} exceeds the supported limit of ${maximumCount}`,
+        countOffset,
+      );
+    }
+    const maximumPossible = Math.floor(this.remaining / minimumElementSize);
+    if (count > maximumPossible) {
+      throw new LabviewBdxParseError(
+        `${label} count ${count} exceeds the remaining data capacity (${maximumPossible})`,
+        countOffset,
+      );
+    }
+    return count;
+  }
+
+  requireEnd(): void {
+    if (this.remaining !== 0) {
+      throw new LabviewBdxParseError(`Unexpected ${this.remaining} trailing byte${this.remaining === 1 ? "" : "s"}`, this.position);
+    }
+  }
+}
+
+function readSegmentType(reader: LabviewBinaryReader): { code: 0 | 1 | 2 | 3 | 4; type: LabviewSegmentType } {
+  const offset = reader.offset;
+  const code = reader.u16("trajectory segment type");
+  if (code < 0 || code > 4) {
+    throw new LabviewBdxParseError(`Unknown trajectory segment type ${code}`, offset);
+  }
+  const typedCode = code as 0 | 1 | 2 | 3 | 4;
+  return { code: typedCode, type: SEGMENT_TYPES[typedCode] };
+}
+
+function readTrajectorySegment(reader: LabviewBinaryReader): LabviewTrajectorySegment {
+  const name = reader.string("trajectory segment name");
+  const segmentType = readSegmentType(reader);
+  const positionCount = reader.count("trajectory position array", 24, LABVIEW_BDX_MAX_TRAJECTORY_POINTS);
+  const positions = Array.from({ length: positionCount }, () => ({
+    xFt: reader.f64("trajectory position x"),
+    yFt: reader.f64("trajectory position y"),
+    headingDeg: reader.f64("trajectory position heading"),
+  }));
+  const velocityCount = reader.count("trajectory velocity array", 32, LABVIEW_BDX_MAX_TRAJECTORY_POINTS);
+  const velocities = Array.from({ length: velocityCount }, () => ({
+    velocityFps: reader.f64("trajectory velocity"),
+    omegaDegPerS: reader.f64("trajectory omega"),
+    // Trajectory Data.ctl defines the velocity-vector cluster as y, then x.
+    vectorYFps: reader.f64("trajectory velocity vector y"),
+    vectorXFps: reader.f64("trajectory velocity vector x"),
+  }));
+  const accelIndex = reader.i32("trajectory acceleration index");
+  const decelIndex = reader.i32("trajectory deceleration index");
+  return { name, typeCode: segmentType.code, type: segmentType.type, positions, velocities, accelIndex, decelIndex };
+}
+
+function readConditions(reader: LabviewBinaryReader): LabviewBdxConditions {
+  const samplePeriodS = reader.f64("sample period");
+  const limits = {
