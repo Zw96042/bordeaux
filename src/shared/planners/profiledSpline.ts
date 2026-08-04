@@ -33,16 +33,16 @@ function timeAtFraction(fraction: number, pts: Array<{ s: number }>, times: numb
 
 function diagnosticsFor(pathName: string, derived: any): ValidationIssue[] {
   return (derived.warnings || []).map((warning: any, index: number) => ({
-    severity: warning.sev === "high" ? "error" : "warning",
+    severity: warning.sev === "high" && warning.kind !== "vel" ? "error" : "warning",
     path: `paths.${pathName}.diagnostics[${index}]`,
     message: warning.text || "Trajectory diagnostic",
   }));
 }
 
 function markersFor(input: PlannerInput, pts: Array<{ s: number }>, times: number[]): BdxMarker[] {
-  return (input.path.markers || []).map((marker) => ({
-    name: marker.name,
-    command: marker.cmd ?? null,
+  const length = pts[pts.length - 1]?.s ?? 0;
+  return (input.path.markers || []).map((marker, index) => {
+    const fraction = marker.anchor === "dist" && length > 1e-9
     group: marker.group ?? null,
     timeS: R(timeAtFraction(marker.f, pts, times), 4),
     fraction: R(marker.f, 5),
