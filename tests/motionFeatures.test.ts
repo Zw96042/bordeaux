@@ -88,3 +88,93 @@ describe("motion features", () => {
         x: 3, y: 5, theta: -45, thetaOn: true, segmentHeadingMode: "tangent",
         headingTransition: { placement: "before", rotationPriority: "heading", distanceM: 0.75 },
       },
+      { x: 0, y: 5, theta: 0 },
+    ]);
+    const raw = points.map((point) => {
+      if (point.s <= 3 || point.s >= 6) return Math.PI;
+      return (-45 * ((point.s - 3) / 3)) * Math.PI / 180;
+    });
+    const goals = headingTransitionGoals(
+      ["tangent", "targets", "tangent"],
+      [false, false, false],
+      [0, 12, 24, 36],
+      points,
+      {
+        manual: [{ f: 0, heading: 0 }, { f: 1, heading: 0 }],
+        targets: [{ f: 0, heading: 0 }, { f: 2 / 3, heading: -Math.PI / 4 }, { f: 1, heading: 0 }],
+      },
+    );
+
+    expect(goals[0].distanceM).toBeCloseTo(6, 8);
+    const headings = smoothHeadingTransitions(raw, ["tangent", "targets", "tangent"], [false, false, false], [0, 12, 24, 36], points, waypoints, goals);
+    expect(headings[24]).toBeCloseTo(7 * Math.PI / 4, 8);
+
+    const boundaryGoals = headingTransitionGoals(
+      ["tangent", "targets"],
+      [false, false],
+      [0, 12, 24],
+      points.slice(0, 25),
+      {
+        manual: [{ f: 0, heading: 0 }, { f: 1, heading: 0 }],
+        targets: [{ f: 0.5, heading: -Math.PI / 4 }, { f: 1, heading: 0 }],
+      },
+    );
+    expect(boundaryGoals[0].distanceM).toBeCloseTo(3, 8);
+    const boundaryPoints = points.slice(0, 25);
+    const boundaryRaw = boundaryPoints.map((point) => (
+      point.s <= 3 ? Math.PI : (-45 + 45 * ((point.s - 3) / 3)) * Math.PI / 180
+    ));
+    const boundaryWaypoints = buildWaypoints([
+      { x: 6, y: 5, theta: 0, segmentHeadingMode: "tangent" },
+      {
+        x: 3, y: 5, theta: -45, thetaOn: true, segmentHeadingMode: "targets",
+        headingTransition: { placement: "after", rotationPriority: "heading", distanceM: 0.75 },
+      },
+      { x: 0, y: 5, theta: 0 },
+    ]);
+    for (const placement of ["before", "split", "after"] as const) {
+      boundaryWaypoints[1].headingTransition!.placement = placement;
+      const boundaryHeadings = smoothHeadingTransitions(
+        boundaryRaw,
+        ["tangent", "targets"],
+        [false, false],
+        [0, 12, 24],
+        boundaryPoints,
+        boundaryWaypoints,
+        boundaryGoals,
+      );
+      expect(boundaryHeadings.slice(12, 16).some((heading) => Math.abs(heading - 7 * Math.PI / 4) < 1e-8)).toBe(true);
+    }
+  });
+
+  it.each(PLANNERS)("does not reverse before a target after a tangent-to-Targets switch with %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.constraints.maxAngVel = 720;
+    path.constraints.maxAngAccel = 1440;
+    path.constraints.maxAngDecel = 1440;
+    path.waypoints = buildWaypoints([
+      { x: 9, y: 5, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "tangent" },
+      {
+        x: 6, y: 5, theta: 0, thetaOn: false, segType: "line", segmentHeadingMode: "targets",
+        headingTransition: { placement: "after", rotationPriority: "heading", distanceM: 0.05 },
+      },
+      { x: 3, y: 5, theta: 0, thetaOn: true, segType: "line" },
+    ]);
+    path.targets = [{ f: 0.75, deg: -45 }];
+
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+    const throughTarget = result.samples.filter((sample) => sample.f >= 0.49 && sample.f <= 0.75 + 1e-6);
+    const unwrapped = [throughTarget[0].headingRad];
+    for (let index = 1; index < throughTarget.length; index += 1) {
+      let heading = throughTarget[index].headingRad;
+      while (heading - unwrapped[index - 1] > Math.PI) heading -= 2 * Math.PI;
+      while (heading - unwrapped[index - 1] < -Math.PI) heading += 2 * Math.PI;
+      unwrapped.push(heading);
+    }
+    for (let index = 1; index < unwrapped.length; index += 1) {
+      expect(unwrapped[index]).toBeGreaterThanOrEqual(unwrapped[index - 1] - 0.02 * Math.PI / 180);
+    }
+    expect(Math.max(...unwrapped)).toBeLessThanOrEqual(7 * Math.PI / 4 + 0.25 * Math.PI / 180);
+  });
+
