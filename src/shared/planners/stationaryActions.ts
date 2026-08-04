@@ -178,3 +178,93 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
   if (incompatible) {
     return {
       ...result,
+      diagnostics: [...result.diagnostics, {
+        severity: "error",
+        path: `paths.${path.name}.waypoints[${incompatible.index}].turnInPlace`,
+        message: "Interior turn heading must match the outgoing segment heading",
+      }],
+    };
+  }
+  const period = samplePeriod(path, result.samples);
+  const samples = result.samples.map((sample) => ({ ...sample }));
+  const markers = result.markers.map((marker) => ({ ...marker }));
+  const diagnostics = [...result.diagnostics];
+  let inserted = 0;
+  let addedDistance = 0;
+
+  actions.forEach(({ waypoint, index: waypointIndex }) => {
+    const turn = waypoint.turnInPlace;
+    const boundary = baseIndices[waypointIndex] + inserted;
+    const arrival = samples[boundary];
+    const previous = samples[Math.max(0, boundary - 1)];
+    const startHeading = waypointIndex === 0 ? arrival.headingRad : previous.headingRad;
+    const targetHeading = turn ? turn.headingDeg * DEG + (path.driveBackward ? Math.PI : 0) : arrival.headingRad;
+    const delta = turn ? directedDelta(startHeading, targetHeading, turn.direction) : 0;
+    const limits = activeAngularLimits(path, arrival.f, waypointIndex, result.totalDistanceM);
+    const rawDuration = rotationDuration(delta, limits);
+    const turnTicks = rawDuration > EPSILON ? Math.max(1, Math.ceil(rawDuration / period - EPSILON)) : 0;
+    const turnDuration = turnTicks * period;
+    const jiggle = waypoint.jiggle;
+    const jiggleHeading = turn ? targetHeading : arrival.headingRad;
+    const jiggleSupported = !jiggle || robot?.drive !== "tank";
+    const jigglePositions = jiggle && jiggleSupported ? PM.jigglePositions(waypoint, jiggleHeading, jiggle) : null;
+    if (jiggle && !jiggleSupported) {
+      diagnostics.push({
+        severity: "error",
+        path: `paths.${path.name}.waypoints[${waypointIndex}].jiggle`,
+        message: "Arbitrary-direction jiggle requires a swerve drivetrain",
+      });
+    }
+    if (jiggle && jiggleSupported && !jigglePositions) {
+      diagnostics.push({
+        severity: "error",
+        path: `paths.${path.name}.waypoints[${waypointIndex}].jiggle`,
+        message: "Jiggle directions must be unique and every stroke must stay on the field",
+      });
+    }
+    const linearLimits = activeLinearLimits(path, arrival.f, waypointIndex, result.totalDistanceM);
+    const requestedJiggleDuration = jiggle && jigglePositions
+      ? feasibleJiggleStrokeDuration(jiggle.strokeTimeS, jiggle.distanceM, linearLimits, Math.max(robot?.maxSpeed ?? linearLimits.velocity, EPSILON))
+      : 0;
+    const jiggleTicks = jiggle && jigglePositions
+      ? Math.max(1, Math.ceil(requestedJiggleDuration / period - EPSILON))
+      : 0;
+    const jiggleStrokeDuration = jiggleTicks * period;
+    const jiggleDuration = jiggle && jigglePositions ? jiggleStrokeDuration * jiggle.strokes : 0;
+    const waitTicks = Math.max(0, Math.ceil(Math.max(0, waypoint.wait ?? 0) / period - EPSILON));
+    const waitDuration = waitTicks * period;
+    const duration = turnDuration + jiggleDuration + waitDuration;
+    if (duration <= EPSILON) return;
+    const arrivalTime = arrival.t;
+
+    if (turn) arrival.headingRad = startHeading;
+    arrival.velocityMps = 0;
+    arrival.accelerationMps2 = 0;
+    if (turn) {
+      const firstMoving = firstMovingSampleIndex(samples, boundary);
+      for (let sampleIndex = boundary + 1; sampleIndex < (firstMoving ?? samples.length); sampleIndex += 1) {
+        samples[sampleIndex].headingRad = targetHeading;
+      }
+    }
+    for (let sampleIndex = boundary + 1; sampleIndex < samples.length; sampleIndex += 1) samples[sampleIndex].t += duration;
+    markers.forEach((marker) => {
+      const afterArrival = marker.timeS > arrivalTime + EPSILON;
+      const terminalAtArrival = waypointIndex === path.waypoints.length - 1
+        && marker.fraction >= 1 - EPSILON
+        && Math.abs(marker.timeS - arrivalTime) <= EPSILON;
+      if (afterArrival || terminalAtArrival) marker.timeS += duration;
+    });
+
+    const turnSamples: TrajectorySample[] = [];
+    for (let tick = 1; tick <= turnTicks; tick += 1) {
+      const u = tick / turnTicks;
+      const progress = 10 * u ** 3 - 15 * u ** 4 + 6 * u ** 5;
+      turnSamples.push({
+        ...arrival,
+        i: 0,
+        t: arrivalTime + tick * period,
+        headingRad: startHeading + delta * progress,
+        velocityMps: 0,
+        accelerationMps2: 0,
+        angularVelocityRadps: 0,
+      });
