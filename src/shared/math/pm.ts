@@ -194,7 +194,12 @@
     const decelG = (c.maxDecel != null && c.maxDecel > 0) ? c.maxDecel : accelG;
     const aFwd = new Array(n).fill(accelG), aBack = new Array(n).fill(decelG);
     const rangeAngV = new Array(n).fill(Infinity);
-    if (ranges.length) {
+    // Index i describes the interval (i - 1, i). Evaluating overlap instead of
+    // requiring both endpoints to be inside a policy preserves very short
+    // transition windows that fall between geometry samples.
+    const translationPriority = new Array(n).fill(false);
+    const headingTransitions = opts.headingTransitions || [];
+    if (ranges.length || headingTransitions.length) {
       for (let i = 0; i < n; i++) {
         const f = pts[i].s / totalS;
         let rv = Infinity, ra = Infinity, rd = Infinity, rw = Infinity;
@@ -212,17 +217,12 @@
         if (rd < Infinity) aBack[i] = Math.min(decelG, rd);
         if (rw < Infinity) rangeAngV[i] = rw * Math.PI / 180;
       }
-    }
-    // ---- rotational limit: cap v so the commanded heading can actually be tracked ----
-    // omega = (dtheta/ds) * v ; enforce |omega| <= Wmax and |d omega/dt| <= Aang (memo §16)
-    const rotLimited = new Array(n).fill(0);
-    const head = opts.heading;
-    const Wmax = (c.maxAngVel || 0) * Math.PI / 180;
-    const Aang = (c.maxAngAccel || 0) * Math.PI / 180;
-    if (head && head.length === n && Wmax > 1e-4) {
-      const g = new Array(n).fill(0), dth = new Array(n).fill(0);
-      for (let i = 1; i < n; i++) { const ds = pts[i].s - pts[i - 1].s; const dd = angWrap(head[i] - head[i - 1]); dth[i] = Math.abs(dd); g[i] = ds > 1e-6 ? dd / ds : 0; }
-      g[0] = g[1] || 0;
+      for (let i = 1; i < n; i++) {
+        const start = pts[i - 1].s / totalS, end = pts[i].s / totalS;
+        const overlaps = (lo, hi) => Math.min(end, hi) - Math.max(start, lo) >= -1e-9;
+        const activeRanges = ranges.filter((R) => overlaps(Math.min(R.f0, R.f1), Math.max(R.f0, R.f1)));
+        const activeTransitions = headingTransitions.filter((policy) => overlaps(policy.start, policy.end));
+        const activePolicies = activeRanges.length + activeTransitions.length;
       const w = new Array(n);
       for (let i = 0; i < n; i++) w[i] = Math.min(Wmax, rangeAngV[i]);
       stopSet.forEach(idx => { if (idx >= 0 && idx < n) w[idx] = 0; });
