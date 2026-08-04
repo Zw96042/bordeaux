@@ -17,3 +17,24 @@ export function getPlanner(id: TrajectoryPlannerId): TrajectoryPlanner {
   const planner = planners[id];
   return {
     id: planner.id,
+    generate(input) {
+      const hasStationaryPause = input.path.waypoints.some((waypoint) => waypoint.turnInPlace || (waypoint.wait ?? 0) > 0);
+      const planningInput = hasStationaryPause
+        ? {
+            ...input,
+            path: {
+              ...input.path,
+              waypoints: input.path.waypoints.map((waypoint) => (waypoint.wait ?? 0) > 0 ? { ...waypoint, wait: 0 } : waypoint),
+            },
+          }
+        : input;
+      const generated = planner.generate(planningInput);
+      return applyStationaryActions(input.path, applyRotationPriority(input.path, generated, input.robot), input.robot);
+    },
+  };
+}
+
+export async function generateTrajectory(input: PlannerInput): Promise<PlannerResult> {
+  const planner = getPlanner(input.plannerId ?? "profiledSpline");
+  return planner.generate(input);
+}
