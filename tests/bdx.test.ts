@@ -481,3 +481,93 @@ describe("canonical shipped renderer", () => {
     expect(field).toContain("'data-role': 'rth'");
     expect(field).toContain("actions.rotateTargetTo(d.idx, world, e.shiftKey)");
     expect(field).toContain("(role === 'rt' || role === 'rth') && actions.delTarget");
+    expect(field).toContain("role === 'em' && actions.delMarker");
+    expect(field).toContain("(role === 'cr' || role === 'rs' || role === 're') && actions.delRange");
+    expect(field).toContain("if (actions.openInspector) actions.openInspector()");
+    expect(field).toContain("!e.altKey && !candidateInspectDouble");
+  });
+
+  it("supports distance-locked targets, markers, and range controls", () => {
+    const inspector = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js"), "utf8");
+    expect(PM.featureFraction({ f: 0.8, anchor: "dist", d: 2 }, { length: 10 })).toBeCloseTo(0.2);
+    expect(inspector).toContain("'Position lock'");
+    expect(inspector).toContain("label: 'Path %'");
+    expect(inspector).toContain("label: 'Distance'");
+  });
+
+  it("keeps waypoint-locked range endpoints attached through structural edits", () => {
+    const range = { anchor: "wp", w0: 1, w1: 3 };
+    expect(PM.remapWaypointRange(range, [0, 2, 3, 4], undefined, 5)).toMatchObject({ w0: 2, w1: 4 });
+    expect(PM.remapWaypointRange(range, [0, 3, 1, 2], undefined, 4)).toMatchObject({ w0: 2, w1: 3 });
+    expect(PM.remapWaypointRange(range, [0, null, 1, 2], 1, 3)).toMatchObject({ w0: 1, w1: 2 });
+    expect(PM.remapWaypointRange({ anchor: "wp", w0: 3, w1: 3 }, [0, 1, 2, null], 3, 3)).toMatchObject({ w0: 2, w1: 2 });
+  });
+
+  it("keeps local range endpoints within their segments as earlier geometry changes", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([{ x: 0, y: 0 }, { x: 2, y: 0 }, { x: 6, y: 0 }, { x: 10, y: 0 }]);
+    path.ranges = [{
+      anchor: "wp", f0: 0.3, f1: 0.5, w0: 1, t0: 0.25, w1: 1, t1: 0.75,
+      maxVel: 2, maxAccel: 2, maxDecel: 2, maxAngVel: 180, maxAngAccel: 360,
+    }];
+    const point = (s: number) => ({ x: s, y: 0, s, heading: 0, curv: 0, seg: 0, t: 0 });
+    const before = PM.effectiveRanges(path, { pts: [point(0), point(2), point(6), point(10)], length: 10 })[0];
+    const after = PM.effectiveRanges(path, { pts: [point(0), point(4), point(7), point(10)], length: 10 })[0];
+
+    expect(before).toMatchObject({ f0: 0.3, f1: 0.5 });
+    expect(after).toMatchObject({ f0: 0.475, f1: 0.625 });
+    expect(PM.remapWaypointRange(path.ranges[0], [3, 2, 1, 0], undefined, 4)).toMatchObject({ w0: 1, t0: 0.25, w1: 1, t1: 0.75 });
+    expect(PM.remapWaypointRange({ ...path.ranges[0], w0: 1, t0: 0.2, w1: 3, t1: undefined }, [3, 2, 1, 0], undefined, 4)).toMatchObject({ w0: 0, t0: 0, w1: 1, t1: 0.8 });
+  });
+});
+
+describe("project file boundary", () => {
+  it("repairs non-stop tangent discontinuities while preserving stopped corners", () => {
+    const project = createDemoProject();
+    project.paths[0].waypoints = buildWaypoints([
+      { x: 1, y: 1 },
+      { x: 3, y: 2 },
+      { x: 6, y: 2 },
+    ]);
+    const moving = project.paths[0].waypoints[1];
+    moving.linked = false;
+    moving.corner = true;
+    moving.prevC = { x: 3, y: 1 };
+    moving.nextC = { x: 4, y: 2 };
+    const repaired = parseProject(JSON.stringify(project)).paths[0].waypoints[1];
+    const incoming = { x: repaired.x - repaired.prevC.x, y: repaired.y - repaired.prevC.y };
+    const outgoing = { x: repaired.nextC.x - repaired.x, y: repaired.nextC.y - repaired.y };
+    expect(repaired.linked).toBe(true);
+    expect(repaired.corner).toBe(false);
+    expect(Math.abs(incoming.x * outgoing.y - incoming.y * outgoing.x)).toBeLessThan(1e-6);
+    expect(incoming.x * outgoing.x + incoming.y * outgoing.y).toBeGreaterThan(0);
+
+    moving.stop = true;
+    const stopped = parseProject(JSON.stringify(project)).paths[0].waypoints[1];
+    expect(stopped.linked).toBe(false);
+    expect(stopped.corner).toBe(true);
+    expect(stopped.prevC).toEqual({ x: 3, y: 1 });
+    expect(stopped.nextC).toEqual({ x: 4, y: 2 });
+  });
+
+  it("normalizes legacy numeric routine references on open", () => {
+    const project = createDemoProject() as unknown as Record<string, any>;
+    delete project.paths[0].id;
+    project.routine.nodes = [{ id: "legacy", type: "path", ref: 0 }];
+    const parsed = parseProject(JSON.stringify(project));
+    expect(parsed.paths[0].id).toMatch(/^path_/);
+    expect((parsed.routine!.nodes[0] as { ref: string }).ref).toBe(parsed.paths[0].id);
+  });
+
+  it("opens unversioned project files through the legacy reader", () => {
+    const project = createDemoProject() as unknown as Record<string, any>;
+    delete project.schemaVersion;
+    delete project.paths[0].id;
+    project.routine.nodes = [{ id: "legacy", type: "path", ref: 0 }];
+    const parsed = parseProject(JSON.stringify(project));
+    expect(parsed.schemaVersion).toBe("1.0");
+    expect((parsed.routine!.nodes[0] as { ref: string }).ref).toBe(parsed.paths[0].id);
+  });
+
+  it("opens the browser fallback's version 2 .path format", () => {
