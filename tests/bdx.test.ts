@@ -88,51 +88,51 @@ function richPath(name = "RichPath"): PathDoc {
 }
 
 describe("project defaults and validation", () => {
-        f: expect.any(Number),
-        x: expect.any(Number),
-        y: expect.any(Number),
-        headingRad: expect.any(Number),
-        velocityMps: expect.any(Number),
-        accelerationMps2: expect.any(Number),
-        angularVelocityRadps: expect.any(Number),
-        curvatureInvM: expect.any(Number),
-      }),
-    );
+  it("starts with one blank path and no routine preset", () => {
+    const project = createDemoProject();
+    expect(project.name).toBe("Untitled");
+    expect(project.paths.map((p) => p.name)).toEqual(["NewPath"]);
+    expect(project.routine?.nodes).toEqual([]);
+    expect(validateProject(project).ok).toBe(true);
   });
 
-  it("forces stop waypoint velocity to zero", () => {
-    const path = richPath("StopPath");
-    const exportData = buildBdxExport(projectWithPaths([path]));
-    const stopIndex = Math.round((path.waypoints.length - 2) / Math.max(1, path.waypoints.length - 1) * (exportData.paths[0].samples.length - 1));
-    expect(exportData.paths[0].samples[stopIndex].velocityMps).toBeCloseTo(0, 4);
+  it("rejects paths with fewer than two waypoints", () => {
+    const project = createDemoProject();
+    project.paths[0].waypoints = [project.paths[0].waypoints[0]];
+    const validation = validateProject(project);
+    expect(validation.ok).toBe(false);
+    expect(validation.issues.some((issue) => issue.message.includes("at least two waypoints"))).toBe(true);
   });
 
-  it("resolves markers to exported timestamps and fractions", () => {
-    const marker = buildBdxExport(projectWithPaths([richPath()])).paths[0].markers[0];
-    expect(marker.name).toBe("score_L4");
-    expect(marker.command).toBe("scoreL4");
-    expect(marker.fraction).toBeCloseTo(0.66, 5);
-    expect(marker.timeS).toBeGreaterThan(0);
+  it.each([
+    { paths: "bad" },
+    { paths: [null] },
+    { paths: [{ waypoints: "bad" }] },
+    { paths: [{ waypoints: [null] }] },
+  ])("never throws for malformed project containers", (value) => {
+    expect(() => validateProject(value)).not.toThrow();
+    expect(validateProject(value).ok).toBe(false);
   });
 
-  it("omits non-exportable routine preview paths", () => {
-    const hidden = clone(richPath("runtime_preview"));
-    hidden.exportable = false;
-    const exportData = buildBdxExport(projectWithPaths([blankPath("Real"), hidden]));
-    expect(exportData.paths.map((path) => path.name)).toEqual(["Real"]);
+  it("rejects malformed nested planner values", () => {
+    const project = createDemoProject() as unknown as Record<string, any>;
+    project.paths[0].waypoints[0].nextC.x = "not-a-number";
+    project.paths[0].markers = [{ f: Number.NaN, name: "bad" }];
+    project.paths[0].ranges = [{ anchor: "unknown" }];
+    project.plannerId = "unknown";
+    const validation = validateProject(project);
+    expect(validation.ok).toBe(false);
+    expect(validation.issues.map((item) => item.path)).toEqual(expect.arrayContaining([
+      "$.paths[0].waypoints[0].nextC.x",
+      "$.paths[0].markers[0].f",
+      "$.paths[0].ranges[0].anchor",
+      "$.plannerId",
+    ]));
+    expect(() => buildBdxExport(project as BordeauxProject)).toThrow(/Invalid Bordeaux project|finite/);
   });
 
-  it("provides an export preview summary", () => {
-    const preview = previewBdxExport(createDemoProject());
-    expect(preview.ok).toBe(true);
-    expect(preview.pathCount).toBe(1);
-    expect(preview.sampleCount).toBeGreaterThan(2);
-    expect(preview.totalTimeS).toBeGreaterThan(0);
-  });
-
-  it("exports optimized trajectory samples with planner diagnostics", () => {
-    const project = projectWithPaths([richPath("Optimized")]);
-    project.plannerId = "optimizedTrajectory";
+  it("round-trips path folders and per-segment heading modes", () => {
+    const project = createDemoProject();
     const exportData = buildBdxExport(project);
     expect(exportData.paths[0].planner).toBe("optimizedTrajectory");
     expect(exportData.paths[0].samples.length).toBeGreaterThan(2);
