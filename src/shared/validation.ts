@@ -43,8 +43,8 @@ function validateRobotFootprint(issues: ValidationIssue[], robot: RecordValue): 
   const path = "$.robot.footprint";
   if (!isRecord(robot.footprint)) {
     issues.push(issue(path, "Robot footprint must be an object"));
-    }
-  });
-
-  return { ok: issues.every((x) => x.severity !== "error"), issues };
-}
+    return;
+  }
+  if (robot.footprint.kind !== "polygon") issues.push(issue(`${path}.kind`, "Robot footprint kind must be polygon"));
+  const vertices = robot.footprint.verticesM;
+  if (!Array.isArray(vertices) || vertices.length < 3 || vertices.length > 16) {
