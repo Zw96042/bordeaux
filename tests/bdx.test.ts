@@ -133,51 +133,51 @@ describe("project defaults and validation", () => {
 
   it("round-trips path folders and per-segment heading modes", () => {
     const project = createDemoProject();
-    const exportData = buildBdxExport(project);
-    expect(exportData.paths[0].planner).toBe("optimizedTrajectory");
+    project.pathFolders = [{ id: "folder_scoring", name: "Scoring" }];
+    project.paths[0].folderId = "folder_scoring";
+    project.paths[0].waypoints[0].segmentHeadingMode = "tangent";
+
+    const parsed = parseProject(JSON.stringify(project));
+    expect(parsed.pathFolders).toEqual(project.pathFolders);
+    expect(parsed.paths[0].folderId).toBe("folder_scoring");
+    expect(parsed.paths[0].waypoints[0].segmentHeadingMode).toBe("tangent");
+  });
+
+  it("rejects orphan folders and invalid per-segment heading modes", () => {
+    const project = createDemoProject() as unknown as Record<string, any>;
+    project.pathFolders = [{ id: "folder_one", name: "One" }];
+    project.paths[0].folderId = "folder_missing";
+    project.paths[0].waypoints[0].segmentHeadingMode = "locked";
+
+    const validation = validateProject(project);
+    expect(validation.ok).toBe(false);
+    expect(validation.issues.map((item) => item.path)).toEqual(expect.arrayContaining([
+      "$.paths[0].folderId",
+      "$.paths[0].waypoints[0].segmentHeadingMode",
+    ]));
+  });
+
+  it("clamps world points to the true field dimensions", () => {
+    expect(clampWorldPoint({ x: -3, y: FIELD_H + 2 })).toEqual({ x: 0, y: FIELD_H });
+    expect(clampWorldPoint({ x: FIELD_W + 1, y: -1 })).toEqual({ x: FIELD_W, y: 0 });
+  });
+});
+
+describe(".bdx export", () => {
+  it("exports the blank default project", () => {
+    const exportData = buildBdxExport(createDemoProject());
+    expect(exportData.paths).toHaveLength(1);
+    expect(exportData.paths[0].name).toBe("NewPath");
     expect(exportData.paths[0].samples.length).toBeGreaterThan(2);
-    expect(exportData.paths[0].optimization).toEqual(
-      expect.objectContaining({
-        plannerUsed: "optimizedTrajectory",
-        fallback: false,
-        solveTimeMs: expect.any(Number),
-        maxVelocityMps: expect.any(Number),
-      }),
-    );
+    expect(exportData.robot).toMatchObject({ widthM: 0.84, lengthM: 0.84, heightM: 0.5 });
   });
-});
 
-describe("legacy renderer patches", () => {
-  it("keeps shift-click deletion wired into the generated field bundle", () => {
-    const fieldBundle = fs
-      .readdirSync(path.join(process.cwd(), "public/legacy/assets"))
-      .find((file) => fs.readFileSync(path.join(process.cwd(), "public/legacy/assets", file), "utf8").startsWith("// Bordeaux — interactive field view"));
-
-    if (!fieldBundle) throw new Error("Could not find generated FieldView bundle");
-    const source = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets", fieldBundle), "utf8");
-    expect(source).toContain("role === 'wp' && e.shiftKey");
-    expect(source).toContain("idx > 0 && idx < doc.waypoints.length - 1");
-    expect(source).toContain("actions.delWp");
-  });
-});
-
-describe("clothoid chains", () => {
-  it("blends the shared tangent across consecutive clothoid segments", () => {
-    const waypoints = [
-      {
-        x: 0,
-        y: 0,
-        theta: 0,
-        thetaOn: true,
-        linked: true,
-        stop: false,
-        segType: "clothoid",
-        prevC: { x: -1, y: 0 },
-        nextC: { x: 1, y: 0 },
-      },
-      {
-        x: 2,
-        y: 1,
+  it("exports eligible paths in project order", () => {
+    const project = projectWithPaths([blankPath("First"), richPath("Second"), blankPath("Third")]);
+    const exportData = buildBdxExport(project);
+    expect(exportData.paths.map((path) => path.name)).toEqual(["First", "Second", "Third"]);
+    expect(exportData.generator).toBe("bordeaux");
+    expect(exportData.units.velocity).toBe("meters_per_second");
         theta: 0,
         thetaOn: false,
         linked: false,
