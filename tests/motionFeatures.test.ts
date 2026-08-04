@@ -808,3 +808,93 @@ describe("motion features", () => {
   it("builds a deterministic multi-direction jiggle and rejects repeated directions", () => {
     const anchor = { x: 5, y: 4 };
     const positions = PM.jigglePositions(anchor, 0, { distanceM: 0.2, strokes: 4, startDeg: 90, stepDeg: -90 });
+
+    expect(positions).toHaveLength(8);
+    positions!.forEach((point, index) => {
+      if (index % 2) expect(point).toEqual(anchor);
+      else expect(Math.hypot(point.x - anchor.x, point.y - anchor.y)).toBeCloseTo(0.2, 10);
+    });
+    expect(PM.jigglePositions(anchor, 0, { distanceM: 0.2, strokes: 4, startDeg: 0, stepDeg: 180 })).toBeNull();
+    expect(PM.jigglePositions({ x: 0.05, y: 0.05 }, 0, { distanceM: 0.2, strokes: 2, startDeg: 180, stepDeg: 90 })).toBeNull();
+  });
+
+  it.each(PLANNERS)("expands a fast endpoint jiggle into samples without adding %s waypoints", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    const baselinePath = structuredClone(path);
+    const waypointCount = path.waypoints.length;
+    const end = path.waypoints.at(-1)!;
+    end.jiggle = { distanceM: 0.18, strokes: 4, startDeg: 90, stepDeg: -90, strokeTimeS: 0.4 };
+
+    const baseline = getPlanner(plannerId).generate({ path: baselinePath, robot: project.robot });
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+    const actionSamples = result.samples.filter((sample) => sample.t > baseline.totalTimeS + 1e-8);
+
+    expect(path.waypoints).toHaveLength(waypointCount);
+    expect(result.totalTimeS - baseline.totalTimeS).toBeGreaterThan(1.6);
+    expect(result.totalTimeS - baseline.totalTimeS).toBeLessThan(3.2);
+    expect(result.totalDistanceM - baseline.totalDistanceM).toBeCloseTo(1.44, 6);
+    expect(actionSamples.some((sample) => Math.hypot(sample.x - end.x, sample.y - end.y) > 0.1)).toBe(true);
+    expect(result.samples.at(-1)!.x).toBeCloseTo(end.x, 8);
+    expect(result.samples.at(-1)!.y).toBeCloseTo(end.y, 8);
+    expect(result.samples.at(-1)!.velocityMps).toBeCloseTo(0, 8);
+    expect(result.samples.at(-1)!.accelerationMps2).toBeCloseTo(0, 8);
+    expect(result.samples.every((sample, index) => index === 0 || sample.t > result.samples[index - 1].t)).toBe(true);
+    actionSamples.forEach((sample) => {
+      if (sample.accelerationMps2 > 0) {
+        const available = path.constraints.maxAccel * Math.max(0, 1 - sample.velocityMps / project.robot.maxSpeed);
+        expect(sample.accelerationMps2).toBeLessThanOrEqual(available + 0.05);
+      } else {
+        expect(Math.abs(sample.accelerationMps2)).toBeLessThanOrEqual(path.constraints.maxDecel + 0.05);
+      }
+    });
+  });
+
+  it("rejects arbitrary-direction jiggle on a tank drivetrain", () => {
+    const project = createDemoProject();
+    project.robot.drive = "tank";
+    const path = project.paths[0];
+    const end = path.waypoints.at(-1)!;
+    end.jiggle = { distanceM: 0.18, strokes: 4, startDeg: 90, stepDeg: -90, strokeTimeS: 0.4 };
+    const baselinePath = structuredClone(path);
+    delete baselinePath.waypoints.at(-1)!.jiggle;
+
+    expect(validateProject(project).issues.some((issue) => issue.path.endsWith(".jiggle") && issue.message.includes("swerve"))).toBe(true);
+    const baseline = getPlanner("profiledSpline").generate({ path: baselinePath, robot: project.robot });
+    const result = getPlanner("profiledSpline").generate({ path, robot: project.robot });
+    expect(result.diagnostics.filter((issue) => issue.path.endsWith(".jiggle"))).toHaveLength(1);
+    expect(result.diagnostics.some((issue) => issue.message.includes("swerve"))).toBe(true);
+    expect(result.totalDistanceM).toBeCloseTo(baseline.totalDistanceM, 8);
+  });
+
+  it("round-trips endpoint jiggle metadata and rejects repeated directions", () => {
+    const project = createDemoProject();
+    const end = project.paths[0].waypoints.at(-1)!;
+    end.jiggle = { distanceM: 0.18, strokes: 4, startDeg: 90, stepDeg: -90, strokeTimeS: 0.4 };
+
+    expect(validateProject(project).ok).toBe(true);
+    expect(decodeProjectFile(JSON.stringify(project)).project.paths[0].waypoints.at(-1)!.jiggle).toEqual(end.jiggle);
+
+    end.jiggle.stepDeg = 180;
+    expect(validateProject(project).issues.some((issue) => issue.path.endsWith(".jiggle.stepDeg") && issue.message.includes("must not repeat"))).toBe(true);
+  });
+
+  it("writes stationary turn samples into the LabVIEW-compatible trajectory", () => {
+    const project = createDemoProject();
+    project.plannerId = "labviewBezier";
+    const end = project.paths[0].waypoints.at(-1)!;
+    end.stop = true;
+    end.turnInPlace = { headingDeg: 90 };
+
+    const encoded = buildLabviewBdx(project, project.paths[0].id);
+    const decoded = parseLabviewBdx(encoded.buffer);
+    const velocities = decoded.trajectory[0].velocities;
+
+    expect(decoded.trajectory[0].positions).toHaveLength(encoded.sampleCount);
+    expect(velocities.some((sample) => Math.abs(sample.velocityFps) < 1e-9 && Math.abs(sample.omegaDegPerS) > 1)).toBe(true);
+  });
+
+  it("flattens endpoint jiggle motion into the LabVIEW-compatible trajectory", () => {
+    const project = createDemoProject();
+    project.plannerId = "labviewBezier";
+    project.paths[0].waypoints.at(-1)!.jiggle = { distanceM: 0.18, strokes: 4, startDeg: 90, stepDeg: -90, strokeTimeS: 0.4 };
