@@ -403,51 +403,51 @@
     if (rev) heading += Math.PI;
     const speed = lerp(prof.v[i - 1], prof.v[i], u);
     return { x, y, heading, speed, s, f };
-      const a = s[i], b = s[i + 1];
-      if (t >= a[0] && t <= b[0]) {
-        const u = (t - a[0]) / Math.max(1e-6, b[0] - a[0]);
-        const ca = hex2rgb(a[1]), cb = hex2rgb(b[1]);
-        return `rgb(${Math.round(ca[0] + (cb[0] - ca[0]) * u)},${Math.round(ca[1] + (cb[1] - ca[1]) * u)},${Math.round(ca[2] + (cb[2] - ca[2]) * u)})`;
-      }
-    }
-    return s[s.length - 1][1];
   }
-  function metricGradient(mode) {
-    const s = RAMPS_M[mode] || RAMPS_M.velocity;
-    return 'linear-gradient(90deg,' + s.map((x) => x[1] + ' ' + Math.round(x[0] * 100) + '%').join(',') + ')';
-  }
-  const METRICS = [
-    { id: 'velocity', label: 'Velocity', unit: 'm/s', kind: 'seq' },
-    { id: 'accel', label: 'Acceleration', unit: 'm/s\u00b2', kind: 'div' },
-    { id: 'angvel', label: 'Angular velocity', unit: '\u00b0/s', kind: 'div' },
-    { id: 'curvature', label: 'Curvature', unit: '1/m', kind: 'seq' },
-  ];
 
-  // ---- safety analysis: flag tight curvature + sharp velocity dips ----
-  function analyze(pts, prof, m, robot) {
-    const n = pts.length; const out = [];
-    if (n < 3) return out;
-    const totalS = pts[n - 1].s || 1;
-    const vCap = (robot && robot.maxSpeed) || 5;
-    // tight curvature: radius below ~0.7 m is hard on a drivetrain
-    let cuf = -1, cuMax = 0, cuAt = 0;
-    for (let i = 1; i < n - 1; i++) {
-      const rad = pts[i].curv > 1e-4 ? 1 / pts[i].curv : Infinity;
-      if (rad < 0.7) { const sev = rad < 0.4 ? 1 : 0.6; if (pts[i].curv > cuMax) { cuMax = pts[i].curv; cuAt = i; } if (cuf < 0) cuf = i; }
-      else if (cuf >= 0) { out.push({ f: pts[cuAt].s / totalS, kind: 'curv', sev: cuMax > 2.5 ? 'high' : 'med', text: 'Tight curvature \u00b7 R\u2248' + (1 / cuMax).toFixed(2) + ' m' }); cuf = -1; cuMax = 0; }
+  // build heading anchors from a flat list of {f, rad} entries (waypoint thetas + rotation targets)
+  // ensures coverage of f=0 and f=1 so heading is defined across the whole path
+  function buildAnchors(entries) {
+    const arr = (entries || [])
+      .filter(e => e && isFinite(e.f) && isFinite(e.rad))
+      .map(e => ({ f: Math.max(0, Math.min(1, e.f)), rad: e.rad }))
+      .sort((a, b) => a.f - b.f);
+    if (!arr.length) return [{ f: 0, rad: 0 }, { f: 1, rad: 0 }];
+    if (arr[0].f > 1e-6) arr.unshift({ f: 0, rad: arr[0].rad });
+    if (arr[arr.length - 1].f < 1 - 1e-6) arr.push({ f: 1, rad: arr[arr.length - 1].rad });
+    return arr;
+  }
+
+  // point + fraction lookup by arclength fraction f (for placing markers/targets)
+  function pointAtFraction(f, pts) {
+    const n = pts.length; if (!n) return { x: 0, y: 0, heading: 0 };
+    const target = f * pts[n - 1].s;
+    let lo = 1, hi = n - 1;
+    if (target <= 0) return { ...pts[0] };
+    if (target >= pts[n - 1].s) return { ...pts[n - 1] };
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (pts[mid].s < target) lo = mid + 1; else hi = mid; }
+    const a = pts[lo - 1], b = pts[lo];
+    const u = (target - a.s) / Math.max(1e-6, b.s - a.s);
+    return { x: lerp(a.x, b.x, u), y: lerp(a.y, b.y, u), heading: angLerp(a.heading, b.heading, u) };
+  }
+
+  // nearest fraction on path to a world point (for placing markers by click)
+  function nearestFraction(wx, wy, pts) {
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const dx = pts[i].x - wx, dy = pts[i].y - wy; const d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; best = i; }
     }
-    if (cuf >= 0) out.push({ f: pts[cuAt].s / totalS, kind: 'curv', sev: cuMax > 2.5 ? 'high' : 'med', text: 'Tight curvature \u00b7 R\u2248' + (1 / cuMax).toFixed(2) + ' m' });
-    // velocity dip: local minimum well below surrounding speed (slow-down the user may not intend)
-    const v = m.v;
-    for (let i = 6; i < n - 6; i++) {
-      const local = v[i];
-      const around = Math.max(v[i - 6], v[i + 6]);
-      if (around > 1.2 && local < around * 0.45 && local < vCap * 0.5) {
-        // ensure it's a genuine trough
-        if (v[i] <= v[i - 1] && v[i] <= v[i + 1]) { out.push({ f: pts[i].s / totalS, kind: 'vel', sev: local < around * 0.3 ? 'high' : 'med', text: 'Velocity dip \u00b7 ' + local.toFixed(1) + ' m/s' }); i += 10; }
-      }
-    }
-    return out;
+    return pts.length > 1 ? pts[best].s / pts[pts.length - 1].s : 0;
+  }
+
+  // auto control handles for a fresh waypoint (smooth Catmull-Rom-ish)
+  function autoHandles(waypoints, i) {
+    const w = waypoints[i];
+    const prev = waypoints[i - 1] || w, next = waypoints[i + 1] || w;
+    let dx = next.x - prev.x, dy = next.y - prev.y;
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len; dy /= len;
   }
 
   // Path type belongs to the SEGMENT between two waypoints. The list stays honest:
