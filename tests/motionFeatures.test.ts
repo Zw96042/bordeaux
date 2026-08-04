@@ -448,3 +448,93 @@ describe("motion features", () => {
     const project = createDemoProject();
     const path = project.paths[0];
     path.ranges = [{
+      anchor: "param", f0: 0.2, f1: 0.8,
+      maxVel: path.constraints.maxVel,
+      maxAccel: path.constraints.maxAccel,
+      maxDecel: path.constraints.maxDecel,
+      maxAngVel: path.constraints.maxAngVel / 2,
+      maxAngAccel: path.constraints.maxAngAccel,
+    }];
+    const omitted = getPlanner(plannerId).generate({ path: structuredClone(path), robot: project.robot });
+    path.ranges[0].rotationPriority = "heading";
+    const explicit = getPlanner(plannerId).generate({ path, robot: project.robot });
+
+    expect(explicit.totalTimeS).toBe(omitted.totalTimeS);
+    expect(explicit.samples).toEqual(omitted.samples);
+  });
+
+  it.each(["profiledSpline", "labviewBezier"] as const)("lets an overlapping heading-priority range override translation priority in %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxVel = 4;
+    path.constraints.maxAccel = 5;
+    path.constraints.maxDecel = 5;
+    path.constraints.maxAngVel = 60;
+    path.constraints.maxAngAccel = 120;
+    path.constraints.maxAngDecel = 120;
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 8, y: 2, theta: 180, thetaOn: true },
+    ]);
+    const range = {
+      anchor: "param" as const, f0: 0.05, f1: 0.95,
+      maxVel: 4, maxAccel: 5, maxDecel: 5, maxAngVel: 60, maxAngAccel: 120,
+      rotationPriority: "translation" as const,
+    };
+    path.ranges = [range];
+    const translationOnly = getPlanner(plannerId).generate({ path: structuredClone(path), robot: project.robot });
+    path.ranges.push({ ...range, f0: 0.35, f1: 0.65, rotationPriority: "heading" });
+    const mixed = getPlanner(plannerId).generate({ path, robot: project.robot });
+
+    expect(mixed.totalTimeS).toBeGreaterThan(translationOnly.totalTimeS);
+  });
+
+  it("keeps a disjoint LabVIEW translation-priority stretch local when a later heading range tightens", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxVel = 4;
+    path.constraints.maxAccel = 5;
+    path.constraints.maxDecel = 5;
+    path.constraints.maxAngVel = 180;
+    path.constraints.maxAngAccel = 360;
+    path.constraints.maxAngDecel = 360;
+    path.waypoints = buildWaypoints([
+      { x: 0.5, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 15.5, y: 2, theta: 180, thetaOn: true },
+    ]);
+    const common = { maxVel: 4, maxAccel: 5, maxDecel: 5, maxAngAccel: 360 };
+    path.ranges = [{
+      anchor: "param", f0: 0.1, f1: 0.3,
+      ...common, maxAngVel: 180, rotationPriority: "translation",
+    }];
+    const translationOnly = getPlanner("labviewBezier").generate({ path: structuredClone(path), robot: project.robot });
+    path.ranges.push({
+      anchor: "param", f0: 0.72, f1: 0.9,
+      ...common, maxAngVel: 20, rotationPriority: "heading",
+    });
+    const mixed = getPlanner("labviewBezier").generate({ path, robot: project.robot });
+    const nearest = (samples: typeof mixed.samples, fraction: number) => samples.reduce((best, sample) => (
+      Math.abs(sample.f - fraction) < Math.abs(best.f - fraction) ? sample : best
+    ));
+    const before = nearest(translationOnly.samples, 0.2);
+    const after = nearest(mixed.samples, 0.2);
+
+    expect(after.t).toBeCloseTo(before.t, 1);
+    expect(after.velocityMps).toBeCloseTo(before.velocityMps, 1);
+    expect(mixed.totalTimeS).toBeGreaterThan(translationOnly.totalTimeS);
+  });
+
+  it("keeps an earlier LabVIEW heading transition bounded when Translation is selected later", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxVel = 4;
+    path.constraints.maxAccel = 5;
+    path.constraints.maxDecel = 5;
+    path.constraints.maxAngVel = 180;
+    path.constraints.maxAngAccel = 30;
+    path.constraints.maxAngDecel = 30;
+    path.waypoints = buildWaypoints([
+      { x: 0.5, y: 2, theta: 0, thetaOn: true, segType: "line" },
