@@ -43,51 +43,51 @@ export interface RobotIntakeProfile {
 
 export interface RobotShooterProfile {
   /** Direction the shooter fires relative to robot +X; front is 0 degrees. */
-  f1: number;
-  d0?: number;
-  d1?: number;
-  w0?: number;
-  w1?: number;
-  maxVel: number;
-  maxAccel: number;
-  maxDecel?: number;
-  maxAngVel: number;
-  maxAngAccel: number;
-  name?: string;
+  directionDeg: number;
+  /** Whether a shooting pose must orient this direction toward its target. */
+  requiresTargetFacing: boolean;
+  preferredRangeM?: number;
 }
 
-export interface PathDoc {
-  name: string;
-  waypoints: Waypoint[];
-  targets: RotationTarget[];
-  markers: Marker[];
-  ranges: ConstraintRange[];
-  constraints: PathConstraints;
-  headingMode?: "manual" | "tangent" | "targets";
-  driveBackward?: boolean;
-  startVel: number;
-  goalVel: number;
-  exportable?: boolean;
+export interface RobotPlanningProfile {
+  intake?: RobotIntakeProfile;
+  shooter?: RobotShooterProfile;
+  /** Team-authored constraints or strategy details not captured by structured fields. */
+  notes?: string;
 }
 
-export interface PathConstraints {
-  maxVel: number;
-  maxAccel: number;
-  maxDecel: number;
-  maxAngVel: number;
-  maxAngAccel: number;
-  maxAngDecel?: number;
-  maxJerk?: number;
-  maxAngJerk?: number;
+export interface TurnInPlace {
+  headingDeg: number;
+  direction?: "shortest" | "clockwise" | "counterclockwise";
 }
 
-export interface RoutineFunctionNode {
-  id: string;
-  type: "function";
-  cat: "terminate" | "sequence" | "generate" | "velocity";
-  title?: string;
-  trigger?: string;
-  note?: string;
+export interface JiggleAction {
+  distanceM: number;
+  strokes: number;
+  startDeg: number;
+  stepDeg: number;
+  /** Duration of one complete outbound-and-return stroke. */
+  strokeTimeS: number;
+}
+
+export type HeadingTransitionPlacement = "before" | "split" | "after";
+
+export interface HeadingTransition {
+  /** Which adjacent segment provides distance for the heading-law blend. */
+  placement?: HeadingTransitionPlacement;
+  /** Whether heading or translation keeps its authored spatial schedule. */
+  rotationPriority?: "heading" | "translation";
+  /** Total path length available for the minimum-jerk blend. */
+  distanceM?: number;
+}
+
+export interface Waypoint {
+  x: number;
+  y: number;
+  theta: number;
+  thetaOn: boolean;
+  linked: boolean;
+  stop: boolean;
   scale?: number;
   funcRef?: string;
   op?: string;
