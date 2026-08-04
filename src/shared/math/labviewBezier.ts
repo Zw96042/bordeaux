@@ -268,3 +268,93 @@ export function evaluateLabviewQuinticSecondDerivative(segment: LabviewQuinticSe
   const firstDerivative = derivativeControlPoints(segment.controlPoints);
   return evaluateBezier(derivativeControlPoints(firstDerivative), Math.max(0, Math.min(1, t)));
 }
+
+export function signedLabviewQuinticCurvature(segment: LabviewQuinticSegment, t: number): number {
+  const first = evaluateLabviewQuinticDerivative(segment, t);
+  const second = evaluateLabviewQuinticSecondDerivative(segment, t);
+  const speedSquared = first.x * first.x + first.y * first.y;
+  if (speedSquared <= DEFAULT_EPSILON * DEFAULT_EPSILON) return 0;
+  return (first.x * second.y - first.y * second.x) / Math.pow(speedSquared, 1.5);
+}
+
+/** Computes arc length over [t0, t1] with the reference's order-24 rule. */
+export function labviewQuinticArcLength(
+  segment: LabviewQuinticSegment,
+  t0 = 0,
+  t1 = 1,
+): number {
+  const start = Math.max(0, Math.min(1, t0));
+  const end = Math.max(0, Math.min(1, t1));
+  if (start === end) return 0;
+
+  const low = Math.min(start, end);
+  const high = Math.max(start, end);
+  const midpoint = (low + high) / 2;
+  const halfWidth = (high - low) / 2;
+  let sum = 0;
+  for (let index = 0; index < GAUSS_24_ABSCISSAE.length; index += 1) {
+    const offset = halfWidth * GAUSS_24_ABSCISSAE[index];
+    const leftSpeed = magnitude(evaluateLabviewQuinticDerivative(segment, midpoint - offset));
+    const rightSpeed = magnitude(evaluateLabviewQuinticDerivative(segment, midpoint + offset));
+    sum += GAUSS_24_WEIGHTS[index] * (leftSpeed + rightSpeed);
+  }
+  return halfWidth * sum;
+}
+
+export function buildLabviewQuinticSpline(
+  waypoints: readonly LabviewBezierWaypoint[],
+): LabviewQuinticSpline {
+  if (waypoints.length < 2) throw new RangeError("At least two waypoints are required.");
+  waypoints.forEach((waypoint, index) => {
+    requireFinitePoint(waypoint, `Waypoint ${index}`);
+    if (waypoint.prevC) requireFinitePoint(waypoint.prevC, `Waypoint ${index} prevC`);
+    if (waypoint.nextC) requireFinitePoint(waypoint.nextC, `Waypoint ${index} nextC`);
+  });
+
+  const tangents = deriveLabviewTangents(waypoints);
+  const secondDerivatives = deriveLabviewSecondDerivatives(waypoints, tangents);
+  const segments = waypoints.slice(0, -1).map((waypoint, index): LabviewQuinticSegment => ({
+    index,
+    controlPoints: makeLabviewQuinticControlPoints(
+      waypoint,
+      waypoints[index + 1],
+      tangents[index],
+      tangents[index + 1],
+      secondDerivatives[index],
+      secondDerivatives[index + 1],
+    ),
+  }));
+  const segmentLengths = segments.map((segment) => labviewQuinticArcLength(segment));
+  const cumulativeLengths = [0];
+  for (const segmentLength of segmentLengths) {
+    cumulativeLengths.push(cumulativeLengths[cumulativeLengths.length - 1] + segmentLength);
+  }
+
+  return {
+    segments,
+    tangents,
+    secondDerivatives,
+    segmentLengths,
+    cumulativeLengths,
+    totalLength: cumulativeLengths[cumulativeLengths.length - 1],
+  };
+}
+
+export function labviewQuinticParameterAtDistance(
+  spline: LabviewQuinticSpline,
+  requestedDistance: number,
+  options: ArcLengthInversionOptions = {},
+): SplineParameter {
+  if (spline.segments.length === 0) throw new RangeError("The spline has no segments.");
+  if (!Number.isFinite(requestedDistance)) throw new RangeError("Distance must be finite.");
+
+  const targetDistance = Math.max(0, Math.min(spline.totalLength, requestedDistance));
+  if (targetDistance <= 0) return { segmentIndex: 0, t: 0 };
+  if (targetDistance >= spline.totalLength) return { segmentIndex: spline.segments.length - 1, t: 1 };
+
+  let segmentIndex = 0;
+  while (spline.cumulativeLengths[segmentIndex + 1] < targetDistance) segmentIndex += 1;
+  const localTarget = targetDistance - spline.cumulativeLengths[segmentIndex];
+  const segment = spline.segments[segmentIndex];
+  const tolerance = options.tolerance ?? DEFAULT_LENGTH_TOLERANCE;
+  const maxIterations = options.maxIterations ?? DEFAULT_INVERSION_ITERATIONS;
