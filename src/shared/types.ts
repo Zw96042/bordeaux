@@ -223,28 +223,28 @@ export interface JavaProjectBookmarkSummary {
   projectName: string;
   folderName: string;
   lastLinkedAt: string;
-  schemaVersion: string;
-  generator: "bordeaux";
-  units: {
-    distance: "meters";
-    time: "seconds";
-    angle: "radians";
-    velocity: "meters_per_second";
-    acceleration: "meters_per_second_squared";
-  };
-  robot: {
-    drive: DriveType;
-    widthM: number;
-    lengthM: number;
-    maxSpeedMps: number;
-  };
-  paths: BdxPath[];
 }
 
-export interface ExportPreview {
-  ok: boolean;
-  pathCount: number;
-  sampleCount: number;
-  totalTimeS: number;
-  issues: ValidationIssue[];
+export interface JavaProjectConnectionResult {
+  catalog: JavaCommandCatalog;
+  bookmarkId: string;
+  recentProjects: JavaProjectBookmarkSummary[];
+  integration: JavaIntegrationStatus;
+  warning?: string;
 }
+
+export interface JavaIntegrationStatus {
+  installed: boolean;
+  supportVersion?: string;
+  generatedCatalog: boolean;
+  catalogHash?: string;
+  buildFile: "build.gradle" | "build.gradle.kts";
+  wrapperAvailable: boolean;
+}
+
+export interface ConstraintRange {
+  anchor: "param" | "dist" | "wp";
+  f0: number;
+  f1: number;
+  d0?: number;
+  d1?: number;
