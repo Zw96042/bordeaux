@@ -88,3 +88,4 @@ export function normalizeProject(value: unknown): unknown {
     : routineSource;
 
   return { ...source, paths, routine } as unknown as BordeauxProject;
+}
