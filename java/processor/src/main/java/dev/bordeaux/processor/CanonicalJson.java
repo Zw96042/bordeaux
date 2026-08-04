@@ -178,3 +178,52 @@ final class CanonicalJson {
         return (value < 0 ? "-" : "") + coefficient + "e" + (exponent >= 0 ? "+" : "") + exponent;
     }
 
+    private void digits() {
+        int start = index;
+        while (index < input.length() && Character.isDigit(input.charAt(index))) index++;
+        if (start == index) fail("expected a digit");
+    }
+
+    private String literal(String literal) {
+        if (!input.startsWith(literal, index)) fail("expected " + literal);
+        index += literal.length();
+        return literal;
+    }
+
+    private boolean take(char ch) {
+        if (index < input.length() && input.charAt(index) == ch) {
+            index++;
+            return true;
+        }
+        return false;
+    }
+
+    private void whitespace() {
+        while (index < input.length() && Character.isWhitespace(input.charAt(index))) index++;
+    }
+
+    private static String quote(String value) {
+        StringBuilder result = new StringBuilder("\"");
+        for (int index = 0; index < value.length(); index++) {
+            char ch = value.charAt(index);
+            switch (ch) {
+                case '"' -> result.append("\\\"");
+                case '\\' -> result.append("\\\\");
+                case '\b' -> result.append("\\b");
+                case '\f' -> result.append("\\f");
+                case '\n' -> result.append("\\n");
+                case '\r' -> result.append("\\r");
+                case '\t' -> result.append("\\t");
+                default -> {
+                    if (ch < 0x20) result.append(String.format("\\u%04x", (int) ch));
+                    else result.append(ch);
+                }
+            }
+        }
+        return result.append('"').toString();
+    }
+
+    private void fail(String message) {
+        throw new IllegalArgumentException(message + " at character " + index);
+    }
+}
