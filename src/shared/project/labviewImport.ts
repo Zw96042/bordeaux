@@ -88,3 +88,25 @@ export function decodeLabviewBdxProject(input: Uint8Array, filePath = "Imported.
       startVel: decoded.conditions.initialVelocityFps * METERS_PER_FOOT,
       goalVel: decoded.conditions.finalVelocityFps * METERS_PER_FOOT,
       exportable: true,
+      labview: {
+        ...DEFAULT_LABVIEW_OPTIONS,
+        samplePeriodS: decoded.conditions.samplePeriodS,
+        reversePath: decoded.reversePath,
+        zeroVelocity: decoded.zeroVelocity,
+        pickupBalls: decoded.pickupBalls,
+        currentLimit: decoded.currentLimit,
+        zeroTranslationalVelocity: decoded.zeroTranslationalVelocity,
+        correctAtBeginningOfPath: decoded.correctAtBeginningOfPath,
+        stoopidFastMps: limits.stoopidFastFps * METERS_PER_FOOT,
+      },
+    }],
+    routine: { name: "Autonomous Routine", nodes: [] },
+    plannerId: decoded.pathType === "clothoid" ? "labviewClothoid" : "labviewBezier",
+  };
+
+  const validation = validateProject(project);
+  if (!validation.ok) {
+    throw new Error(`Imported LabVIEW Bordeaux path is not editable:\n${validation.issues.map((issue) => `${issue.path}: ${issue.message}`).join("\n")}`);
+  }
+  return { project, sourceFormat: "labview-bdx-4.4", migrated: true };
+}
