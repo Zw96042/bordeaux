@@ -88,3 +88,93 @@ function feasibleJiggleStrokeDuration(requested: number, distance: number, limit
   if (feasible(minimum)) return minimum;
   let low = minimum, high = minimum;
   while (!feasible(high)) high *= 2;
+  for (let iteration = 0; iteration < 40; iteration += 1) {
+    const middle = (low + high) / 2;
+    if (feasible(middle)) high = middle;
+    else low = middle;
+  }
+  return high;
+}
+
+function samplePeriod(path: PathDoc, samples: readonly TrajectorySample[]): number {
+  if (path.labview?.samplePeriodS && path.labview.samplePeriodS >= 0.001) return path.labview.samplePeriodS;
+  let best = Infinity;
+  for (let index = 1; index < samples.length; index += 1) {
+    const dt = samples[index].t - samples[index - 1].t;
+    if (dt > EPSILON) best = Math.min(best, dt);
+  }
+  return Number.isFinite(best) ? Math.max(0.01, Math.min(0.05, best)) : 0.02;
+}
+
+function waypointSampleIndices(path: PathDoc, samples: readonly TrajectorySample[]): number[] {
+  let cursor = 0;
+  return path.waypoints.map((waypoint, waypointIndex) => {
+    if (waypointIndex === path.waypoints.length - 1) return samples.length - 1;
+    let best = cursor, distance = Infinity;
+    for (let index = cursor; index < samples.length; index += 1) {
+      const candidate = Math.hypot(samples[index].x - waypoint.x, samples[index].y - waypoint.y);
+      if (candidate < distance) { best = index; distance = candidate; }
+      if (distance < 1e-5 && candidate > distance + 1e-4) break;
+    }
+    cursor = best;
+    return best;
+  });
+}
+
+function firstMovingSampleIndex(samples: readonly TrajectorySample[], boundary: number): number | null {
+  const arrival = samples[boundary];
+  for (let index = boundary + 1; index < samples.length; index += 1) {
+    const sample = samples[index];
+    if (Math.hypot(sample.x - arrival.x, sample.y - arrival.y) > 1e-5 || Math.abs(sample.s - arrival.s) > 1e-6) return index;
+  }
+  return null;
+}
+
+function rotationDuration(delta: number, limits: ReturnType<typeof activeAngularLimits>): number {
+  const distance = Math.abs(delta);
+  if (distance < EPSILON) return 0;
+  return Math.max(
+    distance * 1.875 / limits.velocity,
+    Math.sqrt(distance * 5.77351 / limits.acceleration),
+    limits.jerk > EPSILON ? Math.cbrt(distance * 60 / limits.jerk) : 0,
+  );
+}
+
+function jigglePhase(progress: number): { position: number; velocity: number; acceleration: number; travel: number } {
+  const u = Math.max(0, Math.min(1, progress));
+  if (u < 0.25) return { position: 8 * u * u, velocity: 16 * u, acceleration: 16, travel: 8 * u * u };
+  if (u < 0.5) {
+    const remaining = 0.5 - u;
+    const position = 1 - 8 * remaining * remaining;
+    return { position, velocity: 16 * remaining, acceleration: -16, travel: position };
+  }
+  if (u < 0.75) {
+    const elapsed = u - 0.5;
+    const position = 1 - 8 * elapsed * elapsed;
+    return { position, velocity: -16 * elapsed, acceleration: -16, travel: 2 - position };
+  }
+  const remaining = 1 - u;
+  const position = 8 * remaining * remaining;
+  return { position, velocity: -16 * remaining, acceleration: 16, travel: 2 - position };
+}
+
+/** Adds optional waypoint actions after a planner has finished its authored geometry. */
+export function applyStationaryActions(path: PathDoc, result: PlannerResult, robot?: RobotConfig): PlannerResult {
+  const actions = path.waypoints
+    .map((waypoint, index) => ({ waypoint, index }))
+    .filter(({ waypoint }) => waypoint.turnInPlace || waypoint.jiggle || (waypoint.wait ?? 0) > 0);
+  if (actions.length === 0 || result.samples.length === 0) return result;
+
+  const baseIndices = waypointSampleIndices(path, result.samples);
+  const incompatible = actions.find(({ waypoint, index }) => {
+    if (!waypoint.turnInPlace) return false;
+    if (index >= path.waypoints.length - 1) return false;
+    const boundary = baseIndices[index];
+    const movingIndex = firstMovingSampleIndex(result.samples, boundary);
+    const outgoing = movingIndex == null ? null : result.samples[movingIndex].headingRad;
+    const target = waypoint.turnInPlace!.headingDeg * DEG + (path.driveBackward ? Math.PI : 0);
+    return outgoing == null || Math.abs(wrapRadians(outgoing - target)) > 2 * DEG;
+  });
+  if (incompatible) {
+    return {
+      ...result,
