@@ -541,3 +541,93 @@
     return out;
   }
 
+  // Path type belongs to the SEGMENT between two waypoints. The list stays honest:
+  // only true geometry types live here, grouped Basic / Spline. Snapping, heading-hold,
+  // approach and auto-smooth are tooling/constraint behaviours and live elsewhere.
+  const SEGTYPES = [
+    { id: 'line', label: 'Straight', abbr: 'LIN', group: 'Basic', hint: 'Straight line \u2014 control handles ignored.' },
+    { id: 'arc', label: 'Arc', abbr: 'ARC', group: 'Basic', hint: 'Constant-radius turn, tangent to the out-handle.' },
+    { id: 'bezier', label: 'B\u00e9zier', abbr: 'BEZ', group: 'Spline', hint: 'Hand-shaped spline driven by the control handles.' },
+    { id: 'clothoid', label: 'Clothoid', abbr: 'CLO', group: 'Spline', hint: 'Euler spiral \u2014 curvature ramps smoothly (swerve-friendly).' },
+  ];
+
+  // ---- constraint-range anchoring -------------------------------------------
+  // A range can be anchored three ways. We resolve each to
+  // concrete arclength fractions [f0,f1] against the CURRENT path so the profile
+  // engine + overlays stay simple, while the stored anchor keeps the range
+  // attached the way the user intends as the path is edited.
+  //   param : fixed percent of the path        {f0,f1}
+  //   dist  : legacy fixed metres of travel    {d0,d1}
+  //   wp    : local positions within segments  {w0,t0,w1,t1}; omitted t values
+  //           preserve legacy whole-waypoint spans
+  function waypointFracs(doc, smp) {
+    const pts = smp.pts; const total = smp.length || 1; const n = doc.waypoints.length;
+    if (!pts.length) return doc.waypoints.map(() => 0);
+    if (Array.isArray(smp.wpIdx) && smp.wpIdx.length === n) return smp.wpIdx.map((index) => pts[Math.max(0, Math.min(pts.length - 1, index))].s / total);
+    const perSeg = (pts.length - 1) / Math.max(1, n - 1);
+    return doc.waypoints.map((_, k) => { const i = Math.min(pts.length - 1, Math.round(k * perSeg)); return pts[i].s / total; });
+  }
+  function resolvedHeadingTransition(waypoint) {
+    const value = (waypoint && waypoint.headingTransition) || {};
+    return { placement: value.placement || 'after', rotationPriority: value.rotationPriority || 'heading', distanceM: value.distanceM != null ? value.distanceM : 0.75 };
+  }
+  function headingTransitionWindows(waypoints, modes, breaks, wpFrac, totalDistance) {
+    const total = Math.max(totalDistance || 0, 1e-9), windows = [];
+    for (let segment = 1; segment < modes.length; segment++) {
+      if (modes[segment] === modes[segment - 1] || breaks[segment]) continue;
+      const policy = resolvedHeadingTransition(waypoints[segment]);
+      const boundary = Math.max(0, Math.min(1, wpFrac[segment] != null ? wpFrac[segment] : 0));
+      const beforeShare = policy.placement === 'before' ? 1 : policy.placement === 'split' ? 0.5 : 0;
+      const previousValue = wpFrac[segment - 1] != null ? wpFrac[segment - 1] : boundary;
+      const nextValue = wpFrac[segment + 1] != null ? wpFrac[segment + 1] : boundary;
+      const previousLength = Math.max(0, boundary - Math.max(0, Math.min(1, previousValue)));
+      const nextLength = Math.max(0, Math.max(0, Math.min(1, nextValue)) - boundary);
+      const before = Math.min(previousLength, policy.distanceM * beforeShare / total);
+      const after = Math.min(nextLength, policy.distanceM * (1 - beforeShare) / total);
+      windows.push({ ...policy, waypointIndex: segment, start: boundary - before, end: boundary + after });
+    }
+    return windows;
+  }
+  function headingTransitionGoals(modes, breaks, wpIdx, pts, anchorsByLaw) {
+    const totalDistance = pts.length ? pts[pts.length - 1].s : 0, goals = [];
+    for (let segment = 1; segment < modes.length; segment++) {
+      const law = modes[segment];
+      if ((law !== 'manual' && law !== 'targets') || modes[segment - 1] === law || breaks[segment]) continue;
+      let spanEndSegment = segment;
+      while (spanEndSegment + 1 < modes.length && modes[spanEndSegment + 1] === law && !breaks[spanEndSegment + 1]) spanEndSegment++;
+      const boundaryIndex = Math.max(0, Math.min(pts.length - 1, wpIdx[segment]));
+      const spanEndIndex = Math.max(boundaryIndex, Math.min(pts.length - 1, wpIdx[spanEndSegment + 1]));
+      const boundaryDistance = pts[boundaryIndex].s, spanEndDistance = pts[spanEndIndex].s;
+      const anchor = anchorsByLaw[law].find((candidate) => {
+        const distance = Math.max(0, Math.min(1, candidate.f)) * totalDistance;
+        return distance >= boundaryDistance - 1e-9 && distance <= spanEndDistance + 1e-9;
+      });
+      if (anchor) goals.push({ segmentIndex: segment, distanceM: Math.max(boundaryDistance, Math.max(0, Math.min(1, anchor.f)) * totalDistance), heading: anchor.rad, spanEndIndex });
+    }
+    return goals;
+  }
+  function smoothHeadingTransitions(raw, modes, breaks, wpIdx, pts, waypoints, transitionGoals) {
+    if (!raw.length) return [];
+    transitionGoals = transitionGoals || [];
+    const unwrappedRaw = [raw[0]];
+    for (let i = 1; i < raw.length; i++) unwrappedRaw.push(unwrappedRaw[i - 1] + angWrap(raw[i] - unwrappedRaw[i - 1]));
+    const out = unwrappedRaw.slice();
+    const protectedAnchorIndices = new Set();
+    for (let segment = 1; segment < modes.length; segment++) {
+      if (modes[segment] === modes[segment - 1] || breaks[segment]) continue;
+      const boundary = Math.max(1, Math.min(out.length - 1, wpIdx[segment]));
+      const previousBoundary = Math.max(0, Math.min(boundary - 1, wpIdx[segment - 1]));
+      const nextBoundary = Math.max(boundary, Math.min(out.length - 1, wpIdx[segment + 1]));
+      let outgoingStart = Math.min(boundary + 1, nextBoundary);
+      while (outgoingStart < nextBoundary && pts[outgoingStart].s - pts[boundary].s <= 1e-9) outgoingStart++;
+      const policy = resolvedHeadingTransition(waypoints[segment]);
+      let protectedBefore = -1;
+      protectedAnchorIndices.forEach((index) => { if (index <= boundary) protectedBefore = Math.max(protectedBefore, index); });
+      const boundaryProtected = protectedBefore === boundary;
+      const authoredBeforeShare = policy.placement === 'before' ? 1 : policy.placement === 'split' ? 0.5 : 0;
+      const beforeShare = boundaryProtected ? 0 : authoredBeforeShare;
+      const incoming = boundaryProtected ? out[boundary] : out[boundary - 1];
+      const transitionGoal = transitionGoals.find((goal) => goal.segmentIndex === segment);
+      if (transitionGoal) {
+        const boundaryDistance = pts[boundary].s;
+        const beforeDistance = Math.min(policy.distanceM * beforeShare, Math.max(0, boundaryDistance - pts[previousBoundary].s));
