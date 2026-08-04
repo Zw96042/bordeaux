@@ -178,51 +178,51 @@ export interface JavaCommandParameter {
   defaultValue?: CommandArgumentValue;
   min?: number | string;
   max?: number | string;
-  name: string;
-  command: string | null;
-  group: string | null;
-  timeS: number;
-  fraction: number;
+  javaType: string;
+  role: "argument" | "dependency";
+  schema: JavaValueSchema;
 }
 
-export interface BdxPath {
-  name: string;
-  planner: TrajectoryPlannerId;
-  totalTimeS: number;
-  totalDistanceM: number;
-  samples: TrajectorySample[];
-  markers: BdxMarker[];
-  diagnostics: ValidationIssue[];
-  optimization?: PlannerOptimizationDiagnostics;
+export interface JavaCommandDescriptor {
+  id: string;
+  label: string;
+  description?: string;
+  /** Team-authored natural-language aliases from the generated catalog. */
+  aliases?: string[];
+  /** Explicit capabilities such as shoot-fuel; never inferred from the label. */
+  semanticTags?: string[];
+  ownerType: string;
+  member: string;
+  kind: "constructor" | "factory";
+  confidence: "confirmed" | "inferred";
+  runtimeReady?: boolean;
+  parameters: JavaCommandParameter[];
+  source: {
+    file: string;
+    line: number;
+  };
 }
 
-export interface PlannerResult {
-  planner: TrajectoryPlannerId;
-  totalTimeS: number;
-  totalDistanceM: number;
-  samples: TrajectorySample[];
-  markers: BdxMarker[];
-  diagnostics: ValidationIssue[];
-  optimization?: PlannerOptimizationDiagnostics;
+export interface JavaCommandCatalog {
+  projectName: string;
+  sourceFileCount: number;
+  scannedAt: string;
+  source?: "source" | "generated" | "mixed";
+  runtimeCommandCount?: number;
+  generatedSchemaVersion?: "1.0";
+  catalogId?: string;
+  supportVersion?: string;
+  catalogHash?: string;
+  authoritative?: boolean;
+  commands: JavaCommandDescriptor[];
+  warnings: string[];
 }
 
-export interface TrajectoryPlanner {
-  id: TrajectoryPlannerId;
-  generate(input: PlannerInput): PlannerResult;
-}
-
-export interface PlannerOptimizationDiagnostics {
-  plannerUsed: TrajectoryPlannerId;
-  solveTimeMs: number;
-  totalTimeS: number;
-  maxVelocityMps: number;
-  maxAccelerationMps2: number;
-  constraintViolations: number;
-  fallback: boolean;
-  fallbackReason?: string;
-}
-
-export interface BdxExport {
+export interface JavaProjectBookmarkSummary {
+  id: string;
+  projectName: string;
+  folderName: string;
+  lastLinkedAt: string;
   schemaVersion: string;
   generator: "bordeaux";
   units: {
