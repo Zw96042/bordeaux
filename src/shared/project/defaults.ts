@@ -2,6 +2,7 @@ import { PM } from "../math/pm";
 import { FIELD_H, FIELD_W, clampWorldPoint } from "../math/fieldBounds";
 import type {
   BordeauxProject,
+  LabviewPathOptions,
   PathConstraints,
   PathDoc,
   SegmentType,
@@ -21,28 +22,27 @@ export const DEFAULT_CONSTRAINTS: PathConstraints = {
   maxAngJerk: 0,
 };
 
-type RawWaypoint = Partial<Waypoint> & {
-  x: number;
-  y: number;
-  theta?: number;
-  segType?: SegmentType;
-};
+export const DEFAULT_LABVIEW_OPTIONS = {
+  samplePeriodS: 0.02,
+  minTurnRadiusM: 0.5,
+  bezierTangentMode: "handles",
+  reversePath: false,
+  zeroVelocity: false,
+  pickupBalls: false,
+  currentLimit: 0,
+  zeroTranslationalVelocity: false,
+  correctAtBeginningOfPath: false,
+} satisfies LabviewPathOptions;
 
-export function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
+export function createPathId(): string {
+  return `path_${globalThis.crypto.randomUUID()}`;
 }
 
-export function buildWaypoints(raw: RawWaypoint[]): Waypoint[] {
-  const out = raw.map((w) => ({
-    linked: true,
-    thetaOn: false,
-    theta: 0,
-    stop: false,
-    ...w,
-    ...clampWorldPoint(w),
-  })) as Waypoint[];
+export function createMarkerId(): string {
+  return `event_${globalThis.crypto.randomUUID()}`;
+}
 
-  out.forEach((w, i) => {
+type RawWaypoint = Partial<Waypoint> & {
     const handles = PM.autoHandles(out, i);
     w.prevC = w.prevC ?? handles.prevC;
     w.nextC = w.nextC ?? handles.nextC;
