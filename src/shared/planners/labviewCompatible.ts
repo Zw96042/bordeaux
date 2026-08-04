@@ -538,3 +538,93 @@ function interpolateTimeline(timeline: readonly TimelinePoint[], time: number): 
   };
 }
 
+function draftSamples(planning: PlanningTimeline, samplePeriod: number, requestedScale: number): DraftSample[] {
+  const timeline = planning.points;
+  const boundaries = [0, ...[...planning.stops.keys()].filter((index) => index > 0 && index < timeline.length - 1), timeline.length - 1]
+    .sort((a, b) => a - b)
+    .filter((value, index, values) => index === 0 || value !== values[index - 1]);
+  let tick = 0;
+  const startWaitTicks = Math.ceil((planning.stops.get(0) ?? 0) / samplePeriod - EPSILON);
+  let estimatedCount = 1 + startWaitTicks;
+  for (let section = 1; section < boundaries.length; section += 1) {
+    const rawDuration = timeline[boundaries[section]].t - timeline[boundaries[section - 1]].t;
+    estimatedCount += Math.max(1, Math.ceil((rawDuration * requestedScale - EPSILON) / samplePeriod));
+    estimatedCount += Math.ceil((planning.stops.get(boundaries[section]) ?? 0) / samplePeriod - EPSILON);
+  }
+  if (estimatedCount > LABVIEW_BDX_MAX_TRAJECTORY_POINTS) {
+    throw new Error(`Compatibility timing requires ${estimatedCount} samples, exceeding the LabVIEW .bdx limit of ${LABVIEW_BDX_MAX_TRAJECTORY_POINTS}`);
+  }
+
+  const samples: DraftSample[] = [];
+  for (let section = 1; section < boundaries.length; section += 1) {
+    const startIndex = boundaries[section - 1];
+    const endIndex = boundaries[section];
+    const rawStart = timeline[startIndex].t;
+    const rawDuration = timeline[endIndex].t - rawStart;
+    const motionTicks = Math.max(1, Math.ceil((rawDuration * requestedScale - EPSILON) / samplePeriod));
+    const sectionScale = rawDuration > EPSILON ? motionTicks * samplePeriod / rawDuration : 1;
+    if (samples.length === 0) {
+      const point = timeline[startIndex];
+      samples.push({ ...point, t: 0, velocity: point.velocity / sectionScale, robotHeading: point.heading });
+      for (let waitTick = 0; waitTick < startWaitTicks; waitTick += 1) {
+        tick += 1;
+        samples.push({ ...samples[0], t: tick * samplePeriod, velocity: 0 });
+      }
+    }
+    for (let part = 1; part <= motionTicks; part += 1) {
+      tick += 1;
+      const point = interpolateTimeline(timeline, Math.min(rawStart + part * samplePeriod / sectionScale, timeline[endIndex].t));
+      samples.push({
+        ...point,
+        t: tick * samplePeriod,
+        velocity: point.velocity / sectionScale,
+        robotHeading: point.heading,
+        rotationBreak: part === 1 && planning.rotationBreaks.has(startIndex),
+      });
+    }
+    const waitTicks = Math.ceil((planning.stops.get(endIndex) ?? 0) / samplePeriod - EPSILON);
+    const stop = samples.at(-1)!;
+    for (let waitTick = 0; waitTick < waitTicks; waitTick += 1) {
+      tick += 1;
+      samples.push({ ...stop, t: tick * samplePeriod, velocity: 0 });
+    }
+  }
+  return samples;
+}
+
+function normalizedRangesForSamples(path: PathDoc, samples: readonly { x: number; y: number; s: number }[]): NormalizedRange[] {
+  const totalDistance = samples.at(-1)?.s ?? 0;
+  return rangeFractions(path, totalDistance, nearestGeometryIndices(path, samples), samples);
+}
+
+function activeLimits(path: PathDoc, fraction: number, ranges: readonly NormalizedRange[]) {
+  let maxVel = path.constraints.maxVel;
+  let maxAccel = path.constraints.maxAccel;
+  let maxDecel = path.constraints.maxDecel || path.constraints.maxAccel;
+  let maxAngVel = path.constraints.maxAngVel * Math.PI / 180;
+  let maxAngAccel = path.constraints.maxAngAccel * Math.PI / 180;
+  const maxAngDecel = (path.constraints.maxAngDecel ?? path.constraints.maxAngAccel) * Math.PI / 180;
+  ranges.forEach((range) => {
+    if (fraction < range.f0 - EPSILON || fraction > range.f1 + EPSILON) return;
+    maxVel = Math.min(maxVel, range.maxVel);
+    maxAccel = Math.min(maxAccel, range.maxAccel);
+    maxDecel = Math.min(maxDecel, range.maxDecel ?? range.maxAccel);
+    maxAngVel = Math.min(maxAngVel, range.maxAngVel * Math.PI / 180);
+    maxAngAccel = Math.min(maxAngAccel, range.maxAngAccel * Math.PI / 180);
+  });
+  return { maxVel, maxAccel, maxDecel, maxAngVel, maxAngAccel, maxAngDecel: Math.min(maxAngDecel, maxAngAccel) };
+}
+
+function intervalLimits(path: PathDoc, before: number, after: number, ranges: readonly NormalizedRange[]) {
+  const first = activeLimits(path, before, ranges);
+  const second = activeLimits(path, after, ranges);
+  return {
+    maxVel: Math.min(first.maxVel, second.maxVel),
+    maxAccel: Math.min(first.maxAccel, second.maxAccel),
+    maxDecel: Math.min(first.maxDecel, second.maxDecel),
+    maxAngVel: Math.min(first.maxAngVel, second.maxAngVel),
+    maxAngAccel: Math.min(first.maxAngAccel, second.maxAngAccel),
+    maxAngDecel: Math.min(first.maxAngDecel, second.maxAngDecel),
+  };
+}
+
