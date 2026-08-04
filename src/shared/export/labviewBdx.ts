@@ -268,3 +268,15 @@ export function buildLabviewBdx(project: BordeauxProject, pathId?: string): Labv
   writer.u16(project.robot.drive === "tank" ? 0 : 1); // Drive Type
   writer.u16(kind === "clothoid" ? 0 : 1); // Path Type
   writer.boolean(Boolean(source.labview?.pickupBalls));
+  writer.f64(source.labview?.currentLimit ?? 0);
+  writer.boolean(Boolean(source.labview?.zeroTranslationalVelocity));
+  writer.boolean(Boolean(source.labview?.correctAtBeginningOfPath));
+
+  return {
+    buffer: writer.finish(),
+    pathName: selected.name,
+    samplePeriodS,
+    sampleCount: trajectory.sampleCount,
+    version: BDX_VERSION,
+  };
+}
