@@ -138,3 +138,93 @@ function validateCommandArgumentValue(issues: ValidationIssue[], value: unknown,
     if (value.length > 1024) {
       issues.push(issue(path, "Command argument arrays cannot exceed 1024 items"));
       return;
+    }
+    value.forEach((item, index) => validateCommandArgumentValue(issues, item, `${path}[${index}]`, depth + 1));
+    return;
+  }
+  if (isRecord(value)) {
+    const entries = Object.entries(value);
+    if (entries.length > 256) {
+      issues.push(issue(path, "Command argument objects cannot exceed 256 fields"));
+      return;
+    }
+    entries.forEach(([key, item]) => validateCommandArgumentValue(issues, item, `${path}.${key}`, depth + 1));
+    return;
+  }
+  issues.push(issue(path, "Command arguments must contain only JSON-compatible values"));
+}
+
+function validateRoutineNodes(issues: ValidationIssue[], value: unknown, path: string, pathIds: Set<string>, nodeIds: Set<string>) {
+  if (!Array.isArray(value)) {
+    issues.push(issue(path, "Routine nodes must be an array"));
+    return;
+  }
+  value.forEach((node, index) => {
+    const base = `${path}[${index}]`;
+    if (!isRecord(node)) {
+      issues.push(issue(base, "Routine node must be an object"));
+      return;
+    }
+    if (typeof node.id !== "string" || !node.id.trim()) issues.push(issue(`${base}.id`, "Routine node ID is required"));
+    else if (nodeIds.has(node.id)) issues.push(issue(`${base}.id`, "Routine node IDs must be unique"));
+    else nodeIds.add(node.id);
+
+    if (node.type === "path") {
+      if (typeof node.ref !== "string" || !pathIds.has(node.ref)) issues.push(issue(`${base}.ref`, "Routine path reference must match a path ID"));
+      return;
+    }
+    if (node.type === "decision") {
+      if (typeof node.cond !== "string") issues.push(issue(`${base}.cond`, "Decision condition is required"));
+      if (typeof node.thenLabel !== "string" || typeof node.elseLabel !== "string") issues.push(issue(base, "Decision branch labels are required"));
+      validateRoutineNodes(issues, node.then, `${base}.then`, pathIds, nodeIds);
+      validateRoutineNodes(issues, node.else, `${base}.else`, pathIds, nodeIds);
+      return;
+    }
+    if (node.type !== "function") {
+      issues.push(issue(`${base}.type`, "Routine node type is invalid"));
+      return;
+    }
+    if (!["terminate", "sequence", "generate", "velocity"].includes(String(node.cat))) issues.push(issue(`${base}.cat`, "Routine function category is invalid"));
+    validateOptionalFinite(issues, node.scale, `${base}.scale`, "Velocity scale", { nonnegative: true });
+  });
+}
+
+function validateProjectInner(project: unknown): ValidationResult {
+  const issues: ValidationIssue[] = [];
+  if (!isRecord(project)) return { ok: false, issues: [issue("$", "Project must be a JSON object")] };
+
+  if (project.schemaVersion !== "1.0") issues.push(issue("$.schemaVersion", "Schema version must be 1.0"));
+  if (typeof project.name !== "string" || !project.name.trim()) issues.push(issue("$.name", "Project name is required"));
+  if (project.plannerId !== undefined && !["profiledSpline", "optimizedTrajectory", "labviewBezier", "labviewClothoid"].includes(String(project.plannerId))) {
+    issues.push(issue("$.plannerId", "Planner must be profiledSpline, optimizedTrajectory, labviewBezier, or labviewClothoid"));
+  }
+
+  if (!isRecord(project.robot)) {
+    issues.push(issue("$.robot", "Robot config is required"));
+  } else {
+    if (project.robot.drive !== "swerve" && project.robot.drive !== "tank") issues.push(issue("$.robot.drive", "Drive must be swerve or tank"));
+    validateFinite(issues, project.robot.w, "$.robot.w", "Robot width", { positive: true });
+    validateFinite(issues, project.robot.l, "$.robot.l", "Robot length", { positive: true });
+    validateOptionalFinite(issues, project.robot.heightM, "$.robot.heightM", "Robot height", { positive: true });
+    validateFinite(issues, project.robot.maxSpeed, "$.robot.maxSpeed", "Robot max speed", { positive: true });
+    validateRobotFootprint(issues, project.robot);
+    validateRobotPlanning(issues, project.robot);
+  }
+
+  const pathIds = new Set<string>();
+  const markerIds = new Set<string>();
+  const folderIds = new Set<string>();
+  if (project.pathFolders !== undefined) {
+    if (!Array.isArray(project.pathFolders)) issues.push(issue("$.pathFolders", "Path folders must be an array"));
+    else project.pathFolders.forEach((folder, index) => {
+      const base = `$.pathFolders[${index}]`;
+      if (!isRecord(folder)) { issues.push(issue(base, "Path folder must be an object")); return; }
+      if (typeof folder.id !== "string" || !folder.id.trim()) issues.push(issue(`${base}.id`, "Folder ID is required"));
+      else if (folderIds.has(folder.id)) issues.push(issue(`${base}.id`, "Folder IDs must be unique"));
+      else folderIds.add(folder.id);
+      if (typeof folder.name !== "string" || !folder.name.trim()) issues.push(issue(`${base}.name`, "Folder name is required"));
+    });
+  }
+  if (!Array.isArray(project.paths)) {
+    issues.push(issue("$.paths", "Project paths must be an array"));
+  } else if (project.paths.length === 0) {
