@@ -301,3 +301,93 @@ describe("LabVIEW .bdx compatibility", () => {
     const reader = new BinaryReader(result.buffer);
 
     expect(result.buffer[0]).toBe(0);
+    expect(result.buffer.toString("utf8", 4, 7)).toBe("4.4");
+    expect(reader.string()).toBe("4.4");
+    expect(reader.boolean()).toBe(false); // Robot Backwards
+    expect(reader.boolean()).toBe(false); // Reverse Path
+    expect(reader.u32()).toBe(1); // one trajectory segment
+    expect(reader.string()).toBe("Bezier");
+    expect(reader.u16()).toBe(4);
+
+    const positionCount = reader.u32();
+    expect(positionCount).toBe(result.sampleCount);
+    expect(reader.f64()).toBeCloseTo(3.280839895, 8);
+    expect(reader.f64()).toBeCloseTo(6.56167979, 8);
+    expect(reader.f64()).toBeCloseTo(0, 8);
+    reader.skip((positionCount - 1) * 3 * 8);
+
+    const velocityCount = reader.u32();
+    expect(velocityCount).toBe(positionCount);
+    reader.skip(velocityCount * 4 * 8);
+    expect(reader.i32()).toBeGreaterThanOrEqual(0);
+    expect(reader.i32()).toBeLessThan(positionCount);
+    expect(reader.u32()).toBe(0); // commands
+    expect(reader.f64()).toBe(0.02);
+    expect(reader.f64()).toBeCloseTo(project.paths[0].constraints.maxVel * 3.280839895, 8);
+    reader.skip(5 * 8); // remaining translational limits and conditions
+    expect(reader.u32()).toBe(0); // overrides
+    reader.skip(3 * 8); // angular limits
+    expect(reader.u32()).toBe(2);
+    reader.skip(2 * 3 * 8);
+    expect(reader.f64()).toBeCloseTo((positionCount - 1) * 0.02, 10);
+    expect(reader.f64()).toBeCloseTo(3.280839895, 6);
+    expect(reader.boolean()).toBe(false);
+    expect(reader.u16()).toBe(1); // Holonomic
+    expect(reader.u16()).toBe(1); // Bezier
+    expect(reader.boolean()).toBe(false);
+    expect(reader.f64()).toBe(0);
+    expect(reader.boolean()).toBe(false);
+    expect(reader.boolean()).toBe(false);
+    expect(reader.offset).toBe(result.buffer.length);
+  });
+
+  it("exports only the selected path", () => {
+    const first = blankPath("First");
+    const second = blankPath("Second");
+    second.waypoints = buildWaypoints([{ x: 7, y: 1 }, { x: 8, y: 1 }]);
+    const project = projectWithPaths([first, second]);
+    const result = buildLabviewBdx(project, second.id);
+    const reader = new BinaryReader(result.buffer);
+    reader.string(); reader.boolean(); reader.boolean(); reader.u32(); reader.string(); reader.u16(); reader.u32();
+    expect(result.pathName).toBe("Second");
+    expect(reader.f64()).toBeCloseTo(7 * 3.280839895, 8);
+  });
+
+  it("does not let an unrelated invalid path block the selected path", () => {
+    const selected = blankPath("Selected");
+    const invalid = blankPath("Invalid");
+    invalid.waypoints = invalid.waypoints.slice(0, 1);
+    const project = projectWithPaths([selected, invalid]);
+    expect(buildLabviewBdx(project, selected.id).pathName).toBe("Selected");
+  });
+
+  it("time-scales samples onto exact 20 ms ticks without moving the endpoint", () => {
+    const project = createDemoProject();
+    project.paths[0].waypoints = buildWaypoints([{ x: 1, y: 2 }, { x: 2, y: 2 }]);
+    project.paths[0].startVel = 0.4;
+    project.paths[0].goalVel = 0.6;
+    const planned = buildBdxExport(project).paths[0];
+    const result = buildLabviewBdx(project, project.paths[0].id);
+    const durationS = (result.sampleCount - 1) * result.samplePeriodS;
+    const timeScale = planned.totalTimeS / durationS;
+    const reader = new BinaryReader(result.buffer);
+    reader.string(); reader.boolean(); reader.boolean(); reader.u32(); reader.string(); reader.u16();
+    const positionCount = reader.u32();
+    reader.skip((positionCount - 1) * 3 * 8);
+    expect(reader.f64()).toBeCloseTo(2 * 3.280839895, 8);
+    expect(reader.f64()).toBeCloseTo(2 * 3.280839895, 8);
+    reader.f64();
+    const velocityCount = reader.u32();
+    expect(velocityCount).toBe(positionCount);
+    expect(reader.f64()).toBeCloseTo(project.paths[0].startVel * timeScale * 3.280839895, 6);
+    reader.skip((velocityCount - 2) * 4 * 8 + 3 * 8);
+    expect(reader.f64()).toBeCloseTo(project.paths[0].goalVel * timeScale * 3.280839895, 6);
+    reader.skip(3 * 8); // remaining final velocity-vector fields
+    reader.i32(); reader.i32();
+    expect(reader.u32()).toBe(0); // commands
+    expect(reader.f64()).toBe(result.samplePeriodS);
+    reader.skip(4 * 8); // translational limits
+    expect(reader.f64()).toBeCloseTo(project.paths[0].startVel * 3.280839895, 6);
+    expect(reader.f64()).toBeCloseTo(project.paths[0].goalVel * 3.280839895, 6);
+    expect(durationS).toBeGreaterThanOrEqual(planned.totalTimeS);
+    expect(durationS - planned.totalTimeS).toBeLessThan(result.samplePeriodS);
