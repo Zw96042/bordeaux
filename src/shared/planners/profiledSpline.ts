@@ -82,3 +82,13 @@ export const profiledSplinePlanner: TrajectoryPlanner = {
       curvatureInvM: R(metrics.curv?.[i] ?? point.curv ?? 0, 5),
     }));
 
+    return {
+      planner: "profiledSpline",
+      totalTimeS: R(derived.prof.totalTime || 0, 4),
+      totalDistanceM: R(totalDistanceM, 4),
+      samples,
+      markers: markersFor(input, pts, times),
+      diagnostics: diagnosticsFor(input.path.name, derived),
+    };
+  },
+};
