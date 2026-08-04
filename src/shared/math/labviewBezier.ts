@@ -358,3 +358,64 @@ export function labviewQuinticParameterAtDistance(
   const segment = spline.segments[segmentIndex];
   const tolerance = options.tolerance ?? DEFAULT_LENGTH_TOLERANCE;
   const maxIterations = options.maxIterations ?? DEFAULT_INVERSION_ITERATIONS;
+  let low = 0;
+  let high = 1;
+  for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+    const midpoint = (low + high) / 2;
+    const midpointLength = labviewQuinticArcLength(segment, 0, midpoint);
+    if (Math.abs(midpointLength - localTarget) <= tolerance) return { segmentIndex, t: midpoint };
+    if (midpointLength < localTarget) low = midpoint;
+    else high = midpoint;
+  }
+  return { segmentIndex, t: (low + high) / 2 };
+}
+
+export function sampleLabviewQuinticAtDistance(
+  spline: LabviewQuinticSpline,
+  requestedDistance: number,
+  options?: ArcLengthInversionOptions,
+): QuinticSplineSample {
+  const distanceAlongSpline = Math.max(0, Math.min(spline.totalLength, requestedDistance));
+  const parameter = labviewQuinticParameterAtDistance(spline, distanceAlongSpline, options);
+  const segment = spline.segments[parameter.segmentIndex];
+  const point = evaluateLabviewQuintic(segment, parameter.t);
+  const derivative = evaluateLabviewQuinticDerivative(segment, parameter.t);
+  return {
+    ...parameter,
+    ...point,
+    distance: distanceAlongSpline,
+    headingRad: Math.atan2(derivative.y, derivative.x),
+    curvature: signedLabviewQuinticCurvature(segment, parameter.t),
+  };
+}
+
+/** Returns exactly `count` samples, including both endpoints. */
+export function sampleLabviewQuinticByCount(
+  spline: LabviewQuinticSpline,
+  count: number,
+  options?: ArcLengthInversionOptions,
+): QuinticSplineSample[] {
+  if (!Number.isInteger(count) || count < 2) throw new RangeError("Sample count must be an integer of at least two.");
+  return Array.from({ length: count }, (_, index) =>
+    sampleLabviewQuinticAtDistance(spline, (spline.totalLength * index) / (count - 1), options),
+  );
+}
+
+/** Returns samples at fixed arc-distance spacing and always includes the end. */
+export function sampleLabviewQuinticByDistance(
+  spline: LabviewQuinticSpline,
+  spacing: number,
+  options?: ArcLengthInversionOptions,
+): QuinticSplineSample[] {
+  if (!Number.isFinite(spacing) || spacing <= 0) throw new RangeError("Sample spacing must be positive and finite.");
+  if (spline.totalLength <= DEFAULT_EPSILON) {
+    return [sampleLabviewQuinticAtDistance(spline, 0, options)];
+  }
+
+  const samples: QuinticSplineSample[] = [];
+  for (let sampleDistance = 0; sampleDistance < spline.totalLength; sampleDistance += spacing) {
+    samples.push(sampleLabviewQuinticAtDistance(spline, sampleDistance, options));
+  }
+  samples.push(sampleLabviewQuinticAtDistance(spline, spline.totalLength, options));
+  return samples;
+}
