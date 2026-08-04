@@ -90,3 +90,25 @@ export function previewBdxExport(project: BordeauxProject, options: BdxExportOpt
   issues.push(...validation.issues);
 
   let pathCount = 0;
+  let sampleCount = 0;
+  let totalTimeS = 0;
+
+  if (validation.ok) {
+    try {
+      const exportData = buildBdxExport(project, options);
+      pathCount = exportData.paths.length;
+      sampleCount = exportData.paths.reduce((sum, path) => sum + path.samples.length, 0);
+      totalTimeS = Number(exportData.paths.reduce((sum, path) => sum + path.totalTimeS, 0).toFixed(4));
+      for (const path of exportData.paths) issues.push(...path.diagnostics);
+    } catch (error) {
+      issues.push({
+        severity: "error",
+        path: "$.export",
+        message: error instanceof Error ? error.message : "Failed to build export",
+      });
+    }
+  }
+
+  const hasBlocking = issues.some((issue) => issue.severity === "error" || (options.includeWarningsAsBlocking && issue.severity === "warning"));
+  return { ok: !hasBlocking, pathCount, sampleCount, totalTimeS, issues };
+}
