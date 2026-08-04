@@ -811,3 +811,55 @@
     const allTangent = doc.waypoints.slice(0, -1).every((_, segment) => effectiveHeadingMode(segment) === 'tangent');
     const mode = allTangent ? 'tank' : 'swerve';
     const anchors = mode === 'tank' ? [] : buildAnchors(pts.map((p, i) => ({ f: total > 1e-6 ? p.s / total : 0, rad: head[i] })));
+    const dwell = [], turns = [];
+    doc.waypoints.forEach((w, k) => { if (w.stop && w.wait > 0) dwell.push({ idx: wpIdx[k], wait: w.wait }); });
+    if (!(options && options.skipStationaryActions)) doc.waypoints.forEach((w, k) => { if (w.stop && w.turnInPlace) turns.push({ idx: wpIdx[k], start: k > 0 ? head[Math.max(0, wpIdx[k] - 1)] : head[0], end: w.turnInPlace.headingDeg * D2R, direction: w.turnInPlace.direction, maxAngVel: doc.constraints.maxAngVel, maxAngAccel: Math.min(doc.constraints.maxAngAccel, doc.constraints.maxAngDecel || doc.constraints.maxAngAccel), maxAngJerk: doc.constraints.maxAngJerk }); });
+    const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns });
+    const mtr = metrics(pts, prof, anchors, mode);
+    const warnings = analyze(pts, prof, mtr, robot || {});
+    doc.waypoints.slice(0, -1).forEach((w, segment) => {
+      if (w.segmentHeadingMode !== 'lookAt' || !w.segmentLookAt) return;
+      let nearest = Infinity;
+      for (let i = wpIdx[segment]; i <= wpIdx[segment + 1] && i < pts.length; i++) nearest = Math.min(nearest, Math.hypot(pts[i].x - w.segmentLookAt.x, pts[i].y - w.segmentLookAt.y));
+      if (nearest < 0.05) warnings.push({ f: wpFrac[segment], kind: 'lookAt', sev: 'high', text: 'Tracked field point lies on the driven segment' });
+    });
+    // rotational diagnostics: flag contiguous rotation-limited stretches (memo §16)
+    if (prof.rotLimited) {
+      const rl = prof.rotLimited;
+      const pushRun = (a, b) => { const mid = Math.floor((a + b) / 2); warnings.push({ f: pts[mid].s / total, kind: 'rot', sev: 'med', text: 'Rotation-limited \u00b7 heading can\u2019t keep up at speed' }); };
+      let run = -1;
+      for (let i = 0; i < rl.length; i++) { if (rl[i]) { if (run < 0) run = i; } else if (run >= 0) { if (i - run > 3) pushRun(run, i - 1); run = -1; } }
+      if (run >= 0 && rl.length - run > 3) pushRun(run, rl.length - 1);
+    }
+    // locate each warning to a segment + attach suggested fixes
+    warnings.forEach((wn) => {
+      let seg = 0;
+      for (let i = 0; i < wpFrac.length - 1; i++) { if (wn.f >= wpFrac[i] - 1e-4) seg = i; }
+      wn.seg = Math.max(0, Math.min(doc.waypoints.length - 2, seg));
+      wn.fixes = wn.kind === 'curv'
+        ? [{ id: 'clothoid', label: 'Convert segment to clothoid' }, { id: 'handles', label: 'Increase handle length' }, { id: 'cap', label: 'Cap velocity on this stretch' }, { id: 'insert', label: 'Insert a waypoint here' }]
+        : wn.kind === 'rot'
+        ? [{ id: 'cap', label: 'Cap speed on this stretch' }, { id: 'angvel', label: 'Raise max angular velocity' }]
+        : [{ id: 'cap', label: 'Lower the speed cap around here' }, { id: 'handles', label: 'Lengthen handles to ease the curve' }, { id: 'insert', label: 'Insert a waypoint here' }];
+    });
+    return { sample: smp, prof, anchors, metrics: mtr, warnings, wpFrac, wpIdx, mode, effRanges, headingMode, rev: !!doc.driveBackward };
+  }
+  function jigglePositions(anchor, baseRad, options, bounds = { w: 17.548, h: 8.052 }) {
+    const distance = Number(options.distanceM ?? options.distance), strokes = Math.round(Number(options.strokes)), startDeg = Number(options.startDeg), stepDeg = Number(options.stepDeg);
+    if (!(distance >= 0.03) || strokes < 2 || strokes > 12 || !Number.isFinite(startDeg + stepDeg)) return null;
+    const directions = new Set(), positions = [];
+    for (let stroke = 0; stroke < strokes; stroke++) {
+      const relativeDeg = startDeg + stepDeg * stroke;
+      const key = ((relativeDeg % 360) + 360) % 360;
+      const roundedKey = Math.round(key * 1000) / 1000;
+      if (directions.has(roundedKey)) return null;
+      directions.add(roundedKey);
+      const angle = baseRad + relativeDeg * D2R;
+      const point = { x: anchor.x + Math.cos(angle) * distance, y: anchor.y + Math.sin(angle) * distance };
+      if (point.x < 0 || point.x > bounds.w || point.y < 0 || point.y > bounds.h) return null;
+      positions.push(point, { x: anchor.x, y: anchor.y });
+    }
+    return positions;
+  }
+export const PM = { bez, bezD, sample, profile, poseAtTime, headingAt, metrics, analyze, metricColor, metricGradient, METRICS, SEGTYPES, buildAnchors, pointAtFraction, nearestFraction, autoHandles, angWrap, angLerp, D2R, R2D, lerp, derivePath, jigglePositions, effectiveRanges, featureFraction, remapWaypointRange, waypointFracs };
+export default PM;
