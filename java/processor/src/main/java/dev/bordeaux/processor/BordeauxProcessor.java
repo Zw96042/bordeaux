@@ -538,3 +538,93 @@ public final class BordeauxProcessor extends AbstractProcessor {
                         + schema(field.type(), visiting, depth + 1) + "}");
             }
             visiting.remove(javaType);
+            return "{\"fields\":[" + String.join(",", fields) + "],\"javaType\":" + quote(javaType)
+                    + ",\"kind\":\"object\"}";
+        }
+        return schemaLeaf("opaque", javaType);
+    }
+
+    private static List<SchemaField> objectShape(TypeElement element) {
+        if (element.getKind() == ElementKind.RECORD) {
+            return element.getRecordComponents().stream()
+                    .map(component -> new SchemaField(component.getSimpleName().toString(), component.asType()))
+                    .toList();
+        }
+        List<SchemaField> publicFields = element.getEnclosedElements().stream()
+                .filter(value -> value.getKind() == ElementKind.FIELD)
+                .filter(value -> value.getModifiers().contains(Modifier.PUBLIC))
+                .filter(value -> !value.getModifiers().contains(Modifier.STATIC))
+                .filter(value -> !value.getModifiers().contains(Modifier.FINAL))
+                .map(value -> new SchemaField(value.getSimpleName().toString(), value.asType()))
+                .toList();
+        if (!publicFields.isEmpty()) return publicFields;
+        return List.of();
+    }
+
+    private static boolean hasPublicNoArgConstructor(TypeElement element) {
+        List<ExecutableElement> constructors = element.getEnclosedElements().stream()
+                .filter(value -> value.getKind() == ElementKind.CONSTRUCTOR)
+                .map(value -> (ExecutableElement) value)
+                .toList();
+        return constructors.isEmpty() || constructors.stream().anyMatch(value ->
+                value.getModifiers().contains(Modifier.PUBLIC) && value.getParameters().isEmpty());
+    }
+
+    private String catalogId(List<CommandMethod> methods) {
+        String value = processingEnv.getOptions().get("bordeaux.catalogId");
+        if (value == null || value.isBlank()) value = methods.get(0).owner();
+        value = value.trim();
+        if (value.length() > 256) {
+            processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                    "Bordeaux catalog ID must not exceed 256 characters");
+            return null;
+        }
+        return value;
+    }
+
+    private void writeCatalog(String commandsJson, String catalogId, String catalogHash) throws IOException {
+        Filer filer = processingEnv.getFiler();
+        try (Writer writer = filer.createResource(StandardLocation.CLASS_OUTPUT, "", "META-INF/bordeaux/commands.json").openWriter()) {
+            writer.write("{\n  \"schemaVersion\": \"1.0\",\n  \"catalogId\": " + quote(catalogId)
+                    + ",\n  \"supportVersion\": \"0.1.0\",\n  \"catalogHash\": " + quote(catalogHash)
+                    + ",\n  \"commands\": " + commandsJson + "\n}\n");
+        }
+    }
+
+    private void writeBindings(List<CommandMethod> methods, String catalogId, String catalogHash) throws IOException {
+        Map<String, String> providers = new LinkedHashMap<>();
+        for (CommandMethod method : methods) {
+            if (!method.isStatic()) providers.computeIfAbsent(method.owner(), ignored -> "provider" + providers.size());
+        }
+        JavaFileObject source = processingEnv.getFiler().createSourceFile(GENERATED_PACKAGE + "." + GENERATED_CLASS);
+        try (Writer writer = source.openWriter()) {
+            writer.write("package " + GENERATED_PACKAGE + ";\n\n");
+            writer.write("@javax.annotation.processing.Generated(\"" + BordeauxProcessor.class.getName() + "\")\n");
+            writer.write("public final class " + GENERATED_CLASS + " {\n");
+            writer.write("  public static final String CATALOG_ID = " + quoteJava(catalogId) + ";\n");
+            writer.write("  public static final String CATALOG_HASH = " + quoteJava(catalogHash) + ";\n");
+            for (Map.Entry<String, String> provider : providers.entrySet()) {
+                writer.write("  private final " + provider.getKey() + " " + provider.getValue() + ";\n");
+            }
+            writer.write("\n  public " + GENERATED_CLASS + "(");
+            writer.write(providers.entrySet().stream().map(value -> value.getKey() + " " + value.getValue()).reduce((a, b) -> a + ", " + b).orElse(""));
+            writer.write(") {\n");
+            for (Map.Entry<String, String> provider : providers.entrySet()) {
+                writer.write("    this." + provider.getValue() + " = java.util.Objects.requireNonNull(" + provider.getValue() + ", \"" + provider.getValue() + "\");\n");
+            }
+            writer.write("  }\n\n  public dev.bordeaux.runtime.BordeauxCommandRegistry registry() {\n");
+            writer.write("    var builder = dev.bordeaux.runtime.BordeauxCommandRegistry.builder()"
+                    + ".catalogId(CATALOG_ID).catalogHash(CATALOG_HASH);\n");
+            for (CommandMethod method : methods) {
+                String names = method.parameters().stream().map(parameter -> quoteJava(parameter.name())).reduce((a, b) -> a + ", " + b).orElse("");
+                writer.write("    builder.register(" + quoteJava(method.id()) + ", java.util.Set.of(" + names + "), args -> ");
+                writer.write(method.isStatic() ? method.owner() : providers.get(method.owner()));
+                writer.write("." + method.member() + "(");
+                writer.write(method.parameters().stream().map(this::argumentExpression).reduce((a, b) -> a + ", " + b).orElse(""));
+                writer.write("));\n");
+            }
+            writer.write("    return builder.build();\n  }\n}\n");
+        }
+    }
+
+    private String commandsJson(List<CommandMethod> methods) {
