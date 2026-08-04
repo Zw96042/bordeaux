@@ -88,3 +88,93 @@ export function headingTransitionWindows(
 }
 
 /**
+ * Finds the first authored heading anchor after a transition into Manual or
+ * Targets mode. Those laws are interpolated path-wide, including while another
+ * law is active; acquiring their hidden boundary value can therefore point the
+ * robot past the next real anchor before reversing back to it.
+ */
+export function headingTransitionGoals(
+  segmentLaws: readonly string[],
+  transitionBreaks: readonly boolean[],
+  waypointIndices: readonly number[],
+  points: readonly { s: number }[],
+  anchorsByLaw: {
+    manual: readonly HeadingLawAnchor[];
+    targets: readonly HeadingLawAnchor[];
+  },
+): HeadingTransitionGoal[] {
+  const totalDistanceM = points.at(-1)?.s ?? 0;
+  const goals: HeadingTransitionGoal[] = [];
+  for (let segment = 1; segment < segmentLaws.length; segment += 1) {
+    const law = segmentLaws[segment];
+    if ((law !== "manual" && law !== "targets")
+      || segmentLaws[segment - 1] === law
+      || transitionBreaks[segment]) continue;
+
+    let spanEndSegment = segment;
+    while (spanEndSegment + 1 < segmentLaws.length
+      && segmentLaws[spanEndSegment + 1] === law
+      && !transitionBreaks[spanEndSegment + 1]) spanEndSegment += 1;
+
+    const boundaryIndex = clamp(waypointIndices[segment], 0, Math.max(0, points.length - 1));
+    const spanEndIndex = clamp(waypointIndices[spanEndSegment + 1], boundaryIndex, Math.max(boundaryIndex, points.length - 1));
+    const boundaryDistance = points[boundaryIndex]?.s ?? 0;
+    const spanEndDistance = points[spanEndIndex]?.s ?? boundaryDistance;
+    const anchor = anchorsByLaw[law].find((candidate) => {
+      const distance = clamp(candidate.f, 0, 1) * totalDistanceM;
+      return distance >= boundaryDistance - EPSILON && distance <= spanEndDistance + EPSILON;
+    });
+    if (!anchor) continue;
+    goals.push({
+      segmentIndex: segment,
+      distanceM: Math.max(boundaryDistance, clamp(anchor.f, 0, 1) * totalDistanceM),
+      heading: anchor.heading,
+      spanEndIndex,
+    });
+  }
+  return goals;
+}
+
+export function smoothHeadingTransitions(
+  rawHeadings: readonly number[],
+  segmentLaws: readonly string[],
+  transitionBreaks: readonly boolean[],
+  waypointIndices: readonly number[],
+  points: readonly { s: number }[],
+  waypoints: readonly Waypoint[],
+  transitionGoals: readonly HeadingTransitionGoal[] = [],
+): number[] {
+  if (rawHeadings.length === 0) return [];
+  const unwrappedRaw = [rawHeadings[0]];
+  for (let index = 1; index < rawHeadings.length; index += 1) {
+    unwrappedRaw.push(unwrapFrom(unwrappedRaw[index - 1], rawHeadings[index]));
+  }
+  const headings = [...unwrappedRaw];
+  const protectedAnchorIndices = new Set<number>();
+
+  for (let segment = 1; segment < segmentLaws.length; segment += 1) {
+    if (segmentLaws[segment] === segmentLaws[segment - 1] || transitionBreaks[segment]) continue;
+    const boundaryIndex = clamp(waypointIndices[segment], 1, headings.length - 1);
+    const previousBoundary = clamp(waypointIndices[segment - 1], 0, boundaryIndex - 1);
+    const nextBoundary = clamp(waypointIndices[segment + 1], boundaryIndex, headings.length - 1);
+    let outgoingStart = Math.min(boundaryIndex + 1, nextBoundary);
+    while (outgoingStart < nextBoundary && points[outgoingStart].s - points[boundaryIndex].s <= EPSILON) outgoingStart += 1;
+
+    const policy = resolveHeadingTransition(waypoints[segment]?.headingTransition);
+    let protectedBefore = -1;
+    protectedAnchorIndices.forEach((index) => {
+      if (index <= boundaryIndex) protectedBefore = Math.max(protectedBefore, index);
+    });
+    const boundaryProtected = protectedBefore === boundaryIndex;
+    const authoredBeforeShare = policy.placement === "before" ? 1 : policy.placement === "split" ? 0.5 : 0;
+    const beforeShare = boundaryProtected ? 0 : authoredBeforeShare;
+    const afterShare = 1 - beforeShare;
+    const incoming = boundaryProtected ? headings[boundaryIndex] : headings[boundaryIndex - 1];
+
+    const transitionGoal = transitionGoals.find((goal) => goal.segmentIndex === segment);
+    if (transitionGoal) {
+      const boundaryDistance = points[boundaryIndex].s;
+      const beforeDistance = Math.min(
+        policy.distanceM * beforeShare,
+        Math.max(0, boundaryDistance - points[previousBoundary].s),
+      );
