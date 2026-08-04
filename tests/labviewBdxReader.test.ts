@@ -178,3 +178,57 @@ describe("LabVIEW Bordeaux v4.4 reader", () => {
     expect(decoded.trajectory[0].velocities).toHaveLength(encoded.sampleCount);
     expect(decoded.commands).toEqual([]);
     expect(decoded.conditions.overrides).toEqual([]);
+    expect(decoded.conditions.samplePeriodS).toBe(encoded.samplePeriodS);
+    expect(decoded.updatedWaypoints).toHaveLength(project.paths[0].waypoints.length);
+    expect(decoded.driveType).toBe("holonomic");
+    expect(decoded.pathType).toBe("bezier");
+  });
+
+  it("rejects historical versions whose complete layout is not proven", () => {
+    const historicalV31Header = Buffer.from([0, 0, 0, 3, 0x33, 0x2e, 0x31]);
+    expect(() => parseLabviewBdx(historicalV31Header)).toThrowError(LabviewBdxUnsupportedError);
+    expect(() => parseLabviewBdx(historicalV31Header)).toThrow(/only v4\.4 has a proven complete schema/);
+  });
+
+  it("bounds-checks array counts before allocating", () => {
+    const project = createDemoProject();
+    const corrupted = Buffer.from(buildLabviewBdx(project, project.paths[0].id).buffer);
+    corrupted.writeUInt32BE(0xffffffff, 9); // Trajectory array count follows the 7-byte header and two booleans.
+
+    expect(() => parseLabviewBdx(corrupted)).toThrowError(LabviewBdxParseError);
+    expect(() => parseLabviewBdx(corrupted)).toThrow(/exceeds the supported limit/);
+
+    const sizeConsistentExcessiveCount = Buffer.concat([
+      labviewString("4.4"),
+      u8(0),
+      u8(0),
+      u32(1025),
+      Buffer.alloc(1025 * 22),
+    ]);
+    expect(() => parseLabviewBdx(sizeConsistentExcessiveCount)).toThrow(/supported limit of 1024/);
+  });
+
+  it("rejects non-empty commands and overrides explicitly", () => {
+    const project = createDemoProject();
+    const encoded = buildLabviewBdx(project, project.paths[0].id).buffer;
+    const commandOffset = commandCountOffset(encoded);
+    const withCommand = Buffer.from(encoded);
+    withCommand.writeUInt32BE(1, commandOffset);
+    expect(() => parseLabviewBdx(withCommand)).toThrowError(LabviewBdxUnsupportedError);
+    expect(() => parseLabviewBdx(withCommand)).toThrow(/command records contain LabVIEW Variant and Path values/);
+
+    const withOverride = Buffer.from(encoded);
+    const overrideOffset = commandOffset + 4 + 56;
+    withOverride.writeUInt32BE(1, overrideOffset);
+    expect(() => parseLabviewBdx(withOverride)).toThrowError(LabviewBdxUnsupportedError);
+    expect(() => parseLabviewBdx(withOverride)).toThrow(/overrides are not supported/);
+  });
+
+  it("rejects trailing and truncated data", () => {
+    const project = createDemoProject();
+    const encoded = buildLabviewBdx(project, project.paths[0].id).buffer;
+
+    expect(() => parseLabviewBdx(Buffer.concat([encoded, Buffer.from([0])]))).toThrow(/trailing byte/);
+    expect(() => parseLabviewBdx(encoded.subarray(0, encoded.length - 1))).toThrow(/Truncated/);
+  });
+});
