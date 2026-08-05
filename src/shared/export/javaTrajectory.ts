@@ -88,3 +88,38 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
       events,
     };
   });
+  if (sampleCount > MAX_SAMPLE_COUNT) throw new Error(`Java trajectory export exceeds ${MAX_SAMPLE_COUNT} samples`);
+  if (eventCount > MAX_EVENT_COUNT) throw new Error(`Java trajectory export exceeds ${MAX_EVENT_COUNT} events`);
+  const document: JavaTrajectoryDocument = {
+    schemaVersion: "bordeaux-trajectory/1.0",
+    generator: "bordeaux",
+    catalog: {
+      schemaVersion: "1.0",
+      catalogId: catalog.catalogId,
+      supportVersion: catalog.supportVersion,
+      catalogHash: catalog.catalogHash,
+    },
+    units: native.units,
+    robot: native.robot,
+    routine: native.routine,
+    paths,
+  };
+  const contents = `${JSON.stringify(document, null, 2)}\n`;
+  if (Buffer.byteLength(contents, "utf8") > MAX_EXPORT_BYTES) throw new Error(`Java trajectory export exceeds ${MAX_EXPORT_BYTES} bytes`);
+  return {
+    document,
+    contents,
+    sha256: createHash("sha256").update(contents, "utf8").digest("hex"),
+    pathCount: paths.length,
+    eventCount,
+    sampleCount,
+  };
+}
+
+export function javaTrajectoryFileName(projectName: string): string {
+  const base = projectName.normalize("NFKD")
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^[._-]+|[._-]+$/g, "")
+    .slice(0, 80);
+  return `${base || "autonomous"}.bordeaux.json`;
+}
