@@ -88,3 +88,93 @@ function gradleSupportScript(): string {
 `  annotationProcessor files(bordeauxRuntimeJar, bordeauxProcessorJar)\n` +
 `}\n` +
 `tasks.withType(org.gradle.api.tasks.compile.JavaCompile).configureEach {\n` +
+`  options.compilerArgs.add('-Abordeaux.catalogId=' + rootProject.name)\n` +
+`}\n` +
+`tasks.register('bordeauxCatalog') {\n` +
+`  dependsOn tasks.named('classes')\n` +
+`  def catalogInput = layout.buildDirectory.file('classes/java/main/META-INF/bordeaux/commands.json')\n` +
+`  def catalogOutput = layout.buildDirectory.file('bordeaux/catalog-v1.json')\n` +
+`  inputs.file(catalogInput)\n` +
+`  outputs.file(catalogOutput)\n` +
+`  doLast {\n` +
+`    def inputFile = catalogInput.get().asFile\n` +
+`    if (!inputFile.isFile()) throw new GradleException('No Bordeaux command catalog was generated. Annotate at least one provider method with @BordeauxCommand.')\n` +
+`    def outputFile = catalogOutput.get().asFile\n` +
+`    outputFile.parentFile.mkdirs()\n` +
+`    outputFile.bytes = inputFile.bytes\n` +
+`  }\n` +
+`}\n`;
+}
+
+function integrationGuide(): string {
+  return `# Bordeaux Java integration\n\n` +
+`Bordeaux owns the JSON contract and generated bindings, but your robot project keeps ownership of subsystems and autonomous lifecycle.\n\n` +
+`1. Put \`@BordeauxCommand\` on public command factory methods. Add \`@BordeauxParam\` metadata to authored parameters.\n` +
+`2. In Bordeaux, run **Java > Build Command Catalog** and place generated commands on event markers.\n` +
+`3. Call \`dev.bordeaux.runtime.BordeauxBindings.generated(...)\` with instances of each non-static provider.\n` +
+`4. Open the exported JSON below WPILib's deploy directory and call \`BordeauxTrajectoryReader.read(input, pathId)\`.\n` +
+`5. Create \`BordeauxEventRunner\`, call \`periodic(elapsedSeconds)\` beside the path follower, and call \`endPath()\` when the path ends.\n\n` +
+`A minimal team-owned integration looks like this (replace \`actions\`, file name, and path ID with your code):\n\n` +
+"```java\n" +
+`import dev.bordeaux.runtime.BordeauxBindings;\n` +
+`import dev.bordeaux.runtime.*;\n` +
+`import edu.wpi.first.wpilibj.Filesystem;\n` +
+`import java.nio.file.Files;\n\n` +
+`private final BordeauxCommandRegistry bordeauxRegistry =\n` +
+`    BordeauxBindings.generated(actions);\n` +
+`private BordeauxEventRunner bordeauxEvents;\n\n` +
+`void startBordeauxPath(String fileName, String pathId) throws Exception {\n` +
+`  var file = Filesystem.getDeployDirectory().toPath().resolve("bordeaux").resolve(fileName);\n` +
+`  try (var input = Files.newInputStream(file)) {\n` +
+`    bordeauxEvents = new BordeauxEventRunner(BordeauxTrajectoryReader.read(input, pathId), bordeauxRegistry);\n` +
+`  }\n` +
+`}\n\n` +
+`void autonomousPeriodic(double elapsedSeconds) {\n` +
+`  if (bordeauxEvents != null) bordeauxEvents.periodic(elapsedSeconds);\n` +
+`}\n\n` +
+`void endBordeauxPath() {\n` +
+`  if (bordeauxEvents != null) bordeauxEvents.endPath();\n` +
+`  bordeauxEvents = null;\n` +
+`}\n` +
+"```\n\n" +
+`Pass every non-static command provider to \`BordeauxBindings.generated(...)\`; provider order does not matter. Bordeaux intentionally does not edit \`RobotContainer\` or deploy robot code.\n`;
+}
+
+async function assertSafeSupportDirectory(projectRoot: string): Promise<void> {
+  let current = projectRoot;
+  for (const component of [".bordeaux", "lib"]) {
+    current = path.join(current, component);
+    try {
+      const stat = await fs.lstat(current);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Java support path ${path.relative(projectRoot, current)} must be a regular directory`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
+export async function inspectJavaSupport(projectRoot: string, catalog: JavaCommandCatalog, artifactsDirectory: string): Promise<JavaIntegrationStatus> {
+  const build = await buildFileFor(projectRoot);
+  const [contents, wrapperAvailable] = await Promise.all([
+    fs.readFile(build.path, "utf8"),
+    regularFile(path.join(projectRoot, process.platform === "win32" ? "gradlew.bat" : "gradlew")),
+  ]);
+  let supportVersion: string | undefined;
+  let manifestRuntimeHash: string | undefined;
+  let manifestProcessorHash: string | undefined;
+  let manifestScriptHash: string | undefined;
+  try {
+    const manifest = JSON.parse(await fs.readFile(path.join(projectRoot, ".bordeaux/install.json"), "utf8")) as Record<string, unknown>;
+    if (typeof manifest.supportVersion === "string" && manifest.supportVersion.length <= 64) supportVersion = manifest.supportVersion;
+    if (typeof manifest.runtimeSha256 === "string") manifestRuntimeHash = manifest.runtimeSha256;
+    if (typeof manifest.processorSha256 === "string") manifestProcessorHash = manifest.processorSha256;
+    if (typeof manifest.scriptSha256 === "string") manifestScriptHash = manifest.scriptSha256;
+  } catch {
+    supportVersion = undefined;
+  }
+  const [runtimeHash, processorHash, scriptHash, bundledRuntimeHash, bundledProcessorHash] = await Promise.all([
+    boundedFileHash(path.join(projectRoot, ".bordeaux/lib/bordeaux-runtime.jar")),
+    boundedFileHash(path.join(projectRoot, ".bordeaux/lib/bordeaux-processor.jar")),
+    boundedFileHash(path.join(projectRoot, ".bordeaux/bordeaux.gradle")),
+    boundedFileHash(path.join(artifactsDirectory, "bordeaux-runtime.jar")),
+    boundedFileHash(path.join(artifactsDirectory, "bordeaux-processor.jar")),
