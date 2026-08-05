@@ -358,3 +358,93 @@ function parseTypes(unit: JavaSourceUnit): ParsedJavaType[] {
   return types;
 }
 
+function simpleTypeName(javaType: string): string {
+  const withoutArray = javaType.replace(/\[\]$/g, "");
+  const genericIndex = withoutArray.indexOf("<");
+  const raw = genericIndex >= 0 ? withoutArray.slice(0, genericIndex) : withoutArray;
+  return raw.split(".").at(-1) ?? raw;
+}
+
+function genericParts(javaType: string): { base: string; arguments: string[] } | null {
+  const openIndex = javaType.indexOf("<");
+  if (openIndex < 0) return null;
+  const closeIndex = findMatching(javaType, openIndex, "<", ">");
+  if (closeIndex < 0) return null;
+  return { base: javaType.slice(0, openIndex), arguments: splitTopLevel(javaType.slice(openIndex + 1, closeIndex)) };
+}
+
+function dependencyType(javaType: string): boolean {
+  const simple = simpleTypeName(javaType);
+  return /(?:Subsystem|Command|Supplier|Consumer|Runnable|Controller|Motor|Drivetrain|Drive|RobotContainer)$/.test(simple);
+}
+
+function humanize(value: string): string {
+  const spaced = value
+    .replace(/Command$/, "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_$]+/g, " ")
+    .trim();
+  return spaced ? spaced[0].toUpperCase() + spaced.slice(1) : value;
+}
+
+function resolveKnownType(javaType: string, packageName: string, types: ParsedJavaType[]): ParsedJavaType | undefined {
+  const normalized = normalizeJavaType(javaType).replace(/^\?extends/, "").replace(/^\?super/, "");
+  const raw = normalized.split("<")[0].replace(/\[\]$/g, "");
+  if (raw.includes(".")) return types.find((type) => type.qualifiedName === raw);
+  return types.find((type) => type.packageName === packageName && type.name === raw)
+    ?? types.find((type) => type.name === raw && types.filter((candidate) => candidate.name === raw).length === 1);
+}
+
+function schemaFor(javaType: string, packageName: string, types: ParsedJavaType[], resolving = new Set<string>(), depth = 0): JavaValueSchema {
+  const normalized = normalizeJavaType(javaType).replace(/^\?extends/, "").replace(/^\?super/, "");
+  if (depth > MAX_SCHEMA_DEPTH) return { kind: "opaque", javaType: normalized };
+  const simple = simpleTypeName(normalized);
+  if (["boolean", "Boolean"].includes(simple)) return { kind: "boolean", javaType: normalized };
+  if (["byte", "short", "int", "Byte", "Short", "Integer"].includes(simple)) return { kind: "integer", javaType: normalized };
+  if (["long", "Long", "BigInteger"].includes(simple)) return { kind: "integerString", javaType: normalized };
+  if (["float", "double", "Float", "Double"].includes(simple)) return { kind: "number", javaType: normalized };
+  if (simple === "BigDecimal") return { kind: "decimalString", javaType: normalized };
+  if (["char", "Character", "String", "UUID"].includes(simple)) return { kind: "string", javaType: normalized };
+  if (normalized.endsWith("[]")) return { kind: "array", javaType: normalized, element: schemaFor(normalized.slice(0, -2), packageName, types, resolving, depth + 1) };
+
+  const generic = genericParts(normalized);
+  if (generic) {
+    const base = simpleTypeName(generic.base);
+    if (["List", "Set", "Collection", "Iterable", "ArrayList", "LinkedList"].includes(base)) {
+      return { kind: "array", javaType: normalized, element: schemaFor(generic.arguments[0] ?? "Object", packageName, types, resolving, depth + 1) };
+    }
+    if (base === "Optional") {
+      return { kind: "optional", javaType: normalized, element: schemaFor(generic.arguments[0] ?? "Object", packageName, types, resolving, depth + 1) };
+    }
+    if (base === "Map" && ["String", "java.lang.String"].includes(generic.arguments[0] ?? "")) {
+      return { kind: "map", javaType: normalized, value: schemaFor(generic.arguments[1] ?? "Object", packageName, types, resolving, depth + 1) };
+    }
+  }
+
+  const known = resolveKnownType(normalized, packageName, types);
+  if (!known) return { kind: "opaque", javaType: normalized };
+  if (known.kind === "enum") return { kind: "enum", javaType: known.qualifiedName, enumValues: known.enumValues };
+  if (resolving.has(known.qualifiedName)) return { kind: "opaque", javaType: known.qualifiedName };
+  const nextResolving = new Set(resolving).add(known.qualifiedName);
+  const shape = known.kind === "record"
+    ? known.recordFields
+    : [...known.constructors].sort((a, b) => a.parameters.length - b.parameters.length)[0]?.parameters ?? [];
+  if (shape.length === 0 || shape.length > MAX_OBJECT_FIELD_COUNT) return { kind: "opaque", javaType: known.qualifiedName };
+  const fields: JavaValueField[] = shape.map((field) => ({
+    name: field.name,
+    schema: schemaFor(field.javaType, known.packageName, types, nextResolving, depth + 1),
+  }));
+  return { kind: "object", javaType: known.qualifiedName, fields };
+}
+
+function commandParameters(parameters: RawParameter[], packageName: string, types: ParsedJavaType[]): JavaCommandParameter[] {
+  return parameters.map((parameter) => ({
+    name: parameter.name,
+    javaType: parameter.javaType,
+    role: dependencyType(parameter.javaType) ? "dependency" : "argument",
+    schema: schemaFor(parameter.javaType, packageName, types),
+  }));
+}
+
+function commandReturnType(returnType: string, packageName: string, types: ParsedJavaType[]): "confirmed" | "inferred" | null {
+  const simple = simpleTypeName(returnType);
