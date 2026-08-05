@@ -88,3 +88,93 @@ function parseSchema(raw: unknown, depth = 0): JavaValueSchema {
   if (kind === "object") {
     if (!Array.isArray(value.fields) || value.fields.length > MAX_OBJECT_FIELDS) throw new Error("Generated Java catalog object fields are invalid");
     const names = new Set<string>();
+    schema.fields = value.fields.map((rawField) => {
+      const field = record(rawField);
+      if (!field) throw new Error("Generated Java catalog object field must be an object");
+      const name = text(field.name, "field name", 256);
+      if (names.has(name)) throw new Error(`Generated Java catalog object field ${name} is duplicated`);
+      names.add(name);
+      return { name, schema: parseSchema(field.schema, depth + 1) };
+    });
+  }
+  return schema;
+}
+
+function parseParameter(raw: unknown): JavaCommandParameter {
+  const value = record(raw);
+  if (!value) throw new Error("Generated Java catalog parameter must be an object");
+  const role = text(value.role, "parameter role", 32);
+  if (role !== "argument" && role !== "dependency") throw new Error(`Generated Java catalog parameter role ${role} is unsupported`);
+  const parameter: JavaCommandParameter = {
+    name: text(value.name, "parameter name", 256),
+    javaType: text(value.javaType, "parameter Java type", 512),
+    role,
+    schema: parseSchema(value.schema),
+  };
+  parameter.label = optionalText(value.label, "parameter label", 256);
+  parameter.description = optionalText(value.description, "parameter description", 2_048);
+  parameter.unit = optionalText(value.unit, "parameter unit", 64);
+  const exact = parameter.schema.kind === "integerString" || parameter.schema.kind === "decimalString";
+  parameter.min = exact ? exactBound(value.min, "parameter minimum", parameter.schema.kind === "integerString") : finiteOptional(value.min, "parameter minimum");
+  parameter.max = exact ? exactBound(value.max, "parameter maximum", parameter.schema.kind === "integerString") : finiteOptional(value.max, "parameter maximum");
+  if (typeof parameter.min === "number" && typeof parameter.max === "number" && parameter.min > parameter.max) throw new Error(`Generated Java catalog parameter ${parameter.name} has an inverted range`);
+  if (typeof parameter.min === "string" && typeof parameter.max === "string" && compareExactDecimals(parameter.min, parameter.max) > 0) {
+    throw new Error(`Generated Java catalog parameter ${parameter.name} has an inverted range`);
+  }
+  if (Object.hasOwn(value, "defaultValue")) {
+    const error = javaParameterValueError(value.defaultValue, parameter);
+    if (error) throw new Error(`Generated Java catalog default ${error}`);
+    parameter.defaultValue = value.defaultValue as JavaCommandParameter["defaultValue"];
+  }
+  return parameter;
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const object = record(value);
+  if (!object) throw new Error("Generated Java catalog hash input is not JSON-compatible");
+  return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(",")}}`;
+}
+
+export function generatedCatalogHash(commands: unknown): string {
+  return `sha256:${createHash("sha256").update(canonicalJson(commands), "utf8").digest("hex")}`;
+}
+
+export function parseGeneratedJavaCatalog(raw: unknown): GeneratedJavaCatalog {
+  const value = record(raw);
+  if (!value || value.schemaVersion !== "1.0" || !Array.isArray(value.commands) || value.commands.length > MAX_COMMANDS) {
+    throw new Error("Generated Java catalog must use schema version 1.0 and contain a bounded commands array");
+  }
+  const supportVersion = text(value.supportVersion, "support version", 64);
+  const catalogId = text(value.catalogId, "catalog ID", 256);
+  const catalogHash = text(value.catalogHash, "catalog hash", 96);
+  if (!/^sha256:[0-9a-f]{64}$/.test(catalogHash)) throw new Error("Generated Java catalog hash is invalid");
+  const expectedHash = generatedCatalogHash(value.commands);
+  if (catalogHash !== expectedHash) throw new Error("Generated Java catalog hash does not match its commands");
+  const ids = new Set<string>();
+  const commands = value.commands.map((rawCommand) => {
+    const command = record(rawCommand);
+    if (!command) throw new Error("Generated Java catalog command must be an object");
+    const id = text(command.id, "command ID", 256);
+    if (!/^[A-Za-z0-9_.:#()$,-]+$/.test(id)) throw new Error(`Generated Java catalog command ID ${id} contains unsupported characters`);
+    if (ids.has(id)) throw new Error(`Generated Java catalog command ID ${id} is duplicated`);
+    ids.add(id);
+    const kind = text(command.kind, "command kind", 32) as JavaCommandDescriptor["kind"];
+    if (kind !== "factory" && kind !== "constructor") throw new Error(`Generated Java catalog command kind ${kind} is unsupported`);
+    const confidence = text(command.confidence, "command confidence", 32) as JavaCommandDescriptor["confidence"];
+    if (confidence !== "confirmed" && confidence !== "inferred") throw new Error(`Generated Java catalog command confidence ${confidence} is unsupported`);
+    if (!Array.isArray(command.parameters) || command.parameters.length > MAX_PARAMETERS) throw new Error(`Generated Java catalog command ${id} has too many parameters`);
+    const parameterNames = new Set<string>();
+    const parameters = command.parameters.map((item) => {
+      const parameter = parseParameter(item);
+      if (parameterNames.has(parameter.name)) throw new Error(`Generated Java catalog command ${id} duplicates parameter ${parameter.name}`);
+      parameterNames.add(parameter.name);
+      return parameter;
+    });
+    const source = record(command.source);
+    const sourceFile = source && typeof source.file === "string" && source.file.length <= 1_024 ? source.file : "generated by Bordeaux annotation processor";
+    if (path.isAbsolute(sourceFile) || sourceFile.split(/[\\/]/).includes("..")) throw new Error(`Generated Java catalog source path ${sourceFile} must be relative`);
+    return {
+      id,
+      label: text(command.label, "command label", 256),
