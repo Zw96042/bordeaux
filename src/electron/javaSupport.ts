@@ -178,3 +178,93 @@ export async function inspectJavaSupport(projectRoot: string, catalog: JavaComma
     boundedFileHash(path.join(projectRoot, ".bordeaux/bordeaux.gradle")),
     boundedFileHash(path.join(artifactsDirectory, "bordeaux-runtime.jar")),
     boundedFileHash(path.join(artifactsDirectory, "bordeaux-processor.jar")),
+  ]);
+  const installed = contents.includes(managedBlock(build.name))
+    && supportVersion === JAVA_SUPPORT_VERSION
+    && runtimeHash !== undefined && runtimeHash === manifestRuntimeHash && runtimeHash === bundledRuntimeHash
+    && processorHash !== undefined && processorHash === manifestProcessorHash && processorHash === bundledProcessorHash
+    && scriptHash !== undefined && scriptHash === manifestScriptHash && scriptHash === sha256(gradleSupportScript());
+  return {
+    installed,
+    ...(supportVersion ? { supportVersion } : {}),
+    generatedCatalog: catalog.authoritative === true,
+    ...(catalog.catalogHash ? { catalogHash: catalog.catalogHash } : {}),
+    buildFile: build.name,
+    wrapperAvailable,
+  };
+}
+
+export async function prepareJavaSupportInstall(projectRoot: string, artifactsDirectory: string): Promise<InstallPreview> {
+  const canonicalRoot = await fs.realpath(projectRoot);
+  const build = await buildFileFor(canonicalRoot);
+  const stat = await fs.stat(build.path);
+  if (stat.size > MAX_BUILD_FILE_BYTES) throw new Error(`Robot build file exceeds the ${MAX_BUILD_FILE_BYTES}-byte installation limit`);
+  const buildContents = await fs.readFile(build.path, "utf8");
+  if (!/edu\.wpi\.first\.GradleRIO/.test(buildContents)) throw new Error("Automatic Java support installation requires a GradleRIO Java project");
+  const wrapperName = process.platform === "win32" ? "gradlew.bat" : "gradlew";
+  if (!(await regularFile(path.join(canonicalRoot, wrapperName)))) throw new Error(`Automatic Java support installation requires a regular ${wrapperName} wrapper`);
+  await assertSafeSupportDirectory(canonicalRoot);
+  const runtimePath = path.join(artifactsDirectory, "bordeaux-runtime.jar");
+  const processorPath = path.join(artifactsDirectory, "bordeaux-processor.jar");
+  let runtimeStat: Awaited<ReturnType<typeof fs.stat>>;
+  let processorStat: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    [runtimeStat, processorStat] = await Promise.all([fs.stat(runtimePath), fs.stat(processorPath)]);
+  } catch (error) {
+    throw new Error("Bundled Bordeaux Java support artifacts are missing; rebuild or reinstall the desktop app", { cause: error });
+  }
+  if (!runtimeStat.isFile() || !processorStat.isFile() || runtimeStat.size > MAX_ARTIFACT_BYTES || processorStat.size > MAX_ARTIFACT_BYTES) {
+    throw new Error("Bundled Bordeaux Java support artifacts are missing or invalid");
+  }
+  const [runtimeJar, processorJar] = await Promise.all([fs.readFile(runtimePath), fs.readFile(processorPath)]);
+  const next = withManagedBlock(buildContents, managedBlock(build.name));
+  return {
+    projectRoot: canonicalRoot,
+    buildFile: build.path,
+    buildFileName: build.name,
+    buildHash: sha256(buildContents),
+    nextBuildContents: next.contents,
+    runtimeJar,
+    processorJar,
+    runtimeHash: sha256(runtimeJar),
+    processorHash: sha256(processorJar),
+    replacingManagedBlock: next.replacing,
+  };
+}
+
+export async function applyJavaSupportInstall(preview: InstallPreview): Promise<void> {
+  if (await fs.realpath(preview.projectRoot) !== preview.projectRoot) throw new Error("Linked Java project changed while support installation was open");
+  const currentBuild = await fs.readFile(preview.buildFile, "utf8");
+  if (sha256(currentBuild) !== preview.buildHash) throw new Error("Robot build file changed before installation; review and try again");
+  await assertSafeSupportDirectory(preview.projectRoot);
+  const supportDirectory = path.join(preview.projectRoot, ".bordeaux");
+  const libraryDirectory = path.join(supportDirectory, "lib");
+  await fs.mkdir(libraryDirectory, { recursive: true });
+  const backupPath = path.join(supportDirectory, `${preview.buildFileName}.before-bordeaux`);
+  if (!(await regularFile(backupPath))) await writeBufferAtomically(backupPath, Buffer.from(currentBuild, "utf8"));
+  await writeBufferAtomically(path.join(libraryDirectory, "bordeaux-runtime.jar"), preview.runtimeJar);
+  await writeBufferAtomically(path.join(libraryDirectory, "bordeaux-processor.jar"), preview.processorJar);
+  await writeBufferAtomically(path.join(supportDirectory, "bordeaux.gradle"), Buffer.from(gradleSupportScript(), "utf8"));
+  await writeBufferAtomically(path.join(supportDirectory, "INTEGRATION.md"), Buffer.from(integrationGuide(), "utf8"));
+  await writeJsonAtomically(path.join(supportDirectory, "install.json"), {
+    schemaVersion: "1.0",
+    supportVersion: JAVA_SUPPORT_VERSION,
+    runtimeSha256: preview.runtimeHash,
+    processorSha256: preview.processorHash,
+    scriptSha256: sha256(gradleSupportScript()),
+  });
+  await writeBufferAtomically(preview.buildFile, Buffer.from(preview.nextBuildContents, "utf8"));
+}
+
+function sanitizedBuildEnvironment(): NodeJS.ProcessEnv {
+  const allowed = ["PATH", "JAVA_HOME", "GRADLE_USER_HOME", "SystemRoot", "TEMP", "TMP", "TMPDIR", "USERPROFILE"];
+  return Object.fromEntries(allowed.flatMap((name) => process.env[name] === undefined ? [] : [[name, process.env[name]]]));
+}
+
+function stopBuild(child: ChildProcessWithoutNullStreams, killGraceMs: number): void {
+  if (child.exitCode !== null || child.pid === undefined) return;
+  try {
+    if (process.platform === "win32") {
+      spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore", windowsHide: true });
+      return;
+    }
