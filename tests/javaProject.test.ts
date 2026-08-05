@@ -88,3 +88,93 @@ describe("Java command project discovery", () => {
       { name: "gains", schema: { kind: "map", value: { kind: "number" } } },
       { name: "target", schema: { kind: "optional", element: { kind: "object", fields: [{ name: "x" }, { name: "y" }] } } },
       { name: "tolerance", schema: { kind: "decimalString" } },
+    ]);
+    expect(catalog.warnings).toEqual([]);
+  });
+
+  it("ignores fake declarations in comments and strings and identifies overloads stably", async () => {
+    const project = await temporaryProject();
+    await writeJava(project, "Commands.java", `
+      package frc.robot;
+      import edu.wpi.first.wpilibj2.command.Command;
+      import edu.wpi.first.wpilibj2.command.CommandBase;
+      public final class Commands {
+        // public Command fake(double speed) { return null; }
+        private final String sample = "public class FakeCommand extends CommandBase {}";
+        public Command align(int target) { return null; }
+        public Command align(String target) { return null; }
+        private Command hidden() { return null; }
+      }
+
+      final class HiddenCommand extends CommandBase {
+        private HiddenCommand() {}
+      }
+    `);
+
+    const catalog = await discoverJavaProject(project);
+
+    expect(catalog.commands.map((command) => command.id)).toEqual([
+      "frc.robot.Commands#align(int)",
+      "frc.robot.Commands#align(String)",
+    ]);
+  });
+
+  it("reports opaque custom types without dropping the command", async () => {
+    const project = await temporaryProject();
+    await writeJava(project, "MysteryFactory.java", `
+      package frc.robot;
+      import edu.wpi.first.wpilibj2.command.Command;
+      public final class MysteryFactory {
+        public Command configure(ExternalConfig config) { return null; }
+      }
+    `);
+
+    const catalog = await discoverJavaProject(project);
+
+    expect(catalog.commands[0].parameters[0]).toMatchObject({
+      name: "config",
+      role: "argument",
+      schema: { kind: "opaque", javaType: "ExternalConfig" },
+    });
+    expect(catalog.warnings).toContain("Configure: config uses unresolved custom type ExternalConfig");
+  });
+
+  it("prefers generated bindings while retaining source-only discoveries", async () => {
+    const project = await temporaryProject();
+    await writeJava(project, "AutoCommands.java", `
+      package frc.robot;
+      import edu.wpi.first.wpilibj2.command.Command;
+      public final class AutoCommands {
+        public Command score(int level, String label) { return null; }
+        public Command intake() { return null; }
+      }
+    `);
+    await fs.mkdir(path.join(project, "build/bordeaux"), { recursive: true });
+    const commands = [{
+      id: "auto.score",
+      label: "Score at level",
+      ownerType: "frc.robot.AutoCommands",
+      member: "score",
+      kind: "factory",
+      confidence: "confirmed",
+      parameters: [
+        { name: "label", label: "Label", javaType: "java.lang.String", role: "argument", schema: { kind: "string", javaType: "java.lang.String" } },
+        { name: "level", label: "Level", javaType: "int", role: "argument", schema: { kind: "integer", javaType: "int" } },
+      ],
+    }];
+    await fs.writeFile(path.join(project, "build/bordeaux/catalog-v1.json"), JSON.stringify({
+      schemaVersion: "1.0",
+      catalogId: "robot-test",
+      supportVersion: "0.1.0",
+      catalogHash: generatedCatalogHash(commands),
+      commands,
+    }));
+
+    const catalog = await discoverJavaProject(project);
+
+    expect(catalog.source).toBe("mixed");
+    expect(catalog.runtimeCommandCount).toBe(1);
+    expect(catalog.commands).toHaveLength(2);
+    expect(catalog.commands.find((command) => command.id === "auto.score")).toMatchObject({ label: "Score at level", runtimeReady: true });
+    expect(catalog.commands.some((command) => command.id.endsWith("#score"))).toBe(false);
+    expect(catalog.commands.find((command) => command.id.endsWith("#intake"))).toMatchObject({ runtimeReady: false });
