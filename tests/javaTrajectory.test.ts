@@ -88,3 +88,33 @@ describe("Java trajectory export", () => {
   });
 
   it("blocks collections larger than the robot runtime accepts", () => {
+    const project = createDemoProject();
+    const catalog = generatedCatalog();
+    catalog.commands[0].parameters = [
+      { name: "items", javaType: "java.util.List<java.lang.String>", role: "argument", schema: { kind: "array", javaType: "java.util.List<java.lang.String>", element: { kind: "string", javaType: "java.lang.String" } } },
+      { name: "lookup", javaType: "java.util.Map<java.lang.String, java.lang.String>", role: "argument", schema: { kind: "map", javaType: "java.util.Map<java.lang.String, java.lang.String>", value: { kind: "string", javaType: "java.lang.String" } } },
+    ];
+    project.paths[0].markers = [{
+      id: "oversized",
+      f: 0.2,
+      name: "Oversized",
+      invocation: {
+        commandId: catalog.commands[0].id,
+        arguments: { items: Array.from({ length: 1_025 }, () => "x"), lookup: {} },
+      },
+    }];
+    expect(() => buildJavaTrajectory(project, catalog)).toThrow(/more than 1024 items/);
+
+    project.paths[0].markers[0].invocation!.arguments = {
+      items: [],
+      lookup: Object.fromEntries(Array.from({ length: 257 }, (_, index) => [`key${index}`, "x"])),
+    };
+    expect(() => buildJavaTrajectory(project, catalog)).toThrow(/more than 256 entries/);
+  });
+
+  it("requires an authoritative generated catalog even when a project has no events", () => {
+    const catalog = generatedCatalog();
+    catalog.authoritative = false;
+    expect(() => buildJavaTrajectory(createDemoProject(), catalog)).toThrow(/Build the annotated/);
+  });
+});
