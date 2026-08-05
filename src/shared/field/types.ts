@@ -88,3 +88,34 @@ export interface AuthoredRobotPose extends FieldPoint {
 }
 
 export type RobotRelativePose = PhysicalRobotPose | AuthoredRobotPose;
+
+export interface ResolvedFieldTerm {
+  phrase: string;
+  status: "resolved" | "ambiguous" | "unresolved";
+  matches: Array<{
+    id: string;
+    label: string;
+    point: FieldPoint;
+    /** Renderer position after the current Blue/Red view transform. */
+    displayPoint?: FieldPoint;
+    officialPoint?: FieldPoint;
+    confidence: number;
+    reason: string;
+    navigable?: boolean;
+    traversal?: "trench" | "bump";
+    headingDeg?: number;
+  }>;
+  message?: string;
+  warnings?: string[];
+}
+
+export interface ResolveFieldTermOptions {
+  alliance?: AllianceColor;
+  /** Fallback context for uncolored terms; never conflicts with an explicit color in the phrase. */
+  defaultAlliance?: AllianceColor;
+  /** Current renderer view. This affects only reported display positions, never field ownership. */
+  allianceView?: AllianceColor;
+  pose?: RobotRelativePose;
+  relativeDistanceM?: number;
+  robotHeightM?: number;
+}
