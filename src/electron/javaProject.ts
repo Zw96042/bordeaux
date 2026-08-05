@@ -268,3 +268,93 @@ function topLevelMemberSignatures(body: string): MemberSignature[] {
       if (text) signatures.push({ text, offset: segmentStart + body.slice(segmentStart, index).search(/\S|$/) });
       segmentStart = index + 1;
     }
+  }
+  return signatures.filter((signature) => signature.text.includes("(") && !stripAnnotations(signature.text).includes("="));
+}
+
+function parseCallable(signature: string, ownerName: string): { constructorParameters?: RawParameter[]; method?: Omit<ParsedMethod, "line"> } | null {
+  const annotated = /@(?:[$\w.]*\.)?BordeauxCommand\b/.test(signature);
+  let clean = stripAnnotations(signature).replace(/\s+/g, " ").trim();
+  const visibility = clean.match(/\b(public|protected|private)\b/)?.[1];
+  if (visibility !== "public" && !annotated) return null;
+  clean = clean.replace(/^(?:(?:public|protected|private|static|final|synchronized|native|abstract|default|strictfp)\s+)+/, "");
+  const openIndex = clean.indexOf("(");
+  if (openIndex < 1) return null;
+  const closeIndex = findMatching(clean, openIndex, "(", ")");
+  if (closeIndex < 0) return null;
+  const prefix = clean.slice(0, openIndex).trim();
+  const parameters = parseParameters(clean.slice(openIndex + 1, closeIndex));
+  if (prefix === ownerName) return { constructorParameters: parameters };
+  const methodMatch = prefix.match(/^(.*\S)\s+([$A-Za-z_][$\w]*)$/);
+  if (!methodMatch) return null;
+  const returnType = normalizeJavaType(methodMatch[1]);
+  if (!returnType || /^(if|for|while|switch|catch|new)$/.test(returnType)) return null;
+  return { method: { name: methodMatch[2], returnType, parameters, annotated } };
+}
+
+function declaresConstructor(signature: string, ownerName: string): boolean {
+  const clean = stripAnnotations(signature)
+    .replace(/^(?:(?:public|protected|private|static|final|synchronized|native|abstract|default|strictfp)\s+)+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return clean.startsWith(`${ownerName}(`) || clean.startsWith(`${ownerName} (`);
+}
+
+function enumValues(body: string): string[] {
+  const head = body.split(";")[0] ?? "";
+  return splitTopLevel(head).flatMap((entry) => {
+    const match = entry.trim().match(/^([$A-Za-z_][$\w]*)/);
+    return match ? [match[1]] : [];
+  });
+}
+
+function parseTypes(unit: JavaSourceUnit): ParsedJavaType[] {
+  const types: ParsedJavaType[] = [];
+  const pattern = /\b((?:public\s+|protected\s+|private\s+|static\s+|final\s+|abstract\s+|sealed\s+|non-sealed\s+)*)((class|record|enum))\s+([$A-Za-z_][$\w]*)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(unit.sanitized))) {
+    const openIndex = unit.sanitized.indexOf("{", pattern.lastIndex);
+    if (openIndex < 0) continue;
+    const closeIndex = findMatching(unit.sanitized, openIndex, "{", "}");
+    if (closeIndex < 0) continue;
+    const kind = match[3] as ParsedJavaType["kind"];
+    const name = match[4];
+    const header = unit.sanitized.slice(pattern.lastIndex, openIndex).trim();
+    const body = unit.sanitized.slice(openIndex + 1, closeIndex);
+    const bodyOffset = openIndex + 1;
+    const members = topLevelMemberSignatures(body);
+    const constructors: ParsedConstructor[] = [];
+    const methods: ParsedMethod[] = [];
+    let hasDeclaredConstructor = false;
+    for (const member of members) {
+      hasDeclaredConstructor ||= declaresConstructor(member.text, name);
+      const callable = parseCallable(member.text, name);
+      if (!callable) continue;
+      const line = countLinesBefore(unit.sanitized, bodyOffset + member.offset);
+      if (callable.constructorParameters) constructors.push({ parameters: callable.constructorParameters, line });
+      if (callable.method) methods.push({ ...callable.method, line });
+    }
+    const recordOpen = kind === "record" ? header.indexOf("(") : -1;
+    const recordClose = recordOpen >= 0 ? findMatching(header, recordOpen, "(", ")") : -1;
+    const qualifiedName = unit.packageName ? `${unit.packageName}.${name}` : name;
+    types.push({
+      name,
+      qualifiedName,
+      packageName: unit.packageName,
+      kind,
+      header,
+      abstract: /\babstract\b/.test(match[1] ?? ""),
+      commandClass: kind === "class" && /\b(?:extends|implements)\b[^\{]*\bCommand(?:Base)?\b/.test(header),
+      recordFields: recordOpen >= 0 && recordClose > recordOpen ? parseParameters(header.slice(recordOpen + 1, recordClose)) : [],
+      enumValues: kind === "enum" ? enumValues(body) : [],
+      hasDeclaredConstructor,
+      constructors,
+      methods,
+      source: unit,
+      line: countLinesBefore(unit.sanitized, match.index),
+    });
+    pattern.lastIndex = closeIndex + 1;
+  }
+  return types;
+}
+
