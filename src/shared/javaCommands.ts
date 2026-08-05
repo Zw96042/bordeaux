@@ -88,3 +88,93 @@ export function javaSchemaValueError(value: unknown, schema: JavaValueSchema, va
     return !range || ((value as number) >= range[0] && (value as number) <= range[1]) ? null : `${valuePath} is outside the range for ${schema.javaType}`;
   }
   if (schema.kind === "integerString") {
+    const error = exactIntegerError(value, schema.javaType);
+    return error ? `${valuePath} ${error}` : null;
+  }
+  if (schema.kind === "decimalString") {
+    const error = exactDecimalError(value);
+    return error ? `${valuePath} ${error}` : null;
+  }
+  if (schema.kind === "number") return typeof value === "number" && Number.isFinite(value) ? null : `${valuePath} must be a finite number`;
+  if (schema.kind === "string") return typeof value === "string" ? null : `${valuePath} must be text`;
+  if (schema.kind === "enum") return typeof value === "string" && (schema.enumValues ?? []).includes(value) ? null : `${valuePath} must be one of the discovered enum values`;
+  if (schema.kind === "array") {
+    if (!Array.isArray(value)) return `${valuePath} must be a JSON array`;
+    if (value.length > MAX_ARRAY_ITEMS) return `${valuePath} cannot contain more than ${MAX_ARRAY_ITEMS} items`;
+    for (let index = 0; index < value.length; index += 1) {
+      const error = javaSchemaValueError(value[index], schema.element!, `${valuePath}[${index}]`, depth + 1);
+      if (error) return error;
+    }
+    return null;
+  }
+  if (schema.kind === "map") {
+    if (!isObject(value)) return `${valuePath} must be a JSON object with string keys`;
+    if (Object.keys(value).length > MAX_MAP_ENTRIES) return `${valuePath} cannot contain more than ${MAX_MAP_ENTRIES} entries`;
+    for (const [key, item] of Object.entries(value)) {
+      const error = javaSchemaValueError(item, schema.value!, `${valuePath}.${key}`, depth + 1);
+      if (error) return error;
+    }
+    return null;
+  }
+  if (schema.kind === "object") {
+    if (!isObject(value)) return `${valuePath} must be a JSON object`;
+    const fields = schema.fields ?? [];
+    const names = new Set(fields.map((field) => field.name));
+    const extra = Object.keys(value).find((key) => !names.has(key));
+    if (extra) return `${valuePath}.${extra} is not part of the discovered type`;
+    for (const field of fields) {
+      const error = javaSchemaValueError(value[field.name], field.schema, `${valuePath}.${field.name}`, depth + 1);
+      if (error) return error;
+    }
+    return null;
+  }
+  return `${valuePath} uses an unsupported parameter schema`;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isJsonValue(value: unknown, depth: number): boolean {
+  if (depth > MAX_SCHEMA_DEPTH) return false;
+  if (value === null || typeof value === "boolean" || typeof value === "string") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.length <= MAX_ARRAY_ITEMS && value.every((item) => isJsonValue(item, depth + 1));
+  return isObject(value) && Object.keys(value).length <= MAX_MAP_ENTRIES && Object.values(value).every((item) => isJsonValue(item, depth + 1));
+}
+
+export function defaultJavaSchemaValue(schema: JavaValueSchema, depth = 0): CommandArgumentValue {
+  if (depth > MAX_SCHEMA_DEPTH) return null;
+  if (schema.kind === "boolean") return false;
+  if (schema.kind === "integer" || schema.kind === "number") return 0;
+  if (schema.kind === "integerString" || schema.kind === "decimalString") return "0";
+  if (schema.kind === "string") return "";
+  if (schema.kind === "enum") return schema.enumValues?.[0] ?? "";
+  if (schema.kind === "array") return [];
+  if (schema.kind === "map" || schema.kind === "opaque") return {};
+  if (schema.kind === "optional") return null;
+  if (schema.kind === "object") {
+    return Object.fromEntries((schema.fields ?? []).map((field) => [field.name, defaultJavaSchemaValue(field.schema, depth + 1)]));
+  }
+  return null;
+}
+
+export function defaultJavaCommandArguments(command: JavaCommandDescriptor): Record<string, CommandArgumentValue> {
+  return Object.fromEntries(command.parameters
+    .filter((parameter) => parameter.role === "argument")
+    .map((parameter) => [
+      parameter.name,
+      Object.hasOwn(parameter, "defaultValue") ? parameter.defaultValue! : defaultJavaSchemaValue(parameter.schema),
+    ]));
+}
+
+function parameterLimitError(value: CommandArgumentValue, parameter: JavaCommandParameter): string | null {
+  if (parameter.min === undefined && parameter.max === undefined) return null;
+  if (parameter.schema.kind === "integerString" && typeof value === "string" && /^[+-]?\d+$/.test(value)) {
+    const comparable = BigInt(value);
+    if (parameter.min !== undefined && comparable < BigInt(parameter.min)) return `${parameter.name} must be at least ${parameter.min}`;
+    if (parameter.max !== undefined && comparable > BigInt(parameter.max)) return `${parameter.name} must be at most ${parameter.max}`;
+    return null;
+  }
+  if (parameter.schema.kind === "decimalString" && typeof value === "string") {
+    if (parameter.min !== undefined && compareExactDecimals(value, String(parameter.min)) < 0) return `${parameter.name} must be at least ${parameter.min}`;
