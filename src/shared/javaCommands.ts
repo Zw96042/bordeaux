@@ -178,3 +178,69 @@ function parameterLimitError(value: CommandArgumentValue, parameter: JavaCommand
   }
   if (parameter.schema.kind === "decimalString" && typeof value === "string") {
     if (parameter.min !== undefined && compareExactDecimals(value, String(parameter.min)) < 0) return `${parameter.name} must be at least ${parameter.min}`;
+    if (parameter.max !== undefined && compareExactDecimals(value, String(parameter.max)) > 0) return `${parameter.name} must be at most ${parameter.max}`;
+    return null;
+  }
+  let comparable: number | null = null;
+  if (typeof value === "number" && Number.isFinite(value)) comparable = value;
+  else if (typeof value === "string" && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value)) comparable = Number(value);
+  if (comparable === null || !Number.isFinite(comparable)) return null;
+  if (parameter.min !== undefined && comparable < Number(parameter.min)) return `${parameter.name} must be at least ${parameter.min}`;
+  if (parameter.max !== undefined && comparable > Number(parameter.max)) return `${parameter.name} must be at most ${parameter.max}`;
+  return null;
+}
+
+export function javaParameterValueError(value: unknown, parameter: JavaCommandParameter): string | null {
+  const schemaError = javaSchemaValueError(value, parameter.schema, parameter.label || parameter.name);
+  return schemaError ?? parameterLimitError(value as CommandArgumentValue, parameter);
+}
+
+export function javaInvocationErrors(invocation: CommandInvocation, command: JavaCommandDescriptor): string[] {
+  const errors: string[] = [];
+  if (command.runtimeReady !== true) errors.push(`${command.label} has no generated robot binding; build the annotated catalog first`);
+  const parameters = command.parameters.filter((parameter) => parameter.role === "argument");
+  const names = new Set(parameters.map((parameter) => parameter.name));
+  for (const name of Object.keys(invocation.arguments)) {
+    if (!names.has(name)) errors.push(`${name} is not a parameter of ${command.label}`);
+  }
+  for (const parameter of parameters) {
+    const value = invocation.arguments[parameter.name];
+    const error = javaParameterValueError(value, parameter);
+    if (error) errors.push(error);
+  }
+  return errors;
+}
+
+export function validateProjectJavaInvocations(project: BordeauxProject, catalog: JavaCommandCatalog | null): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const commands = new Map((catalog?.commands ?? []).map((command) => [command.id, command]));
+  project.paths.forEach((path, pathIndex) => path.markers.forEach((marker, markerIndex) => {
+    const base = `$.paths[${pathIndex}].markers[${markerIndex}]`;
+    if (marker.actionIntent && !marker.invocation) {
+      issues.push({ path: `${base}.actionIntent`, message: `Action ${marker.actionIntent.semanticTag} is still an intent; bind it to a generated Java command before export`, severity: "error" });
+      return;
+    }
+    if (!marker.invocation && marker.cmd && marker.cmd !== "none") {
+      issues.push({ path: `${base}.cmd`, message: `Legacy command ${marker.cmd} must be replaced with a generated Java invocation before export`, severity: "error" });
+      return;
+    }
+    if (!marker.invocation) return;
+    const invocationBase = `${base}.invocation`;
+    const command = commands.get(marker.invocation.commandId);
+    if (!command) {
+      issues.push({ path: `${invocationBase}.commandId`, message: `Command ${marker.invocation.commandId} is not in the linked generated catalog`, severity: "error" });
+      return;
+    }
+    if (marker.actionIntent && !command.semanticTags?.includes(marker.actionIntent.semanticTag)) {
+      issues.push({
+        path: `${base}.actionIntent`,
+        message: `Command ${command.label} does not advertise the required ${marker.actionIntent.semanticTag} capability`,
+        severity: "error",
+      });
+    }
+    for (const message of javaInvocationErrors(marker.invocation, command)) {
+      issues.push({ path: invocationBase, message, severity: "error" });
+    }
+  }));
+  return issues;
+}
