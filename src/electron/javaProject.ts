@@ -628,3 +628,57 @@ export async function discoverJavaProject(inputPath: string): Promise<JavaComman
   for (const source of sources) {
     const sourceTypes = parseTypes(source);
     if (sourceTypes.length === 0 && /\b(?:class|record|enum)\s+[$A-Za-z_][$\w]*/.test(source.sanitized)) {
+      warnings.push(`${source.relativePath} contains a type declaration Bordeaux could not parse`);
+    }
+    types.push(...sourceTypes);
+    if (types.length > MAX_DISCOVERED_TYPE_COUNT) {
+      throw new Error(`Java project contains more than ${MAX_DISCOVERED_TYPE_COUNT} discoverable types`);
+    }
+  }
+  const sourceCommands = buildCommands(types).map((command) => ({ ...command, runtimeReady: false }));
+  const generatedCatalog = await readGeneratedJavaCatalog(rootPath);
+  const bindingKey = (command: JavaCommandDescriptor) => [
+    command.ownerType,
+    command.kind,
+    command.kind === "constructor" ? "<init>" : command.member,
+    command.parameters
+      .map((parameter) => `${parameter.role}:${parameter.name}:${normalizeBindingJavaType(parameter.javaType)}`)
+      .sort()
+      .join(","),
+  ].join("\u0000");
+  const generatedBindings = new Set((generatedCatalog?.commands ?? []).map(bindingKey));
+  const sourceOnlyCommands = sourceCommands.filter((command) => !generatedBindings.has(bindingKey(command)));
+  const commandById = new Map<string, JavaCommandDescriptor>(
+    sourceOnlyCommands.map((command) => [command.id, command]),
+  );
+  generatedCatalog?.commands.forEach((command) => commandById.set(command.id, command));
+  const commands = [...commandById.values()].sort((left, right) => left.label.localeCompare(right.label) || left.id.localeCompare(right.id));
+  if (!sources.some((source) => source.text.includes("edu.wpi.first.wpilibj2.command"))) {
+    warnings.push("No WPILib command imports were found; discovery results may not be FRC commands");
+  }
+  for (const command of commands) {
+    for (const parameter of command.parameters) {
+      if (parameter.role === "argument" && parameter.schema.kind === "opaque") {
+        warnings.push(`${command.label}: ${parameter.name} uses unresolved custom type ${parameter.javaType}`);
+      }
+    }
+  }
+  if (commands.length === 0) warnings.push("No public WPILib command classes or command-returning factory methods were found");
+  const runtimeCommandCount = commands.filter((command) => command.runtimeReady === true).length;
+  return {
+    projectName: await projectName(rootPath),
+    sourceFileCount: sources.length,
+    scannedAt: new Date().toISOString(),
+    source: generatedCatalog ? (sourceOnlyCommands.length > 0 ? "mixed" : "generated") : "source",
+    runtimeCommandCount,
+    ...(generatedCatalog ? {
+      generatedSchemaVersion: generatedCatalog.schemaVersion,
+      catalogId: generatedCatalog.catalogId,
+      supportVersion: generatedCatalog.supportVersion,
+      catalogHash: generatedCatalog.catalogHash,
+      authoritative: true,
+    } : { authoritative: false }),
+    commands,
+    warnings: [...new Set(warnings)].slice(0, 100),
+  };
+}
