@@ -88,3 +88,47 @@
         {
           "id": "event_hold",
           "f": 0.8,
+          "name": "Hold until end",
+          "invocation": {
+            "commandId": "example.hold-output",
+            "arguments": {
+              "output": 0.25
+            },
+            "cancelOnPathEnd": true
+          }
+        }
+      ],
+      "ranges": [],
+      "constraints": {
+        "maxVel": 4.2,
+        "maxAccel": 6.5,
+        "maxDecel": 6.5,
+        "maxAngVel": 540,
+        "maxAngAccel": 720,
+        "maxAngDecel": 720,
+        "maxJerk": 0,
+        "maxAngJerk": 0
+      },
+      "headingMode": "targets",
+      "startVel": 0,
+      "goalVel": 0,
+      "exportable": true,
+      "labview": {
+        "samplePeriodS": 0.02,
+        "minTurnRadiusM": 0.5,
+        "bezierTangentMode": "handles",
+        "reversePath": false,
+        "zeroVelocity": false,
+        "pickupBalls": false,
+        "currentLimit": 0,
+        "zeroTranslationalVelocity": false,
+        "correctAtBeginningOfPath": false
+      }
+    }
+  ],
+  "routine": {
+    "name": "Autonomous Routine",
+    "nodes": []
+  },
+  "plannerId": "profiledSpline"
+}
