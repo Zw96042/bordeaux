@@ -178,3 +178,93 @@ const landmarks: FieldLandmark[] = [
     descriptiveLandmark(`${alliance}-outpost-corral`, `${alliance} OUTPOST CORRAL`, [`${alliance} corral`], "Lower OUTPOST opening where ROBOTS return FUEL; use the adjacent AprilTag poses for perception, not this label as a drive coordinate.", { allianceOwner: alliance, dimensionsM: { width: 32 * 0.0254, height: 7 * 0.0254 } }),
     descriptiveLandmark(`${alliance}-depot`, `${alliance} DEPOT`, [`${alliance} depot`], "42 in wide by 27 in deep FUEL staging structure along the ALLIANCE WALL. Its 3 in wide steel barriers are solid; exact barrier polygons are intentionally not inferred from a center point.", { allianceOwner: alliance, dimensionsM: { width: 42 * 0.0254, depth: 27 * 0.0254, height: 1.125 * 0.0254 } }),
     ...([1, 2, 3] as const).map((station) => descriptiveLandmark(`${alliance}-driver-station-${station}`, `${alliance} DRIVER STATION ${station}`, [`${alliance} driver station ${station}`, `${alliance} ds ${station}`], "One of three off-field DRIVE TEAM stations in the ALLIANCE WALL; not a robot drive target.", { allianceOwner: alliance, dimensionsM: { height: (36.8 + 42) * 0.0254 } })),
+  ]),
+  ...(["blue", "red"] as const).flatMap((alliance) => {
+    const hub = hubLandmarks.find((item) => item.id === `${alliance}-hub`)!;
+    const bounds = hub.bounds!;
+    return [
+      { ...pointLandmark(`${alliance}-hub-alliance-face`, `${alliance} HUB alliance-wall face`, [`${alliance} hub back face`, `${alliance} hub alliance face`], { x: alliance === "blue" ? bounds.xMin : bounds.xMax, y: (bounds.yMin + bounds.yMax) / 2 }, alliance), navigable: false, description: "Reference point on the solid HUB surface, not a robot pose." },
+      { ...pointLandmark(`${alliance}-hub-neutral-face`, `${alliance} HUB neutral-zone face`, [`${alliance} hub front face`, `${alliance} hub neutral face`], { x: alliance === "blue" ? bounds.xMax : bounds.xMin, y: (bounds.yMin + bounds.yMax) / 2 }, alliance), navigable: false, description: "Reference point on the solid HUB surface, not a robot pose." },
+      { ...pointLandmark(`${alliance}-hub-table-face`, `${alliance} HUB scoring-table face`, [`${alliance} hub table face`], { x: (bounds.xMin + bounds.xMax) / 2, y: bounds.yMin }, alliance), navigable: false, description: "Reference point on the solid HUB surface, not a robot pose." },
+      { ...pointLandmark(`${alliance}-hub-away-face`, `${alliance} HUB non-scoring-table face`, [`${alliance} hub away face`], { x: (bounds.xMin + bounds.xMax) / 2, y: bounds.yMax }, alliance), navigable: false, description: "Reference point on the solid HUB surface, not a robot pose." },
+    ];
+  }),
+  ...aprilTagLandmarks,
+  ...hubLandmarks,
+];
+
+const solidObstacles = hubLandmarks;
+
+function crossingPortal(id: string, side: "table" | "away") {
+  const landmark = landmarks.find((item) => item.id === id)!;
+  const isBlue = landmark.allianceOwner === "blue";
+  const isBump = landmark.traversal === "bump";
+  const yMin = isBump
+    ? landmark.point!.y - landmark.openingWidthM! / 2
+    : side === "table" ? 0 : REBUILT_2026_FIELD_WIDTH_M - landmark.openingWidthM!;
+  const yMax = isBump
+    ? landmark.point!.y + landmark.openingWidthM! / 2
+    : side === "table" ? landmark.openingWidthM! : REBUILT_2026_FIELD_WIDTH_M;
+  const xMin = isBlue ? BLUE_BARRIER_X : (isBump ? RED_BUMP_X_MIN : RED_STRUCTURE_X_MIN);
+  const xMax = isBlue ? (isBump ? BLUE_BUMP_X_MAX : BLUE_STRUCTURE_X_MAX) : RED_BARRIER_X;
+  return {
+    id: landmark.id,
+    name: landmark.name,
+    allianceOwner: landmark.allianceOwner!,
+    traversal: landmark.traversal!,
+    side,
+    allianceSide: landmark.allianceSide!,
+    point: landmark.point!,
+    widthM: landmark.openingWidthM!,
+    bounds: { xMin, xMax, yMin, yMax },
+    depthM: xMax - xMin,
+    ...(landmark.clearanceHeightM === undefined ? {} : { clearanceHeightM: landmark.clearanceHeightM }),
+  };
+}
+
+const crossingBarriers = [
+  {
+    id: "blue-alliance-barrier",
+    allianceOwner: "blue" as const,
+    x: BLUE_BARRIER_X,
+    portals: [
+      crossingPortal("blue-trench-table", "table"),
+      crossingPortal("blue-trench-away", "away"),
+      crossingPortal("blue-bump-table", "table"),
+      crossingPortal("blue-bump-away", "away"),
+    ],
+  },
+  {
+    id: "red-alliance-barrier",
+    allianceOwner: "red" as const,
+    x: RED_BARRIER_X,
+    portals: [
+      crossingPortal("red-trench-table", "table"),
+      crossingPortal("red-trench-away", "away"),
+      crossingPortal("red-bump-table", "table"),
+      crossingPortal("red-bump-away", "away"),
+    ],
+  },
+];
+
+export const REBUILT_2026_FIELD: FieldPack = {
+  id: "2026-rebuilt",
+  revision: REBUILT_2026_FIELD_REVISION,
+  name: "2026 REBUILT presented by Haas",
+  dimensions: { lengthM: REBUILT_2026_FIELD_LENGTH_M, widthM: REBUILT_2026_FIELD_WIDTH_M },
+  coordinateFrame: "Official WPILib blue-wall origin: +X toward red, +Y away from the scoring-table guardrail",
+  appDisplayTransform: {
+    appLengthM: FIELD_W,
+    appWidthM: FIELD_H,
+    description: "Mirror official X, then independently scale X/Y into Bordeaux's preserved overhead image where red is left and blue is right",
+  },
+  authoringInvariants: [
+    "Canonical Bordeaux coordinates match the overhead image: red structures have smaller app X (left) and blue structures have larger app X (right).",
+    "The Red editor view rotates authored points 180 degrees for display only; it never changes landmark ownership.",
+    "Alliance left/right is from that alliance's drivers facing the field: red-left is scoring-table side and blue-left is non-scoring-table side.",
+    "A route with different outbound and inbound crossings must use ordered per-leg traversal requirements; one global traversal is invalid.",
+    "A swoosh is a typed 180-degree maneuver with explicit turn direction and radius, not an arbitrary coordinate loop.",
+    "Initial FUEL collection uses the approximately 72-inch-deep staging band around the CENTER LINE, not the full 283-inch NEUTRAL ZONE depth.",
+    "Official +Y points away from the scoring table: low-Y is scoring-table side and high-Y is non-scoring-table side.",
+    "The ROBOT STARTING LINE is the alliance-side face of the HUB/BUMP/TRENCH band, not the center of those structures.",
+    "AprilTags and HUB faces are perception/aiming references, not collision-free chassis poses.",
