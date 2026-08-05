@@ -1,0 +1,90 @@
+{
+  "schemaVersion": "1.0",
+  "name": "Untitled",
+  "robot": {
+    "drive": "swerve",
+    "w": 0.84,
+    "l": 0.84,
+    "maxSpeed": 5
+  },
+  "paths": [
+    {
+      "id": "path_example",
+      "name": "NewPath",
+      "waypoints": [
+        {
+          "linked": true,
+          "thetaOn": true,
+          "theta": 0,
+          "stop": false,
+          "x": 2.2,
+          "y": 4,
+          "segType": "bezier",
+          "prevC": {
+            "x": 1.4160000000000001,
+            "y": 4
+          },
+          "nextC": {
+            "x": 2.984,
+            "y": 4
+          }
+        },
+        {
+          "linked": true,
+          "thetaOn": true,
+          "theta": 0,
+          "stop": false,
+          "x": 5,
+          "y": 4,
+          "prevC": {
+            "x": 4.216,
+            "y": 4
+          },
+          "nextC": {
+            "x": 5.784,
+            "y": 4
+          }
+        }
+      ],
+      "targets": [],
+      "markers": [
+        {
+          "id": "event_message",
+          "f": 0.15,
+          "name": "Hello",
+          "invocation": {
+            "commandId": "example.print-message",
+            "arguments": {
+              "message": "Hello from Bordeaux"
+            }
+          }
+        },
+        {
+          "id": "event_output",
+          "f": 0.4,
+          "name": "Set output",
+          "invocation": {
+            "commandId": "example.set-output",
+            "arguments": {
+              "request": {
+                "output": 0.35,
+                "signal": "READY"
+              }
+            }
+          }
+        },
+        {
+          "id": "event_status",
+          "f": 0.65,
+          "name": "Score status",
+          "invocation": {
+            "commandId": "example.set-status",
+            "arguments": {
+              "signal": "SCORE"
+            },
+            "cancelOnPathEnd": false
+          }
+        },
+        {
+          "id": "event_hold",
+          "f": 0.8,
