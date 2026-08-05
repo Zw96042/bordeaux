@@ -88,3 +88,21 @@ public final class BordeauxBindings {
         for (int candidate = 0; candidate < available.length; candidate++) {
             if (used[candidate]) continue;
             boolean matches = exact
+                    ? available[candidate].getClass().equals(required)
+                    : required.isInstance(available[candidate]);
+            if (!matches) continue;
+            if (match >= 0) {
+                throw new BordeauxRuntimeException("Multiple supplied providers match " + required.getName());
+            }
+            match = candidate;
+        }
+        return match;
+    }
+
+    private static String safeMessage(Throwable throwable) {
+        String message = throwable == null ? null : throwable.getMessage();
+        return message == null || message.isBlank()
+                ? throwable == null ? "unknown failure" : throwable.getClass().getSimpleName()
+                : message.lines().findFirst().orElse(throwable.getClass().getSimpleName());
+    }
+}
