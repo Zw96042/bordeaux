@@ -268,3 +268,93 @@ function stopBuild(child: ChildProcessWithoutNullStreams, killGraceMs: number): 
       spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore", windowsHide: true });
       return;
     }
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    child.kill("SIGTERM");
+  }
+  if (!killEscalations.has(child)) {
+    const escalation = setTimeout(() => {
+      if (child.exitCode !== null || child.pid === undefined) return;
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+    }, killGraceMs);
+    killEscalations.set(child, escalation);
+  }
+}
+
+function forceStopBuild(child: ChildProcessWithoutNullStreams): void {
+  if (child.exitCode !== null || child.pid === undefined) return;
+  try {
+    if (process.platform === "win32") spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore", windowsHide: true });
+    else process.kill(-child.pid, "SIGKILL");
+  } catch {
+    child.kill("SIGKILL");
+  }
+}
+
+export function cancelJavaCatalogBuild(force = false): boolean {
+  if (!activeBuild) return false;
+  activeBuild.canceled = true;
+  if (force) forceStopBuild(activeBuild.child);
+  else stopBuild(activeBuild.child, activeBuild.killGraceMs);
+  return true;
+}
+
+export function windowsGradleCommand(wrapper: string, args: readonly string[]): string {
+  if (/[&|<>^%!]/.test(wrapper)) throw new Error("Linked project path contains characters that cannot be launched safely by cmd.exe");
+  if (args.some((argument) => !/^[A-Za-z0-9_.:=/-]+$/.test(argument))) throw new Error("Gradle argument is not safe for cmd.exe");
+  return `"${wrapper}" ${args.join(" ")}`;
+}
+
+export async function runJavaCatalogBuild(projectRoot: string, limits: { timeoutMs?: number; outputBytes?: number; killGraceMs?: number } = {}): Promise<{ output: string }> {
+  if (activeBuild) throw new Error("A Java catalog build is already running");
+  const canonicalRoot = await fs.realpath(projectRoot);
+  const wrapperName = process.platform === "win32" ? "gradlew.bat" : "gradlew";
+  const wrapper = path.join(canonicalRoot, wrapperName);
+  if (!(await regularFile(wrapper))) throw new Error(`Linked project does not have a regular ${wrapperName} wrapper`);
+  const fixedArgs = ["bordeauxCatalog", "--no-daemon", "--console=plain"];
+  const child = process.platform === "win32"
+    ? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", windowsGradleCommand(wrapper, fixedArgs)], { cwd: canonicalRoot, env: sanitizedBuildEnvironment(), windowsHide: true })
+    : spawn(wrapper, fixedArgs, { cwd: canonicalRoot, env: sanitizedBuildEnvironment(), detached: true });
+  const killGraceMs = limits.killGraceMs ?? 2_000;
+  activeBuild = { child, canceled: false, killGraceMs };
+  let output = "";
+  let outputBytes = 0;
+  let overflow = false;
+  let timedOut = false;
+  const collect = (chunk: Buffer) => {
+    outputBytes += chunk.byteLength;
+    if (outputBytes > (limits.outputBytes ?? MAX_BUILD_OUTPUT_BYTES)) {
+      overflow = true;
+      stopBuild(child, killGraceMs);
+      return;
+    }
+    output += chunk.toString("utf8");
+    if (output.length > 32_768) output = output.slice(-32_768);
+  };
+  child.stdout.on("data", collect);
+  child.stderr.on("data", collect);
+  const timeoutMs = limits.timeoutMs ?? BUILD_TIMEOUT_MS;
+  const timeout = setTimeout(() => { timedOut = true; stopBuild(child, killGraceMs); }, timeoutMs);
+  let exitCode: number | null;
+  try {
+    exitCode = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", resolve);
+    });
+  } catch (error) {
+    activeBuild = null;
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    const escalation = killEscalations.get(child);
+    if (escalation) clearTimeout(escalation);
+    killEscalations.delete(child);
+    if (activeBuild?.child === child && child.exitCode === null) stopBuild(child, killGraceMs);
+  }
+  const canceled = activeBuild?.canceled === true;
+  activeBuild = null;
+  const redacted = output
