@@ -88,3 +88,28 @@ public final class BordeauxEventRunner implements AutoCloseable {
 
     /** Stops the runner early with the same ownership semantics as a normal path end. */
     public void stop() {
+        endPath();
+    }
+
+    /** Cancels owned commands and prepares the same path to run again from time zero. */
+    public void reset() {
+        cancelOwnedCommands();
+        nextEvent = 0;
+        lastElapsedS = -1;
+        active = true;
+    }
+
+    public int firedCount() {
+        return nextEvent;
+    }
+
+    private void cancelOwnedCommands() {
+        for (Command command : cancelOnEnd) scheduler.cancel(command);
+        cancelOnEnd.clear();
+    }
+
+    @Override
+    public void close() {
+        stop();
+    }
+}
