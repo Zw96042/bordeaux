@@ -448,3 +448,93 @@ function commandParameters(parameters: RawParameter[], packageName: string, type
 
 function commandReturnType(returnType: string, packageName: string, types: ParsedJavaType[]): "confirmed" | "inferred" | null {
   const simple = simpleTypeName(returnType);
+  if (simple === "Command" || simple === "CommandBase") return "confirmed";
+  const known = resolveKnownType(returnType, packageName, types);
+  return known?.commandClass ? "inferred" : null;
+}
+
+function parameterSignature(parameters: RawParameter[]): string {
+  return parameters.map((parameter) => normalizeJavaType(parameter.javaType)).join(",");
+}
+
+function buildCommands(types: ParsedJavaType[]): JavaCommandDescriptor[] {
+  const candidates: Array<JavaCommandDescriptor & { baseId: string; signature: string }> = [];
+  const addCandidate = (candidate: JavaCommandDescriptor & { baseId: string; signature: string }) => {
+    if (candidates.length >= MAX_DISCOVERED_COMMAND_COUNT) {
+      throw new Error(`Java project contains more than ${MAX_DISCOVERED_COMMAND_COUNT} discoverable commands`);
+    }
+    candidates.push(candidate);
+  };
+  for (const owner of types) {
+    if (owner.commandClass && !owner.abstract) {
+      const constructors = owner.constructors.length > 0
+        ? owner.constructors
+        : owner.hasDeclaredConstructor
+          ? []
+          : [{ parameters: [], line: owner.line }];
+      for (const constructor of constructors) {
+        addCandidate({
+          baseId: owner.qualifiedName,
+          signature: parameterSignature(constructor.parameters),
+          id: owner.qualifiedName,
+          label: humanize(owner.name),
+          ownerType: owner.qualifiedName,
+          member: owner.name,
+          kind: "constructor",
+          confidence: "confirmed",
+          parameters: commandParameters(constructor.parameters, owner.packageName, types),
+          source: { file: owner.source.relativePath, line: constructor.line },
+        });
+      }
+    }
+    for (const method of owner.methods) {
+      const confidence = method.annotated ? "confirmed" : commandReturnType(method.returnType, owner.packageName, types);
+      if (!confidence) continue;
+      const baseId = `${owner.qualifiedName}#${method.name}`;
+      addCandidate({
+        baseId,
+        signature: parameterSignature(method.parameters),
+        id: baseId,
+        label: humanize(method.name),
+        ownerType: owner.qualifiedName,
+        member: method.name,
+        kind: "factory",
+        confidence,
+        parameters: commandParameters(method.parameters, owner.packageName, types),
+        source: { file: owner.source.relativePath, line: method.line },
+      });
+    }
+  }
+  const counts = new Map<string, number>();
+  candidates.forEach((candidate) => counts.set(candidate.baseId, (counts.get(candidate.baseId) ?? 0) + 1));
+  return candidates.map(({ baseId, signature, ...command }) => ({
+    ...command,
+    id: (counts.get(baseId) ?? 0) > 1 ? `${baseId}(${signature})` : baseId,
+  })).sort((left, right) => left.label.localeCompare(right.label) || left.id.localeCompare(right.id));
+}
+
+async function existsFile(filePath: string): Promise<boolean> {
+  try {
+    return (await fs.stat(filePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function collectSourceRoots(rootPath: string): Promise<string[]> {
+  const roots: string[] = [];
+  const queue: Array<{ directory: string; depth: number; lineage: string[] }> = [{ directory: rootPath, depth: 0, lineage: [] }];
+  let visited = 0;
+  let discoveredEntries = 0;
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    visited += 1;
+    if (visited > MAX_DIRECTORY_COUNT) throw new Error(`Java project scan exceeded ${MAX_DIRECTORY_COUNT} directories`);
+    let entries;
+    try {
+      entries = await fs.opendir(current.directory);
+    } catch {
+      continue;
+    }
+    for await (const entry of entries) {
+      discoveredEntries += 1;
