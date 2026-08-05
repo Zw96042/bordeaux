@@ -178,3 +178,89 @@ class BordeauxRuntimeTest {
                         new TestCommand("exact-" + args.requireLong("sequence")))
                 .build();
 
+        assertThrows(BordeauxRuntimeException.class, () -> registry.create("strict",
+                (ObjectNode) MAPPER.readTree("{\"count\":1.9,\"enabled\":true,\"target\":{\"level\":\"L4\",\"slots\":[1]}}")));
+        assertThrows(BordeauxRuntimeException.class, () -> registry.create("strict",
+                (ObjectNode) MAPPER.readTree("{\"count\":1,\"enabled\":\"true\",\"target\":{\"level\":\"L4\",\"slots\":[1]}}")));
+        assertThrows(BordeauxRuntimeException.class, () -> registry.create("strict",
+                (ObjectNode) MAPPER.readTree("{\"count\":1,\"enabled\":true,\"target\":{\"level\":\"L4\",\"slots\":[1.5]}}")));
+        assertThrows(BordeauxRuntimeException.class, () -> registry.create("exact",
+                (ObjectNode) MAPPER.readTree("{\"sequence\":42}")));
+    }
+
+    @Test
+    void rejectsBackwardsOrInvalidElapsedTime() {
+        BordeauxEventRunner runner = new BordeauxEventRunner(
+                new BordeauxPathEvents("p", "P", 1, CATALOG_ID, HASH, List.of()),
+                BordeauxCommandRegistry.builder().catalogId(CATALOG_ID).catalogHash(HASH).build(),
+                new RecordingScheduler());
+        runner.periodic(0.5);
+        assertThrows(BordeauxRuntimeException.class, () -> runner.periodic(0.4));
+        assertThrows(BordeauxRuntimeException.class, () -> runner.periodic(Double.NaN));
+    }
+
+    @Test
+    void rejectsCatalogMismatchBeforeAnyEventCanSchedule() {
+        String otherHash = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        BordeauxPathEvents path = new BordeauxPathEvents("p", "P", 1, CATALOG_ID, otherHash, List.of());
+        RecordingScheduler scheduler = new RecordingScheduler();
+
+        BordeauxRuntimeException mismatch = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxEventRunner(path,
+                        BordeauxCommandRegistry.builder().catalogId(CATALOG_ID).catalogHash(HASH).build(), scheduler));
+
+        assertTrue(mismatch.getMessage().contains("does not match robot registry"));
+        assertTrue(scheduler.scheduled.isEmpty());
+    }
+
+    @Test
+    void rejectsCatalogIdMismatchBeforeAnyEventCanSchedule() {
+        BordeauxPathEvents path = new BordeauxPathEvents("p", "P", 1, "other-robot", HASH, List.of());
+        RecordingScheduler scheduler = new RecordingScheduler();
+
+        BordeauxRuntimeException mismatch = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxEventRunner(path,
+                        BordeauxCommandRegistry.builder().catalogId(CATALOG_ID).catalogHash(HASH).build(), scheduler));
+
+        assertTrue(mismatch.getMessage().contains("catalog ID"));
+        assertTrue(scheduler.scheduled.isEmpty());
+    }
+
+    private static BordeauxPathEvents read(String json) {
+        return BordeauxTrajectoryReader.read(
+                new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), "auto");
+    }
+
+    private static BordeauxCommandRegistry registry(List<String> created, String... ids) {
+        BordeauxCommandRegistry.Builder builder = BordeauxCommandRegistry.builder()
+                .catalogId(CATALOG_ID).catalogHash(HASH);
+        for (String id : ids) {
+            builder.register(id, Set.of(), args -> {
+                created.add(id);
+                return new TestCommand(id);
+            });
+        }
+        return builder.build();
+    }
+
+    private static final class TestCommand extends Command {
+        private TestCommand(String name) {
+            setName(name);
+        }
+    }
+
+    private static final class RecordingScheduler implements BordeauxEventRunner.Scheduler {
+        private final List<Command> scheduled = new ArrayList<>();
+        private final List<Command> cancelled = new ArrayList<>();
+
+        @Override
+        public void schedule(Command command) {
+            scheduled.add(command);
+        }
+
+        @Override
+        public void cancel(Command command) {
+            cancelled.add(command);
+        }
+    }
+}
