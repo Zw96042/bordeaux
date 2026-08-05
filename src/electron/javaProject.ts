@@ -538,3 +538,93 @@ async function collectSourceRoots(rootPath: string): Promise<string[]> {
     }
     for await (const entry of entries) {
       discoveredEntries += 1;
+      if (discoveredEntries > MAX_DIRECTORY_ENTRY_COUNT) throw new Error(`Java project scan exceeded ${MAX_DIRECTORY_ENTRY_COUNT} directory entries`);
+      if (!entry.isDirectory() || entry.isSymbolicLink() || SKIPPED_DIRECTORIES.has(entry.name)) continue;
+      const child = path.join(current.directory, entry.name);
+      const lineage = [...current.lineage, entry.name].slice(-3);
+      if (lineage.join("/") === "src/main/java") {
+        roots.push(child);
+        continue;
+      }
+      if (current.depth < MAX_SCAN_DEPTH) {
+        if (visited + queue.length >= MAX_DIRECTORY_COUNT) throw new Error(`Java project scan exceeded ${MAX_DIRECTORY_COUNT} directories`);
+        queue.push({ directory: child, depth: current.depth + 1, lineage });
+      }
+    }
+  }
+  return [...new Set(roots)].sort();
+}
+
+async function collectJavaSources(projectRoot: string, sourceRoots: string[], warnings: string[]): Promise<JavaSourceUnit[]> {
+  const files: string[] = [];
+  let visitedDirectories = 0;
+  let discoveredEntries = 0;
+  for (const sourceRoot of sourceRoots) {
+    const queue: Array<{ directory: string; depth: number }> = [{ directory: sourceRoot, depth: 0 }];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      visitedDirectories += 1;
+      if (visitedDirectories > MAX_DIRECTORY_COUNT) throw new Error(`Java source scan exceeded ${MAX_DIRECTORY_COUNT} directories`);
+      const entries = await fs.opendir(current.directory);
+      for await (const entry of entries) {
+        discoveredEntries += 1;
+        if (discoveredEntries > MAX_DIRECTORY_ENTRY_COUNT) throw new Error(`Java source scan exceeded ${MAX_DIRECTORY_ENTRY_COUNT} directory entries`);
+        if (entry.isSymbolicLink()) continue;
+        const child = path.join(current.directory, entry.name);
+        if (entry.isDirectory()) {
+          if (current.depth >= MAX_SCAN_DEPTH) throw new Error(`Java source scan exceeded the maximum depth of ${MAX_SCAN_DEPTH}`);
+          if (visitedDirectories + queue.length >= MAX_DIRECTORY_COUNT) throw new Error(`Java source scan exceeded ${MAX_DIRECTORY_COUNT} directories`);
+          queue.push({ directory: child, depth: current.depth + 1 });
+        }
+        else if (entry.isFile() && entry.name.endsWith(".java")) files.push(child);
+        if (files.length > MAX_SOURCE_FILE_COUNT) throw new Error(`Java project contains more than ${MAX_SOURCE_FILE_COUNT} source files`);
+      }
+    }
+  }
+  files.sort();
+  const sources: JavaSourceUnit[] = [];
+  let totalBytes = 0;
+  for (const absolutePath of files) {
+    const stat = await fs.lstat(absolutePath);
+    if (!stat.isFile() || stat.isSymbolicLink()) continue;
+    if (stat.size > MAX_SOURCE_FILE_BYTES) {
+      warnings.push(`${path.relative(projectRoot, absolutePath)} was skipped because it exceeds ${MAX_SOURCE_FILE_BYTES} bytes`);
+      continue;
+    }
+    totalBytes += stat.size;
+    if (totalBytes > MAX_TOTAL_SOURCE_BYTES) throw new Error(`Java project source exceeds the ${MAX_TOTAL_SOURCE_BYTES}-byte scan limit`);
+    const text = await fs.readFile(absolutePath, "utf8");
+    const sanitized = sanitizeJava(text);
+    const packageName = sanitized.match(/\bpackage\s+([$\w.]+)\s*;/)?.[1] ?? "";
+    sources.push({ absolutePath, relativePath: path.relative(projectRoot, absolutePath), text, sanitized, packageName });
+  }
+  return sources;
+}
+
+async function projectName(projectRoot: string): Promise<string> {
+  for (const fileName of ["settings.gradle", "settings.gradle.kts"]) {
+    const filePath = path.join(projectRoot, fileName);
+    if (!(await existsFile(filePath))) continue;
+    const stat = await fs.stat(filePath);
+    if (stat.size > MAX_SETTINGS_FILE_BYTES) throw new Error(`Java project ${fileName} exceeds the ${MAX_SETTINGS_FILE_BYTES}-byte read limit`);
+    const contents = await fs.readFile(filePath, "utf8");
+    const match = contents.match(/\brootProject\.name\s*=\s*["']([^"']+)["']/);
+    if (match?.[1]) return match[1];
+  }
+  return path.basename(projectRoot);
+}
+
+export async function discoverJavaProject(inputPath: string): Promise<JavaCommandCatalog> {
+  const rootPath = await fs.realpath(inputPath);
+  const rootStat = await fs.stat(rootPath);
+  if (!rootStat.isDirectory()) throw new Error("Java project path must be a directory");
+  const hasGradleBuild = await existsFile(path.join(rootPath, "build.gradle")) || await existsFile(path.join(rootPath, "build.gradle.kts"));
+  if (!hasGradleBuild) throw new Error("Selected folder is not a Gradle Java project (build.gradle or build.gradle.kts was not found)");
+  const sourceRoots = await collectSourceRoots(rootPath);
+  if (sourceRoots.length === 0) throw new Error("Selected project has no src/main/java source root");
+  const warnings: string[] = [];
+  const sources = await collectJavaSources(rootPath, sourceRoots, warnings);
+  const types: ParsedJavaType[] = [];
+  for (const source of sources) {
+    const sourceTypes = parseTypes(source);
+    if (sourceTypes.length === 0 && /\b(?:class|record|enum)\s+[$A-Za-z_][$\w]*/.test(source.sanitized)) {
