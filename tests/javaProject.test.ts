@@ -178,3 +178,90 @@ describe("Java command project discovery", () => {
     expect(catalog.commands.find((command) => command.id === "auto.score")).toMatchObject({ label: "Score at level", runtimeReady: true });
     expect(catalog.commands.some((command) => command.id.endsWith("#score"))).toBe(false);
     expect(catalog.commands.find((command) => command.id.endsWith("#intake"))).toMatchObject({ runtimeReady: false });
+  });
+
+  it("previews the annotated command factories in the bundled template before a catalog build", async () => {
+    const project = await temporaryProject();
+    const sourceRoot = path.join(project, "src/main/java");
+    await fs.rm(sourceRoot, { recursive: true });
+    await fs.cp(path.join(process.cwd(), "examples/bordeaux-template-robot/src/main/java"), sourceRoot, { recursive: true });
+
+    const catalog = await discoverJavaProject(project);
+
+    expect(catalog.source).toBe("source");
+    expect(catalog.commands.map((command) => command.member)).toEqual([
+      "holdOutput",
+      "printMessage",
+      "setOutput",
+      "setStatus",
+    ]);
+  });
+
+  it("rejects folders that are not Gradle Java projects", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-not-java-"));
+    temporaryDirectories.push(directory);
+    await expect(discoverJavaProject(directory)).rejects.toThrow(/build\.gradle/);
+  });
+
+  it("warns on malformed and oversized sources while ignoring source symlinks", async () => {
+    const project = await temporaryProject();
+    await writeJava(project, "GoodCommand.java", `
+      package frc.robot;
+      import edu.wpi.first.wpilibj2.command.CommandBase;
+      public final class GoodCommand extends CommandBase {}
+    `);
+    await writeJava(project, "Broken.java", "package frc.robot; public final class Broken {");
+    await writeJava(project, "Oversized.java", " ".repeat(512 * 1024 + 1));
+
+    const outsideDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-java-outside-"));
+    temporaryDirectories.push(outsideDirectory);
+    const outsideSource = path.join(outsideDirectory, "OutsideCommand.java");
+    await fs.writeFile(outsideSource, `
+      package frc.robot;
+      import edu.wpi.first.wpilibj2.command.CommandBase;
+      public final class OutsideCommand extends CommandBase {}
+    `);
+    await fs.symlink(outsideSource, path.join(project, "src/main/java/frc/robot/OutsideCommand.java"));
+
+    const catalog = await discoverJavaProject(project);
+
+    expect(catalog.commands.map((command) => command.id)).toEqual(["frc.robot.GoodCommand"]);
+    expect(catalog.sourceFileCount).toBe(2);
+    expect(catalog.warnings).toEqual(expect.arrayContaining([
+      expect.stringMatching(/Broken\.java contains a type declaration Bordeaux could not parse/),
+      expect.stringMatching(/Oversized\.java was skipped because it exceeds/),
+    ]));
+  });
+
+  it("rejects source trees that exceed the directory-depth ceiling", async () => {
+    const project = await temporaryProject();
+    const deepDirectory = path.join(project, "src/main/java", ...Array.from({ length: 10 }, (_, index) => `level${index}`));
+    await fs.mkdir(deepDirectory, { recursive: true });
+
+    await expect(discoverJavaProject(project)).rejects.toThrow(/maximum depth/);
+  });
+
+  it("rejects oversized Gradle settings before reading them", async () => {
+    const project = await temporaryProject();
+    await fs.writeFile(path.join(project, "settings.gradle"), " ".repeat(64 * 1024 + 1));
+
+    await expect(discoverJavaProject(project)).rejects.toThrow(/settings\.gradle exceeds.*read limit/);
+  });
+
+  it("rejects source trees wider than the directory ceiling", async () => {
+    const project = await temporaryProject();
+    const sourceRoot = path.join(project, "src/main/java");
+    await Promise.all(Array.from({ length: 2_001 }, (_, index) => fs.mkdir(path.join(sourceRoot, `wide${index}`))));
+
+    await expect(discoverJavaProject(project)).rejects.toThrow(/source scan exceeded 2000 directories/);
+  });
+
+  it("redacts filesystem paths from errors sent to the renderer", () => {
+    const error = Object.assign(new Error("EIO while reading /private/robot/src/main/java"), { code: "EIO" });
+    const readable = readableJavaProjectError(error, "CompetitionRobot");
+
+    expect(readable.message).toContain("CompetitionRobot");
+    expect(readable.message).toContain("EIO");
+    expect(readable.message).not.toContain("/private/robot");
+  });
+});
