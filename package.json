@@ -3,32 +3,32 @@
   "version": "0.1.0",
   "private": true,
   "productName": "Bordeaux",
+  "author": "FRC Team 2468",
   "description": "Desktop trajectory authoring and .bdx export app for FRC paths.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
-    "extract": "node scripts/extract-standalone.mjs",
-    "dev": "npm run extract && npm run build:electron && electron dist-electron/electron/main.js",
-    "build": "npm run extract && npm run build:electron",
+    "dev": "npm run build && electron dist-electron/electron/main.js",
+    "build": "npm run verify:renderer && npm run build:java && npm run build:electron",
+    "build:java": "node scripts/build-java.mjs build",
     "build:electron": "tsc -p tsconfig.electron.json",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit && npm run build:electron -- --pretty false"
-  },
-  "dependencies": {
-    "@vitejs/plugin-react": "^5.0.0",
-    "electron": "^37.0.0",
-    "lucide-react": "^0.468.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "test:java": "node scripts/build-java.mjs test",
+    "test:java-integration": "npm run build && node scripts/java-project-integration.mjs",
+    "test:smoke": "npm run build && node scripts/electron-smoke.mjs",
+    "verify:renderer": "node scripts/verify-legacy-renderer.mjs",
+    "typecheck": "tsc --noEmit && npm run build:electron -- --pretty false",
+    "package:dir": "npm run build && electron-builder --dir",
+    "package:mac": "npm run build && electron-builder --mac --arm64 --x64",
+    "package:mac:ci": "npm run build && electron-builder --mac --arm64 --x64 --config.mac.icon=build/icon.icns",
+    "package:win": "npm run build && electron-builder --win --x64"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
     "@types/node": "^22.10.2",
-    "@types/react": "^18.3.18",
-    "@types/react-dom": "^18.3.5",
-    "concurrently": "^9.1.2",
-    "cross-env": "^7.0.3",
+    "electron": "^43.3.0",
+    "electron-builder": "^26.15.3",
     "typescript": "^5.7.2",
-    "vite": "^6.0.5",
-    "vitest": "^2.1.8",
-    "wait-on": "^8.0.1"
-  }
-}
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=22.12"
