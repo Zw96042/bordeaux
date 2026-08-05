@@ -88,3 +88,93 @@ class BordeauxProcessorTest {
         assertTrue(Files.exists(result.classes().resolve("dev/bordeaux/generated/BordeauxGeneratedBindings.class")));
 
         Compilation second = compile("frc/robot/Actions.java", source);
+        JsonNode secondCatalog = MAPPER.readTree(Files.readString(
+                second.classes().resolve("META-INF/bordeaux/commands.json")));
+        assertEquals(catalog.path("catalogHash"), secondCatalog.path("catalogHash"));
+    }
+
+    @Test
+    void rejectsDuplicateIdsInvalidReturnTypesAndUnsupportedShapes() throws Exception {
+        Compilation duplicates = compile("frc/robot/Duplicates.java", """
+                package frc.robot;
+                import dev.bordeaux.annotations.BordeauxCommand;
+                import edu.wpi.first.wpilibj2.command.Command;
+                public final class Duplicates {
+                  @BordeauxCommand(id="same") public Command first() { return null; }
+                  @BordeauxCommand(id="same") public Command second() { return null; }
+                }
+                """);
+        assertFalse(duplicates.success());
+        assertTrue(duplicates.messages().contains("Duplicate Bordeaux command ID 'same'"));
+
+        Compilation invalid = compile("frc/robot/Invalid.java", """
+                package frc.robot;
+                import dev.bordeaux.annotations.BordeauxCommand;
+                import edu.wpi.first.wpilibj2.command.Command;
+                import java.util.Map;
+                public final class Invalid {
+                  public static final class Payload { public int value; private Payload(int value) { this.value = value; } }
+                  @BordeauxCommand public String wrong(Map<Integer, String> values) { return ""; }
+                  @BordeauxCommand public Command badChar(char value) { return null; }
+                  @BordeauxCommand public Command badObject(Payload value) { return null; }
+                }
+                """);
+        assertFalse(invalid.success());
+        assertTrue(invalid.messages().contains("must return edu.wpi.first.wpilibj2.command.Command"));
+        assertTrue(invalid.messages().contains("map keys must be String"));
+        assertTrue(invalid.messages().contains("char values are ambiguous"));
+        assertTrue(invalid.messages().contains("public no-argument constructor"));
+
+        Compilation badBound = compile("frc/robot/BadBound.java", """
+                package frc.robot;
+                import dev.bordeaux.annotations.*;
+                import edu.wpi.first.wpilibj2.command.Command;
+                public final class BadBound {
+                  @BordeauxCommand public Command action(@BordeauxParam(min="1.5") long count) { return null; }
+                }
+                """);
+        assertFalse(badBound.success());
+        assertTrue(badBound.messages().contains("signed digit strings"));
+    }
+
+    @Test
+    void semanticChangesChangeTheCatalogHash() throws Exception {
+        Compilation first = compile("frc/robot/HashActions.java", providerWithLabel("One"));
+        String firstHash = MAPPER.readTree(Files.readString(
+                first.classes().resolve("META-INF/bordeaux/commands.json"))).path("catalogHash").textValue();
+        Compilation second = compile("frc/robot/HashActions.java", providerWithLabel("Two"));
+        String secondHash = MAPPER.readTree(Files.readString(
+                second.classes().resolve("META-INF/bordeaux/commands.json"))).path("catalogHash").textValue();
+        assertNotEquals(firstHash, secondHash);
+    }
+
+    @Test
+    void rejectsDefaultsThatDoNotMatchSchemaOrBoundsAndNestedOptional() throws Exception {
+        Compilation result = compile("frc/robot/BadDefaults.java", """
+                package frc.robot;
+                import dev.bordeaux.annotations.*;
+                import edu.wpi.first.wpilibj2.command.Command;
+                import java.math.BigDecimal;
+                import java.util.*;
+                public final class BadDefaults {
+                  public record Target(String level, List<Integer> slots) {}
+                  @BordeauxCommand(id="fractional") public Command fractional(
+                    @BordeauxParam(defaultValue="1.5") int count) { return null; }
+                  @BordeauxCommand(id="coerced") public Command coerced(
+                    @BordeauxParam(defaultValue="\\\"true\\\"") boolean enabled) { return null; }
+                  @BordeauxCommand(id="incomplete") public Command incomplete(
+                    @BordeauxParam(defaultValue="{\\\"level\\\":\\\"L4\\\"}") Target target) { return null; }
+                  @BordeauxCommand(id="range") public Command range(
+                    @BordeauxParam(defaultValue="0", min="1") int count) { return null; }
+                  @BordeauxCommand(id="exponent") public Command exponent(
+                    @BordeauxParam(defaultValue="\\\"1e10001\\\"") BigDecimal value) { return null; }
+                  @BordeauxCommand(id="optional") public Command optional(
+                    List<Optional<String>> values) { return null; }
+                }
+                """);
+
+        assertFalse(result.success());
+        assertTrue(result.messages().contains("must be an integer JSON number"), result.messages());
+        assertTrue(result.messages().contains("must be a JSON boolean"), result.messages());
+        assertTrue(result.messages().contains("exactly the declared object fields"), result.messages());
+        assertTrue(result.messages().contains("must be at least min"), result.messages());
