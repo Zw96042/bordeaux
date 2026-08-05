@@ -178,3 +178,30 @@ public final class BordeauxTrajectoryReader {
     private static final class BoundedInputStream extends InputStream {
         private final InputStream delegate;
         private final long maxBytes;
+        private long read;
+
+        private BoundedInputStream(InputStream delegate, long maxBytes) {
+            this.delegate = delegate;
+            this.maxBytes = maxBytes;
+        }
+
+        @Override
+        public int read() throws IOException {
+            int value = delegate.read();
+            if (value >= 0) add(1);
+            return value;
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws IOException {
+            int count = delegate.read(buffer, offset, length);
+            if (count > 0) add(count);
+            return count;
+        }
+
+        private void add(long count) throws IOException {
+            read += count;
+            if (read > maxBytes) throw new IOException("trajectory exceeds the " + maxBytes + " byte limit");
+        }
+    }
+}
