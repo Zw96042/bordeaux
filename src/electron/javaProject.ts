@@ -88,3 +88,93 @@ function countLinesBefore(value: string, offset: number): number {
   return lines;
 }
 
+function sanitizeJava(source: string): string {
+  const output = source.split("");
+  let index = 0;
+  let state: "code" | "line" | "block" | "string" | "character" | "text" = "code";
+  while (index < source.length) {
+    const current = source[index];
+    const next = source[index + 1];
+    const third = source[index + 2];
+    if (state === "code") {
+      if (current === "/" && next === "/") {
+        output[index] = output[index + 1] = " ";
+        index += 2;
+        state = "line";
+        continue;
+      }
+      if (current === "/" && next === "*") {
+        output[index] = output[index + 1] = " ";
+        index += 2;
+        state = "block";
+        continue;
+      }
+      if (current === '"' && next === '"' && third === '"') {
+        output[index] = output[index + 1] = output[index + 2] = " ";
+        index += 3;
+        state = "text";
+        continue;
+      }
+      if (current === '"') {
+        output[index] = " ";
+        index += 1;
+        state = "string";
+        continue;
+      }
+      if (current === "'") {
+        output[index] = " ";
+        index += 1;
+        state = "character";
+        continue;
+      }
+      index += 1;
+      continue;
+    }
+    if (state === "line") {
+      if (current === "\n") state = "code";
+      else output[index] = " ";
+      index += 1;
+      continue;
+    }
+    if (state === "block") {
+      if (current === "*" && next === "/") {
+        output[index] = output[index + 1] = " ";
+        index += 2;
+        state = "code";
+      } else {
+        if (current !== "\n") output[index] = " ";
+        index += 1;
+      }
+      continue;
+    }
+    if (state === "text") {
+      if (current === '"' && next === '"' && third === '"') {
+        output[index] = output[index + 1] = output[index + 2] = " ";
+        index += 3;
+        state = "code";
+      } else {
+        if (current !== "\n") output[index] = " ";
+        index += 1;
+      }
+      continue;
+    }
+    if (current === "\\") {
+      output[index] = " ";
+      if (index + 1 < output.length && source[index + 1] !== "\n") output[index + 1] = " ";
+      index += 2;
+      continue;
+    }
+    const closes = (state === "string" && current === '"') || (state === "character" && current === "'");
+    if (current !== "\n") output[index] = " ";
+    index += 1;
+    if (closes) state = "code";
+  }
+  return output.join("");
+}
+
+function findMatching(value: string, openIndex: number, open: string, close: string): number {
+  let depth = 0;
+  for (let index = openIndex; index < value.length; index += 1) {
+    if (value[index] === open) depth += 1;
+    else if (value[index] === close) {
+      depth -= 1;
