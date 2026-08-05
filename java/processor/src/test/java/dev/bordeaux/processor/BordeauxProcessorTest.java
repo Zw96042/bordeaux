@@ -178,3 +178,93 @@ class BordeauxProcessorTest {
         assertTrue(result.messages().contains("must be a JSON boolean"), result.messages());
         assertTrue(result.messages().contains("exactly the declared object fields"), result.messages());
         assertTrue(result.messages().contains("must be at least min"), result.messages());
+        assertTrue(result.messages().contains("decimal exponent"), result.messages());
+        assertTrue(result.messages().contains("Optional is supported only as a top-level"), result.messages());
+    }
+
+    @Test
+    void includesCommandsGeneratedByAnotherProcessorInALaterRound() throws Exception {
+        Compilation result = compile("frc/robot/BaseActions.java", """
+                package frc.robot;
+                import dev.bordeaux.annotations.BordeauxCommand;
+                import edu.wpi.first.wpilibj2.command.Command;
+                public final class BaseActions {
+                  @BordeauxCommand(id="base") public static Command base() { return null; }
+                }
+                """, List.of(new LateCommandProcessor(), new BordeauxProcessor()));
+
+        assertTrue(result.success(), result.messages());
+        JsonNode commands = MAPPER.readTree(Files.readString(
+                result.classes().resolve("META-INF/bordeaux/commands.json"))).path("commands");
+        assertEquals(List.of("base", "generated"),
+                StreamSupport.stream(commands.spliterator(), false).map(value -> value.path("id").textValue()).toList());
+    }
+
+    private Compilation compile(String relativePath, String source) throws IOException {
+        return compile(relativePath, source, List.of(new BordeauxProcessor()));
+    }
+
+    private Compilation compile(String relativePath, String source, List<Processor> processors) throws IOException {
+        Path run = Files.createTempDirectory(temporaryDirectory, "compile-");
+        Path sourceFile = run.resolve("src").resolve(relativePath);
+        Path classes = run.resolve("classes");
+        Path generated = run.resolve("generated");
+        Files.createDirectories(sourceFile.getParent());
+        Files.createDirectories(classes);
+        Files.createDirectories(generated);
+        Files.writeString(sourceFile, source);
+        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
+        try (StandardJavaFileManager files = compiler.getStandardFileManager(diagnostics, Locale.ROOT, StandardCharsets.UTF_8)) {
+            Iterable<? extends JavaFileObject> units = files.getJavaFileObjects(sourceFile);
+            List<String> options = List.of(
+                    "--release", "17", "-parameters",
+                    "-classpath", System.getProperty("java.class.path"),
+                    "-d", classes.toString(), "-s", generated.toString(),
+                    "-Abordeaux.catalogId=test-robot");
+            JavaCompiler.CompilationTask task = compiler.getTask(null, files, diagnostics, options, null, units);
+            task.setProcessors(processors);
+            boolean success = task.call();
+            String messages = diagnostics.getDiagnostics().stream()
+                    .map(diagnostic -> diagnostic.getMessage(Locale.ROOT))
+                    .collect(java.util.stream.Collectors.joining("\n"));
+            Path bindings = generated.resolve("dev/bordeaux/generated/BordeauxGeneratedBindings.java");
+            if (!success && Files.exists(bindings)) messages += "\n" + Files.readString(bindings);
+            return new Compilation(success, messages, classes, generated);
+        }
+    }
+
+    private static String providerWithLabel(String label) {
+        return """
+                package frc.robot;
+                import dev.bordeaux.annotations.BordeauxCommand;
+                import edu.wpi.first.wpilibj2.command.Command;
+                public final class HashActions {
+                  @BordeauxCommand(id="hash", label="%s") public Command action() { return null; }
+                }
+                """.formatted(label);
+    }
+
+    private static String canonicalHash(JsonNode commands) throws Exception {
+        String canonical = canonical(commands);
+        byte[] digest = MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(StandardCharsets.UTF_8));
+        StringBuilder result = new StringBuilder("sha256:");
+        for (byte value : digest) result.append(String.format("%02x", value & 0xff));
+        return result.toString();
+    }
+
+    private static String canonical(JsonNode node) throws Exception {
+        if (node.isObject()) {
+            List<String> names = new ArrayList<>();
+            node.fieldNames().forEachRemaining(names::add);
+            names.sort(Comparator.naturalOrder());
+            List<String> fields = new ArrayList<>();
+            for (String name : names) fields.add(MAPPER.writeValueAsString(name) + ":" + canonical(node.get(name)));
+            return "{" + String.join(",", fields) + "}";
+        }
+        if (node.isArray()) {
+            List<String> values = new ArrayList<>();
+            for (JsonNode value : node) values.add(canonical(value));
+            return "[" + String.join(",", values) + "]";
+        }
+        return MAPPER.writeValueAsString(node);
