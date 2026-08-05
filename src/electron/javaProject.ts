@@ -178,3 +178,93 @@ function findMatching(value: string, openIndex: number, open: string, close: str
     if (value[index] === open) depth += 1;
     else if (value[index] === close) {
       depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function splitTopLevel(value: string, delimiter = ","): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  let angle = 0;
+  let paren = 0;
+  let bracket = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === "<") angle += 1;
+    else if (char === ">") angle = Math.max(0, angle - 1);
+    else if (char === "(") paren += 1;
+    else if (char === ")") paren = Math.max(0, paren - 1);
+    else if (char === "[") bracket += 1;
+    else if (char === "]") bracket = Math.max(0, bracket - 1);
+    else if (char === delimiter && angle === 0 && paren === 0 && bracket === 0) {
+      parts.push(value.slice(start, index));
+      start = index + 1;
+    }
+  }
+  parts.push(value.slice(start));
+  return parts.map((part) => part.trim()).filter(Boolean);
+}
+
+function stripAnnotations(value: string): string {
+  let result = value;
+  let previous = "";
+  while (result !== previous) {
+    previous = result;
+    result = result.replace(/@[$\w.]+(?:\s*\([^()]*(?:\([^()]*\)[^()]*)*\))?\s*/g, "");
+  }
+  return result;
+}
+
+function normalizeJavaType(value: string): string {
+  return stripAnnotations(value)
+    .replace(/\bfinal\s+/g, "")
+    .replace(/\s*\.\.\.\s*/g, "[]")
+    .replace(/\s+/g, " ")
+    .replace(/\s*([<>,?\[\]])\s*/g, "$1")
+    .trim();
+}
+
+function normalizeBindingJavaType(value: string): string {
+  return normalizeJavaType(value).replace(/\b(?:[$A-Za-z_][$\w]*\.)+([$A-Za-z_][$\w]*)/g, "$1");
+}
+
+function parseParameters(value: string): RawParameter[] {
+  return splitTopLevel(value).flatMap((raw, index) => {
+    const clean = stripAnnotations(raw)
+      .replace(/\bfinal\s+/g, "")
+      .replace(/\s*\.\.\.\s*/g, "[] ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const match = clean.match(/^(.*\S)\s+([$A-Za-z_][$\w]*)$/);
+    if (!match) return [];
+    const javaType = normalizeJavaType(match[1]);
+    return javaType ? [{ name: match[2] || `arg${index + 1}`, javaType }] : [];
+  });
+}
+
+function topLevelMemberSignatures(body: string): MemberSignature[] {
+  const signatures: MemberSignature[] = [];
+  let segmentStart = 0;
+  let depth = 0;
+  for (let index = 0; index < body.length; index += 1) {
+    const char = body[index];
+    if (char === "{") {
+      if (depth === 0) {
+        const text = body.slice(segmentStart, index).trim();
+        if (text) signatures.push({ text, offset: segmentStart + body.slice(segmentStart, index).search(/\S|$/) });
+      }
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) segmentStart = index + 1;
+      continue;
+    }
+    if (char === ";" && depth === 0) {
+      const text = body.slice(segmentStart, index).trim();
+      if (text) signatures.push({ text, offset: segmentStart + body.slice(segmentStart, index).search(/\S|$/) });
+      segmentStart = index + 1;
+    }
