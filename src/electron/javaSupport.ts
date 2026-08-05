@@ -358,3 +358,20 @@ export async function runJavaCatalogBuild(projectRoot: string, limits: { timeout
   const canceled = activeBuild?.canceled === true;
   activeBuild = null;
   const redacted = output
+    .replaceAll(canonicalRoot, "<robot-project>")
+    .replace(/\u001b\[[0-9;]*m/g, "")
+    .trim();
+  if (canceled) throw new Error("Java catalog build was canceled");
+  if (timedOut) throw new Error(`Java catalog build exceeded the ${timeoutMs / 1000}-second time limit`);
+  if (overflow) throw new Error(`Java catalog build exceeded the ${limits.outputBytes ?? MAX_BUILD_OUTPUT_BYTES}-byte output limit`);
+  if (exitCode !== 0) throw new Error(`Java catalog build failed with exit code ${exitCode ?? "unknown"}${redacted ? `\n${redacted.slice(-8_192)}` : ""}`);
+  return { output: redacted.slice(-8_192) };
+}
+
+export function installPreviewSummary(preview: InstallPreview): { buildFile: string; files: string[]; replacing: boolean } {
+  return {
+    buildFile: preview.buildFileName,
+    files: [".bordeaux/bordeaux.gradle", ".bordeaux/INTEGRATION.md", ".bordeaux/lib/bordeaux-runtime.jar", ".bordeaux/lib/bordeaux-processor.jar", ".bordeaux/install.json"],
+    replacing: preview.replacingManagedBlock,
+  };
+}
