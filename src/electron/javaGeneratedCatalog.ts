@@ -178,3 +178,45 @@ export function parseGeneratedJavaCatalog(raw: unknown): GeneratedJavaCatalog {
     return {
       id,
       label: text(command.label, "command label", 256),
+      description: optionalText(command.description, "command description", 2_048),
+      aliases: optionalTerms(command.aliases, "command aliases"),
+      semanticTags: optionalTerms(command.semanticTags, "command semantic tags", true),
+      ownerType: text(command.ownerType, "command owner", 512),
+      member: text(command.member, "command member", 256),
+      kind,
+      confidence,
+      runtimeReady: true,
+      parameters,
+      source: {
+        file: sourceFile,
+        line: source && Number.isInteger(source.line) && (source.line as number) > 0 ? source.line as number : 1,
+      },
+    };
+  });
+  return { schemaVersion: "1.0", catalogId, supportVersion, catalogHash, commands };
+}
+
+export async function readGeneratedJavaCatalog(projectRoot: string): Promise<GeneratedCatalogResult | null> {
+  const candidates = ["build/bordeaux/catalog-v1.json"];
+  for (const relativePath of candidates) {
+    const filePath = path.join(projectRoot, relativePath);
+    let stat;
+    try {
+      stat = await fs.lstat(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Generated Java catalog ${relativePath} must be a regular file`);
+    if (stat.size > MAX_CATALOG_BYTES) throw new Error(`Generated Java catalog exceeds ${MAX_CATALOG_BYTES} bytes`);
+    let raw: unknown;
+    try {
+      raw = JSON.parse(await fs.readFile(filePath, "utf8"));
+    } catch (error) {
+      throw new Error(`Generated Java catalog ${relativePath} is not valid JSON`, { cause: error });
+    }
+    const catalog = parseGeneratedJavaCatalog(raw);
+    return { ...catalog, relativePath };
+  }
+  return null;
+}
