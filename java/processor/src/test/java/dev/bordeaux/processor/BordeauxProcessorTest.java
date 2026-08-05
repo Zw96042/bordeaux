@@ -268,3 +268,39 @@ class BordeauxProcessorTest {
             return "[" + String.join(",", values) + "]";
         }
         return MAPPER.writeValueAsString(node);
+    }
+
+    private record Compilation(boolean success, String messages, Path classes, Path generated) {}
+
+    private static final class LateCommandProcessor extends AbstractProcessor {
+        private boolean generated;
+
+        @Override
+        public Set<String> getSupportedAnnotationTypes() {
+            return Set.of("*");
+        }
+
+        @Override
+        public SourceVersion getSupportedSourceVersion() {
+            return SourceVersion.RELEASE_17;
+        }
+
+        @Override
+        public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnvironment) {
+            if (generated || roundEnvironment.processingOver()) return false;
+            generated = true;
+            try (var writer = processingEnv.getFiler().createSourceFile("frc.robot.GeneratedActions").openWriter()) {
+                writer.write("""
+                        package frc.robot;
+                        public final class GeneratedActions {
+                          @dev.bordeaux.annotations.BordeauxCommand(id="generated")
+                          public static edu.wpi.first.wpilibj2.command.Command generated() { return null; }
+                        }
+                        """);
+            } catch (IOException exception) {
+                throw new IllegalStateException(exception);
+            }
+            return false;
+        }
+    }
+}
