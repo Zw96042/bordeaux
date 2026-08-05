@@ -88,3 +88,40 @@ describe("Java support installation and trusted catalog builds", () => {
     await expect(prepareJavaSupportInstall(linked.project, linked.artifacts)).rejects.toThrow(/regular directory/);
   });
 
+  it("runs only the fixed wrapper task and redacts the project path", async () => {
+    const { project } = await fixture();
+    const result = await runJavaCatalogBuild(project);
+    expect(result.output).toContain("catalog built in <robot-project>");
+    expect(result.output).not.toContain(project);
+  });
+
+  it("enforces output, timeout, cancellation, and one-build-at-a-time limits", async () => {
+    const noisy = await fixture();
+    const noisyWrapper = path.join(noisy.project, "gradlew");
+    await fs.writeFile(noisyWrapper, "#!/bin/sh\nyes x | head -c 4096\n");
+    await fs.chmod(noisyWrapper, 0o755);
+    await expect(runJavaCatalogBuild(noisy.project, { outputBytes: 128 })).rejects.toThrow(/output limit/);
+
+    const slow = await fixture();
+    const slowWrapper = path.join(slow.project, "gradlew");
+    await fs.writeFile(slowWrapper, "#!/bin/sh\nsleep 5\n");
+    await fs.chmod(slowWrapper, 0o755);
+    await expect(runJavaCatalogBuild(slow.project, { timeoutMs: 30, killGraceMs: 30 })).rejects.toThrow(/time limit/);
+
+    const stubborn = await fixture();
+    const stubbornWrapper = path.join(stubborn.project, "gradlew");
+    await fs.writeFile(stubbornWrapper, "#!/bin/sh\ntrap '' TERM\nwhile :; do sleep 1; done\n");
+    await fs.chmod(stubbornWrapper, 0o755);
+    await expect(runJavaCatalogBuild(stubborn.project, { timeoutMs: 30, killGraceMs: 30 })).rejects.toThrow(/time limit/);
+
+    const cancel = await fixture();
+    const cancelWrapper = path.join(cancel.project, "gradlew");
+    await fs.writeFile(cancelWrapper, "#!/bin/sh\nsleep 5\n");
+    await fs.chmod(cancelWrapper, 0o755);
+    const running = runJavaCatalogBuild(cancel.project, { timeoutMs: 5_000 });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await expect(runJavaCatalogBuild(cancel.project)).rejects.toThrow(/already running/);
+    expect(cancelJavaCatalogBuild()).toBe(true);
+    await expect(running).rejects.toThrow(/canceled/);
+  });
+});
