@@ -88,3 +88,15 @@ export function rememberJavaProject(
 ): JavaProjectBookmark[] {
   const normalizedPath = path.normalize(projectPath);
   const bookmark: JavaProjectBookmark = {
+    id: bookmarkId(normalizedPath),
+    projectName: projectName.slice(0, MAX_TEXT_LENGTH),
+    folderName: path.basename(normalizedPath).slice(0, MAX_TEXT_LENGTH),
+    lastLinkedAt: linkedAt.toISOString(),
+    projectPath: normalizedPath,
+  };
+  return [bookmark, ...bookmarks.filter((item) => item.id !== bookmark.id)].slice(0, MAX_BOOKMARKS);
+}
+
+export function summarizeJavaProjectBookmarks(bookmarks: JavaProjectBookmark[]): JavaProjectBookmarkSummary[] {
+  return bookmarks.map(({ id, projectName, folderName, lastLinkedAt }) => ({ id, projectName, folderName, lastLinkedAt }));
+}
