@@ -88,3 +88,24 @@ describe("generated Java command catalogs", () => {
     let schema = invalid.commands[0].parameters[0].schema;
     for (let depth = 0; depth < 26; depth += 1) {
       schema.kind = "optional";
+      schema.element = { kind: "optional", javaType: "java.util.Optional<java.lang.String>" };
+      schema = schema.element;
+    }
+    invalid.catalogHash = generatedCatalogHash(invalid.commands);
+    expect(() => parseGeneratedJavaCatalog(invalid)).toThrow(/exceeds 24 levels/);
+  });
+
+  it("rejects inverted exact bounds without converting them to binary floats", () => {
+    const invalid = catalog();
+    invalid.commands[0].parameters[1].min = "0.10000000000000000003";
+    invalid.catalogHash = generatedCatalogHash(invalid.commands);
+    expect(() => parseGeneratedJavaCatalog(invalid)).toThrow(/inverted range/);
+  });
+
+  it("rejects generated defaults outside their authored bounds", () => {
+    const invalid = catalog();
+    invalid.commands[0].parameters[1].defaultValue = "0.2";
+    invalid.catalogHash = generatedCatalogHash(invalid.commands);
+    expect(() => parseGeneratedJavaCatalog(invalid)).toThrow(/default.*at most/);
+  });
+});
