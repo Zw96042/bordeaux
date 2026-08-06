@@ -223,37 +223,37 @@
     if (!magnitude) for (let i = 0; i < Math.max(a.digits.length, b.digits.length); i++) {
       const aDigit = a.digits[i] || '0', bDigit = b.digits[i] || '0';
       if (aDigit !== bDigit) { magnitude = aDigit < bDigit ? -1 : 1; break; }
-      icon = 'gauge'; title = 'Constraint Range';
-      tag = (loF * len).toFixed(1) + '\u2013' + (hiF * len).toFixed(1) + ' m';
-      body = h(React.Fragment, null,
-        h('div', { className: 'fieldlabel first' }, 'Max velocity'),
-        h(Num, { label: null, value: rg.maxVel, unit: 'm/s', min: 0, onChange: (v) => actions.setRange(sel.idx, { maxVel: v }) }),
-        h('button', { className: 'morebtn' + (moreLimits ? ' on' : ''), type: 'button', onClick: () => setMoreLimits(!moreLimits) }, h(Icon, { name: 'chevron', size: 14 }), moreLimits ? 'Fewer limits' : 'More limits \u00b7 accel & rotation'),
-        moreLimits && h(React.Fragment, null,
-          h('div', { className: 'cgroup-h' }, 'Translation'),
-          h('div', { className: 'grid2' },
-            h(Num, { label: 'Max accel', value: rg.maxAccel, unit: 'm/s\u00b2', min: 0, onChange: (v) => actions.setRange(sel.idx, { maxAccel: v }) }),
-            h(Num, { label: 'Max decel', value: rg.maxDecel, unit: 'm/s\u00b2', min: 0, onChange: (v) => actions.setRange(sel.idx, { maxDecel: v }) })),
-          h('div', { className: 'cgroup-h' }, 'Rotation'),
-          h('div', { className: 'grid2' },
-            h(Num, { label: 'Max \u03c9', value: rg.maxAngVel, unit: '\u00b0/s', step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { maxAngVel: v }) }),
-            h(Num, { label: 'Max \u03b1', value: rg.maxAngAccel, unit: '\u00b0/s\u00b2', step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { maxAngAccel: v }) }))),
-        h('div', { className: 'fieldlabel' }, 'Label'),
-        h('input', { className: 'textinput', value: rg.name || '', placeholder: 'e.g. Reef approach', onChange: (e) => actions.setRange(sel.idx, { name: e.target.value }) }),
-        h('div', { className: 'chint' }, 'Drawn directly on the trajectory \u2014 drag its endpoints on the field to move or resize it. Where ranges overlap, the tightest limit wins.'),
-        h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delRange(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete range'));
-    } else {
-      return null;
     }
-
-    return h('div', { className: 'ctxinsp' },
-      h('div', { className: 'ctxinsp-hd' },
-        h('span', { className: 'ctxinsp-ic' }, h(Icon, { name: icon, size: 15 })),
-        h('span', { className: 'ctxinsp-t' }, title),
-        tag && h('span', { className: 'ctxinsp-tag' }, tag),
-        closable && h('button', { className: 'ctxinsp-x', type: 'button', title: 'Clear selection', onClick: onClose }, h(Icon, { name: 'x', size: 14 }))),
-      h('div', { className: 'ctxinsp-body' }, body));
+    return a.sign < 0 ? -magnitude : magnitude;
   }
 
-  window.ContextInspector = ContextInspector;
-})();
+  function parameterMetadata(parameter, javaType) {
+    if (!parameter) return javaType;
+    return [javaType, parameter.unit, parameter.description].filter(Boolean).join(' · ');
+  }
+
+  const MAX_RENDERED_PICKER_ITEMS = 80;
+
+  function InlinePicker({ id, label, value, items, onChange, disabled, placeholder, icon, searchThreshold = 7 }) {
+    const [open, setOpen] = React.useState(false);
+    const [query, setQuery] = React.useState('');
+    const [activeIndex, setActiveIndex] = React.useState(0);
+    const rootRef = React.useRef(null);
+    const triggerRef = React.useRef(null);
+    const searchRef = React.useRef(null);
+    const optionRefs = React.useRef([]);
+    const listboxId = id + '-listbox';
+    const labelId = id + '-label';
+    const selected = items.find((item) => item.value === value);
+    const normalizedQuery = query.trim().toLowerCase();
+    const filteredItems = normalizedQuery
+      ? items.filter((item) => [item.label, item.meta, item.searchText].some((part) => String(part || '').toLowerCase().includes(normalizedQuery)))
+      : items;
+    const visibleItems = filteredItems.slice(0, MAX_RENDERED_PICKER_ITEMS);
+    const hiddenMatchCount = filteredItems.length - visibleItems.length;
+    const showSearch = items.length > searchThreshold;
+
+    React.useEffect(() => {
+      if (!open) return;
+      const closeFromOutside = (event) => {
+        if (rootRef.current && !rootRef.current.contains(event.target)) setOpen(false);
