@@ -88,51 +88,51 @@ html, body { font-synthesis: none; }
   border-radius: 7px !important;
   background: var(--polish-control) !important;
 }
-.plannerselect select {
-  color: var(--text);
-  background: transparent;
-  border: 0;
-  outline: none;
-  font: inherit;
+.textinput::placeholder, .pathlib-search::placeholder {
+  color: var(--polish-placeholder);
+  opacity: 1;
 }
-.plannerdiag {
-  display: grid;
-  grid-template-columns: auto auto;
-  column-gap: 8px;
-  row-gap: 2px;
-  margin-top: 8px;
-  padding: 8px 9px;
-  border: 1px solid rgba(43,179,196,0.28);
-  border-radius: 7px;
-  background: rgba(43,179,196,0.08);
+.textinput:hover, .selectinput:hover, .numbox:hover {
+  background-color: var(--polish-control-hover) !important;
 }
-.plannerdiag b { color: #7bdcea; font-size: 12px; }
-.plannerdiag span, .plannerdiag em { color: var(--muted); font-size: 11px; font-style: normal; }
-.ctxinsp, .outline, .diag, .rt-panel, .stepinsp {
-  border-color: var(--panel-border-strong) !important;
+.textinput:focus-visible, .selectinput:focus-visible, .numinput:focus-visible,
+.pathlib-search:focus-visible {
+  outline: 2px solid oklch(0.72 0.10 255 / .82) !important;
+  outline-offset: 1px;
 }
-.ctxinsp-body, .outline-scroll { scrollbar-width: thin; }
-.featempty, .diag-empty {
-  color: color-mix(in srgb, var(--muted) 88%, white);
-  background: rgba(255,255,255,0.032);
-  border: 1px dashed rgba(255,255,255,0.11);
-  border-radius: 6px;
+.toolrail, .cbar, .overlayctl, .transport, .viewctl, .diag, .ctxmenu {
+  box-shadow: var(--polish-elevation) !important;
 }
-.fieldlabel, .cgroup-h, .outline-grp {
-  letter-spacing: 0 !important;
+.toolrail, .cbar, .overlayctl, .transport, .viewctl, .rt-transport {
+  border-color: transparent !important;
+  border-radius: 6px !important;
+  background: var(--hud-surface) !important;
+  box-shadow: var(--hud-ring) !important;
 }
-.textinput, .selectinput {
-  border-color: rgba(255,255,255,0.12) !important;
+.cbar { box-shadow: var(--polish-elevation), inset 0 1px rgb(255 255 255 / .045) !important; }
+.timecode, .pathsw-t, .featmeta, .secsub, .seccount, .cbar-v, .cbar-u,
+.numinput, .numunit, .psum-row b, .rt-stat-v, .viewpct {
+  font-variant-numeric: tabular-nums;
 }
-</style>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>Bordeaux — FRC Path Planner</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com">
-<style>/* cyrillic-ext */
-@font-face {
-  font-family: 'JetBrains Mono';
+.tb-right { min-width: 0; }
+.tb-file { flex: 0 0 auto !important; white-space: nowrap; }
+.plannercontrol { min-width: 252px; max-width: 294px; flex: 0 1 294px; }
+.pathsw { flex: 0 1 170px; max-width: 170px; }
+.pathsw-btn, .exportbtn, .alliance, .qbtn, .cbar-chip, .cbar-k, .cbar-v, .cbar-u,
+.timecode, .roi, .numlbl, .numunit, .ctxinsp-tag { white-space: nowrap; }
+.pathsw-btn { overflow: hidden; }
+.exportbtn, .alliance, .ctxinsp-tag, .numunit { flex-shrink: 0; }
+.ctxinsp-body { overflow-x: hidden; }
+.morebtn { width: 100%; justify-content: space-between; margin-top: 4px; }
+.ctxinsp-t, .featnm {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hint, .chint, .seg-hint, .outline-foot, .rp-sub, .inrow-l small {
+  overflow-wrap: break-word;
+  text-wrap: pretty;
   font-style: normal;
   font-weight: 400;
   font-display: swap;
