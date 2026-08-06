@@ -43,23 +43,29 @@
     palette: 'M12 3a9 9 0 1 0 0 18 2 2 0 0 0 1.6-3.2 2 2 0 0 1 1.6-3.2H17a4 4 0 0 0 4-4 9 9 0 0 0-9-7.6z M7.5 12.5h.01 M9.5 8.5h.01 M14.5 8.5h.01',
     x: 'M6 6l12 12M18 6L6 18',
     compass: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M15.5 8.5l-2 5-5 2 2-5z',
+    drag: 'M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01',
+    shuffle: 'M4 5h4l9 14h3 M17 5h3 M4 19h4l3-4.5 M15.5 7.5L20 5l-2 4 M18 22l2-3-3-1',
+    branch: 'M6 4v6a4 4 0 0 0 4 4h4 M18 4v6a4 4 0 0 1-4 4 M6 20a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M6 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M18 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
+    dot: 'M12 12m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0',
     check: 'M5 13l4 4L19 7',
     bolt: 'M13 3L5 13h6l-1 8 8-10h-6z',
     layers: 'M12 3l9 5-9 5-9-5z M3 13l9 5 9-5',
     pin: 'M12 21s7-6.5 7-12a7 7 0 1 0-14 0c0 5.5 7 12 7 12z M12 9a2 2 0 1 0 0 0z',
     ruler: 'M4 14L14 4l6 6L10 20z M8 10l2 2M11 7l2 2M14 10l2 2',
+    sliders: 'M4 6h5M15 6h5M9 3v6M4 12h9M19 12h1M13 9v6M4 18h3M13 18h7M7 15v6',
   };
 
   function Icon({ name, size = 18, fill = false, stroke = 'currentColor', sw = 1.7 }) {
-    return h('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: fill ? 'currentColor' : 'none', stroke: fill ? 'none' : stroke, strokeWidth: sw, strokeLinecap: 'round', strokeLinejoin: 'round' }, h('path', { d: PATHS[name] || '' }));
+    return h('svg', { width: size, height: size, viewBox: '0 0 24 24', 'aria-hidden': true, focusable: false, fill: fill ? 'currentColor' : 'none', stroke: fill ? 'none' : stroke, strokeWidth: sw, strokeLinecap: 'round', strokeLinejoin: 'round' }, h('path', { d: PATHS[name] || '' }));
   }
 
   function IconBtn({ icon, active, onClick, title, danger, size = 18, fill }) {
-    return h('button', { className: 'iconbtn' + (active ? ' active' : '') + (danger ? ' danger' : ''), onClick, title, type: 'button' }, h(Icon, { name: icon, size, fill }));
+    return h('button', { className: 'iconbtn' + (active ? ' active' : '') + (danger ? ' danger' : ''), onClick, title, 'aria-label': title, 'aria-pressed': active == null ? undefined : active, type: 'button' }, h(Icon, { name: icon, size, fill }));
   }
 
   // numeric field with drag-to-scrub
   function Num({ label, value, onChange, unit, step = 0.01, min, max, precision = 2, accentDrag }) {
+    const id = useId();
     const [edit, setEdit] = useState(null);
     const ref = useRef(null);
     const start = () => (down) => {
@@ -72,22 +78,16 @@
     };
     const disp = edit != null ? edit : (typeof value === 'number' ? value.toFixed(precision) : value);
     return h('div', { className: 'numrow' },
-      label != null && h('label', { className: 'numlbl', onPointerDown: start() }, label),
+      label != null && h('label', { className: 'numlbl', htmlFor: id, onPointerDown: start() }, label),
       h('div', { className: 'numbox' },
         h('input', {
-          ref, className: 'numinput', value: disp, inputMode: 'decimal',
+          id, ref, className: 'numinput', value: disp, inputMode: 'decimal', 'aria-describedby': unit ? id + '-unit' : undefined,
           onChange: (e) => setEdit(e.target.value),
           onFocus: (e) => { setEdit(typeof value === 'number' ? String(value) : value); requestAnimationFrame(() => e.target.select()); },
           onBlur: (e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) onChange(n); setEdit(null); },
           onKeyDown: (e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setEdit(null); e.target.blur(); } },
         }),
-        unit && h('span', { className: 'numunit' }, unit)),
-    );
-  }
-
-  function Section({ icon, title, count, right, children, open, onToggle, sub }) {
-    return h('div', { className: 'section' + (open ? ' open' : '') },
-      h('div', { className: 'sechead', onClick: onToggle, role: 'button' },
+        unit && h('span', { id: id + '-unit', className: 'numunit' }, unit)),
         h('span', { className: 'secchev' }, h(Icon, { name: 'chevron', size: 15 })),
         icon && h('span', { className: 'secicon' }, h(Icon, { name: icon, size: 16 })),
         h('span', { className: 'sectitle' }, title),
