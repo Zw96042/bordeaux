@@ -1082,3 +1082,93 @@
     if (Math.abs(errorAtArrival) <= 0.05 * D2R && Math.abs(omega) <= 0.05 * D2R) return;
     let period = doc.labview && doc.labview.samplePeriodS >= 0.001 ? doc.labview.samplePeriodS : Infinity;
     for (let i = 1; i < prof.t.length; i++) { const dt = prof.t[i] - prof.t[i - 1]; if (dt > 1e-9) period = Math.min(period, dt); }
+    period = isFinite(period) ? Math.max(0.01, Math.min(0.05, period)) : 0.02;
+    const active = ranges.filter((range) => 1 >= Math.min(range.f0, range.f1) - 1e-9 && 1 <= Math.max(range.f0, range.f1) + 1e-9);
+    let maxOmega = (doc.constraints.maxAngVel || 0) * D2R;
+    let maxAccel = (doc.constraints.maxAngAccel || 0) * D2R;
+    let maxDecel = (doc.constraints.maxAngDecel || doc.constraints.maxAngAccel || 0) * D2R;
+    active.forEach((range) => {
+      maxOmega = Math.min(maxOmega, range.maxAngVel * D2R);
+      maxAccel = Math.min(maxAccel, range.maxAngAccel * D2R);
+      maxDecel = Math.min(maxDecel, range.maxAngAccel * D2R);
+    });
+    let ticks = 0;
+    while ((Math.abs(target - actual) > 0.05 * D2R || Math.abs(omega) > 0.05 * D2R) && ticks < 250000) {
+      const error = target - actual;
+      const brakingOmega = Math.max(0, Math.sqrt(2 * Math.max(1e-9, maxDecel) * Math.abs(error)) - Math.max(1e-9, maxDecel) * period);
+      let nextTarget = Math.max(-maxOmega, Math.min(maxOmega, Math.sign(error) * brakingOmega));
+      const exactOmega = error / period;
+      const exactReversing = Math.sign(exactOmega) !== 0 && Math.sign(omega) !== 0 && Math.sign(exactOmega) !== Math.sign(omega);
+      const exactRate = exactReversing ? Math.min(maxAccel, maxDecel) : Math.abs(exactOmega) > Math.abs(omega) ? maxAccel : maxDecel;
+      if (Math.abs(exactOmega) <= maxOmega + 1e-9 && Math.abs(exactOmega - omega) <= exactRate * period + 1e-9) nextTarget = exactOmega;
+      const reversing = Math.sign(nextTarget) !== 0 && Math.sign(omega) !== 0 && Math.sign(nextTarget) !== Math.sign(omega);
+      const increasing = Math.sign(nextTarget) === Math.sign(omega) && Math.abs(nextTarget) > Math.abs(omega);
+      const rate = reversing ? Math.min(maxAccel, maxDecel) : increasing ? maxAccel : maxDecel;
+      omega += Math.max(-rate * period, Math.min(rate * period, nextTarget - omega));
+      actual += omega * period;
+      ticks++;
+    }
+    if (Math.abs(target - actual) > 0.05 * D2R || Math.abs(omega) > 0.05 * D2R) { prof.headingCatchupFailed = true; return; }
+    const duration = ticks * period, arrival = prof.t[last];
+    (prof.turns || []).forEach((turn) => { if (turn.idx === last) { turn.t0 += duration; turn.t1 += duration; } });
+    (prof.jiggles || []).forEach((jiggle) => { if (jiggle.idx === last) { jiggle.t0 += duration; jiggle.t1 += duration; } });
+    (prof.holds || []).forEach((hold) => { if (hold.idx === last) { hold.t0 += duration; hold.t1 += duration; } });
+    prof.turns = prof.turns || [];
+    prof.turns.push({ idx: last, t0: arrival, t1: arrival + duration, start: tracked[last], delta: target - tracked[last], catchup: true });
+    prof.totalTime += duration;
+    prof.headingCatchupDuration = duration;
+  }
+
+  function featureFraction(feature, smp) {
+    const total = smp.length || 1;
+    const raw = feature && feature.anchor === 'dist'
+      ? (feature.d != null ? feature.d : (feature.f || 0) * total) / total
+      : (feature && feature.f) || 0;
+    return Math.max(0, Math.min(1, raw));
+  }
+
+  function remapWaypointRange(range, oldToNew, removedIndex, newCount) {
+    if (!range || range.anchor !== 'wp') return range;
+    const next = { ...range };
+    const last = Math.max(0, newCount - 1);
+    if (range.t0 != null || range.t1 != null) {
+      const remapLocal = (segment, local) => {
+        const authored = Number.isInteger(segment) ? segment : 0;
+        const oldSegment = Math.max(0, Math.min(oldToNew.length - 2, authored));
+        const oldLocal = Math.max(0, Math.min(1, local != null ? local : (authored >= oldToNew.length - 1 ? 1 : 0)));
+        const a = oldToNew[oldSegment], b = oldToNew[oldSegment + 1];
+        if (!Number.isInteger(a) || !Number.isInteger(b) || newCount < 2) {
+          const fallback = Number.isInteger(a) ? a : Math.max(0, Math.min(last, oldSegment));
+          return { segment: Math.max(0, Math.min(Math.max(0, newCount - 2), fallback)), local: oldLocal };
+        }
+        const position = Math.max(0, Math.min(last, a + (b - a) * oldLocal));
+        const mappedSegment = Math.min(Math.max(0, newCount - 2), Math.floor(position));
+        return { segment: mappedSegment, local: position >= last ? 1 : position - mappedSegment };
+      };
+      let start = remapLocal(range.w0, range.t0), end = remapLocal(range.w1, range.t1);
+      if (start.segment + start.local > end.segment + end.local) { const swap = start; start = end; end = swap; }
+      next.w0 = start.segment; next.t0 = start.local; next.w1 = end.segment; next.t1 = end.local;
+      return next;
+    }
+    const oldStart = Number.isInteger(range.w0) ? range.w0 : 0;
+    const oldEnd = Number.isInteger(range.w1) ? range.w1 : oldToNew.length - 1;
+    const resolve = (value, start) => {
+      const mapped = oldToNew[value];
+      if (Number.isInteger(mapped)) return mapped;
+      if (value === removedIndex) return start ? Math.min(value, last) : Math.max(0, value - 1);
+      return Math.max(0, Math.min(last, value));
+    };
+    if (oldStart === removedIndex && oldEnd === removedIndex) {
+      next.w0 = next.w1 = Math.min(removedIndex, last);
+      return next;
+    }
+    const a = resolve(oldStart, true), b = resolve(oldEnd, false);
+    next.w0 = Math.min(a, b); next.w1 = Math.max(a, b);
+    return next;
+  }
+
+  // ---- one-call derivation: everything the field + panels need for a path ----
+  function derivePath(doc, robot, perSeg, plannerId) {
+    perSeg = perSeg || 56;
+    const labview = doc.labview || {};
+    const smp = plannerId === 'labviewBezier'
