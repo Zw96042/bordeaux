@@ -268,3 +268,68 @@ describe("agent route candidates", () => {
       ],
       minimumClearanceM: 0,
     })[0];
+    expect(candidate.valid, candidate.rejectionReason).toBe(true);
+    expect(candidate.analysis.findings.some((finding) => finding.id.startsWith("geometry:trench-height-unverified") && finding.severity === "warning")).toBe(true);
+    expect(Math.max(...candidate.path.waypoints.map((waypoint) => waypoint.x))).toBeCloseTo(9.7441, 3);
+  });
+
+  it("preserves the annotated mixed route as an exact ordered topology", () => {
+    const candidates = generateRouteCandidates(createDemoProject(), {
+      intent: "Red left TRENCH to far neutral, clockwise swoosh, return over red left BUMP",
+      alliance: "red",
+      start: { term: "red left trench" },
+      steps: [
+        { kind: "swoosh", at: { term: "far side of the neutral zone" }, traversal: "trench-table", turn: "counterclockwise", radiusM: 0.8, insetM: 1 },
+        { kind: "travel", to: { x: 2.2, y: 2.59, headingDeg: 0 }, traversal: "bump-table" },
+      ],
+      robotHeightM: 0.5,
+      minimumClearanceM: 0,
+    });
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].traversal).toBe("ordered");
+    expect(candidates[0].requiredPortalIds).toEqual(["red-trench-table", "red-bump-table"]);
+    expect(candidates[0].valid, candidates[0].rejectionReason).toBe(true);
+    const waypoints = candidates[0].path.waypoints;
+    expect(waypoints[0].x).toBeLessThan(waypoints[1].x);
+    expect(Math.max(...waypoints.map((waypoint) => waypoint.x))).toBeGreaterThan(11.5);
+    const farthestIndex = waypoints.reduce((best, waypoint, index) => waypoint.x > waypoints[best].x ? index : best, 0);
+    expect(waypoints[farthestIndex].y).toBeGreaterThan(waypoints[0].y);
+    expect(waypoints[farthestIndex + 1].x).toBeLessThan(waypoints[farthestIndex].x);
+    expect(waypoints.at(-1)!.x).toBeLessThan(waypoints[0].x);
+    expect(candidates[0].analysis.findings.some((finding) => finding.id === "geometry:ordered-traversal-mismatch")).toBe(false);
+  });
+
+  it("does not collapse two chronologically separate visits to the same portal", () => {
+    const candidates = generateRouteCandidates(createDemoProject(), {
+      intent: "Leave and return through the red left TRENCH",
+      alliance: "red",
+      start: { term: "red left trench" },
+      steps: [
+        { kind: "swoosh", at: { x: 9, y: 7.2 }, traversal: "trench-table", turn: "clockwise", radiusM: 0.6 },
+        { kind: "travel", to: { x: 2.5, y: 7.2 }, traversal: "trench-table" },
+      ],
+      robotHeightM: 0.5,
+      minimumClearanceM: 0,
+    });
+    expect(candidates[0].requiredPortalIds).toEqual(["red-trench-table", "red-trench-table"]);
+    expect(candidates[0].valid, candidates[0].rejectionReason).toBe(true);
+  });
+
+  it("rejects a global traversal policy beside ordered per-leg traversal", () => {
+    expect(() => generateRouteCandidates(createDemoProject(), {
+      intent: "Do not reinterpret conflicting route contracts",
+      alliance: "red",
+      steps: [{ kind: "travel", to: { x: 8, y: 4 }, traversal: "bump-table" }],
+      traversal: "trench",
+    })).toThrow(/cannot be combined with a global traversal/);
+  });
+
+  it("requires an exact per-leg portal whenever an ordered step reaches a barrier", () => {
+    expect(() => generateRouteCandidates(createDemoProject(), {
+      intent: "Do not choose a crossing accidentally",
+      alliance: "red",
+      start: { x: 2.5, y: 7.2 },
+      steps: [{ kind: "travel", to: { x: 8, y: 7.2 } }],
+    })).toThrow(/must name its exact TRENCH\/BUMP/);
+  });
+});
