@@ -88,3 +88,81 @@ export class AgentBridgeServer {
     };
     const server = net.createServer((socket) => {
       socket.setTimeout(REQUEST_TIMEOUT_MS, () => socket.destroy());
+      void readOne(socket, REQUEST_TIMEOUT_MS).then(async (raw) => {
+        const envelope = raw as Partial<BridgeEnvelope>;
+        if (!envelope || envelope.token !== descriptor.token || typeof envelope.id !== "string" || !envelope.request) throw new Error("Agent bridge authentication failed");
+        const result = await this.sessions.request(envelope.request);
+        socket.end(encode({ id: envelope.id, result }));
+      }).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!socket.destroyed) socket.end(encode({ error: message }));
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(endpoint, () => { server.off("error", reject); resolve(); });
+    });
+    if (process.platform !== "win32") await fs.promises.chmod(endpoint, 0o600);
+    const target = descriptorPath(this.userData);
+    await fs.promises.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+    const temporary = `${target}.${process.pid}.tmp`;
+    await fs.promises.writeFile(temporary, JSON.stringify(descriptor), { encoding: "utf8", mode: 0o600, flag: "wx" });
+    await fs.promises.rename(temporary, target);
+    this.server = server;
+    this.descriptor = descriptor;
+    return descriptor;
+  }
+
+  async stop(): Promise<void> {
+    const server = this.server;
+    const descriptor = this.descriptor;
+    this.server = null;
+    this.descriptor = null;
+    if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
+    await fs.promises.rm(descriptorPath(this.userData), { force: true });
+    if (descriptor && process.platform !== "win32") await fs.promises.rm(descriptor.endpoint, { force: true });
+  }
+}
+
+export class AgentBridgeClient {
+  constructor(private readonly userData: string) {}
+
+  private async readDescriptor(): Promise<AgentRuntimeDescriptor> {
+    const target = descriptorPath(this.userData);
+    let stat: fs.Stats;
+    try { stat = await fs.promises.stat(target); }
+    catch { throw new Error("Open Bordeaux and enable Agents → MCP Access, then retry."); }
+    if (!stat.isFile() || stat.size > 16_384) throw new Error("The Bordeaux MCP runtime descriptor is invalid.");
+    if (process.platform !== "win32" && (stat.mode & 0o077) !== 0) throw new Error("The Bordeaux MCP runtime descriptor is not private to this user.");
+    if (process.platform !== "win32" && typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error("The Bordeaux MCP runtime descriptor belongs to another user.");
+    const value = JSON.parse(await fs.promises.readFile(target, "utf8")) as AgentRuntimeDescriptor;
+    if (value.schemaVersion !== 1 || value.protocolVersion !== 1 || typeof value.endpoint !== "string" || typeof value.token !== "string" || value.pid <= 0) throw new Error("The Bordeaux MCP runtime descriptor is incompatible.");
+    try { process.kill(value.pid, 0); } catch { throw new Error("The Bordeaux MCP session is no longer running."); }
+    if (process.platform !== "win32") {
+      // GUI apps and MCP clients can inherit different TMPDIR values on macOS.
+      // The private descriptor, socket owner, mode, and fixed basename authenticate
+      // the endpoint without assuming both processes resolve os.tmpdir() equally.
+      if (!path.isAbsolute(value.endpoint) || !path.basename(value.endpoint).startsWith("bordeaux-mcp-") || !value.endpoint.endsWith(".sock")) throw new Error("The Bordeaux MCP endpoint is invalid.");
+      const endpointStat = await fs.promises.lstat(value.endpoint);
+      if (!endpointStat.isSocket() || (endpointStat.mode & 0o077) !== 0 || (typeof process.getuid === "function" && endpointStat.uid !== process.getuid())) throw new Error("The Bordeaux MCP endpoint is not a private socket owned by this user.");
+    }
+    return value;
+  }
+
+  async request(request: AgentRequest): Promise<unknown> {
+    const descriptor = await this.readDescriptor();
+    const socket = net.createConnection(descriptor.endpoint);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Could not connect to the Bordeaux MCP session.")), 2_000);
+      socket.once("connect", () => { clearTimeout(timer); resolve(); });
+      socket.once("error", (error) => { clearTimeout(timer); reject(error); });
+    });
+    const id = randomUUID();
+    socket.write(encode({ id, token: descriptor.token, request } satisfies BridgeEnvelope));
+    const response = await readOne(socket, REQUEST_TIMEOUT_MS) as { id?: string; result?: unknown; error?: string };
+    socket.destroy();
+    if (response.error) throw new Error(response.error);
+    if (response.id !== id) throw new Error("The Bordeaux MCP response did not match its request.");
+    return response.result;
+  }
+}
