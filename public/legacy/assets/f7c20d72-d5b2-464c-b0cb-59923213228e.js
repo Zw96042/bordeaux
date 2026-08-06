@@ -594,3 +594,93 @@
             reserveLabelSpace(c.x, c.y + P(17), P(40), P(25));
           }
         }
+        const labelOverlap = (a, b) => Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x))
+          * Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+        const placeRangeLabel = (fraction, anchor, width, height) => {
+          const before = W2P(window.PM.pointAtFraction(Math.max(0, fraction - 0.012), pts));
+          const after = W2P(window.PM.pointAtFraction(Math.min(1, fraction + 0.012), pts));
+          const length = Math.hypot(after.x - before.x, after.y - before.y) || 1;
+          const tx = (after.x - before.x) / length, ty = (after.y - before.y) / length;
+          let nx = -ty, ny = tx;
+          if (ny > 0) { nx *= -1; ny *= -1; }
+          const pad = P(8);
+          const minX = X0 + width / 2 + pad, maxX = X1 - width / 2 - pad;
+          const minY = Y0 + height / 2 + pad, maxY = Y1 - height / 2 - pad;
+          let best = null;
+          let foundClear = false, index = 0;
+          for (let ring = 0; ring < 8 && !foundClear; ring++) {
+            const normalGap = P(31 + ring * 24);
+            const tangentGap = width * 0.58;
+            const shifts = ring === 0 ? [0, 1, -1] : [0, 1, -1, 2, -2];
+            for (const side of [1, -1]) {
+              for (const shift of shifts) {
+                const dx = nx * normalGap * side + tx * tangentGap * shift;
+                const dy = ny * normalGap * side + ty * tangentGap * shift;
+                const rawX = anchor.x + dx, rawY = anchor.y + dy;
+                const x = Math.max(minX, Math.min(maxX, rawX));
+                const y = Math.max(minY, Math.min(maxY, rawY));
+                const box = { x: x - width / 2 - pad, y: y - height / 2 - pad, w: width + pad * 2, h: height + pad * 2 };
+                const overlap = labelObstacles.reduce((sum, obstacle) => sum + labelOverlap(box, obstacle), 0);
+                const clamped = Math.hypot(x - rawX, y - rawY);
+                const score = overlap * 1000 + clamped * 100 + Math.hypot(dx, dy) + index++ * 0.01;
+                if (!best || score < best.score) best = { x, y, box, score };
+                if (overlap === 0 && clamped < P(1)) { best = { x, y, box, score }; foundClear = true; break; }
+              }
+              if (foundClear) break;
+            }
+          }
+          labelObstacles.push(best.box);
+          return best;
+        };
+
+        // range handles + collision-aware velocity tags
+        const rangeOrder = ranges.map((rg, ri) => ({ rg, ri }));
+        rangeOrder.sort((a, b) => Number(sel.kind === 'cr' && sel.idx === a.ri) - Number(sel.kind === 'cr' && sel.idx === b.ri));
+        rangeOrder.forEach(({ rg, ri }) => {
+          const isSel = sel.kind === 'cr' && sel.idx === ri;
+          const col = isSel ? accent : '#caa23a';
+          let rangeHit = '', rangeStarted = false;
+          for (let k = 0; k < pts.length; k++) {
+            const f = pts[k].s / totalS;
+            if (f >= Math.min(rg.f0, rg.f1) && f <= Math.max(rg.f0, rg.f1)) {
+              const q = W2P(pts[k]);
+              rangeHit += (rangeStarted ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1);
+              rangeStarted = true;
+            }
+          }
+          if (rangeHit) els.push(h('path', { key: 'rhit' + ri, d: rangeHit, fill: 'none', stroke: 'transparent', strokeWidth: P(11), strokeLinecap: 'round', 'data-role': 'cr', 'data-idx': ri, style: { cursor: 'pointer' } }));
+          [['f0', 'rs'], ['f1', 're']].forEach(([fk, role]) => {
+            const pf = window.PM.pointAtFraction(rg[fk], pts); const c = W2P(pf);
+            els.push(h('g', { key: role + ri, transform: `translate(${c.x} ${c.y})`, style: { cursor: 'ew-resize' } },
+              h('circle', { r: P(7), fill: '#14161a', stroke: col, strokeWidth: P(2), 'data-role': role, 'data-idx': ri }),
+              h('circle', { r: P(2.5), fill: col, 'data-role': role, 'data-idx': ri })));
+          });
+          const fraction = (rg.f0 + rg.f1) / 2;
+          const mid = window.PM.pointAtFraction(fraction, pts); const mc = W2P(mid);
+          const summary = window.UI.constraintRangeSummary(rg, doc.constraints, robot);
+          if (summary) {
+            const text = summary.text;
+            const tw = P(Math.max(78, text.length * 7.4 + 20)), th = P(24);
+            const label = placeRangeLabel(fraction, mc, tw, th);
+            const leaderDx = label.x - mc.x, leaderDy = label.y - mc.y;
+            const leaderLength = Math.hypot(leaderDx, leaderDy) || 1;
+            const leaderEndX = label.x - leaderDx / leaderLength * (th / 2 + P(2));
+            const leaderEndY = label.y - leaderDy / leaderLength * (th / 2 + P(2));
+            els.push(h('g', { key: 'rl' + ri, style: { cursor: 'pointer' }, role: 'button', tabIndex: 0, 'aria-label': 'Open constraint range, ' + summary.ariaLabel, onKeyDown: (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); actions.select('cr', ri); } } },
+              h('line', { x1: mc.x, y1: mc.y, x2: leaderEndX, y2: leaderEndY, stroke: col, strokeOpacity: 0.72, strokeWidth: P(1.2), strokeLinecap: 'round', 'data-role': 'cr', 'data-idx': ri }),
+              h('rect', { x: label.x - tw / 2, y: label.y - th / 2, width: tw, height: th, rx: P(6), fill: 'oklch(0.17 0.012 260 / 0.96)', stroke: isSel ? accent : 'oklch(0.73 0.13 86 / 0.72)', strokeWidth: P(1), 'data-role': 'cr', 'data-idx': ri }),
+              h('text', { x: label.x, y: label.y + P(4.2), fill: isSel ? accent : 'oklch(0.84 0.12 88)', fontSize: P(12), fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, letterSpacing: P(0.1), textAnchor: 'middle', 'data-role': 'cr', 'data-idx': ri }, text)));
+          }
+        });
+      }
+
+      // precise heading helper (waypoints) — draggable when idx is supplied (memo §7)
+      const headArrow = (cx, cy, deg, col, len, idx) => {
+        const rot = flip ? deg + 180 : deg;
+        const interactive = idx != null;
+        return h('g', { transform: `translate(${cx} ${cy}) rotate(${-rot})`, style: interactive ? { cursor: 'grab' } : { pointerEvents: 'none' } },
+          h('line', { x1: 0, y1: 0, x2: len, y2: 0, stroke: col, strokeWidth: P(1.8), strokeLinecap: 'round' }),
+          h('path', { d: `M ${len} ${-P(3.8)} L ${len + P(7)} 0 L ${len} ${P(3.8)} Z`, fill: col }),
+          interactive && h('line', { x1: P(5), y1: 0, x2: len + P(8), y2: 0, stroke: 'transparent', strokeWidth: P(15), strokeLinecap: 'round', 'data-role': 'head', 'data-idx': idx }),
+          interactive && h('circle', { cx: len + P(2), cy: 0, r: P(8.5), fill: 'transparent', 'data-role': 'head', 'data-idx': idx }));
+      };
