@@ -43,6 +43,20 @@
 
     const clientToWorld = useCallback((cx, cy, bounded = true) => {
       const svg = svgRef.current; if (!svg) return { x: 0, y: 0 };
+      const ctm = svg.getScreenCTM(); if (!ctm) return { x: 0, y: 0 };
+      const pt = svg.createSVGPoint(); pt.x = cx; pt.y = cy;
+      const u = pt.matrixTransform(ctm.inverse());
+      const mx = (u.x - X0) / SX, my = (Y1 - u.y) / SY;
+      const world = tf({ x: mx, y: my });
+      return bounded ? clampWorld(world) : world;
+    }, [tf]);
+
+    useEffect(() => {
+      const svg = svgRef.current; if (!svg) return;
+      const ro = new ResizeObserver(() => setCw(svg.clientWidth || 1200));
+      ro.observe(svg); setCw(svg.clientWidth || 1200);
+      return () => ro.disconnect();
+    }, []);
 
     // report selected element's screen position for the floating inspector
     useEffect(() => {
@@ -50,8 +64,8 @@
       const pp = derived.sample.pts;
       let wpoint = null;
       if (sel.kind === 'wp' && doc.waypoints[sel.idx]) wpoint = doc.waypoints[sel.idx];
-      else if (sel.kind === 'rt' && doc.targets[sel.idx]) wpoint = window.PM.pointAtFraction(doc.targets[sel.idx].f, pp);
-      else if (sel.kind === 'em' && doc.markers[sel.idx]) wpoint = window.PM.pointAtFraction(doc.markers[sel.idx].f, pp);
+      else if (sel.kind === 'rt' && doc.targets[sel.idx]) wpoint = window.PM.pointAtFraction(window.PM.featureFraction(doc.targets[sel.idx], derived.sample), pp);
+      else if (sel.kind === 'em' && doc.markers[sel.idx]) wpoint = window.PM.pointAtFraction(window.PM.featureFraction(doc.markers[sel.idx], derived.sample), pp);
       else if (sel.kind === 'cr' && doc.ranges && doc.ranges[sel.idx]) { const rg = doc.ranges[sel.idx]; wpoint = window.PM.pointAtFraction((rg.f0 + rg.f1) / 2, pp); }
       if (!wpoint) { onSelPos(null); return; }
       const ctm = svg.getScreenCTM(); if (!ctm) { onSelPos(null); return; }
@@ -63,31 +77,17 @@
 
     const upp = view.w / Math.max(1, cw);
     const P = (px) => px * upp;
+    const pts = derived.sample.pts;
+    const visitTolerance = P(18) / Math.min(SX, SY);
 
-    // ---- pointer handling ----
-    const onDown = (e) => {
-      if (e.button !== 0 && e.button !== 1) return;
-      e.preventDefault();
-      const t = e.target;
-      const role = t.getAttribute && t.getAttribute('data-role');
-      try { svgRef.current.setPointerCapture(e.pointerId); } catch (_) {}
-      if (routine) {
-        if (role === 'rpath') { const id = t.getAttribute('data-idx'); if (actions.selectNode) actions.selectNode(id); drag.current = null; return; }
-        drag.current = { role: 'bg', start: { cx: e.clientX, cy: e.clientY }, vb0: { ...view }, moved: false, mid: e.button === 1 };
-        return;
-      }
-      const world = clientToWorld(e.clientX, e.clientY);
-      if (role === 'head') {
-        const idx = parseInt(t.getAttribute('data-idx'), 10);
-        actions.select('wp', idx);
-        drag.current = { role: 'head', idx, moved: false };
-        return;
-      }
-      if (role === 'seg') {
-        const idx = parseInt(t.getAttribute('data-idx'), 10);
-        if (e.altKey || tool === 'waypoint') drag.current = { role: 'bg', onPath: true, start: { cx: e.clientX, cy: e.clientY }, vb0: { ...view }, world, moved: false, mid: false };
-        else { actions.select('seg', idx); drag.current = null; }
-        return;
+    const updateVisitFocus = useCallback((next) => {
+      visitFocusRef.current = next;
+      setVisitFocus(next);
+    }, []);
+
+    useEffect(() => updateVisitFocus(null), [doc.id, updateVisitFocus]);
+
+    const visitsAt = useCallback((world) => {
       }
       if (role && role !== 'bg' && role !== 'ins') {
         const idx = parseInt(t.getAttribute('data-idx'), 10);
