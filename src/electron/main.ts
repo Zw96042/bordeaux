@@ -615,3 +615,93 @@ handle("javaProject:refresh", async () => {
   if (!linkedJavaProjectPath) throw new Error("Link a Java robot project before refreshing commands");
   try {
     return await connectJavaProject(linkedJavaProjectPath);
+  } catch (error) {
+    const bookmark = javaProjectBookmarks.find((item) => item.id === linkedJavaProjectBookmarkId);
+    throw readableJavaProjectError(error, bookmark?.projectName);
+  }
+});
+handle("javaProject:installSupport", async () => {
+  if (!linkedJavaProjectPath) throw new Error("Link a Java robot project before installing Java support");
+  try {
+    const preview = await prepareJavaSupportInstall(linkedJavaProjectPath, javaSupportArtifactsDirectory());
+    const summary = installPreviewSummary(preview);
+    if (!smokeDirectory) {
+      const result = await dialog.showMessageBox(mainWindow!, {
+        type: "warning",
+        title: summary.replacing ? "Update Bordeaux Java support" : "Install Bordeaux Java support",
+        message: summary.replacing ? "Replace the managed Bordeaux support files?" : "Add Bordeaux support to this GradleRIO project?",
+        detail: `Bordeaux will ${summary.replacing ? "replace its managed block in" : "add one managed block to"} ${summary.buildFile}, preserve a one-time backup, and write:\n\n${summary.files.join("\n")}\n\nIt will not modify RobotContainer or deploy robot code.`,
+        buttons: ["Cancel", summary.replacing ? "Update Support" : "Install Support"],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      if (result.response !== 1) return null;
+    }
+    await applyJavaSupportInstall(preview);
+    return connectJavaProject(linkedJavaProjectPath);
+  } catch (error) {
+    throw readableJavaProjectError(error, "Linked Java project");
+  }
+});
+handle("javaProject:buildCatalog", async () => {
+  if (!linkedJavaProjectPath) throw new Error("Link a Java robot project before building its command catalog");
+  if (!linkedJavaIntegration?.installed) throw new Error("Install Bordeaux Java support before building the command catalog");
+  if (!smokeDirectory) {
+    const result = await dialog.showMessageBox(mainWindow!, {
+      type: "warning",
+      title: "Trust and build Java catalog",
+      message: "Run the linked project’s Gradle wrapper?",
+      detail: "This executes the fixed bordeauxCatalog task. Gradle build scripts are code and may access your computer or network. Only continue if you trust this robot project.",
+      buttons: ["Cancel", "Run Build"],
+      defaultId: 0,
+      cancelId: 0,
+    });
+    if (result.response !== 1) return null;
+  }
+  try {
+    await runJavaCatalogBuild(linkedJavaProjectPath);
+    return connectJavaProject(linkedJavaProjectPath);
+  } catch (error) {
+    console.error("Java catalog build failed");
+    throw readableJavaProjectError(error, "Linked Java project");
+  }
+});
+handle("javaProject:cancelBuild", () => ({ canceled: cancelJavaCatalogBuild() }));
+handle("agent:getActiveProposal", () => agentSessions.getActiveProposal());
+handle("agent:getMcpStatus", () => ({ enabled: agentBridge?.enabled === true }));
+ipcMain.on("project:setDirty", (event, value) => { assertTrustedSender(event); dirty = value === true; });
+ipcMain.on("agent:publishSession", (event, value) => {
+  assertTrustedSender(event);
+  agentSessions.publishSnapshot(value as AgentSessionSnapshot);
+});
+ipcMain.on("agent:proposalStatus", (event, rawId, rawStatus, rawRevision) => {
+  assertTrustedSender(event);
+  if (typeof rawId !== "string" || !["applied", "rejected", "stale"].includes(String(rawStatus))) return;
+  agentSessions.updateProposalStatus(rawId, rawStatus as "applied" | "rejected" | "stale", typeof rawRevision === "number" ? rawRevision : undefined);
+});
+ipcMain.on("agent:proposalReceipt", (event, rawId) => {
+  assertTrustedSender(event);
+  if (typeof rawId !== "string") return;
+  const receipt = proposalReceipts.get(rawId);
+  if (!receipt) return;
+  proposalReceipts.delete(rawId);
+  clearTimeout(receipt.timer);
+  receipt.resolve();
+});
+
+app.whenReady().then(async () => {
+  if (mcpStdioMode) {
+    app.dock?.hide();
+    serveBordeauxMcp(new AgentBridgeClient(app.getPath("userData")));
+    return;
+  }
+  try {
+    javaProjectBookmarks = await readJavaProjectBookmarks(javaProjectBookmarksFile());
+  } catch (error) {
+    javaProjectBookmarks = [];
+    console.warn("Could not load Java project bookmarks:", error);
+  }
+  agentBridge = new AgentBridgeServer(app.getPath("userData"), agentSessions);
+  if (enableMcpAccessOnLaunch) await agentBridge.start();
+  buildMenu();
+  createWindow();
