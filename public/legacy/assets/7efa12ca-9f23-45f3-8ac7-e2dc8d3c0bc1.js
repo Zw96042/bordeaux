@@ -347,3 +347,93 @@
             ref: searchRef,
             type: 'search',
             value: query,
+            placeholder: 'Filter ' + label.toLowerCase() + '…',
+            autoComplete: 'off',
+            spellCheck: false,
+            'data-lpignore': 'true',
+            'data-1p-ignore': true,
+            'aria-controls': listboxId,
+            onChange: (event) => setQuery(event.target.value),
+          })),
+        h('div', { id: listboxId, className: 'cmd-picker-list', role: 'listbox', 'aria-labelledby': labelId },
+          visibleItems.length === 0
+            ? h('div', { className: 'cmd-picker-empty' }, 'No matches')
+            : visibleItems.map((item, index) => h('button', {
+                key: item.value,
+                ref: (node) => { optionRefs.current[index] = node; },
+                className: 'cmd-picker-option' + (index === activeIndex ? ' active' : ''),
+                type: 'button',
+                role: 'option',
+                tabIndex: -1,
+                'aria-selected': item.value === value,
+                'data-value': item.value,
+                onMouseEnter: () => setActiveIndex(index),
+                onClick: () => choose(item.value),
+              },
+                h('span', { className: 'cmd-picker-check' }, item.value === value && h(Icon, { name: 'check', size: 13 })),
+                h('span', { className: 'cmd-picker-option-copy' },
+                  h('strong', { title: item.label }, item.label),
+                  item.meta && h('small', null, item.meta)),
+                item.badge && h('span', { className: 'cmd-picker-badge' }, item.badge))),
+          hiddenMatchCount > 0 && h('div', { className: 'cmd-picker-more', role: 'status' },
+            visibleItems.length + ' of ' + filteredItems.length + ' shown · Keep typing to narrow results'))));
+  }
+
+  function NumberValueEditor({ id, label, value, integer, javaType, parameter, onChange }) {
+    const formatted = Number.isFinite(value) ? String(value) : '';
+    const [draft, setDraft] = React.useState(formatted);
+    const [error, setError] = React.useState('');
+    React.useEffect(() => { setDraft(formatted); setError(''); }, [formatted, id]);
+    const validate = (next, commit) => {
+      const parsed = Number(next);
+      const range = integer ? javaIntegerRange(javaType) : null;
+      const message = next.trim() === '' || !Number.isFinite(parsed)
+        ? 'Enter a finite number.'
+        : integer && !Number.isSafeInteger(parsed)
+          ? 'Enter a whole number.'
+          : range && (parsed < range[0] || parsed > range[1])
+            ? 'Enter a value from ' + range[0] + ' to ' + range[1] + '.'
+          : parameter && parameter.min != null && parsed < parameter.min
+            ? 'Enter a value of at least ' + parameter.min + '.'
+          : parameter && parameter.max != null && parsed > parameter.max
+            ? 'Enter a value of at most ' + parameter.max + '.'
+          : '';
+      setError(message);
+      if (!message && commit) onChange(parsed);
+      return !message;
+    };
+    return h('div', { className: 'cmd-param' },
+      h('label', { className: 'fieldlabel', htmlFor: id }, label),
+      h('input', {
+        id,
+        className: 'textinput cmd-param-input',
+        type: 'number',
+        inputMode: integer ? 'numeric' : 'decimal',
+        step: integer ? 1 : 'any',
+        min: parameter && parameter.min != null ? parameter.min : undefined,
+        max: parameter && parameter.max != null ? parameter.max : undefined,
+        value: draft,
+        'aria-invalid': !!error,
+        'aria-describedby': error ? id + '-error' : id + '-type',
+        onChange: (event) => { setDraft(event.target.value); if (error) validate(event.target.value, false); },
+        onBlur: () => validate(draft, true),
+        onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(draft, true); event.currentTarget.blur(); } },
+      }),
+      h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, javaType)),
+      error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
+  }
+
+  function IntegerStringValueEditor({ id, label, value, javaType, parameter, onChange }) {
+    const formatted = typeof value === 'string' ? value : '';
+    const [draft, setDraft] = React.useState(formatted);
+    const [error, setError] = React.useState('');
+    React.useEffect(() => { setDraft(formatted); setError(''); }, [formatted, id]);
+    const validate = (next, commit) => {
+      const exactError = exactIntegerStringError(next.trim(), javaType);
+      let message = exactError ? 'Value ' + exactError : '';
+      if (!message && parameter && parameter.min != null && BigInt(next.trim()) < BigInt(parameter.min)) message = 'Enter a value of at least ' + parameter.min + '.';
+      if (!message && parameter && parameter.max != null && BigInt(next.trim()) > BigInt(parameter.max)) message = 'Enter a value of at most ' + parameter.max + '.';
+      setError(message);
+      if (!message && commit) onChange(next.trim());
+      return !message;
+    };
