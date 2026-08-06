@@ -133,16 +133,16 @@
       { key: 'maxAngVel', base: c.maxAngVel, order: 3, text: (v) => '\u03c9 \u2264 ' + v.toFixed(0) + '\u00b0/s', aria: (v) => 'maximum angular velocity ' + v.toFixed(0) + ' degrees per second' },
       { key: 'maxAngAccel', base: c.maxAngAccel, order: 4, text: (v) => '\u03b1 \u2264 ' + v.toFixed(0) + '\u00b0/s\u00b2', aria: (v) => 'maximum angular acceleration ' + v.toFixed(0) + ' degrees per second squared' },
     ].filter((candidate) => {
-      return () => { window.removeEventListener('pointerdown', away, true); window.removeEventListener('keydown', esc); };
-    }, [onClose]);
-    return h('div', { ref, className: 'ctxmenu', style: { left: pos.x + 'px', top: pos.y + 'px' } },
-      items.map((it, i) => it.sep
-        ? h('div', { key: 'sep' + i, className: 'ctxmenu-sep' })
-        : h('button', { key: i, type: 'button', className: 'ctxmenu-i' + (it.danger ? ' danger' : ''), onClick: () => { onClose(); it.onClick(); } },
-            it.icon && h('span', { className: 'ctxmenu-ic' }, h(Icon, { name: it.icon, size: 14 })),
-            h('span', null, it.label),
-            it.hint && h('span', { className: 'ctxmenu-k' }, it.hint))));
+      const value = range && range[candidate.key], baseline = candidate.base;
+      return Number.isFinite(value) && value > 0 && Number.isFinite(baseline) && baseline > 0 && value < baseline - Math.max(1e-6, Math.abs(baseline) * 1e-6);
+    }).map((candidate) => ({ ...candidate, value: range[candidate.key], ratio: range[candidate.key] / candidate.base }));
+    candidates.sort((a, b) => a.ratio - b.ratio || a.order - b.order);
+    const chosen = candidates[0];
+    return chosen ? { text: chosen.text(chosen.value), ariaLabel: chosen.aria(chosen.value), key: chosen.key } : null;
   }
 
-  window.UI = { Icon, IconBtn, Num, Section, Toggle, Seg, GroupSelect, ContextMenu };
-})();
+  // floating context menu — items: [{label,icon,onClick,danger,sep}]
+  function ContextMenu({ x, y, items, onClose }) {
+    const ref = useRef(null);
+    const [pos, setPos] = useState({ x, y });
+    useEffect(() => {
