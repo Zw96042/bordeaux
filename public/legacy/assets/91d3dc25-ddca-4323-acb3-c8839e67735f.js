@@ -403,51 +403,51 @@
     const v = new Array(n).fill(vmax);
     const vLimit = new Array(n).fill(vmax);
     // curvature cap: v <= sqrt(aLat / k)
-      const a = s[i], b = s[i + 1];
-      if (t >= a[0] && t <= b[0]) {
-        const u = (t - a[0]) / Math.max(1e-6, b[0] - a[0]);
-        const ca = hex2rgb(a[1]), cb = hex2rgb(b[1]);
-        return `rgb(${Math.round(ca[0] + (cb[0] - ca[0]) * u)},${Math.round(ca[1] + (cb[1] - ca[1]) * u)},${Math.round(ca[2] + (cb[2] - ca[2]) * u)})`;
-      }
+    const aLat = Math.max(0.1, c.maxAccel);
+    for (let i = 0; i < n; i++) {
+      const k = pts[i].curv;
+      if (k > 1e-4) v[i] = Math.min(v[i], Math.sqrt(aLat / k));
     }
-    return s[s.length - 1][1];
-  }
-  function metricGradient(mode) {
-    const s = RAMPS_M[mode] || RAMPS_M.velocity;
-    return 'linear-gradient(90deg,' + s.map((x) => x[1] + ' ' + Math.round(x[0] * 100) + '%').join(',') + ')';
-  }
-  const METRICS = [
-    { id: 'velocity', label: 'Velocity', unit: 'm/s', kind: 'seq' },
-    { id: 'accel', label: 'Acceleration', unit: 'm/s\u00b2', kind: 'div' },
-    { id: 'angvel', label: 'Angular velocity', unit: '\u00b0/s', kind: 'div' },
-    { id: 'curvature', label: 'Curvature', unit: '1/m', kind: 'seq' },
-  ];
-
-  // ---- safety analysis: flag tight curvature + sharp velocity dips ----
-  function analyze(pts, prof, m, robot) {
-    const n = pts.length; const out = [];
-    if (n < 3) return out;
+    v[0] = Math.min(v[0], startV);
+    v[n - 1] = Math.min(v[n - 1], endV);
+    // hard stops: velocity pinned to 0
+    stopSet.forEach(idx => { if (idx >= 0 && idx < n) v[idx] = 0; });
+    // per-point accel/decel limits, tightened by any constraint ranges (tightest wins)
+    const ranges = opts.ranges || [];
     const totalS = pts[n - 1].s || 1;
-    const vCap = (robot && robot.maxSpeed) || 5;
-    // tight curvature: radius below ~0.7 m is hard on a drivetrain
-    let cuf = -1, cuMax = 0, cuAt = 0;
-    for (let i = 1; i < n - 1; i++) {
-      const rad = pts[i].curv > 1e-4 ? 1 / pts[i].curv : Infinity;
-      if (rad < 0.7) { const sev = rad < 0.4 ? 1 : 0.6; if (pts[i].curv > cuMax) { cuMax = pts[i].curv; cuAt = i; } if (cuf < 0) cuf = i; }
-      else if (cuf >= 0) { out.push({ f: pts[cuAt].s / totalS, kind: 'curv', sev: cuMax > 2.5 ? 'high' : 'med', text: 'Tight curvature \u00b7 R\u2248' + (1 / cuMax).toFixed(2) + ' m' }); cuf = -1; cuMax = 0; }
-    }
-    if (cuf >= 0) out.push({ f: pts[cuAt].s / totalS, kind: 'curv', sev: cuMax > 2.5 ? 'high' : 'med', text: 'Tight curvature \u00b7 R\u2248' + (1 / cuMax).toFixed(2) + ' m' });
-    // velocity dip: local minimum well below surrounding speed (slow-down the user may not intend)
-    const v = m.v;
-    for (let i = 6; i < n - 6; i++) {
-      const local = v[i];
-      const around = Math.max(v[i - 6], v[i + 6]);
-      if (around > 1.2 && local < around * 0.45 && local < vCap * 0.5) {
-        // ensure it's a genuine trough
-        if (v[i] <= v[i - 1] && v[i] <= v[i + 1]) { out.push({ f: pts[i].s / totalS, kind: 'vel', sev: local < around * 0.3 ? 'high' : 'med', text: 'Velocity dip \u00b7 ' + local.toFixed(1) + ' m/s' }); i += 10; }
+    const accelG = Math.max(0.1, c.maxAccel);
+    const decelG = (c.maxDecel != null && c.maxDecel > 0) ? c.maxDecel : accelG;
+    const aFwd = new Array(n).fill(accelG), aBack = new Array(n).fill(decelG);
+    const rangeAngV = new Array(n).fill(Infinity);
+    // Index i describes the interval (i - 1, i). Evaluating overlap instead of
+    // requiring both endpoints to be inside a policy preserves very short
+    // transition windows that fall between geometry samples.
+    const translationPriority = new Array(n).fill(false);
+    const headingTransitions = opts.headingTransitions || [];
+    if (ranges.length || headingTransitions.length) {
+      for (let i = 0; i < n; i++) {
+        const f = pts[i].s / totalS;
+        let rv = Infinity, ra = Infinity, rd = Infinity, rw = Infinity;
+        for (let r = 0; r < ranges.length; r++) {
+          const R = ranges[r]; const lo = Math.min(R.f0, R.f1), hi = Math.max(R.f0, R.f1);
+          if (f >= lo && f <= hi) {
+            if (R.maxVel > 0) rv = Math.min(rv, R.maxVel);
+            if (R.maxAccel > 0) ra = Math.min(ra, R.maxAccel);
+            if (R.maxDecel > 0) rd = Math.min(rd, R.maxDecel);
+            if (R.maxAngVel > 0) rw = Math.min(rw, R.maxAngVel);
+          }
+        }
+        if (rv < Infinity) { v[i] = Math.min(v[i], rv); vLimit[i] = Math.min(vLimit[i], rv); }
+        if (ra < Infinity) aFwd[i] = Math.min(accelG, ra);
+        if (rd < Infinity) aBack[i] = Math.min(decelG, rd);
+        if (rw < Infinity) rangeAngV[i] = rw * Math.PI / 180;
       }
-    }
-    return out;
+      for (let i = 1; i < n; i++) {
+        const start = pts[i - 1].s / totalS, end = pts[i].s / totalS;
+        const overlaps = (lo, hi) => Math.min(end, hi) - Math.max(start, lo) >= -1e-9;
+        const activeRanges = ranges.filter((R) => overlaps(Math.min(R.f0, R.f1), Math.max(R.f0, R.f1)));
+        const activeTransitions = headingTransitions.filter((policy) => overlaps(policy.start, policy.end));
+        const activePolicies = activeRanges.length + activeTransitions.length;
   }
 
   // Path type belongs to the SEGMENT between two waypoints. The list stays honest:
