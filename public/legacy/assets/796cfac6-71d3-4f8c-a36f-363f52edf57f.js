@@ -133,51 +133,51 @@
         h('aside', { ref: panelRef, className: 'pathlib-panel', role: 'dialog', 'aria-modal': true, 'aria-label': 'Path library', tabIndex: -1, onKeyDown: trapFocus },
           h('div', { className: 'pathlib-head' }, h('div', null, h(Icon, { name: 'folder', size: 15 }), h('strong', null, 'Path library'), h('span', null, project.paths.length)), h('button', { type: 'button', 'aria-label': 'Close path library', onClick: close }, h(Icon, { name: 'x', size: 15 }))),
           h('div', { className: 'pathlib-create' }, h('button', { className: 'primary', type: 'button', onClick: () => addPath() }, h(Icon, { name: 'plus', size: 14 }), 'New path'), h('button', { type: 'button', onClick: () => { const folder = addPathFolder(); if (folder) beginEdit('folder', folder.id, folder.name); } }, h(Icon, { name: 'folder', size: 14 }), 'New folder')),
-  function ConstraintBar({ c, robot, active, onOpen }) {
-    const chips = [
-      { k: 'Max V', v: Math.min(c.maxVel, robot.maxSpeed).toFixed(1), u: 'm/s' },
-      { k: 'Max A', v: c.maxAccel.toFixed(1), u: 'm/s\u00b2' },
-      { k: 'Decel', v: (c.maxDecel != null ? c.maxDecel : c.maxAccel).toFixed(1), u: 'm/s\u00b2' },
-      { k: 'Max \u03c9', v: (c.maxAngVel || 0).toFixed(0), u: '\u00b0/s' },
-    ];
-    return h('button', { className: 'cbar' + (active ? ' active' : ''), type: 'button', title: 'Edit global constraints in the inspector', onClick: onOpen },
-      h('span', { className: 'cbar-ic' }, h(Icon, { name: 'gauge', size: 14 })),
-      chips.map((ch, i) => h('span', { key: i, className: 'cbar-chip' },
-        h('span', { className: 'cbar-k' }, ch.k),
-        h('span', { className: 'cbar-v' }, ch.v),
-        h('span', { className: 'cbar-u' }, ch.u))),
-      h('span', { className: 'cbar-edit' }, active ? 'Editing' : 'Edit'));
+          h('label', { className: 'sr-only', htmlFor: 'path-library-search' }, 'Search paths and folders'),
+          h('div', { className: 'pathlib-searchwrap' }, h(Icon, { name: 'search', size: 14 }), h('input', { id: 'path-library-search', ref: searchRef, className: 'pathlib-search', type: 'search', 'aria-label': 'Search paths and folders', autoComplete: 'off', spellCheck: false, placeholder: 'Search paths and folders', value: query, onChange: (e) => { setMenu(null); setQuery(e.target.value); } })),
+          h('div', { className: 'pathlib-scroll' }, needle ? (results.length ? results.map((row) => pathRow(row.path, row.index, true)) : h('div', { className: 'pathlib-empty pathlib-emptysearch' }, h('strong', null, 'No matching paths'), h('span', null, 'Try a different name or folder.'))) : [folders.map(group), group(null)]))));
   }
 
-  // ---------------- outline: document STRUCTURE only (memo §5 / §7) ----------------
-  const behPill = (w) => w.stop ? { t: w.wait ? 'stop ' + (w.wait) + 's' : 'stop', c: 'r' } : w.corner ? { t: 'corner', c: 'n' } : null;
+  function PlannerControl({ plannerId, setPlannerId }) {
+    const lastNative = useRef('profiledSpline'), lastLabview = useRef('labviewBezier');
+    const labview = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid';
+    useEffect(() => { if (labview) lastLabview.current = plannerId; else lastNative.current = plannerId; }, [labview, plannerId]);
+    const methods = labview
+      ? [
+          { v: 'labviewBezier', label: 'Bezier', title: 'LabVIEW Bezier compatibility planner' },
+          { v: 'labviewClothoid', label: 'Clothoid', title: 'LabVIEW clothoid compatibility planner' },
+        ]
+      : [
+          { v: 'profiledSpline', label: 'Profiled', title: 'Profiled spline planner' },
+          { v: 'optimizedTrajectory', label: 'Optimized', title: 'Optimized trajectory (experimental)' },
+        ];
+    return h('div', { className: 'plannercontrol', title: 'Geometry and timing planner' },
+      h(Seg, { className: 'planner-family', value: labview ? 'labview' : 'native', ariaLabel: 'Planner family', options: [{ v: 'native', label: 'Java' }, { v: 'labview', label: 'LabVIEW' }], onChange: (value) => setPlannerId(value === 'labview' ? lastLabview.current : lastNative.current) }),
+      h(Seg, { className: 'planner-method', value: plannerId, ariaLabel: 'Trajectory planner', options: methods, onChange: setPlannerId }));
+  }
 
-  function WaypointList({ wps, sel, actions }) {
-    const [drag, setDrag] = useState(null);
-    const rows = useRef([]);
-    const startDrag = (i) => (e) => {
-      e.preventDefault(); e.stopPropagation();
-      setDrag({ from: i, over: i });
-      const mv = (ev) => {
-        let over = 0;
-        rows.current.forEach((el, k) => { if (!el) return; const r = el.getBoundingClientRect(); if (ev.clientY > r.top + r.height / 2) over = k + 1; });
-        over = Math.max(0, Math.min(wps.length - 1, over));
-        setDrag((d) => (d && d.over === over) ? d : (d ? { ...d, over } : d));
-      };
-      const up = () => {
-        window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up);
-        setDrag((d) => { if (d && d.from !== d.over) actions.reorderWp(d.from, d.over); return null; });
-      };
-      window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
-    };
-    return h('div', { className: 'wplist' + (drag ? ' dragging' : '') }, wps.map((w, i) => {
-      const label = i === 0 ? 'Start' : i === wps.length - 1 ? 'End' : 'Waypoint ' + i;
-      const mid = i !== 0 && i !== wps.length - 1;
-      const bp = behPill(w);
-      const cls = 'featrow' + (sel.kind === 'wp' && sel.idx === i ? ' sel' : '') + (drag && drag.from === i ? ' dragging' : '') + (drag && drag.over === i && drag.from !== i ? ' over' : '');
-      return h('div', { key: i, ref: (el) => (rows.current[i] = el), className: cls, onClick: () => actions.select('wp', i) },
-        h('span', { className: 'featgrip', title: 'Drag to reorder', onPointerDown: startDrag(i), onClick: (e) => e.stopPropagation() }, h(Icon, { name: 'drag', size: 13 })),
-        h('span', { className: 'featdot ' + (w.stop ? 'r sq' : i === 0 ? 'g' : i === wps.length - 1 ? 'r' : 'b') }),
+  // ---------------- top bar ----------------
+  function Toolbar(props) {
+    const { project, page, setPage, alliance, setAlliance,
+      onUndo, onRedo, onExport, onExportJava, javaProject, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerId } = props;
+    const plan = page === 'plan';
+    const javaReady = !!(javaProject && javaProject.catalog && javaProject.catalog.authoritative && javaProject.integration && javaProject.integration.installed && javaProject.integration.supportVersion === javaProject.catalog.supportVersion);
+    return h('header', { className: 'toolbar' },
+      h('div', { className: 'tb-left' },
+        h('div', { className: 'brand' }, h('img', { className: 'brand-mark', src: 'assets/wrlp-chap-bird-original.svg', alt: '' }), h('span', { className: 'brand-name' }, 'Bordeaux')),
+        h('nav', { className: 'pageswitch', 'aria-label': 'Workspace' },
+          h('button', { className: plan ? 'on' : '', type: 'button', 'aria-current': plan ? 'page' : undefined, onClick: () => setPage('plan') }, h(Icon, { name: 'route', size: 15 }), 'Plan'),
+          h('button', { className: page === 'auto' ? 'on' : '', type: 'button', 'aria-current': page === 'auto' ? 'page' : undefined, onClick: () => setPage('auto') }, h(Icon, { name: 'layers', size: 15 }), 'Auto'),
+          h('button', { className: page === 'robot' ? 'on' : '', type: 'button', 'aria-current': page === 'robot' ? 'page' : undefined, onClick: () => setPage('robot') }, h(Icon, { name: 'car', size: 15 }), 'Robot')),
+        plan && h(PathLibrary, { project, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times })),
+
+      h('div', { className: 'tb-right' },
+        h('button', { className: 'qbtn tb-file', type: 'button', title: 'Open project', 'aria-label': 'Open project', onClick: props.onOpen }, 'Open'),
+        h('button', { className: 'qbtn tb-file', type: 'button', title: 'Save project (⌘S)', 'aria-label': 'Save project', onClick: () => props.onSave(false) }, 'Save'),
+        plan && h(React.Fragment, null,
+          h(IconBtn, { icon: 'undo', onClick: onUndo, title: 'Undo  (\u2318Z)' }),
+          h(IconBtn, { icon: 'redo', onClick: onRedo, title: 'Redo  (\u21e7\u2318Z)' }),
+          h('div', { className: 'tbdiv' }),
         h('span', { className: 'featnm' }, label),
         mid && w.thetaOn && h('span', { className: 'pill th' }, (w.theta || 0).toFixed(0) + '\u00b0'),
         bp ? h('span', { className: 'pill ' + bp.c }, bp.t) : h('span', { className: 'featmeta' }, w.x.toFixed(1) + ', ' + w.y.toFixed(1)),
