@@ -268,51 +268,51 @@
       }
       if (role === 'head') {
         const idx = parseInt(t.getAttribute('data-idx'), 10);
-      // precise heading helper (waypoints) — draggable when idx is supplied (memo §7)
-      const headArrow = (cx, cy, deg, col, len, idx) => {
-        const rot = flip ? deg + 180 : deg;
-        const interactive = idx != null;
-        return h('g', { transform: `translate(${cx} ${cy}) rotate(${-rot})`, style: interactive ? { cursor: 'grab' } : { pointerEvents: 'none' } },
-          h('line', { x1: 0, y1: 0, x2: len, y2: 0, stroke: col, strokeWidth: P(1.8), strokeLinecap: 'round' }),
-          h('path', { d: `M ${len} ${-P(3.8)} L ${len + P(7)} 0 L ${len} ${P(3.8)} Z`, fill: col }),
-          interactive && h('line', { x1: P(5), y1: 0, x2: len + P(8), y2: 0, stroke: 'transparent', strokeWidth: P(15), strokeLinecap: 'round', 'data-role': 'head', 'data-idx': idx }),
-          interactive && h('circle', { cx: len + P(2), cy: 0, r: P(8.5), fill: 'transparent', 'data-role': 'head', 'data-idx': idx }));
-      };
-
-      // facing comb: neutral, thin heading ticks along the trajectory
-      if (pts.length > 1 && !isTank) {
-        const totalLen = derived.sample.length || 1;
-        const step = 0.78;
-        const comb = [];
-        for (let dl = step * 0.55; dl < totalLen - 0.04; dl += step) {
-          const f = dl / totalLen;
-          const pf = window.PM.pointAtFraction(f, pts);
-          const rad = tangentMode ? pf.heading : window.PM.headingAt(f, derived.anchors);
-          const c = W2P(pf);
-          const rot = flip ? (rad * 180 / Math.PI) + 180 : (rad * 180 / Math.PI);
-          comb.push(h('g', { key: 'cb' + dl.toFixed(2), transform: `translate(${c.x} ${c.y}) rotate(${-rot})` },
-            h('line', { x1: 0, y1: 0, x2: P(12), y2: 0, stroke: '#aeb6c2', strokeWidth: P(1.1), strokeLinecap: 'round' }),
-            h('path', { d: `M ${P(12)} ${-P(2.6)} L ${P(16.5)} 0 L ${P(12)} ${P(2.6)} Z`, fill: '#aeb6c2' })));
-        }
-        els.push(h('g', { key: 'comb', opacity: 0.32, style: { pointerEvents: 'none' } }, comb));
+        actions.select('wp', idx);
+        drag.current = { role: 'head', idx, inspectItem: { kind: 'wp', selectedIndex: idx, pressKey: 'wp:' + idx }, moved: false, historyStarted: false };
+        return;
       }
-
-      // ghost robot footprint (dashed outline) at a pose
-      const ghost = (cx, cy, deg, col, key, op) => {
-        const rot = flip ? deg + 180 : deg;
-        const rw = robot.w * SX, rh = robot.l * SY;
-        return h('g', { key, transform: `translate(${cx} ${cy}) rotate(${-rot})`, opacity: op, style: { pointerEvents: 'none' } },
-          h('rect', { x: -rw / 2, y: -rh / 2, width: rw, height: rh, rx: P(2), fill: 'none', stroke: col, strokeWidth: P(1.6), strokeDasharray: `${P(7)} ${P(5)}` }));
-      };
-      const wps = doc.waypoints;
-      const startHead = isTank && pts.length ? pts[0].heading * 180 / Math.PI : (wps[0] ? (wps[0].theta || 0) : 0);
-      const endHead = isTank && pts.length ? pts[pts.length - 1].heading * 180 / Math.PI : (wps[wps.length - 1] ? (wps[wps.length - 1].theta || 0) : 0);
-      if (wps[0]) { const c = W2P(wps[0]); els.push(ghost(c.x, c.y, startHead, C_START, 'gs', 0.28)); }
-      if (wps[wps.length - 1]) { const c = W2P(wps[wps.length - 1]); els.push(ghost(c.x, c.y, endHead, C_END, 'ge', 0.28)); }
-
-      // event markers — neutral diamond node + flag
-      doc.markers.forEach((mk, i) => {
-        const pf = window.PM.pointAtFraction(mk.f, pts); const c = W2P(pf);
+      if (role === 'seg') {
+        const idx = parseInt(t.getAttribute('data-idx'), 10);
+        const visit = resolveVisit(world, { cycle: tool === 'select' && !e.altKey && !candidateInspectDouble });
+        if (tool === 'range' && pts.length > 1) { startRangeDrag(world, visit); return; }
+        if (e.altKey || tool === 'rotation' || tool === 'marker') drag.current = { role: 'bg', onPath: true, segment: visit ? visit.seg : idx, visit, insertWaypoint: e.altKey, start: { cx: e.clientX, cy: e.clientY }, vb0: { ...view }, world, moved: false, mid: false };
+        else {
+          const selectedIndex = visit ? visit.seg : idx;
+          actions.select('seg', selectedIndex);
+          drag.current = { role: 'inspect', inspectItem: { kind: 'seg', selectedIndex, pressKey: 'seg:' + selectedIndex }, start: { cx: e.clientX, cy: e.clientY }, moved: false };
+        }
+        return;
+      }
+      if (role && role !== 'bg' && role !== 'ins') {
+        let idx = parseInt(t.getAttribute('data-idx'), 10);
+        let cycleWaypoint = false;
+        if (role === 'wp' && tool === 'select') {
+          const preferred = sel.kind === 'wp' ? sel.idx : idx;
+          cycleWaypoint = sel.kind === 'wp' && sel.idx === idx;
+          const visit = resolveWaypointVisit(world, false, preferred);
+          if (visit && Number.isInteger(visit.wp)) idx = visit.wp;
+        }
+        let lastF = null;
+        if (role === 'rt' && doc.targets[idx]) lastF = window.PM.featureFraction(doc.targets[idx], derived.sample);
+        else if (role === 'em' && doc.markers[idx]) lastF = window.PM.featureFraction(doc.markers[idx], derived.sample);
+        else if ((role === 'rs' || role === 're') && doc.ranges && doc.ranges[idx]) {
+          const range = (derived.effRanges && derived.effRanges[idx]) || doc.ranges[idx];
+          lastF = role === 'rs' ? range.f0 : range.f1;
+        }
+        let dragInspectItem = inspectItem;
+        if (inspectItem && role === 'wp') dragInspectItem = { kind: 'wp', selectedIndex: idx, pressKey: 'wp:' + idx };
+        drag.current = { role, idx, lastF, world, cycleWaypoint, inspectItem: dragInspectItem, moved: false, historyStarted: false };
+        if (role === 'ct') actions.select('wp', idx >> 1);
+        else if (role === 'rs' || role === 're') actions.select('cr', idx);
+        else if (role === 'rth') actions.select('rt', idx);
+        else if (role === 'look') actions.select('seg', idx);
+        else if (role === 'cr') actions.select('cr', idx);
+        else if (role === 'wp' || role === 'rt' || role === 'em') actions.select(role, idx);
+        return;
+      }
+      if (tool === 'range' && pts.length > 1) {
+        startRangeDrag(world);
         const isSel = sel.kind === 'em' && sel.idx === i;
         const col = isSel ? accent : C_NEUTRAL;
         els.push(h('g', { key: 'em' + i, transform: `translate(${c.x} ${c.y})`, style: { cursor: 'pointer' } },
