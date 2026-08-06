@@ -533,3 +533,93 @@
         stepDeg: Number(options.stepDeg),
         strokeTimeS: Math.max(0.08, Math.min(5, Number(options.strokeTimeS))),
       };
+      if (!Object.values(config).every(Number.isFinite)) return false;
+      const anchor = docRef.current.waypoints[docRef.current.waypoints.length - 1];
+      const lastIndex = Math.max(0, (derived.wpIdx && derived.wpIdx[docRef.current.waypoints.length - 1]) || 0);
+      const baseRad = anchor.turnInPlace
+        ? anchor.turnInPlace.headingDeg * Math.PI / 180
+        : derived.metrics && derived.metrics.head ? derived.metrics.head[lastIndex] : (anchor.theta || 0) * Math.PI / 180;
+      const physicalBaseRad = baseRad + (derived.rev ? Math.PI : 0);
+      if (!window.PM.jigglePositions(anchor, physicalBaseRad, config, { w: FIELD_W, h: FIELD_H })) return false;
+      commit((d) => {
+        d.waypoints[d.waypoints.length - 1].jiggle = config;
+        d.goalVel = 0;
+        return d;
+      });
+      return true;
+    }, [commit, derived]);
+    const applyWaypointPreview = useCallback(() => {
+      if (!waypointPreview) return;
+      commit(() => waypointPreview.doc);
+      setWaypointPreview(null);
+    }, [commit, waypointPreview]);
+    useEffect(() => { setWaypointPreview(null); }, [doc, plannerId]);
+    useEffect(() => { if (doc._selAfter != null) { select('wp', doc._selAfter); mutate((d) => { delete d._selAfter; return d; }); } }, [doc._selAfter]);
+
+    const setWp = useCallback((i, patch) => commit((d) => {
+      const w = d.waypoints[i];
+      if (patch.x != null || patch.y != null) {
+        const next = clampWorld({ x: patch.x != null ? patch.x : w.x, y: patch.y != null ? patch.y : w.y });
+        patch = { ...patch, x: next.x, y: next.y };
+      }
+      Object.assign(w, patch); return d;
+    }), [commit]);
+    const toggleStop = useCallback((i, on) => commit((d) => { const w = d.waypoints[i]; w.stop = on; if (on) w.linked = false; else { alignWaypointHandles(w); delete w.wait; delete w.turnInPlace; } return d; }), [commit]);
+    const toggleTheta = useCallback((i, on) => commit((d) => { d.waypoints[i].thetaOn = on; return d; }), [commit]);
+    const setHandleLen = useCallback((i, key, len) => commit((d) => { const w = d.waypoints[i]; const a = Math.atan2(w[key].y - w.y, w[key].x - w.x); w[key] = { x: w.x + Math.cos(a) * len, y: w.y + Math.sin(a) * len }; return d; }), [commit]);
+    const delWp = useCallback((i) => { commit((d) => {
+      if (d.waypoints.length <= 2 || i < 0 || i >= d.waypoints.length) return d;
+      const oldCount = d.waypoints.length;
+      const endpointJiggle = i === oldCount - 1 && d.waypoints[i].jiggle ? { ...d.waypoints[i].jiggle } : null;
+      const indexMap = Array.from({ length: oldCount }, (_, index) => index === i ? null : index < i ? index : index - 1);
+      d.waypoints.splice(i, 1);
+      const last = d.waypoints.length - 1;
+      remapWaypointRanges(d, indexMap, i);
+      delete d.waypoints[last].segmentHeadingMode;
+      delete d.waypoints[last].segmentLookAt;
+      delete d.waypoints[0].headingTransition;
+      delete d.waypoints[last].headingTransition;
+      if (endpointJiggle) d.waypoints[last].jiggle = endpointJiggle;
+      d.waypoints[0].thetaOn = true; d.waypoints[last].thetaOn = true;
+      return d;
+    }); select(null, -1); }, [commit, select]);
+
+    const enableTargetsAtFraction = (d, f) => {
+      const fractions = derived.wpFrac || window.PM.waypointFracs(d, derived.sample);
+      let segment = 0;
+      for (let i = 0; i < d.waypoints.length - 1; i++) {
+        if (f >= (fractions[i] || 0) - 1e-6) segment = i;
+      }
+      segment = Math.max(0, Math.min(d.waypoints.length - 2, segment));
+      d.waypoints[segment].segmentHeadingMode = 'targets';
+    };
+    const addTargetAt = useCallback((p, visitFraction) => commit((d) => {
+      const pts = derived.sample.pts;
+      const f = Number.isFinite(visitFraction) ? visitFraction : (pts.length > 1 ? window.PM.nearestFraction(p.x, p.y, pts) : 0.5);
+      const deg = pts.length > 1 ? window.PM.pointAtFraction(f, pts).heading * 180 / Math.PI : 0;
+      d.targets.push({ f, deg });
+      enableTargetsAtFraction(d, f);
+      d._selT = d.targets.length - 1;
+      return d;
+    }), [commit, derived]);
+    const addMarkerAt = useCallback((p, visitFraction) => commit((d) => { const f = Number.isFinite(visitFraction) ? visitFraction : (derived.sample.pts.length > 1 ? window.PM.nearestFraction(p.x, p.y, derived.sample.pts) : 0.5); d.markers.push({ id: markerId(), f, name: 'event' + (d.markers.length + 1), cmd: 'none', group: 'sequential' }); d._selM = d.markers.length - 1; return d; }), [commit, derived]);
+    useEffect(() => { if (doc._selT != null) { select('rt', doc._selT); mutate((d) => { delete d._selT; return d; }); } }, [doc._selT]);
+    useEffect(() => { if (doc._selM != null) { select('em', doc._selM); mutate((d) => { delete d._selM; return d; }); } }, [doc._selM]);
+
+    const moveTargetTo = useCallback((i, p, visitFraction) => mutate((d) => { const t = d.targets[i]; if (!t) return d; const f = Number.isFinite(visitFraction) ? visitFraction : window.PM.nearestFraction(p.x, p.y, derived.sample.pts); t.f = f; if (t.anchor === 'dist') t.d = +(f * (derived.sample.length || 0)).toFixed(3); return d; }), [mutate, derived]);
+    const rotateTargetTo = useCallback((i, p, snap) => mutate((d) => {
+      const target = d.targets[i]; if (!target) return d;
+      const f = window.PM.featureFraction(target, derived.sample);
+      const center = window.PM.pointAtFraction(f, derived.sample.pts);
+      let deg = Math.atan2(p.y - center.y, p.x - center.x) * 180 / Math.PI;
+      if (snap) deg = Math.round(deg / 15) * 15;
+      target.deg = Math.round(deg * 10) / 10;
+      return d;
+    }), [mutate, derived]);
+    const moveMarkerTo = useCallback((i, p, visitFraction) => mutate((d) => { const m = d.markers[i]; if (!m) return d; const f = Number.isFinite(visitFraction) ? visitFraction : window.PM.nearestFraction(p.x, p.y, derived.sample.pts); m.f = f; if (m.anchor === 'dist') m.d = +(f * (derived.sample.length || 0)).toFixed(3); return d; }), [mutate, derived]);
+    const setFeature = (items, i, patch) => { const item = items[i]; if (!item) return; if (patch.anchor) { const f = window.PM.featureFraction(item, derived.sample); item.f = f; if (patch.anchor === 'dist') item.d = +(f * (derived.sample.length || 0)).toFixed(3); else delete item.d; } Object.assign(item, patch); };
+    const setTarget = useCallback((i, patch) => commit((d) => { setFeature(d.targets, i, patch); return d; }), [commit, derived]);
+    const delTarget = useCallback((i) => { commit((d) => { d.targets.splice(i, 1); return d; }); select(null, -1); }, [commit, select]);
+    const setMarker = useCallback((i, patch) => commit((d) => { setFeature(d.markers, i, patch); return d; }), [commit, derived]);
+    const delMarker = useCallback((i) => { commit((d) => { d.markers.splice(i, 1); return d; }); select(null, -1); }, [commit, select]);
+
