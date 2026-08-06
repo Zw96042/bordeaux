@@ -577,3 +577,4 @@
   }
 
   window.Panels = { Toolbar, ToolRail, ConstraintBar, Outline, Overlay, PathChecks, Transport, ViewControls, RoutineLegend };
+})();
