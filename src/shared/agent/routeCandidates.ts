@@ -448,3 +448,93 @@ function localAnchor(path: PathDoc, samples: readonly TrajectorySample[], sample
 }
 
 function bumpCrossingRanges(project: BordeauxProject, path: PathDoc, samples: readonly TrajectorySample[]): Array<{ w0: number; t0: number; w1: number; t1: number }> {
+  const intervals: Array<{ first: number; last: number }> = [];
+  REBUILT_2026_FIELD.crossingBarriers.flatMap((barrier) => barrier.portals).filter((portal) => portal.traversal === "bump").forEach((portal) => {
+    const bounds = officialToAppRect(portal.bounds);
+    const rectangle = boundsPolygon({ min: { x: bounds.xMin, y: bounds.yMin }, max: { x: bounds.xMax, y: bounds.yMax } });
+    let first = -1;
+    samples.forEach((sample, index) => {
+      const footprint = robotFootprintAt(project.robot, { x: sample.x, y: sample.y, headingRad: sample.headingRad });
+      const footprintBox = polygonBounds(footprint);
+      const insideLane = footprintBox.min.y >= bounds.yMin - 1e-6 && footprintBox.max.y <= bounds.yMax + 1e-6;
+      const onBump = insideLane && convexPolygonClearance(footprint, rectangle) <= 1e-6;
+      if (onBump && first < 0) first = index;
+      if (!onBump && first >= 0) { intervals.push({ first, last: index - 1 }); first = -1; }
+    });
+    if (first >= 0) intervals.push({ first, last: samples.length - 1 });
+  });
+  const brakingMarginM = Math.max(0, (path.constraints.maxVel ** 2 - 2 ** 2) / (2 * path.constraints.maxDecel)) + 0.1;
+  return intervals.sort((left, right) => left.first - right.first).map((interval) => {
+    const firstSurfaceDistance = samples[interval.first].s;
+    const lastSurfaceDistance = samples[interval.last].s;
+    let firstIndex = interval.first;
+    let lastIndex = interval.last;
+    while (firstIndex > 0 && samples[firstIndex].s > firstSurfaceDistance - brakingMarginM) firstIndex -= 1;
+    while (lastIndex + 1 < samples.length && samples[lastIndex].s < lastSurfaceDistance + 0.1) lastIndex += 1;
+    firstIndex = Math.max(0, firstIndex - 1);
+    lastIndex = Math.min(samples.length - 1, lastIndex + 1);
+    const first = localAnchor(path, samples, firstIndex);
+    const last = localAnchor(path, samples, lastIndex);
+    const start = first.t >= 0.02
+      ? { waypointIndex: first.waypointIndex, t: first.t - 0.02 }
+      : { waypointIndex: Math.max(0, first.waypointIndex - 1), t: first.waypointIndex > 0 ? 0.98 : 0 };
+    const end = last.t <= 0.98
+      ? { waypointIndex: last.waypointIndex, t: last.t + 0.02 }
+      : { waypointIndex: Math.min(path.waypoints.length - 2, last.waypointIndex + 1), t: last.waypointIndex < path.waypoints.length - 2 ? 0.02 : 1 };
+    return { w0: start.waypointIndex, t0: start.t, w1: end.waypointIndex, t1: end.t };
+  });
+}
+
+function rangeContains(container: PathDoc["ranges"][number], range: { w0: number; t0: number; w1: number; t1: number }): boolean {
+  if (container.anchor !== "wp" || container.w0 === undefined || container.w1 === undefined || container.maxVel === undefined || container.maxVel > 2 + 1e-9) return false;
+  const startBefore = container.w0 < range.w0 || (container.w0 === range.w0 && (container.t0 ?? 0) <= range.t0 + 1e-9);
+  const endAfter = container.w1 > range.w1 || (container.w1 === range.w1 && (container.t1 ?? 0) >= range.t1 - 1e-9);
+  return startBefore && endAfter;
+}
+
+function collectionHeadingIssue(samples: readonly TrajectorySample[], spans: readonly ActiveCollectionSpan[], intakeDirectionDeg: number): string | null {
+  if (samples.length < 3) return null;
+  let worst = 0;
+  let limit = Number.POSITIVE_INFINITY;
+  let checked = false;
+  spans.forEach((span) => {
+    if (span.intent.allowCrosswiseHeading === true) return;
+    checked = true;
+    limit = Math.min(limit, span.intent.maxHeadingErrorDeg ?? 5);
+    const first = Math.max(1, samples.findIndex((sample) => sample.f >= span.f0 - 1e-5));
+    let last = samples.findIndex((sample) => sample.f > span.f1 + 1e-5);
+    if (last < 0) last = samples.length - 1;
+    last = Math.max(first, Math.min(samples.length - 2, last - 1));
+    for (let index = first; index <= last; index += 1) {
+      const before = samples[index - 1];
+      const after = samples[index + 1];
+      const tangent = Math.atan2(after.y - before.y, after.x - before.x);
+      const intakeHeading = samples[index].headingRad + intakeDirectionDeg * Math.PI / 180;
+      worst = Math.max(worst, Math.abs(Math.atan2(Math.sin(intakeHeading - tangent), Math.cos(intakeHeading - tangent))) * 180 / Math.PI);
+    }
+  });
+  return checked && worst > limit + 0.25 ? `The configured intake deviates ${worst.toFixed(1)}° from collection travel; the allowed error is ${limit.toFixed(1)}°.` : null;
+}
+
+function finishHeadingIssue(samples: readonly TrajectorySample[], target: FieldPointInput, shooterDirectionDeg: number, limitDeg: number): string | null {
+  const final = samples.at(-1);
+  if (!final) return "The planner did not produce a final shooting pose.";
+  const targetHeading = Math.atan2(target.y - final.y, target.x - final.x);
+  const shooterHeading = final.headingRad + shooterDirectionDeg * Math.PI / 180;
+  const error = Math.abs(Math.atan2(Math.sin(shooterHeading - targetHeading), Math.cos(shooterHeading - targetHeading))) * 180 / Math.PI;
+  return error > limitDeg + 0.25 ? `The shooter misses its requested target-facing heading by ${error.toFixed(1)}°; the allowed error is ${limitDeg.toFixed(1)}°.` : null;
+}
+
+function peak(analysis: RouteCandidate["analysis"], metric: "curvature" | "angularVelocity"): number {
+  return analysis.extrema.find((item) => item.metric === metric)?.value ?? 0;
+}
+
+function estimatedCollectionArea(project: BordeauxProject, samples: readonly TrajectorySample[], spans: readonly ActiveCollectionSpan[]): number | undefined {
+  const intake = project.robot.planning?.intake;
+  if (!intake || spans.length === 0 || samples.length < 2) return undefined;
+  const cellSize = Math.max(0.04, Math.min(0.15, intake.captureWidthM / 5));
+  const covered = new Set<string>();
+  const cover = (x: number, y: number) => covered.add(`${Math.floor(x / cellSize)},${Math.floor(y / cellSize)}`);
+  spans.forEach((span) => {
+    const first = Math.max(0, samples.findIndex((sample) => sample.f >= span.f0 - 1e-5));
+    let last = samples.findIndex((sample) => sample.f > span.f1 + 1e-5);
