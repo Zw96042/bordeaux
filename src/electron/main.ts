@@ -165,3 +165,93 @@ async function assertSafeJavaExportTarget(projectRoot: string, fileName: string)
   return target;
 }
 
+async function javaExportTargetSnapshot(target: string): Promise<string> {
+  try {
+    const stat = await fs.promises.lstat(target);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Existing Java export target must be a regular file");
+    if (stat.size > 64 * 1024 * 1024) throw new Error("Existing Java export target exceeds the 64 MiB safety limit");
+    const hash = createHash("sha256").update(await fs.promises.readFile(target)).digest("hex");
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${hash}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    throw error;
+  }
+}
+
+function handle(channel: string, listener: (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown) {
+  ipcMain.handle(channel, async (event, ...args) => {
+    assertTrustedSender(event);
+    return listener(event, ...args);
+  });
+}
+
+function createWindow() {
+  currentProjectPath = null;
+  dirty = false;
+  allowClose = false;
+  mainWindow = new BrowserWindow({
+    width: 1440,
+    height: 920,
+    minWidth: 1100,
+    minHeight: 720,
+    title: "Bordeaux",
+    backgroundColor: "#12151b",
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  const window = mainWindow;
+  window.once("ready-to-show", () => window.show());
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("did-start-loading", () => {
+    rejectProposalReceipts("The Bordeaux editor reloaded before acknowledging the proposal.");
+    agentSessions.clearSnapshot();
+  });
+  window.webContents.on("will-navigate", (event) => event.preventDefault());
+  window.webContents.on("will-attach-webview", (event) => event.preventDefault());
+  window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  window.on("close", (event) => {
+    if (allowClose || !dirty) return;
+    event.preventDefault();
+    if (smokeDirectory) {
+      smokeCloseGuardTriggered = true;
+      return;
+    }
+    void dialog.showMessageBox(window, {
+      type: "warning",
+      title: "Unsaved Bordeaux project",
+      message: "Discard unsaved changes?",
+      detail: "Save the project first if you want to keep your latest path and routine edits.",
+      buttons: ["Cancel", "Save Project…", "Discard Changes"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    }).then(({ response }) => {
+      if (response === 1) {
+        sendCommand("save-project");
+      } else if (response === 2) {
+        allowClose = true;
+        window.close();
+      }
+    });
+  });
+  window.on("closed", () => {
+    if (mainWindow === window) mainWindow = null;
+    rejectProposalReceipts("The Bordeaux editor closed before acknowledging the proposal.");
+    agentSessions.clearSnapshot();
+    currentProjectPath = null;
+    dirty = false;
+    allowClose = false;
+  });
+
+  void window.webContents.session.clearCache().finally(() => {
+    if (!window.isDestroyed()) void window.loadFile(path.join(__dirname, "../../public/legacy/index.html"));
+  });
+
+  if (process.env.BORDEAUX_SMOKE_TEST === "1") {
+    window.webContents.once("did-finish-load", async () => {
