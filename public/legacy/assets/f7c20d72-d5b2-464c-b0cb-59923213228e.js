@@ -88,51 +88,51 @@
     useEffect(() => updateVisitFocus(null), [doc.id, updateVisitFocus]);
 
     const visitsAt = useCallback((world) => {
-      }
-      if (role && role !== 'bg' && role !== 'ins') {
-        const idx = parseInt(t.getAttribute('data-idx'), 10);
-        if (role === 'wp' && e.shiftKey && idx > 0 && idx < doc.waypoints.length - 1 && actions.delWp) { actions.delWp(idx); drag.current = null; return; }
-        drag.current = { role, idx, moved: false };
-        if (role === 'ct') actions.select('wp', idx >> 1);
-        else if (role === 'rs' || role === 're') actions.select('cr', idx);
-        else if (role === 'wp' || role === 'rt' || role === 'em') actions.select(role, idx);
-        return;
-      }
-      if (tool === 'range' && pts.length > 1) {
-        const f0 = window.PM.nearestFraction(world.x, world.y, pts);
-        drag.current = { role: 'newrange', f0, f1: f0, moved: false };
-        setPreview({ f0, f1: f0 });
-        return;
-      }
-      drag.current = { role: 'bg', onPath: role === 'ins', start: { cx: e.clientX, cy: e.clientY }, vb0: { ...view }, world, moved: false, mid: e.button === 1 };
-    };
+      const candidates = window.PM.nearestVisits(world.x, world.y, pts, { tolerance: visitTolerance });
+      if (!derived.wpFrac || derived.wpFrac.length < 2) return candidates;
+      return candidates.map((candidate) => {
+        let seg = derived.wpFrac.length - 2;
+        for (let i = 0; i < derived.wpFrac.length - 1; i++) {
+          if (candidate.f <= derived.wpFrac[i + 1] + 1e-9) { seg = i; break; }
+        }
+        return { ...candidate, seg };
+      });
+    }, [pts, visitTolerance, derived.wpFrac]);
 
-    const onMove = (e) => {
-      const d = drag.current; if (!d) return;
-      const world = clientToWorld(e.clientX, e.clientY);
-      if (d.role === 'bg') {
-        const dx = e.clientX - d.start.cx, dy = e.clientY - d.start.cy;
-        if (!d.moved && Math.hypot(dx, dy) > 4) d.moved = true;
-        if (d.moved) setView({ x: d.vb0.x - dx * upp, y: d.vb0.y - dy * upp, w: d.vb0.w, h: d.vb0.h });
-        return;
+    const resolveVisit = useCallback((world, options) => {
+      const opts = options || {}, candidates = visitsAt(world);
+      if (!candidates.length) return null;
+      const previous = visitFocusRef.current;
+      const sameConflict = previous && previous.candidates.length === candidates.length
+        && Math.hypot(previous.anchor.x - world.x, previous.anchor.y - world.y) <= visitTolerance * 0.8
+        && previous.candidates.every((candidate, index) => Math.abs(candidate.f - candidates[index].f) <= 0.01);
+      let affinityIndex = 0;
+      if (Number.isFinite(opts.nearFraction)) {
+        for (let i = 1; i < candidates.length; i++) {
+          if (Math.abs(candidates[i].f - opts.nearFraction) < Math.abs(candidates[affinityIndex].f - opts.nearFraction)) affinityIndex = i;
+        }
+      } else {
+        for (let i = 1; i < candidates.length; i++) {
+          if (candidates[i].distance < candidates[affinityIndex].distance) affinityIndex = i;
+        }
       }
-      if (d.role === 'newrange') { d.f1 = window.PM.nearestFraction(world.x, world.y, pts); d.moved = true; setPreview({ f0: d.f0, f1: d.f1 }); return; }
-      if (d.role === 'head') {
-        const w = doc.waypoints[d.idx];
-        if (w) {
-          let deg = Math.atan2(world.y - w.y, world.x - w.x) * 180 / Math.PI;
-          let label = null;
-          if (e.shiftKey) deg = Math.round(deg / 15) * 15;
-          else {
-            const cands = [];
-            const wi = derived.wpIdx ? derived.wpIdx[d.idx] : 0; const tp = pts[wi];
-            if (tp) cands.push({ deg: tp.heading * 180 / Math.PI, label: 'Tangent' });
-            const nx = doc.waypoints[d.idx + 1]; if (nx) cands.push({ deg: Math.atan2(nx.y - w.y, nx.x - w.x) * 180 / Math.PI, label: 'Face next' });
-            const pv = doc.waypoints[d.idx - 1]; if (pv) cands.push({ deg: Math.atan2(pv.y - w.y, pv.x - w.x) * 180 / Math.PI, label: 'Face prev' });
-            let best = null, bestD = 8;
-            cands.forEach((cd) => { const dd = Math.abs(window.PM.angWrap((deg - cd.deg) * Math.PI / 180) * 180 / Math.PI); if (dd < bestD) { bestD = dd; best = cd; } });
-            if (best) { deg = best.deg; label = best.label; } else deg = Math.round(deg);
-          }
+      const index = opts.cycle && sameConflict
+        ? (previous.index + 1) % candidates.length
+        : (sameConflict && opts.preserve !== false && !Number.isFinite(opts.nearFraction) ? previous.index : affinityIndex);
+      const next = { candidates, index, anchor: { x: world.x, y: world.y } };
+      updateVisitFocus(next);
+      return candidates[index];
+    }, [visitsAt, visitTolerance, updateVisitFocus]);
+
+    const projectVisit = useCallback((world, nearFraction) => resolveVisit(world, { nearFraction, preserve: false }), [resolveVisit]);
+
+    const resolveWaypointVisit = useCallback((world, cycle, preferredIndex) => {
+      if (!derived.wpFrac) return null;
+      const candidates = doc.waypoints.map((waypoint, index) => ({
+        x: waypoint.x,
+        y: waypoint.y,
+        f: Number.isFinite(derived.wpFrac[index]) ? derived.wpFrac[index] : 0,
+        seg: Math.min(index, Math.max(0, doc.waypoints.length - 2)),
           setSnap(label ? { idx: d.idx, label } : null);
           actions.setWaypointHeading(d.idx, deg);
         }
