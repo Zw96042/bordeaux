@@ -43,11 +43,25 @@
     const planning = robot.planning || {};
     const intake = planning.intake;
     const shooter = planning.shooter;
-                h('button', { className: 'rp-drivebtn' + (isSwerve ? ' on' : ''), type: 'button', onClick: () => setRobot({ drive: 'swerve' }) },
+    const setPlanning = (patch) => setRobot({ planning: { ...planning, ...patch } });
+    const setIntake = (patch) => setPlanning({ intake: { ...intake, ...patch } });
+    const setShooter = (patch) => setPlanning({ shooter: { ...shooter, ...patch } });
+
+    return h('div', { className: 'robotpage' },
+      h('div', { className: 'rp-wrap' },
+        h('div', { className: 'rp-title' }, 'Robot'),
+        h('div', { className: 'rp-sub' }, 'One robot for the whole project \u2014 every path plans around these. Set it once here and the field preview, velocity caps, and footprint update everywhere.'),
+        h('div', { className: 'rp-grid' },
+          // ---- left column: controls ----
+          h('div', { className: 'rp-col' },
+            h('div', { className: 'rp-sec' },
+              h('div', { className: 'rp-sech' }, 'Drivetrain'),
+              h('div', { className: 'rp-drive' },
+                h('button', { className: 'rp-drivebtn' + (isSwerve ? ' on' : ''), type: 'button', 'aria-pressed': isSwerve, onClick: () => setRobot({ drive: 'swerve' }) },
                   h('span', { className: 'dbi' }, h(Icon, { name: 'swerve', size: 22 })),
                   h('div', { className: 'dbt' }, 'Swerve'),
                   h('div', { className: 'dbd' }, 'Holonomic \u2014 heading is independent of travel. Uses per-waypoint \u03b8.')),
-                h('button', { className: 'rp-drivebtn' + (!isSwerve ? ' on' : ''), type: 'button', onClick: () => setRobot({ drive: 'tank' }) },
+                h('button', { className: 'rp-drivebtn' + (!isSwerve ? ' on' : ''), type: 'button', 'aria-pressed': !isSwerve, onClick: () => setRobot({ drive: 'tank' }) },
                   h('span', { className: 'dbi' }, h(Icon, { name: 'tank', size: 22 })),
                   h('div', { className: 'dbt' }, 'Tank'),
                   h('div', { className: 'dbd' }, 'Differential \u2014 heading follows the path tangent. \u03b8 is automatic.')))),
@@ -57,37 +71,23 @@
               h('div', { className: 'rp-two' },
                 h('div', { className: 'rp-field' },
                   h('div', { className: 'rp-flabel' }, 'Width', h('small', null, m2ft(robot.w).toFixed(2) + ' ft')),
-                  h(BigNum, { value: robot.w, unit: 'm', min: 0.3, max: 1.3, onChange: (v) => setRobot({ w: v }) })),
+                  h(BigNum, { label: 'Robot width', value: robot.w, unit: 'm', min: 0.3, max: 1.3, onChange: (v) => setRobot({ w: v }) })),
                 h('div', { className: 'rp-field' },
                   h('div', { className: 'rp-flabel' }, 'Length', h('small', null, m2ft(robot.l).toFixed(2) + ' ft')),
-                  h(BigNum, { value: robot.l, unit: 'm', min: 0.3, max: 1.3, onChange: (v) => setRobot({ l: v }) }))),
+                  h(BigNum, { label: 'Robot length', value: robot.l, unit: 'm', min: 0.3, max: 1.3, onChange: (v) => setRobot({ l: v }) }))),
+              h('div', { className: 'rp-field' },
+                h('div', { className: 'rp-flabel' }, 'Height', h('small', null, typeof robot.heightM === 'number' ? m2ft(robot.heightM).toFixed(2) + ' ft' : 'required for TRENCH checks')),
+                h(BigNum, { label: 'Robot height', value: robot.heightM, unit: 'm', min: 0.1, max: 2.5, onChange: (v) => setRobot({ heightM: v }) })),
               h('div', { className: 'rp-note' }, h(Icon, { name: 'info', size: 14 }), 'Bumper-to-bumper footprint. This is what gets drawn on the field and animated along the path.')),
 
             h('div', { className: 'rp-sec' },
               h('div', { className: 'rp-sech' }, 'Performance'),
               h('div', { className: 'rp-field' },
                 h('div', { className: 'rp-flabel' }, 'Max robot speed', h('small', null, m2ft(robot.maxSpeed).toFixed(1) + ' ft/s')),
-                h(BigNum, { value: robot.maxSpeed, unit: 'm/s', min: 0.5, max: 8, precision: 1, step: 0.1, onChange: (v) => setRobot({ maxSpeed: v }) })),
+                h(BigNum, { label: 'Maximum robot speed', value: robot.maxSpeed, unit: 'm/s', min: 0.5, max: 8, precision: 1, step: 0.1, onChange: (v) => setRobot({ maxSpeed: v }) })),
               h('div', { className: 'rp-note' }, h(Icon, { name: 'info', size: 14 }), 'The hard ceiling. A path\u2019s own max velocity is clamped to this, so you can\u2019t accidentally plan faster than the robot can drive.'))),
 
-          // ---- right column: live preview ----
-          h('div', { className: 'rp-col' },
-            h('div', { className: 'rp-preview' },
-              h('div', { className: 'rp-stage' },
-                h('svg', { width: 260, height: 260, viewBox: '0 0 260 260' },
-                  h('g', { transform: 'translate(130 130)' },
-                    h('rect', { x: -rw / 2, y: -rl / 2, width: rw, height: rl, rx: 8, fill: 'var(--accent-soft)', stroke: 'var(--accent)', strokeWidth: 2.5 }),
-                    h('rect', { x: -rw / 2 + 7, y: -rl / 2 + 7, width: Math.max(0, rw - 14), height: Math.max(0, rl - 14), rx: 4, fill: 'none', stroke: 'var(--accent)', strokeOpacity: 0.3, strokeWidth: 1.5, strokeDasharray: '4 4' }),
-                    // forward indicator (front = +X)
-                    h('line', { x1: 0, y1: 0, x2: rw / 2 + 4, y2: 0, stroke: '#fff', strokeWidth: 2.5 }),
-                    h('path', { d: `M ${rw / 2 + 2} -6 L ${rw / 2 + 14} 0 L ${rw / 2 + 2} 6 Z`, fill: '#fff' }),
-                    // width / length ticks
-                    h('text', { x: 0, y: -rl / 2 - 10, fill: 'var(--txt-3)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace', textAnchor: 'middle' }, robot.w.toFixed(2) + ' m'),
-                    h('text', { x: rw / 2 + 26, y: 4, fill: 'var(--txt-3)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace', transform: `rotate(90 ${rw / 2 + 26} 0)`, textAnchor: 'middle' }, robot.l.toFixed(2) + ' m')))),
-              h('div', { className: 'rp-readout' },
-                h('div', { className: 'rr' }, h('div', { className: 'rrv' }, isSwerve ? 'Swerve' : 'Tank'), h('div', { className: 'rru' }, 'drive')),
-                h('div', { className: 'rr' }, h('div', { className: 'rrv' }, (robot.w * robot.l).toFixed(2)), h('div', { className: 'rru' }, 'm\u00b2 footprint')),
-                h('div', { className: 'rr' }, h('div', { className: 'rrv' }, robot.maxSpeed.toFixed(1)), h('div', { className: 'rru' }, 'm/s top'))))))));
+            mcpEnabled && h('div', { className: 'rp-sec rp-agent' },
   }
 
   window.RobotPage = RobotPage;
