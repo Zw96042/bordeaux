@@ -178,3 +178,93 @@ function activeCollectionSpans(path: PathDoc, requested: readonly CollectionSpan
   });
   return active;
 }
+
+function routePath(project: BordeauxProject, base: PathDoc, name: string, points: FieldPointInput[], requestedCollectionSpans: readonly CollectionSpan[], finishHeadingDeg?: number, smoothGeometry = false): { path: PathDoc; collectionSpans: ActiveCollectionSpan[] } {
+  const raw = points.map((point, index) => {
+    const next = points[Math.min(points.length - 1, index + 1)];
+    const previous = points[Math.max(0, index - 1)];
+    const theta = point.headingDeg ?? Math.atan2(next.y - previous.y, next.x - previous.x) * 180 / Math.PI;
+    const authored = point as FieldPointInput & { prevC?: { x: number; y: number }; nextC?: { x: number; y: number }; segType?: "bezier" | "line" | "arc" | "clothoid" };
+    const segType: "bezier" | "line" | "arc" | "clothoid" = authored.segType
+      ?? (smoothGeometry ? "clothoid" : base.waypoints[Math.min(index, base.waypoints.length - 1)]?.segType ?? "bezier");
+    return {
+      x: point.x, y: point.y, theta,
+      segType,
+      ...(authored.prevC ? { prevC: authored.prevC } : {}),
+      ...(authored.nextC ? { nextC: authored.nextC } : {}),
+    };
+  });
+  const waypoints = buildWaypoints(raw);
+  waypoints.forEach((waypoint, index) => {
+    const authored = points[index] as FieldPointInput & { prevC?: { x: number; y: number }; nextC?: { x: number; y: number } };
+    const next = waypoints[index + 1];
+    if (!authored.prevC || authored.nextC || !next) return;
+    const dx = waypoint.x - authored.prevC.x;
+    const dy = waypoint.y - authored.prevC.y;
+    const length = Math.hypot(dx, dy);
+    const capped = Math.min(length, Math.hypot(next.x - waypoint.x, next.y - waypoint.y) / 3);
+    if (length > 1e-9) waypoint.nextC = { x: waypoint.x + dx / length * capped, y: waypoint.y + dy / length * capped };
+  });
+  waypoints.forEach((waypoint, index) => {
+    const capHandle = (key: "prevC" | "nextC", neighborIndex: number) => {
+      if ((points[index] as FieldPointInput & { prevC?: unknown; nextC?: unknown })[key]) return;
+      const handle = waypoint[key];
+      const neighbor = waypoints[neighborIndex];
+      if (!handle || !neighbor) return;
+      const handleLength = Math.hypot(handle.x - waypoint.x, handle.y - waypoint.y);
+      const maximum = Math.hypot(neighbor.x - waypoint.x, neighbor.y - waypoint.y) / 3;
+      if (handleLength <= maximum || handleLength <= 1e-9) return;
+      const scale = maximum / handleLength;
+      waypoint[key] = { x: waypoint.x + (handle.x - waypoint.x) * scale, y: waypoint.y + (handle.y - waypoint.y) * scale };
+    };
+    capHandle("prevC", index - 1);
+    capHandle("nextC", index + 1);
+  });
+  const intake = project.robot.planning?.intake;
+  if (requestedCollectionSpans.length > 0 && !intake) throw new Error("Configure the robot's intake location, direction, capture width, and collection speed before planning FUEL collection.");
+  if (finishHeadingDeg !== undefined) {
+    const endpoint = waypoints.at(-1)!;
+    endpoint.stop = true;
+    endpoint.theta = finishHeadingDeg;
+    endpoint.thetaOn = true;
+  }
+  if (requestedCollectionSpans.length > 0) waypoints.slice(0, -1).forEach((waypoint) => { waypoint.segmentHeadingMode = "tangent"; });
+  const path: PathDoc = {
+    ...clone(base),
+    id: createPathId(),
+    name,
+    folderId: base.folderId,
+    waypoints,
+    targets: [],
+    markers: [],
+    ranges: [],
+    driveBackward: false,
+    startVel: 0,
+    goalVel: 0,
+  };
+  const collectionSpans = activeCollectionSpans(path, requestedCollectionSpans);
+  path.ranges = collectionSpans.map((span) => ({
+    anchor: "wp" as const,
+    f0: 0,
+    f1: 0,
+    w0: span.startSegmentIndex,
+    t0: span.startT,
+    w1: span.endSegmentIndex,
+    t1: span.endT,
+    maxVel: Math.min(base.constraints.maxVel, intake?.maxCollectSpeedMps ?? base.constraints.maxVel),
+    maxAccel: base.constraints.maxAccel,
+    maxDecel: base.constraints.maxDecel,
+    maxAngVel: base.constraints.maxAngVel,
+    maxAngAccel: base.constraints.maxAngAccel,
+    name: collectionSpans.length > 1 ? `FUEL collection ${collectionSpans.indexOf(span) + 1}` : "FUEL collection",
+  }));
+  if (intake) {
+    configureCollectionHeading(path, collectionSpans, intake.directionDeg);
+  }
+  if (finishHeadingDeg !== undefined && path.waypoints.length > 1) {
+    const finishStart = collectionSpans.length
+      ? Math.min(path.waypoints.length - 2, Math.max(...collectionSpans.map((span) => span.endSegmentIndex)) + 1)
+      : 0;
+    path.waypoints[finishStart].thetaOn = true;
+    for (let segment = finishStart; segment < path.waypoints.length - 1; segment += 1) path.waypoints[segment].segmentHeadingMode = "targets";
+  }
