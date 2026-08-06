@@ -19,9 +19,9 @@
     return h('div', { className: 'rt-params' },
       list.length === 0 && h('div', { className: 'rt-param-empty' }, 'No parameters passed to the function.'),
       list.map((p, i) => h('div', { className: 'rt-param-row', key: i },
-        h('input', { className: 'textinput k', value: p.k, placeholder: 'key', spellCheck: false, onChange: (e) => setRow(i, { k: e.target.value }) }),
-        h('input', { className: 'textinput v', value: p.v, placeholder: 'value', spellCheck: false, onChange: (e) => setRow(i, { v: e.target.value }) }),
-        h('button', { className: 'rt-param-del', type: 'button', title: 'Remove', onClick: () => del(i) }, h(Icon, { name: 'x', size: 13 })))),
+        h('input', { className: 'textinput k', 'aria-label': 'Parameter ' + (i + 1) + ' key', value: p.k, placeholder: 'key', spellCheck: false, onChange: (e) => setRow(i, { k: e.target.value }) }),
+        h('input', { className: 'textinput v', 'aria-label': 'Parameter ' + (i + 1) + ' value', value: p.v, placeholder: 'value', spellCheck: false, onChange: (e) => setRow(i, { v: e.target.value }) }),
+        h('button', { className: 'rt-param-del', type: 'button', title: 'Remove', 'aria-label': 'Remove parameter ' + (i + 1), onClick: () => del(i) }, h(Icon, { name: 'x', size: 13 })))),
       h('button', { className: 'rt-param-add', type: 'button', onClick: add }, h(Icon, { name: 'plus', size: 13 }), 'Add parameter'));
   }
 
@@ -33,12 +33,12 @@
     let icon = 'dot', title = '', tag = null, accent = 'var(--accent)', body = null;
 
     if (node.type === 'path') {
-      const doc = paths[node.ref];
+      const doc = paths.find((path) => path.id === node.ref);
       icon = 'route'; title = 'Path'; tag = 'step';
       body = h(React.Fragment, null,
         FieldLabel('Bound path'),
-        h('select', { className: 'selectinput', value: node.ref, onChange: (e) => set({ ref: +e.target.value }) },
-          paths.map((p, i) => h('option', { key: i, value: i }, p.name))),
+        h('select', { className: 'selectinput', 'aria-label': 'Routine path', value: node.ref, onChange: (e) => set({ ref: e.target.value }) },
+          paths.map((p) => h('option', { key: p.id, value: p.id }, p.name))),
         seg && h('div', { className: 'rt-stat' },
           h('div', { className: 'rt-stat-i' }, h('span', { className: 'rt-stat-v' }, fmt(seg.t1 - seg.t0)), h('span', { className: 'rt-stat-k' }, 'duration')),
           h('div', { className: 'rt-stat-i' }, h('span', { className: 'rt-stat-v' }, seg.deriv.sample.length.toFixed(2) + ' m'), h('span', { className: 'rt-stat-k' }, 'distance')),
