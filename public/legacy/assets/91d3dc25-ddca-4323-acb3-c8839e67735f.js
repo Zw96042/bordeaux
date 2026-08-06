@@ -133,51 +133,51 @@
     }
     const sample = lvFinishSample(lvDensify(pts), raw.length - 1);
     sample.wpIdx = lvNearestWaypointIndices(raw, sample.pts); return sample;
-          const speed2 = d.x * d.x + d.y * d.y, cross = d.x * dd.y - d.y * dd.x;
-          head = Math.atan2(d.y, d.x); curv = speed2 > 1e-9 ? Math.abs(cross) / Math.pow(speed2, 1.5) : 0;
-        }
-        pts.push({ x: pos.x, y: pos.y, seg: i, t, heading: head, curv, s: 0 });
-      }
-    }
-
-    // Blend curvature across adjacent clothoid joints. Position/heading already use a shared
-    // tangent; this removes artificial velocity dips from independent curvature estimates.
-    for (let j = 1; j < segs; j++) {
-      if (!clothoidSegments.has(j - 1) || !clothoidSegments.has(j)) continue;
-      const center = pts.findIndex((p) => p.seg === j - 1 && p.t > 1 - 1e-9);
-      if (center < 0) continue;
-      const next = Math.min(pts.length - 1, center + 1);
-      const jointK = 0.5 * ((pts[center].curv || 0) + (pts[next].curv || 0));
-      const span = Math.max(2, Math.round(steps * 0.16));
-      for (let off = -span; off <= span; off++) {
-        const idx = center + off;
-        if (idx < 0 || idx >= pts.length) continue;
-        if (!clothoidSegments.has(pts[idx].seg)) continue;
-        const u = 1 - Math.min(1, Math.abs(off) / span);
-        const w = u * u * (3 - 2 * u);
-        pts[idx].curv = lerp(pts[idx].curv || 0, jointK, w);
-      }
-    }
-
-    // arclength
-    let s = 0;
-    for (let i = 1; i < pts.length; i++) {
-      const dx = pts[i].x - pts[i - 1].x, dy = pts[i].y - pts[i - 1].y;
-      s += Math.hypot(dx, dy);
-      pts[i].s = s;
-    }
-    return { pts, length: s, segs };
   }
 
-  // ---- trapezoidal velocity profile with curvature (centripetal) limit ----
-  // constraints: {maxVel, maxAccel, maxAngVel, maxAngAccel}, start/end vel
-  function profile(pts, c, startV = 0, endV = 0, opts = {}) {
-    const n = pts.length;
-    if (n < 2) return { v: [], t: [], totalTime: 0, holds: [], rotLimited: [] };
-    const vmax = opts.vmax != null ? Math.min(c.maxVel, opts.vmax) : c.maxVel;
-    const stopSet = new Set(opts.stopIdx || []);
-    const v = new Array(n).fill(vmax);
-    // curvature cap: v <= sqrt(aLat / k)
+  function lvUnit(v) { const n = lvMag(v); if (n <= LV_EPS) throw new Error('LabVIEW clothoid waypoints must not overlap'); return lvScale(v, 1 / n); }
+  function lvCross(a, b) { return a.x * b.y - a.y * b.x; }
+  function lvDot(a, b) { return a.x * b.x + a.y * b.y; }
+  function lvRotate(v, a) { const c = Math.cos(a), s = Math.sin(a); return { x: c * v.x - s * v.y, y: s * v.x + c * v.y }; }
+  function lvReflect(v, axisAngle) { const axis = { x: Math.cos(axisAngle), y: Math.sin(axisAngle) }, p = 2 * lvDot(v, axis); return { x: p * axis.x - v.x, y: p * axis.y - v.y }; }
+  function lvCanonicalBlend(turn, radius) {
+    const sign = Math.sign(turn), absTurn = Math.abs(turn), spiralTurn = Math.min(absTurn, Math.PI / 2), halfHeading = spiralTurn / 2;
+    const tauMax = Math.sqrt(halfHeading), sigma = 2 * radius * tauMax, extraArc = absTurn - spiralTurn;
+    const entry = [{ x: 0, y: 0, heading: 0, curvature: 0 }]; let tau = 0, x = 0, y = 0;
+    while (tau < tauMax - Number.EPSILON) {
+      const step = Math.min(LV_TAU_STEP, tauMax - tau), heading = sign * tau * tau;
+      x += sigma * Math.cos(heading) * step; y += sigma * Math.sin(heading) * step; tau += step;
+      entry.push({ x, y, heading: sign * tau * tau, curvature: sign * 2 * tau / sigma });
+    }
+    const local = entry.slice(); let exitStart = entry[entry.length - 1];
+    if (extraArc > 1e-6) {
+      const startHeading = sign * halfHeading, normal = { x: -Math.sin(startHeading) * sign, y: Math.cos(startHeading) * sign };
+      const center = { x: exitStart.x + normal.x * radius, y: exitStart.y + normal.y * radius }, radialStart = Math.atan2(exitStart.y - center.y, exitStart.x - center.x);
+      const count = Math.max(1, Math.ceil(extraArc / Math.max(1e-6, sigma * LV_TAU_STEP / radius)));
+      for (let i = 1; i <= count; i++) { const swept = extraArc * i / count, radial = radialStart + sign * swept; exitStart = { x: center.x + radius * Math.cos(radial), y: center.y + radius * Math.sin(radial), heading: sign * (halfHeading + swept), curvature: sign / radius }; local.push(exitStart); }
+    }
+    let current = exitStart;
+    for (let i = entry.length - 1; i > 0; i--) { const reflected = lvReflect(lvSub(entry[i], entry[i - 1]), turn / 2); current = { x: current.x + reflected.x, y: current.y + reflected.y, heading: turn - entry[i - 1].heading, curvature: entry[i - 1].curvature }; local.push(current); }
+    return local;
+  }
+  function lvCorner(wps, i, radius) {
+    const incoming = lvUnit(lvSub(wps[i], wps[i - 1])), outgoing = lvUnit(lvSub(wps[i + 1], wps[i]));
+    const turn = Math.atan2(lvCross(incoming, outgoing), lvDot(incoming, outgoing)); if (Math.abs(turn) <= 1e-6) return null;
+    if (Math.abs(Math.PI - Math.abs(turn)) <= 1e-6) throw new Error('LabVIEW clothoid cannot reverse 180 degrees');
+    const local = lvCanonicalBlend(turn, radius), end = local[local.length - 1], exitTrim = end.y / Math.sin(turn), entryTrim = end.x - exitTrim * Math.cos(turn);
+    return { incoming, outgoing, incomingHeading: Math.atan2(incoming.y, incoming.x), local, entryTrim, exitTrim, scale: 1 };
+  }
+  function lvClothoidPiece(wps, radius) {
+    wps = wps.filter((w, i) => i === 0 || lvMag(lvSub(w, wps[i - 1])) > LV_EPS);
+    if (wps.length < 2) return wps.length ? [{ x: wps[0].x, y: wps[0].y, heading: 0, curvature: 0 }] : [];
+    const recipes = wps.map((_, i) => i > 0 && i < wps.length - 1 ? lvCorner(wps, i, radius) : null);
+    for (let i = 0; i < wps.length - 1; i++) {
+      const edge = lvMag(lvSub(wps[i + 1], wps[i])), left = i > 0 ? recipes[i] : null, right = i + 1 < wps.length - 1 ? recipes[i + 1] : null;
+      const required = (left ? left.exitTrim * left.scale : 0) + (right ? right.entryTrim * right.scale : 0);
+      if (required > edge && required > LV_EPS) { const reduction = Math.max(0, (edge - LV_EPS) / required); if (left) left.scale *= reduction; if (right) right.scale *= reduction; }
+    }
+    const out = [];
+    const append = (p) => { const prev = out[out.length - 1]; if (!prev || lvMag(lvSub(p, prev)) > LV_EPS) out.push(p); };
     const aLat = Math.max(0.1, c.maxAccel);
     for (let i = 0; i < n; i++) {
       const k = pts[i].curv;
