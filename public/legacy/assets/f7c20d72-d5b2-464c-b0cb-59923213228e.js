@@ -223,51 +223,51 @@
       let selectedIndex = role === 'ct' ? index >> 1 : index;
       if (kind === 'seg' && visitFocusRef.current) {
         const focused = visitFocusRef.current.candidates[visitFocusRef.current.index];
-          let dd = ''; let started = false;
-          for (let k = 0; k < pts.length; k++) { const f = pts[k].s / totalS; if (f >= lo && f <= hi) { const q = W2P(pts[k]); dd += (started ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); started = true; } }
-          if (dd) els.push(h('path', { key: 'rb' + ri, d: dd, fill: 'none', stroke: isSel ? accent : '#caa23a', strokeOpacity: isSel ? 0.5 : 0.32, strokeWidth: P(12), strokeLinecap: 'round', strokeLinejoin: 'round', style: { pointerEvents: 'none' } }));
-        });
-        let dCase = `M ${W2P(pts[0]).x} ${W2P(pts[0]).y}`;
-        for (let i = 1; i < pts.length; i++) { const q = W2P(pts[i]); dCase += ` L ${q.x} ${q.y}`; }
-        els.push(h('path', { key: 'case', d: dCase, fill: 'none', stroke: '#05060a', strokeOpacity: 0.75, strokeWidth: P(5), strokeLinecap: 'round', strokeLinejoin: 'round' }));
-        const segEls = [];
-        const stride = Math.max(1, Math.floor(pts.length / 200));
-        for (let i = 0; i + stride < pts.length; i += stride) {
-          const a = W2P(pts[i]), b = W2P(pts[i + stride]);
-          segEls.push(h('line', { key: 's' + i, x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: colAt(i), strokeWidth: P(2.6), strokeLinecap: 'butt' }));
-        }
-        els.push(h('g', { key: 'pathbody' }, segEls));
-        // selected-segment highlight (memo §3)
-        if (sel.kind === 'seg' && derived.wpFrac && derived.wpFrac.length > sel.idx + 1) {
-          const lo = derived.wpFrac[sel.idx], hi = derived.wpFrac[sel.idx + 1];
-          let sd = '', st = false;
-          for (let k = 0; k < pts.length; k++) { const f = pts[k].s / totalS; if (f >= lo - 1e-4 && f <= hi + 1e-4) { const q = W2P(pts[k]); sd += (st ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); st = true; } }
-          if (sd) els.push(h('path', { key: 'segsel', d: sd, fill: 'none', stroke: accent, strokeWidth: P(5.5), strokeOpacity: 0.92, strokeLinecap: 'round', strokeLinejoin: 'round', style: { pointerEvents: 'none' } }));
-        }
-        // per-segment hit paths — click selects the segment; alt-click / waypoint-tool inserts (memo §3)
-        if (derived.wpFrac) {
-          for (let si = 0; si < doc.waypoints.length - 1; si++) {
-            const lo = derived.wpFrac[si], hi = derived.wpFrac[si + 1];
-            let sd = '', st = false;
-            for (let k = 0; k < pts.length; k++) { const f = pts[k].s / totalS; if (f >= lo - 1e-4 && f <= hi + 1e-4) { const q = W2P(pts[k]); sd += (st ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); st = true; } }
-            if (sd) els.push(h('path', { key: 'seghit' + si, d: sd, fill: 'none', stroke: 'transparent', strokeWidth: P(18), strokeLinecap: 'round', 'data-role': 'seg', 'data-idx': si, style: { cursor: tool === 'waypoint' ? 'copy' : 'pointer' } }));
-          }
-        }
-        // range handles + velocity tag (above the path)
-        ranges.forEach((rg, ri) => {
-          const isSel = sel.kind === 'cr' && sel.idx === ri;
-          const col = isSel ? accent : '#caa23a';
-          [['f0', 'rs'], ['f1', 're']].forEach(([fk, role]) => {
-            const pf = window.PM.pointAtFraction(rg[fk], pts); const c = W2P(pf);
-            els.push(h('g', { key: role + ri, transform: `translate(${c.x} ${c.y})`, style: { cursor: 'ew-resize' } },
-              h('circle', { r: P(7), fill: '#14161a', stroke: col, strokeWidth: P(2), 'data-role': role, 'data-idx': ri }),
-              h('circle', { r: P(2.5), fill: col, 'data-role': role, 'data-idx': ri })));
-          });
-          const mid = window.PM.pointAtFraction((rg.f0 + rg.f1) / 2, pts); const mc = W2P(mid);
-          els.push(h('text', { key: 'rl' + ri, x: mc.x, y: mc.y - P(15), fill: col, fontSize: P(13), fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, textAnchor: 'middle', style: { pointerEvents: 'none' } }, '\u2264' + rg.maxVel.toFixed(1) + ' m/s'));
-        });
+        if (focused && Number.isInteger(focused.seg)) selectedIndex = focused.seg;
       }
+      return { kind, selectedIndex, pressKey: kind + ':' + selectedIndex };
+    };
 
+    const inspectTarget = (eventTarget) => {
+      const item = inspectIdentity(eventTarget);
+      if (!item) return false;
+      actions.select(item.kind, item.selectedIndex);
+      if (actions.openInspector) actions.openInspector();
+      return true;
+    };
+
+    const onDown = (e) => {
+      if (e.button !== 0 && e.button !== 1) return;
+      e.preventDefault();
+      const t = e.target;
+      const role = t.getAttribute && t.getAttribute('data-role');
+      try { svgRef.current.setPointerCapture(e.pointerId); } catch (_) {}
+      if (routine) {
+        if (role === 'rpath') { const id = t.getAttribute('data-idx'); if (actions.selectNode) actions.selectNode(id); drag.current = null; return; }
+        drag.current = { role: 'bg', start: { cx: e.clientX, cy: e.clientY }, vb0: { ...view }, moved: false, mid: e.button === 1 };
+        return;
+      }
+      const world = clientToWorld(e.clientX, e.clientY);
+      if (e.button === 0 && e.shiftKey) {
+        const idx = parseInt(t.getAttribute && t.getAttribute('data-idx'), 10);
+        let removed = false;
+        if (role === 'wp' && doc.waypoints.length > 2 && actions.delWp) { actions.delWp(idx); removed = true; }
+        else if ((role === 'rt' || role === 'rth') && actions.delTarget) { actions.delTarget(idx); removed = true; }
+        else if (role === 'em' && actions.delMarker) { actions.delMarker(idx); removed = true; }
+        else if ((role === 'cr' || role === 'rs' || role === 're') && actions.delRange) { actions.delRange(idx); removed = true; }
+        if (removed) { drag.current = null; return; }
+      }
+      const inspectItem = e.button === 0 ? inspectIdentity(t) : null;
+      const pendingInspect = lastInspectPress.current;
+      const candidateInspectDouble = inspectItem && pendingInspect.key === inspectItem.pressKey
+        && performance.now() - pendingInspect.at <= 550;
+      if (!inspectItem) lastInspectPress.current = { key: null, at: 0 };
+      if (e.button === 0 && tool === 'waypoint' && !e.altKey) {
+        drag.current = { role: 'bg', insertWaypoint: false, start: { cx: e.clientX, cy: e.clientY }, vb0: { ...view }, world, moved: false, mid: false };
+        return;
+      }
+      if (role === 'head') {
+        const idx = parseInt(t.getAttribute('data-idx'), 10);
       // precise heading helper (waypoints) — draggable when idx is supplied (memo §7)
       const headArrow = (cx, cy, deg, col, len, idx) => {
         const rot = flip ? deg + 180 : deg;
