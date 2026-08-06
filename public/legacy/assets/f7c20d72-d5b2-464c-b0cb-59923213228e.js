@@ -133,51 +133,51 @@
         y: waypoint.y,
         f: Number.isFinite(derived.wpFrac[index]) ? derived.wpFrac[index] : 0,
         seg: Math.min(index, Math.max(0, doc.waypoints.length - 2)),
-          setSnap(label ? { idx: d.idx, label } : null);
-          actions.setWaypointHeading(d.idx, deg);
+        wp: index,
+        distance: Math.hypot(waypoint.x - world.x, waypoint.y - world.y),
+      })).filter((candidate) => candidate.distance <= visitTolerance)
+        .sort((a, b) => a.wp - b.wp);
+      if (candidates.length < 2) return candidates[0] || null;
+      const previous = visitFocusRef.current;
+      const sameConflict = previous && previous.candidates.length === candidates.length
+        && previous.candidates.every((candidate, index) => candidate.wp === candidates[index].wp);
+      let index = Number.isInteger(preferredIndex) ? candidates.findIndex((candidate) => candidate.wp === preferredIndex) : -1;
+      if (index < 0) {
+        index = 0;
+        for (let i = 1; i < candidates.length; i++) if (candidates[i].distance < candidates[index].distance) index = i;
+      }
+      if (cycle && sameConflict) index = (previous.index + 1) % candidates.length;
+      const next = { candidates, index, anchor: { x: world.x, y: world.y } };
+      updateVisitFocus(next);
+      return candidates[index];
+    }, [derived.wpFrac, doc.waypoints, visitTolerance, updateVisitFocus]);
+
+    useEffect(() => {
+      if (!pts.length) { updateVisitFocus(null); return; }
+      let fraction = null;
+      if (sel.kind === 'seg' && derived.wpFrac && derived.wpFrac.length > sel.idx + 1) fraction = (derived.wpFrac[sel.idx] + derived.wpFrac[sel.idx + 1]) / 2;
+      else if (sel.kind === 'wp' && derived.wpFrac && Number.isFinite(derived.wpFrac[sel.idx])) fraction = derived.wpFrac[sel.idx];
+      else if (sel.kind === 'rt' && doc.targets[sel.idx]) fraction = window.PM.featureFraction(doc.targets[sel.idx], derived.sample);
+      else if (sel.kind === 'em' && doc.markers[sel.idx]) fraction = window.PM.featureFraction(doc.markers[sel.idx], derived.sample);
+      else if (sel.kind === 'cr' && doc.ranges && doc.ranges[sel.idx]) {
+        const range = (derived.effRanges && derived.effRanges[sel.idx]) || doc.ranges[sel.idx];
+        fraction = (range.f0 + range.f1) / 2;
+      }
+      if (!Number.isFinite(fraction)) return;
+      const current = visitFocusRef.current && visitFocusRef.current.candidates[visitFocusRef.current.index];
+      if (sel.kind === 'wp' && doc.waypoints[sel.idx]) {
+        const waypoint = doc.waypoints[sel.idx];
+        const coincidentCount = doc.waypoints.reduce((count, candidate) => count + Number(Math.hypot(candidate.x - waypoint.x, candidate.y - waypoint.y) <= visitTolerance), 0);
+        if (coincidentCount > 1) {
+          if (current && current.wp === sel.idx) return;
+          resolveWaypointVisit(waypoint, false, sel.idx);
+          return;
         }
-        d.moved = true; return;
       }
-      d.moved = true;
-      const p = clampWorld(world);
-      if (d.role === 'wp') actions.moveWaypoint(d.idx, p);
-      else if (d.role === 'ct') actions.moveHandle(d.idx >> 1, d.idx & 1, p);
-      else if (d.role === 'rt') actions.moveTargetTo(d.idx, world);
-      else if (d.role === 'em') actions.moveMarkerTo(d.idx, world);
-      else if (d.role === 'rs') actions.moveRangeHandle(d.idx, 0, window.PM.nearestFraction(world.x, world.y, pts));
-      else if (d.role === 're') actions.moveRangeHandle(d.idx, 1, window.PM.nearestFraction(world.x, world.y, pts));
-    };
-
-    const onUp = (e) => {
-      const d = drag.current; drag.current = null;
-      setSnap(null);
-      try { svgRef.current.releasePointerCapture(e.pointerId); } catch (_) {}
-      if (!d) return;
-      if (d.role === 'newrange') {
-        setPreview(null);
-        const f0 = d.f0, f1 = d.f1;
-        if (Math.abs(f1 - f0) >= 0.015) actions.addRange(f0, f1);
-        return;
-      }
-      if (d.role === 'bg' && !d.moved && !d.mid) {
-        if (tool === 'waypoint') actions.addWaypoint(d.world);
-        else if (tool === 'rotation') actions.addTargetAt(d.world);
-        else if (tool === 'marker') actions.addMarkerAt(d.world);
-        else if (tool === 'select') { if (d.onPath) actions.addWaypoint(d.world); else actions.select(null, -1); }
-      }
-    };
-
-    const onWheel = (e) => {
-      e.preventDefault();
-      const svg = svgRef.current; const ctm = svg.getScreenCTM();
-      const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
-      const u = pt.matrixTransform(ctm.inverse());
-      const factor = e.deltaY > 0 ? 1.12 : 1 / 1.12;
-      let nw = view.w * factor;
-      nw = Math.max(IMG_W * 0.12, Math.min(IMG_W * 1.6, nw)); const nh = nw * (IMG_H / IMG_W);
-      const k = nw / view.w;
-      setView({ x: u.x - (u.x - view.x) * k, y: u.y - (u.y - view.y) * k, w: nw, h: nh });
-    };
+      if (sel.kind === 'seg' && current && current.seg === sel.idx) return;
+      if (current && !Number.isInteger(current.wp) && Math.abs(current.f - fraction) <= 0.015) return;
+      const point = window.PM.pointAtFraction(fraction, pts);
+      resolveVisit(point, { nearFraction: fraction, preserve: false });
 
     const onDbl = (e) => {
       if (routine) return;
