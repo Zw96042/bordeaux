@@ -223,6 +223,7 @@
   function append(routine, node) { const r = _clone(routine); r.nodes.push(node); return r; }
   // move a node up/down within its own containing array
   function move(routine, id, dir) {
+    const r = _clone(routine);
     const mv = (arr) => {
       const i = arr.findIndex((n) => n.id === id);
       if (i >= 0) { const j = i + dir; if (j < 0 || j >= arr.length) return true; const t = arr[i]; arr[i] = arr[j]; arr[j] = t; return true; }
@@ -252,4 +253,3 @@
   }
   // total step count inside a branch (recursive)
   function branchCount(nodes) { let c = 0; walk(nodes || [], () => c++); return c; }
-})();
