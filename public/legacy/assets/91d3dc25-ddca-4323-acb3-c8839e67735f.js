@@ -1262,3 +1262,54 @@
     const mtr = metrics(pts, prof, anchors, mode);
     const checks = analyze(pts, prof, mtr, robot || {}, {
       constraints: doc.constraints,
+      plannerId,
+      minTurnRadiusM: labview.minTurnRadiusM || 0.5,
+    });
+    doc.waypoints.slice(0, -1).forEach((w, segment) => {
+      if (w.segmentHeadingMode !== 'lookAt' || !w.segmentLookAt) return;
+      let nearest = Infinity;
+      for (let i = wpIdx[segment]; i <= wpIdx[segment + 1] && i < pts.length; i++) nearest = Math.min(nearest, Math.hypot(pts[i].x - w.segmentLookAt.x, pts[i].y - w.segmentLookAt.y));
+      if (nearest < 0.05) checks.push({ f: wpFrac[segment], kind: 'lookAt', level: 'error', text: 'Tracked field point lies on the driven segment' });
+    });
+    if (invalidJiggle) checks.push({ f: 1, kind: 'jiggle', level: 'error', text: 'Jiggle directions must be unique and stay on the field' });
+    if (unsupportedJiggle) checks.push({ f: 1, kind: 'jiggle', level: 'error', text: 'Arbitrary-direction jiggle requires swerve drive' });
+    if (prof.headingCatchupFailed) checks.push({ f: 1, kind: 'rotation', level: 'error', text: 'Final heading cannot settle within the trajectory sample limit' });
+    // Rotation limiting is expected planner behavior, so report it as a note.
+    if (prof.rotLimited) {
+      const rl = prof.rotLimited;
+      let run = -1, longest = null;
+      const consider = (a, b) => { if (b - a > 3 && (!longest || b - a > longest[1] - longest[0])) longest = [a, b]; };
+      for (let i = 0; i < rl.length; i++) { if (rl[i]) { if (run < 0) run = i; } else if (run >= 0) { consider(run, i - 1); run = -1; } }
+      if (run >= 0) consider(run, rl.length - 1);
+      if (longest) {
+        const mid = Math.floor((longest[0] + longest[1]) / 2);
+        checks.push({ f: pts[mid].s / total, kind: 'performance', level: 'note', text: 'Rotation limits speed through this stretch' });
+      }
+    }
+    checks.forEach((check) => {
+      let seg = 0;
+      for (let i = 0; i < wpFrac.length - 1; i++) { if (check.f >= wpFrac[i] - 1e-4) seg = i; }
+      check.seg = Math.max(0, Math.min(doc.waypoints.length - 2, seg));
+    });
+    return { sample: smp, prof, totalDistance: smp.length + (prof.actionDistance || 0), anchors, metrics: mtr, checks, wpFrac, wpIdx, mode, effRanges, headingMode, rev: !!doc.driveBackward };
+  }
+
+  function jigglePositions(anchor, baseRad, options, bounds = { w: 17.548, h: 8.052 }) {
+    const distance = Number(options.distanceM != null ? options.distanceM : options.distance), strokes = Math.round(Number(options.strokes)), startDeg = Number(options.startDeg), stepDeg = Number(options.stepDeg);
+    if (!(distance >= 0.03) || strokes < 2 || strokes > 12 || !Number.isFinite(startDeg + stepDeg)) return null;
+    const directions = new Set(), positions = [];
+    for (let stroke = 0; stroke < strokes; stroke++) {
+      const relativeDeg = startDeg + stepDeg * stroke;
+      const key = ((relativeDeg % 360) + 360) % 360;
+      const roundedKey = Math.round(key * 1000) / 1000;
+      if (directions.has(roundedKey)) return null;
+      directions.add(roundedKey);
+      const angle = baseRad + relativeDeg * D2R;
+      const point = { x: anchor.x + Math.cos(angle) * distance, y: anchor.y + Math.sin(angle) * distance };
+      if (point.x < 0 || point.x > bounds.w || point.y < 0 || point.y > bounds.h) return null;
+      positions.push(point, { x: anchor.x, y: anchor.y });
+    }
+    return positions;
+  }
+  window.PM = { bez, bezD, splitBezier, nearestPointOnSegment, sample, profile, poseAtTime, headingAt, metrics, analyze, metricColor, metricGradient, METRICS, SEGTYPES, buildAnchors, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, angLerp, D2R, R2D, lerp, derivePath, jigglePositions, effectiveRanges, featureFraction, remapWaypointRange, waypointFracs };
+})();
