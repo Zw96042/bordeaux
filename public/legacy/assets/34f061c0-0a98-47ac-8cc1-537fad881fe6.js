@@ -403,43 +403,43 @@
       if (!Number.isInteger(segmentHint) && derived.wpFrac && derived.wpFrac.length > 1) {
         for (let i = 0; i < derived.wpFrac.length - 1; i++) {
           if (f >= derived.wpFrac[i] - 1e-6) segment = i;
-      page === 'robot'
-        ? h(window.RobotPage, { robot, setRobot, accent })
-        : page === 'auto'
-        ? h('div', { className: 'stage stage-auto' },
-            h('div', { className: 'rail rail-l' },
-              h(window.RoutinePanel, { routine, run, paths: project.paths, selId: routineSel, onSelect: setRoutineSel, acq, time: routineTime, running: routineRunning })),
-            h('div', { className: 'fieldcol' },
-              h(window.FieldView, { doc, derived, sel: { kind: null, idx: -1 }, tool: 'select', view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, playTime: 0, actions: autoFieldActions, onSelPos: () => {}, routine: routineOverlay, routinePose }),
-              h(window.Panels.RoutineLegend, { run, time: routineTime, running: routineRunning }),
-              h(window.RoutineTransport, { run, time: routineTime, playing: routinePlaying, controls: routineControls, running: routineRunning, outcomes: routineOutcomes }),
-              h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit })),
-            h('div', { className: 'rail rail-r' + (selNode ? '' : ' collapsed') },
-              selNode && h(window.StepInspector, { node: selNode, paths: project.paths, acq, run })))
-        : h('div', { className: 'stage stage-plan' },
-            h('div', { className: 'rail rail-l' + (outlineOpen ? '' : ' collapsed') },
-              h(window.Panels.Outline, { open: outlineOpen, setOpen: setOutlineOpen, doc, sel, actions: inspActions, secOpen, setSecOpen, robot })),
-            h('div', { className: 'fieldcol' },
-              h(window.Panels.ToolRail, { tool, setTool }),
-              h(window.FieldView, { doc, derived, sel, tool, view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, playTime, playing, actions: fieldActions, onSelPos }),
-              tool !== 'select' && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
-              h(window.Panels.ConstraintBar, { c: doc.constraints, robot, active: !sel.kind, onOpen: () => select(null, -1) }),
-              h(window.Panels.Overlay, { metric, setMetric, derived, diagOpen, onToggleDiag: () => setDiagOpen((o) => !o), plannerId }),
-              diagOpen && h(window.Panels.Diagnostics, { derived, doc, accent, onClose: () => setDiagOpen(false), onPick: pickWarning, onFix: applyFix }),
-              h(window.Panels.Transport, { derived, metric, playTime, playing, setPlaying, seek, restart, graphOpen, setGraphOpen }),
-              h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit })),
-            h('div', { className: 'rail rail-r' },
-              h(window.ContextInspector, { doc, sel, derived, actions: inspActions, accent, drive: robot.drive, robot, onClose: () => select(null, -1) })),
-            headMenu && h(window.UI.ContextMenu, { x: headMenu.x, y: headMenu.y, items: headMenu.items, onClose: () => setHeadMenu(null) })));
-  }
+        }
+      }
+      segment = Math.max(0, Math.min(oldCount - 2, segment));
+      const insertAt = segment + 1;
+      const selectedT = selectedVisit && Number.isFinite(selectedVisit.t)
+        ? selectedVisit.t
+        : (derived.wpFrac && derived.wpFrac.length > segment + 1
+          ? (f - derived.wpFrac[segment]) / Math.max(1e-9, derived.wpFrac[segment + 1] - derived.wpFrac[segment])
+          : null);
+      const nearest = onPath && selectedVisit && selectedVisit.seg === segment && Number.isFinite(selectedVisit.x) && Number.isFinite(selectedVisit.y)
+        ? { x: selectedVisit.x, y: selectedVisit.y, t: selectedT, heading: selectedVisit.heading || 0 }
+        : (onPath && pts.length > 1 ? window.PM.nearestPointOnSegment(p, pts, segment) : null);
+      const projected = nearest || p;
+      const originalType = (wps[segment] && wps[segment].segType) || 'bezier';
+      const nw = { x: projected.x, y: projected.y, linked: true, thetaOn: false, theta: 0, stop: false, segType: originalType };
+      if (wps[segment] && wps[segment].segmentHeadingMode) nw.segmentHeadingMode = wps[segment].segmentHeadingMode;
+      if (wps[segment] && wps[segment].segmentLookAt) nw.segmentLookAt = { ...wps[segment].segmentLookAt };
+      let previewRequired = false;
 
-  function toolHint(tool) {
-    if (tool === 'waypoint') return 'Click the field to place a <b>waypoint</b> \u00b7 click the path to insert one between';
-    if (tool === 'rotation') return 'Click the path to set a <b>rotation target</b>';
-    if (tool === 'marker') return 'Click the path to place an <b>event marker</b>';
-    if (tool === 'range') return 'Drag along the path to define a <b>constraint range</b> \u00b7 then edit its limits';
-    return '';
-  }
+      // The original cubic planners can be split exactly with de Casteljau,
+      // preserving the authored curve instead of reshaping both neighboring spans.
+      if (onPath && originalType === 'bezier' && (plannerId === 'profiledSpline' || plannerId === 'optimizedTrajectory')) {
+        const a = wps[segment], b = wps[segment + 1], t = nearest && Number.isFinite(nearest.t) ? Math.max(0.001, Math.min(0.999, nearest.t)) : 0.5;
+        if (a && b && a.nextC && b.prevC) {
+          const split = window.PM.splitBezier(a, a.nextC, b.prevC, b, t);
+          nw.x = split.point.x; nw.y = split.point.y; nw.prevC = split.left[2]; nw.nextC = split.right[1];
+          a.nextC = split.left[1]; b.prevC = split.right[2];
+        }
+      } else if (onPath && (originalType === 'arc' || originalType === 'clothoid') && nearest) {
+        // These segment solvers are endpoint/tangent based. Seed both sides with
+        // the measured tangent, then require a preview because adding the joint
+        // can make the solver choose a different valid construction.
+        const a = wps[segment], b = wps[segment + 1];
+        const handle = Math.max(0.15, Math.min(Math.hypot(nw.x - a.x, nw.y - a.y), Math.hypot(b.x - nw.x, b.y - nw.y)) / 3);
+        nw.prevC = { x: nw.x - Math.cos(nearest.heading) * handle, y: nw.y - Math.sin(nearest.heading) * handle };
+        nw.nextC = { x: nw.x + Math.cos(nearest.heading) * handle, y: nw.y + Math.sin(nearest.heading) * handle };
+        previewRequired = true;
+      }
 
-  ReactDOM.createRoot(document.getElementById('root')).render(h(App));
-})();
+      wps.splice(insertAt, 0, nw);
