@@ -1067,3 +1067,20 @@
             h(Num, { label: 'Max \u03b1', value: rg.maxAngAccel, unit: '\u00b0/s\u00b2', step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { maxAngAccel: v }) }))),
         h('label', { className: 'fieldlabel', htmlFor: 'constraint-range-label' }, 'Label'),
         h('input', { id: 'constraint-range-label', className: 'textinput', value: rg.name || '', placeholder: 'e.g. Reef approach', autoComplete: 'off', spellCheck: false, 'data-lpignore': 'true', 'data-1p-ignore': true, onChange: (e) => actions.setRange(sel.idx, { name: e.target.value }) }),
+        h('div', { className: 'chint' }, 'Drag either endpoint on the field or edit its locked position here. Where ranges overlap, the tightest limit wins.'),
+        h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delRange(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete range'));
+    } else {
+      return null;
+    }
+
+    return h('div', { className: 'ctxinsp' },
+      h('div', { className: 'ctxinsp-hd' },
+        h('span', { className: 'ctxinsp-ic' }, h(Icon, { name: icon, size: 15 })),
+        h('span', { className: 'ctxinsp-t', title }, title),
+        tag && h('span', { className: 'ctxinsp-tag' }, tag),
+        h('button', { className: 'ctxinsp-x', type: 'button', title: 'Hide inspector', 'aria-label': 'Hide inspector', onClick: onClose }, h(Icon, { name: 'x', size: 14 }))),
+      h('div', { className: 'ctxinsp-body' }, body));
+  }
+
+  window.ContextInspector = ContextInspector;
+})();
