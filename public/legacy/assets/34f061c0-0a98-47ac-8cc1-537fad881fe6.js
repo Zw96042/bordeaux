@@ -358,51 +358,51 @@
 
     const undo = useCallback(() => {
       const H = hist.current;
-    };
+      if (H.past.length) { H.future.push(clone(docRef.current)); writeDoc(H.past.pop()); force((x) => x + 1); return; }
+      const P = projectHist.current; if (!P.past.length) return;
+      P.future.push({ project: clone(project), activeIdx });
+      const previous = P.past.pop(); setProject(previous.project); setActiveIdx(previous.activeIdx); setSel({ kind: null, idx: -1 }); force((x) => x + 1);
+    }, [writeDoc, project, activeIdx]);
+    const redo = useCallback(() => {
+      const H = hist.current;
+      if (H.future.length) { H.past.push(clone(docRef.current)); writeDoc(H.future.pop()); force((x) => x + 1); return; }
+      const P = projectHist.current; if (!P.future.length) return;
+      P.past.push({ project: clone(project), activeIdx });
+      const next = P.future.pop(); setProject(next.project); setActiveIdx(next.activeIdx); setSel({ kind: null, idx: -1 }); force((x) => x + 1);
+    }, [writeDoc, project, activeIdx]);
 
-    // ---- keyboard ----
-    useEffect(() => {
-      const onKey = (e) => {
-        if (e.target.matches && e.target.matches('input,select,textarea')) return;
-        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
-        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
-        if (page !== 'plan') return;
-        if (e.key.indexOf('Arrow') === 0 && sel.kind) {
-          const base = e.shiftKey ? 0.25 : e.altKey ? 0.01 : 0.05;
-          const flip = alliance === 'red' ? -1 : 1;
-          let dx = 0, dy = 0;
-          if (e.key === 'ArrowUp') dy = base * flip; else if (e.key === 'ArrowDown') dy = -base * flip;
-          else if (e.key === 'ArrowRight') dx = base * flip; else if (e.key === 'ArrowLeft') dx = -base * flip;
-          if (dx || dy) {
-            e.preventDefault();
-            if (sel.kind === 'wp') nudgeWp(sel.idx, dx, dy);
-            else if (sel.kind === 'rt' || sel.kind === 'em') { const dir = (e.key === 'ArrowRight' || e.key === 'ArrowUp') ? 1 : -1; nudgeFrac(sel.kind, sel.idx, dir * (e.shiftKey ? 0.02 : 0.005)); }
-          }
-          return;
-        }
-        const k = e.key.toLowerCase();
-        if (k === 'v') setTool('select');
-        else if (k === 'w') setTool('waypoint');
-        else if (k === 'r') setTool('rotation');
-        else if (k === 'm') setTool('marker');
-        else if (k === 'c') setTool('range');
-        else if (k === 'g') setShowGrid((s) => !s);
-        else if (k === 'f') setView(FIT);
-        else if (e.key === ' ') { e.preventDefault(); const tot = totalRef.current; if (playRef.current >= tot - 1e-3) { setPlayTime(0); setPlaying(true); } else setPlaying((p) => !p); }
-        else if (e.key === 'Escape') { setTool('select'); setHeadMenu(null); setDiagOpen(false); select(null, -1); }
-        else if ((e.key === 'Backspace' || e.key === 'Delete') && sel.kind) {
-          if (sel.kind === 'wp') delWp(sel.idx); else if (sel.kind === 'rt') delTarget(sel.idx); else if (sel.kind === 'em') delMarker(sel.idx); else if (sel.kind === 'cr') delRange(sel.idx);
-        }
-      };
-      window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
-    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, nudgeWp, nudgeFrac, alliance]);
+    const select = useCallback((kind, idx) => setSel(kind ? { kind, idx } : { kind: null, idx: -1 }), []);
+    const onSelPos = useCallback((p) => setSelPos(p), []);
 
-    useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
-
-    const selNode = (page === 'auto' && routineSel) ? window.AUTO.findNode(routine, routineSel) : null;
-
-    return h('div', { className: 'app' },
-      h(window.Panels.Toolbar, { project, page, setPage, alliance, setAlliance, showGrid, setShowGrid, onUndo: undo, onRedo: redo, onExport, theme, setTheme, activeIdx, setActive, addPath, dupPath, delPath, renamePath, times, plannerId, setPlannerId }),
+    // ---- field actions ----
+    const moveWaypoint = useCallback((i, p) => mutate((d) => {
+      p = clampWorld(p);
+      const w = d.waypoints[i]; const dx = p.x - w.x, dy = p.y - w.y;
+      w.x = p.x; w.y = p.y; w.prevC.x += dx; w.prevC.y += dy; w.nextC.x += dx; w.nextC.y += dy; return d;
+    }), [mutate]);
+    const moveHandle = useCallback((i, which, p) => mutate((d) => {
+      const w = d.waypoints[i]; const key = which ? 'nextC' : 'prevC'; const other = which ? 'prevC' : 'nextC';
+      w[key] = { x: p.x, y: p.y };
+      if (!w.stop && i > 0 && i < d.waypoints.length - 1) {
+        const ol = Math.hypot(w[other].x - w.x, w[other].y - w.y);
+        const ang = Math.atan2(p.y - w.y, p.x - w.x) + Math.PI;
+        w[other] = { x: w.x + Math.cos(ang) * ol, y: w.y + Math.sin(ang) * ol };
+        w.linked = true; w.corner = false;
+      }
+      return d;
+    }), [mutate]);
+    const prepareWaypointInsertion = useCallback((rawPoint, segmentHint, onPath, selectedVisit) => {
+      const p = clampWorld(rawPoint);
+      const candidate = clone(docRef.current);
+      const wps = candidate.waypoints, oldCount = wps.length;
+      const pts = derived.sample.pts || [];
+      const f = selectedVisit && Number.isFinite(selectedVisit.f)
+        ? selectedVisit.f
+        : (pts.length > 1 ? window.PM.nearestFraction(p.x, p.y, pts) : 0.5);
+      let segment = Number.isInteger(segmentHint) ? segmentHint : (selectedVisit && Number.isInteger(selectedVisit.seg) ? selectedVisit.seg : 0);
+      if (!Number.isInteger(segmentHint) && derived.wpFrac && derived.wpFrac.length > 1) {
+        for (let i = 0; i < derived.wpFrac.length - 1; i++) {
+          if (f >= derived.wpFrac[i] - 1e-6) segment = i;
       page === 'robot'
         ? h(window.RobotPage, { robot, setRobot, accent })
         : page === 'auto'
