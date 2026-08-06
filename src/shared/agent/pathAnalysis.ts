@@ -178,3 +178,93 @@ function appObstacleBounds() {
     if (!item.bounds) return [];
     const first = officialToAppPoint({ x: item.bounds.xMin, y: item.bounds.yMin });
     const second = officialToAppPoint({ x: item.bounds.xMax, y: item.bounds.yMax });
+    return [{
+      id: item.id,
+      name: item.name,
+      min: { x: Math.min(first.x, second.x), y: Math.min(first.y, second.y) },
+      max: { x: Math.max(first.x, second.x), y: Math.max(first.y, second.y) },
+    }];
+  });
+}
+
+function portalBounds(portal: typeof REBUILT_2026_FIELD.crossingBarriers[number]["portals"][number]) {
+  const point = officialToAppPoint(portal.point);
+  const halfWidth = portal.widthM * FIELD_H / REBUILT_2026_FIELD_WIDTH_M / 2;
+  return { minY: point.y - halfWidth, maxY: point.y + halfWidth };
+}
+
+function portalsForSection(
+  barrier: typeof REBUILT_2026_FIELD.crossingBarriers[number],
+  section: { minY: number; maxY: number },
+) {
+  return barrier.portals.filter((portal) => {
+    const bounds = portalBounds(portal);
+    return section.minY >= bounds.minY - EPSILON && section.maxY <= bounds.maxY + EPSILON;
+  });
+}
+
+function crossingPose(previous: TrajectorySample, sample: TrajectorySample, x: number) {
+  const ratio = Math.max(0, Math.min(1, (x - previous.x) / (sample.x - previous.x)));
+  return {
+    x,
+    y: previous.y + (sample.y - previous.y) * ratio,
+    headingRad: interpolateHeading(previous.headingRad, sample.headingRad, ratio),
+    ratio,
+  };
+}
+
+function footprintSectionAt(project: BordeauxProject, pose: { x: number; y: number; headingRad: number }, x: number) {
+  return verticalLineSection(robotFootprintAt(project.robot, pose), x);
+}
+
+function barrierCrossingFindings(
+  project: BordeauxProject,
+  path: PathDoc,
+  samples: readonly TrajectorySample[],
+  robotHeightM?: number,
+  requiredTraversal: AnalyzePathOptions["requiredTraversal"] = "direct",
+): PathAnalysisFinding[] {
+  const effectiveHeightM = project.robot.heightM ?? robotHeightM;
+  const findings: PathAnalysisFinding[] = [];
+  let traversalUseCount = 0;
+  REBUILT_2026_FIELD.crossingBarriers.forEach((barrier) => {
+    const barrierX = officialToAppPoint({ x: barrier.x, y: 0 }).x;
+    const validatePortal = (portals: typeof barrier.portals, index: number, suffix: string, verb: "crosses" | "touches") => {
+      if (portals.length !== 1) {
+        findings.push({ id: `geometry:illegal-barrier-${verb}:${suffix}`, severity: "error", kind: "geometry", message: `The robot footprint ${verb} the ${barrier.allianceOwner} alliance barrier outside a typed TRENCH or BUMP corridor.`, sample: sampleReference(path, samples, index), sourcePath: `field.2026-rebuilt.crossingBarriers.${barrier.id}` });
+        return;
+      }
+      const portal = portals[0];
+      if (requiredTraversal !== "direct") {
+        const [requiredType, requiredSide] = requiredTraversal.split("-") as ["trench" | "bump", "table" | "away"];
+        if (portal.traversal !== requiredType || portal.side !== requiredSide) findings.push({ id: `geometry:wrong-traversal:${suffix}`, severity: "error", kind: "geometry", message: `This candidate uses ${portal.name} instead of the required ${requiredSide} ${requiredType.toUpperCase()} corridor.`, sample: sampleReference(path, samples, index), sourcePath: `field.2026-rebuilt.crossingBarriers.${barrier.id}` });
+      }
+      if (portal.traversal === "trench") {
+        if (effectiveHeightM === undefined) findings.push({ id: `geometry:trench-height-unverified:${suffix}`, severity: "warning", kind: "geometry", message: `Robot height is required to certify passage under ${portal.name}.`, sample: sampleReference(path, samples, index), sourcePath: `field.2026-rebuilt.crossingBarriers.${barrier.id}` });
+        else if (portal.clearanceHeightM !== undefined && effectiveHeightM > portal.clearanceHeightM + EPSILON) findings.push({ id: `geometry:trench-height:${suffix}`, severity: "error", kind: "geometry", measured: effectiveHeightM, limit: portal.clearanceHeightM, unit: "m", message: `Robot height ${effectiveHeightM.toFixed(3)} m exceeds the ${portal.clearanceHeightM.toFixed(3)} m clearance under ${portal.name}.`, sample: sampleReference(path, samples, index), sourcePath: `field.2026-rebuilt.crossingBarriers.${barrier.id}` });
+      }
+    };
+    [0, samples.length - 1].forEach((index) => {
+      if (index < 0) return;
+      const section = footprintSectionAt(project, samples[index], barrierX);
+      if (!section) return;
+      const endpointPortals = portalsForSection(barrier, section);
+      if (requiredTraversal !== "direct" && endpointPortals.length === 1) {
+        const [requiredType, requiredSide] = requiredTraversal.split("-") as ["trench" | "bump", "table" | "away"];
+        if (endpointPortals[0].traversal === requiredType && endpointPortals[0].side === requiredSide) traversalUseCount += 1;
+      }
+      validatePortal(endpointPortals, index, `${barrier.id}:endpoint:${index}`, "touches");
+    });
+    const unsafeApproachIndex = samples.findIndex((sample) => {
+      const section = footprintSectionAt(project, sample, barrierX);
+      return section !== null && portalsForSection(barrier, section).length !== 1;
+    });
+    if (unsafeApproachIndex >= 0) validatePortal([], unsafeApproachIndex, `${barrier.id}:footprint:${unsafeApproachIndex}`, "touches");
+    let previousIndex = -1;
+    let previousSide = 0;
+    samples.forEach((sample, index) => {
+      const delta = sample.x - barrierX;
+      const side = Math.abs(delta) <= BARRIER_EPSILON ? 0 : Math.sign(delta);
+      if (side === 0) return;
+      if (previousIndex >= 0 && previousSide !== side) {
+        traversalUseCount += 1;
