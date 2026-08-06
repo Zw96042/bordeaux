@@ -51,10 +51,10 @@
       const out = acq.outcomes[node.id] || 'then';
       body = h(React.Fragment, null,
         FieldLabel('Condition'),
-        h('input', { className: 'textinput', value: node.cond, spellCheck: false, onChange: (e) => set({ cond: e.target.value }) }),
+        h('input', { className: 'textinput', 'aria-label': 'Decision condition', value: node.cond, spellCheck: false, onChange: (e) => set({ cond: e.target.value }) }),
         h('div', { className: 'grid2', style: { marginTop: '10px' } },
-          h('div', null, FieldLabel('If true'), h('input', { className: 'textinput', value: node.thenLabel, spellCheck: false, onChange: (e) => set({ thenLabel: e.target.value }) })),
-          h('div', null, FieldLabel('If false'), h('input', { className: 'textinput', value: node.elseLabel, spellCheck: false, onChange: (e) => set({ elseLabel: e.target.value }) }))),
+          h('div', null, FieldLabel('If true'), h('input', { className: 'textinput', 'aria-label': 'True branch label', value: node.thenLabel, spellCheck: false, onChange: (e) => set({ thenLabel: e.target.value }) })),
+          h('div', null, FieldLabel('If false'), h('input', { className: 'textinput', 'aria-label': 'False branch label', value: node.elseLabel, spellCheck: false, onChange: (e) => set({ elseLabel: e.target.value }) }))),
         FieldLabel('Simulated outcome'),
         h(Seg, { value: out, options: [{ v: 'then', label: node.thenLabel || 'true' }, { v: 'else', label: node.elseLabel || 'false' }], onChange: (v) => acq.setOutcome(node.id, v) }),
         h('div', { className: 'seg-hint' }, 'Picks which branch the simulation runs. Both branches stay in the routine.'),
@@ -67,9 +67,9 @@
         body = h(React.Fragment, null,
           h('div', { className: 'rt-callout' }, h(Icon, { name: 'info', size: 14 }), 'Autonomous Routine invokes this function at runtime. Your robot code decides what trajectory it returns.'),
           FieldLabel('Function reference'),
-          h('input', { className: 'textinput rt-fnref-input', value: node.funcRef, spellCheck: false, onChange: (e) => set({ funcRef: e.target.value }) }),
+          h('input', { className: 'textinput rt-fnref-input', 'aria-label': 'Function reference', value: node.funcRef, spellCheck: false, onChange: (e) => set({ funcRef: e.target.value }) }),
           FieldLabel('Trigger'),
-          h('input', { className: 'textinput', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
+          h('input', { className: 'textinput', 'aria-label': 'Function trigger', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
           FieldLabel('Parameters'),
           h(Params, { params: node.params, onChange: (p) => set({ params: p }) }),
           FieldLabel('Sim preview', node.preview ? h('button', { className: 'rt-mini-clear', type: 'button', onClick: () => set({ preview: null }) }, 'clear') : null),
@@ -77,7 +77,7 @@
             ? h('div', { className: 'rt-genbadge' }, h(Icon, { name: 'compass', size: 13 }), 'Dashed preview trajectory shown on the field — illustration only, not the deployed path.')
             : h('div', { className: 'seg-hint' }, 'No preview attached. This step shows as a runtime marker in the simulation.'),
           FieldLabel('Notes'),
-          h('textarea', { className: 'rt-note', value: node.note || '', placeholder: 'What this generated path is for\u2026', onChange: (e) => set({ note: e.target.value }) }),
+          h('textarea', { className: 'rt-note', 'aria-label': 'Function notes', value: node.note || '', placeholder: 'What this generated path is for\u2026', onChange: (e) => set({ note: e.target.value }) }),
           h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete function'));
 
       } else if (node.cat === 'sequence') {
@@ -85,7 +85,7 @@
         body = h(React.Fragment, null,
           h('div', { className: 'rt-callout' }, h(Icon, { name: 'info', size: 14 }), 'Sequence ops re-order the routine itself at runtime — independent of any robot.'),
           FieldLabel('Operation'),
-          h('select', { className: 'selectinput', value: node.op, onChange: (e) => set({ op: e.target.value }) },
+          h('select', { className: 'selectinput', 'aria-label': 'Sequence operation', value: node.op, onChange: (e) => set({ op: e.target.value }) },
             A.SEQ_OPS.map((o) => h('option', { key: o.id, value: o.id }, o.label))),
           h('div', { className: 'seg-hint' }, op.blurb),
           (node.op !== 'reorder') && h(React.Fragment, null,
