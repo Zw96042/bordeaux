@@ -954,3 +954,63 @@
     const previewEl = (preview && pts.length > 1) ? (function () {
       const lo = Math.min(preview.f0, preview.f1), hi = Math.max(preview.f0, preview.f1);
       const totalS = derived.sample.length || 1;
+      let dd = '', started = false;
+      for (let k = 0; k < pts.length; k++) { const f = pts[k].s / totalS; if (f >= lo && f <= hi) { const q = W2P(pts[k]); dd += (started ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); started = true; } }
+      return dd ? h('path', { d: dd, fill: 'none', stroke: accent, strokeOpacity: 0.45, strokeWidth: P(12), strokeLinecap: 'round', style: { pointerEvents: 'none' } }) : null;
+    })() : null;
+
+    const insertionGhost = insertionPreview && insertionPreview.derived && insertionPreview.derived.sample.pts.length > 1 ? (function () {
+      const previewPoints = insertionPreview.derived.sample.pts;
+      let path = '';
+      previewPoints.forEach((point, index) => {
+        const q = W2P(point);
+        path += (index ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1);
+      });
+      const waypoint = insertionPreview.doc.waypoints[insertionPreview.index];
+      const marker = waypoint ? W2P(waypoint) : null;
+      return h('g', { className: 'insertion-ghost', style: { pointerEvents: 'none' } },
+        h('path', { d: path, fill: 'none', stroke: '#05060a', strokeOpacity: 0.78, strokeWidth: P(6), strokeLinecap: 'round', strokeLinejoin: 'round' }),
+        h('path', { d: path, fill: 'none', stroke: accent, strokeOpacity: 0.92, strokeWidth: P(2.5), strokeDasharray: `${P(8)} ${P(6)}`, strokeLinecap: 'round', strokeLinejoin: 'round' }),
+        marker && h('circle', { cx: marker.x, cy: marker.y, r: P(7), fill: '#101216', stroke: accent, strokeWidth: P(2) }));
+    })() : null;
+
+    const proposalGhosts = (proposalPreviews || []).map((candidate, candidateIndex) => {
+      const previewPoints = candidate.derived && candidate.derived.sample && candidate.derived.sample.pts;
+      if (!previewPoints || previewPoints.length < 2) return null;
+      let path = '';
+      previewPoints.forEach((point, index) => { const q = W2P(point); path += (index ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); });
+      const color = candidate.valid ? (candidate.selected ? accent : '#a7b1c2') : '#d2655f';
+      return h('g', { key: candidate.id || candidateIndex, className: 'agent-proposal-ghost', style: { pointerEvents: 'none' } },
+        candidate.selected && h('path', { d: path, fill: 'none', stroke: '#05060a', strokeOpacity: 0.76, strokeWidth: P(7), strokeLinecap: 'round', strokeLinejoin: 'round' }),
+        h('path', { d: path, fill: 'none', stroke: color, strokeOpacity: candidate.selected ? 0.96 : 0.48, strokeWidth: P(candidate.selected ? 3 : 2), strokeDasharray: `${P(candidate.selected ? 9 : 5)} ${P(6)}`, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+    });
+
+    const snapEl = (snap && doc.waypoints[snap.idx]) ? (function () { const c = W2P(doc.waypoints[snap.idx]); return h('g', { transform: `translate(${c.x} ${c.y - P(34)})`, style: { pointerEvents: 'none' } }, h('rect', { x: -P(37), y: -P(11), width: P(74), height: P(20), rx: P(4), fill: 'rgba(11,12,14,0.95)', stroke: accent, strokeWidth: P(1) }), h('text', { x: 0, y: P(4), fill: accent, fontSize: P(11), fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, textAnchor: 'middle' }, snap.label)); })() : null;
+
+    const vb = `${view.x} ${view.y} ${view.w} ${view.h}`;
+    const cursor = drag.current && drag.current.moved && drag.current.role === 'bg' ? 'grabbing' : (tool === 'waypoint' || tool === 'rotation' || tool === 'marker' || tool === 'range') ? 'crosshair' : 'default';
+
+    return h('svg', {
+      ref: svgRef, className: 'fieldsvg', viewBox: vb, preserveAspectRatio: 'xMidYMid meet',
+      onPointerDown: onDown, onPointerMove: onMove, onPointerUp: onUp, onWheel: onWheel, onDoubleClick: onDbl,
+      style: { cursor, userSelect: 'none', WebkitUserSelect: 'none', touchAction: 'none' },
+      onContextMenu: onCtx, onDragStart: (e) => e.preventDefault(), draggable: false,
+    },
+      h('rect', { x: -2000, y: -2000, width: IMG_W + 4000, height: IMG_H + 4000, fill: '#0a0b0d', 'data-role': 'bg' }),
+      h('rect', { x: X0 - 6, y: Y0 - 6, width: (X1 - X0) + 12, height: (Y1 - Y0) + 12, rx: 4, fill: '#131418', stroke: '#2a2d33', strokeWidth: P(1.5), 'data-role': 'bg' }),
+      h('foreignObject', { x: 0, y: 0, width: IMG_W, height: IMG_H, transform: flip ? `rotate(180 ${FIELD_CX} ${FIELD_CY})` : undefined, 'data-role': 'bg', style: { pointerEvents: 'none' } },
+        h('img', { src: (window.__resources && window.__resources.fieldImg) || 'uploads/FE-2026-_REBUILT_Playing_Field.png', width: IMG_W, height: IMG_H, draggable: false, style: { width: IMG_W + 'px', height: IMG_H + 'px', display: 'block', opacity: 0.9, filter: 'brightness(0.38) saturate(0.32) contrast(1.06)', WebkitUserDrag: 'none', userSelect: 'none', pointerEvents: 'none' } })),
+      h('rect', { x: X0 - 6, y: Y0 - 6, width: (X1 - X0) + 12, height: (Y1 - Y0) + 12, rx: 4, fill: 'none', stroke: '#ffffff', strokeOpacity: 0.07, strokeWidth: P(1), style: { pointerEvents: 'none' } }),
+      routine ? routineLayers : staticLayers,
+      routine ? null : visitFocusEl,
+      routine ? null : previewEl,
+      routine ? null : insertionGhost,
+      routine ? null : proposalGhosts,
+      routine ? routineRobot : robotEl,
+      routine ? null : snapEl,
+    );
+  }
+
+  window.FieldView = FieldView;
+  window.FIELD_DIMS = { FIELD_W, FIELD_H, IMG_W, IMG_H };
+})();
