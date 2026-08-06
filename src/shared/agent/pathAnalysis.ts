@@ -448,3 +448,93 @@ function analyzeGeneratedPath(
   if (plannerId === "labviewBezier" || plannerId === "labviewClothoid") {
     const motorViolation = samples.reduce<{ index: number; measured: number; limit: number; ratio: number } | undefined>((worst, sample, index) => {
       if (index === 0 || sample.accelerationMps2 <= 0) return worst;
+      const active = metricLimit(path, sample, samples.at(-1)?.s ?? 0, waypointDistances, "acceleration").limit ?? path.constraints.maxAccel;
+      const limit = active * Math.max(0, Math.min(1, 1 - Math.abs(samples[index - 1].velocityMps) / project.robot.maxSpeed));
+      if (sample.accelerationMps2 <= limit + Math.max(EPSILON, active * 1e-3)) return worst;
+      const candidate = { index, measured: sample.accelerationMps2, limit, ratio: sample.accelerationMps2 / Math.max(limit, EPSILON) };
+      return !worst || candidate.ratio > worst.ratio ? candidate : worst;
+    }, undefined);
+    if (motorViolation) {
+      retainedIndices.add(motorViolation.index);
+      findings.push({ id: "constraint:motor-envelope", severity: "error", kind: "constraint", metric: "acceleration", measured: motorViolation.measured, limit: motorViolation.limit, unit: "m/s²", sample: sampleReference(path, samples, motorViolation.index), sourcePath: "robot.maxSpeed", message: `Acceleration reaches ${motorViolation.measured.toFixed(3)} m/s² above the ${motorViolation.limit.toFixed(3)} m/s² motor free-speed envelope.` });
+    }
+  }
+
+  const clearance = minimumPathClearance(project, samples);
+  if (clearance < minimumClearanceM) {
+    const closestIndex = samples.reduce((bestIndex, sample, index) => {
+      const singleton = minimumPathClearance(project, [sample]);
+      return singleton < minimumPathClearance(project, [samples[bestIndex]]) ? index : bestIndex;
+    }, 0);
+    retainedIndices.add(closestIndex);
+    findings.push({
+      id: "geometry:field-obstacle-clearance",
+      severity: clearance < 0 ? "error" : "warning",
+      kind: "geometry",
+      measured: clearance,
+      limit: minimumClearanceM,
+      unit: "m",
+      sample: sampleReference(path, samples, closestIndex),
+      sourcePath: "field.2026-rebuilt.solidObstacles",
+      message: clearance < 0
+        ? `The robot footprint intersects a solid field element by ${Math.abs(clearance).toFixed(3)} m.`
+        : `Minimum field-element clearance is ${clearance.toFixed(3)} m, below the requested ${minimumClearanceM.toFixed(3)} m.`,
+    });
+  }
+
+  plannerDiagnostics.forEach((diagnostic, index) => findings.push({
+    id: `planner:${index}`,
+    severity: /^(Tight curvature|Velocity dip)/.test(diagnostic.message) ? "note" : diagnostic.severity,
+    kind: "planner",
+    message: diagnostic.message,
+    sourcePath: diagnostic.path,
+  }));
+
+  return {
+    rawSamples: downsample(samples, sampleLimit, retainedIndices),
+    samplesTruncated: samples.length > sampleLimit,
+    extrema,
+    findings,
+  };
+}
+
+export function analyzePath(project: BordeauxProject, pathId: string, options: AnalyzePathOptions = {}): PathAnalysis {
+  const projectClone = clone(project);
+  const pathIndex = projectClone.paths.findIndex((candidate) => candidate.id === pathId);
+  if (pathIndex < 0) throw new Error(`Path ${pathId} does not exist in the current project.`);
+  const path = projectClone.paths[pathIndex];
+  const plannerId = options.plannerId ?? projectClone.plannerId ?? "profiledSpline";
+  const structural = validateProject(projectClone).issues.filter((item) => item.path.startsWith(`$.paths[${pathIndex}]`));
+  let generated;
+  try {
+    generated = getPlanner(plannerId).generate({ path, robot: projectClone.robot, plannerId });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const structureFindings: PathAnalysisFinding[] = structural.map((item, index) => ({
+      id: `structure:${index}`,
+      severity: item.severity,
+      kind: "structure",
+      message: item.message,
+      sourcePath: item.path,
+    }));
+    return {
+      pathId: path.id,
+      pathName: path.name,
+      authoredPath: clone(path),
+      planner: plannerId,
+      totalTimeS: null,
+      totalDistanceM: null,
+      sampleCount: 0,
+      samplesTruncated: false,
+      rawSamples: [],
+      extrema: [],
+      findings: structureFindings.concat({
+        id: "planner:generation-failed",
+        severity: "error",
+        kind: "planner",
+        message: `Planner generation failed: ${message}`,
+        sourcePath: `$.paths[${pathIndex}]`,
+      }),
+      plannerDiagnostics: [],
+    };
+  }
