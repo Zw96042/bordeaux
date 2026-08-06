@@ -7,42 +7,42 @@
 
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const clampWorld = (p) => ({ x: Math.max(0, Math.min(FIELD_W, p.x)), y: Math.max(0, Math.min(FIELD_H, p.y)) });
+  const pathId = () => 'path_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+  const markerId = () => 'event_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+  const LV_DEFAULTS = { samplePeriodS: 0.02, minTurnRadiusM: 0.5, bezierTangentMode: 'handles', reversePath: false, zeroVelocity: false, pickupBalls: false, currentLimit: 0, zeroTranslationalVelocity: false, correctAtBeginningOfPath: false };
 
-  const ACCENTS = { slate: '#3f6fd0', forest: '#2fa36b', amber: '#cf962f', cyan: '#2bb3c4', violet: '#8a7bf0' };
+  function normalizeProject(raw) {
+    const project = clone(raw);
+    const used = new Set();
+    (project.paths || []).forEach((p) => {
+      if (!p.id) { do { p.id = pathId(); } while (used.has(p.id)); }
+      used.add(p.id);
+      p.labview = { ...LV_DEFAULTS, ...(p.labview || {}) };
+      if (Array.isArray(p.waypoints)) p.waypoints = buildWps(p.waypoints);
+      (p.markers || []).forEach((marker) => { if (!marker.id) marker.id = markerId(); });
+    });
+    const walk = (nodes) => (nodes || []).forEach((node) => {
+      if (node.type === 'path' && typeof node.ref === 'number') node.ref = project.paths[node.ref] ? project.paths[node.ref].id : '';
+      if (node.type === 'decision') { walk(node.then); walk(node.else); }
+    });
+    project.routine = project.routine || { name: 'Autonomous Routine', nodes: [] };
+    walk(project.routine.nodes);
+    project.plannerId = project.plannerId || 'profiledSpline';
+    return project;
+  }
+
+  const ACCENT = '#3f6fd0';
 
   const DEF_CONS = { maxVel: 4.2, maxAccel: 6.5, maxDecel: 6.5, maxAngVel: 540, maxAngAccel: 720, maxAngDecel: 720, maxJerk: 0, maxAngJerk: 0 };
   const NEW_RANGE = { anchor: 'wp', maxVel: 1.5, maxAccel: 2.5, maxDecel: 2.5, maxAngVel: 270, maxAngAccel: 540 };
 
-  function buildWps(raw) {
-    const out = raw.map((w) => ({ linked: true, thetaOn: false, theta: 0, stop: false, ...w }));
-    out.forEach((w, i) => { const hd = window.PM.autoHandles(out, i); if (!w.prevC) w.prevC = hd.prevC; if (!w.nextC) w.nextC = hd.nextC; });
-    if (out.length) { out[0].thetaOn = true; out[out.length - 1].thetaOn = true; }
-    return out;
-  }
-
-  // ---- blank startup path ----
-  function blankPath(name) {
-    return {
-      name,
-      waypoints: buildWps([{ x: 2.2, y: 4.0, theta: 0 }, { x: 5.0, y: 4.0, theta: 0 }]),
-      targets: [], markers: [],
-      ranges: [],
-      constraints: { ...DEF_CONS },
-      headingMode: 'targets',
-      startVel: 0, goalVel: 0,
-    };
-  }
-
-  const FIT = { x: 307, y: 7, w: 3285, h: 1569 };
-
-  function App() {
-    const [project, setProject] = useState({
-      schemaVersion: '1.0',
-      name: 'Untitled',
-      robot: { drive: 'swerve', w: 0.84, l: 0.84, maxSpeed: 5.0 },
-      paths: [blankPath('NewPath')],
-      routine: { name: 'Autonomous Routine', nodes: [] },
-      plannerId: 'profiledSpline',
+  function alignWaypointHandles(w) {
+    if (!w || !w.prevC || !w.nextC) return;
+    const inLen = Math.hypot(w.x - w.prevC.x, w.y - w.prevC.y);
+    const outLen = Math.hypot(w.nextC.x - w.x, w.nextC.y - w.y);
+    const inX = inLen > 1e-6 ? (w.x - w.prevC.x) / inLen : 0;
+    const inY = inLen > 1e-6 ? (w.y - w.prevC.y) / inLen : 0;
+    const outX = outLen > 1e-6 ? (w.nextC.x - w.x) / outLen : 0;
     });
     const [activeIdx, setActiveIdx] = useState(0);
     const [sel, setSel] = useState({ kind: null, idx: -1 });
