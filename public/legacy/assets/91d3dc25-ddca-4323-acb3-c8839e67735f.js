@@ -358,51 +358,51 @@
       }
     }
 
-    return {
-      prevC: { x: w.x - dx * handle, y: w.y - dy * handle },
-      nextC: { x: w.x + dx * handle, y: w.y + dy * handle },
+    // arclength
+    let s = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const dx = pts[i].x - pts[i - 1].x, dy = pts[i].y - pts[i - 1].y;
+      s += Math.hypot(dx, dy);
+      pts[i].s = s;
+    }
+    return { pts, length: s, segs };
+  }
+
+  // ---- trapezoidal velocity profile with curvature (centripetal) limit ----
+  // constraints: {maxVel, maxAccel, maxAngVel, maxAngAccel}, start/end vel
+  function jigglePhase(progress) {
+    const u = Math.max(0, Math.min(1, progress));
+    if (u < 0.25) return { position: 8 * u * u, velocity: 16 * u, travel: 8 * u * u };
+    if (u < 0.5) { const r = 0.5 - u, position = 1 - 8 * r * r; return { position, velocity: 16 * r, travel: position }; }
+    if (u < 0.75) { const e = u - 0.5, position = 1 - 8 * e * e; return { position, velocity: -16 * e, travel: 2 - position }; }
+    const r = 1 - u, position = 8 * r * r; return { position, velocity: -16 * r, travel: 2 - position };
+  }
+
+  function feasibleJiggleStrokeDuration(requested, distance, velocity, acceleration, deceleration, freeSpeed) {
+    const minimum = Math.max(requested, 4 * distance / Math.max(1e-9, Math.min(velocity, freeSpeed)), Math.sqrt(16 * distance / Math.max(1e-9, deceleration)));
+    const feasible = (duration) => {
+      const peakVelocity = 4 * distance / duration;
+      const availableAcceleration = acceleration * Math.max(0, 1 - peakVelocity / freeSpeed);
+      return 16 * distance / (duration * duration) <= availableAcceleration + 1e-9;
     };
+    if (feasible(minimum)) return minimum;
+    let low = minimum, high = minimum;
+    while (!feasible(high)) high *= 2;
+    for (let iteration = 0; iteration < 40; iteration++) {
+      const middle = (low + high) / 2;
+      if (feasible(middle)) high = middle; else low = middle;
+    }
+    return high;
   }
 
-  // ---- per-point engineering metrics aligned to the sampled path ----
-  // returns arrays + maxima for velocity / acceleration / angular velocity / curvature
-  function metrics(pts, prof, anchors, mode) {
+  function profile(pts, c, startV = 0, endV = 0, opts = {}) {
     const n = pts.length;
-    const v = prof.v && prof.v.length ? prof.v : new Array(n).fill(0);
-    const t = prof.t && prof.t.length ? prof.t : new Array(n).fill(0);
-    const accel = new Array(n).fill(0), omega = new Array(n).fill(0), curv = new Array(n).fill(0), head = new Array(n).fill(0);
-    const totalS = n ? pts[n - 1].s : 0;
-    for (let i = 0; i < n; i++) {
-      const f = totalS > 1e-6 ? pts[i].s / totalS : 0;
-      head[i] = mode === 'tank' ? pts[i].heading : headingAt(f, anchors);
-      curv[i] = pts[i].curv || 0;
-    }
-    for (let i = 1; i < n; i++) {
-      const dt = t[i] - t[i - 1];
-      accel[i] = dt > 1e-5 ? (v[i] - v[i - 1]) / dt : 0;
-      omega[i] = dt > 1e-5 ? angWrap(head[i] - head[i - 1]) / dt : 0;
-    }
-    if (n > 1) { accel[0] = accel[1]; omega[0] = omega[1]; }
-    let vMax = 0.1, aMax = 0.1, wMax = 0.01, kMax = 0.01;
-    for (let i = 0; i < n; i++) {
-      vMax = Math.max(vMax, v[i]); aMax = Math.max(aMax, Math.abs(accel[i]));
-      wMax = Math.max(wMax, Math.abs(omega[i])); kMax = Math.max(kMax, curv[i]);
-    }
-    return { v, accel, omega, curv, head, vMax, aMax, wMax, kMax };
-  }
-
-  // ---- colour scales for the metric overlays ----
-  function hex2rgb(hx) { return [parseInt(hx.slice(1, 3), 16), parseInt(hx.slice(3, 5), 16), parseInt(hx.slice(5, 7), 16)]; }
-  const RAMPS_M = {
-    velocity:  [[0, '#3f6fd0'], [0.4, '#2fa36b'], [0.7, '#d28f37'], [1, '#cf4f4a']],
-    accel:     [[0, '#3f6fd0'], [0.5, '#4d535e'], [1, '#cf4f4a']],
-    angvel:    [[0, '#343d47'], [0.5, '#2f8fa6'], [1, '#5fcfe6']],
-    curvature: [[0, '#39342b'], [0.5, '#a87c30'], [1, '#edbf5c']],
-  };
-  function metricColor(mode, tt) {
-    const s = RAMPS_M[mode] || RAMPS_M.velocity;
-    let t = Math.max(0, Math.min(1, tt));
-    for (let i = 0; i < s.length - 1; i++) {
+    if (n < 2) return { v: [], t: [], totalTime: 0, holds: [], turns: [], jiggles: [], actionDistance: 0, rotLimited: [] };
+    const vmax = opts.vmax != null ? Math.min(c.maxVel, opts.vmax) : c.maxVel;
+    const stopSet = new Set(opts.stopIdx || []);
+    const v = new Array(n).fill(vmax);
+    const vLimit = new Array(n).fill(vmax);
+    // curvature cap: v <= sqrt(aLat / k)
       const a = s[i], b = s[i + 1];
       if (t >= a[0] && t <= b[0]) {
         const u = (t - a[0]) / Math.max(1e-6, b[0] - a[0]);
