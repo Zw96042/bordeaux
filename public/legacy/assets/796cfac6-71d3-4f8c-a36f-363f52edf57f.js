@@ -88,51 +88,51 @@
       error && h('span', { id: 'path-library-name-error', className: 'pathlib-error', role: 'status' }, error));
     const pathActions = (path, index) => h('div', { id: 'path-actions-' + path.id, className: 'pathlib-actionmenu', role: 'group', 'aria-label': path.name + ' actions' },
       h('div', { className: 'pathlib-actionrow' },
-  }
-
-  // ---------------- top bar ----------------
-  function Toolbar(props) {
-    const { project, page, setPage, alliance, setAlliance, showGrid, setShowGrid,
-      onUndo, onRedo, onExport, theme, setTheme, activeIdx, setActive, addPath, dupPath, delPath, renamePath, times, plannerId, setPlannerId } = props;
-    const plan = page === 'plan';
-    return h('div', { className: 'toolbar' },
-      h('div', { className: 'tb-left' },
-        h('div', { className: 'brand' }, h('span', { className: 'brand-mark' }), h('span', { className: 'brand-name' }, 'Bordeaux')),
-        h('div', { className: 'pageswitch' },
-          h('button', { className: plan ? 'on' : '', type: 'button', onClick: () => setPage('plan') }, h(Icon, { name: 'route', size: 15 }), 'Plan'),
-          h('button', { className: page === 'auto' ? 'on' : '', type: 'button', onClick: () => setPage('auto') }, h(Icon, { name: 'layers', size: 15 }), 'Auto'),
-          h('button', { className: page === 'robot' ? 'on' : '', type: 'button', onClick: () => setPage('robot') }, h(Icon, { name: 'car', size: 15 }), 'Robot')),
-        plan && h(PathSwitcher, { project, activeIdx, setActive, addPath, dupPath, delPath, renamePath, times })),
-
-      h('div', { className: 'tb-right' },
-        plan && h(React.Fragment, null,
-          h(IconBtn, { icon: 'undo', onClick: onUndo, title: 'Undo  (\u2318Z)' }),
-          h(IconBtn, { icon: 'redo', onClick: onRedo, title: 'Redo  (\u21e7\u2318Z)' }),
-          h('div', { className: 'tbdiv' }),
-          h(PlannerSelect, { plannerId, setPlannerId })),
-        (plan || page === 'auto') && h(React.Fragment, null,
-          h('button', { className: 'alliance ' + alliance, type: 'button', onClick: () => setAlliance(alliance === 'blue' ? 'red' : 'blue'), title: 'Flip alliance' },
-            h('span', { className: 'alliance-dot' }), alliance === 'blue' ? 'Blue' : 'Red'),
-          h(IconBtn, { icon: 'grid', active: showGrid, onClick: () => setShowGrid(!showGrid), title: 'Grid  (G)' })),
-        h(ThemePicker, { theme, setTheme }),
-        (plan || page === 'auto') && h('button', { className: 'exportbtn', type: 'button', onClick: onExport }, h(Icon, { name: 'share', size: 15 }), page === 'auto' ? 'Deploy' : 'Export')));
-  }
-
-  // ---------------- canvas tool rail (left edge) — spatial creation (memo §2) ----------------
-  const TOOLS = [
-    { id: 'select', icon: 'select', label: 'Select / move', key: 'V' },
-    { id: 'waypoint', icon: 'waypoint', label: 'Place waypoint', key: 'W' },
-    { id: 'rotation', icon: 'rotation', label: 'Rotation target', key: 'R' },
-    { id: 'marker', icon: 'flag2', label: 'Event marker', key: 'M' },
-    { id: 'range', icon: 'gauge', label: 'Constraint range', key: 'C' },
-  ];
-  function ToolRail({ tool, setTool }) {
-    return h('div', { className: 'toolrail' }, TOOLS.map((t) =>
-      h('button', { key: t.id, className: 'toolrail-b' + (tool === t.id ? ' on' : ''), type: 'button', title: t.label + '  (' + t.key + ')', onClick: () => setTool(t.id) },
-        h(Icon, { name: t.icon, size: 18 }), h('span', { className: 'toolrail-k' }, t.key))));
-  }
-
-  // ---------------- global-constraint chip bar (top of canvas) — memo §6 ----------------
+        h('button', { type: 'button', onClick: () => beginEdit('path', path.id, path.name) }, h(Icon, { name: 'edit', size: 13 }), h('span', null, 'Rename')),
+        h('button', { type: 'button', onClick: () => { dupPath(index); setMenu(null); } }, h(Icon, { name: 'copy', size: 13 }), h('span', null, 'Duplicate')),
+        h('button', { className: 'danger', type: 'button', disabled: project.paths.length <= 1, onClick: () => { if (delPath(index)) setMenu(null); } }, h(Icon, { name: 'trash', size: 13 }), h('span', null, 'Delete'))),
+      h('label', { className: 'pathlib-move' }, h(Icon, { name: 'folder', size: 14 }), h('span', null, 'Move to'),
+        h('select', { 'aria-label': 'Move ' + path.name + ' to folder', value: path.folderId || '', onChange: (e) => { movePathToFolder(index, e.target.value); setMenu(null); } },
+          h('option', { value: '' }, 'Unfiled'), folders.map((folder) => h('option', { key: folder.id, value: folder.id }, folder.name)))));
+    const pathRow = (path, index, showFolder) => editing && editing.kind === 'path' && editing.id === path.id
+      ? h('div', { key: path.id, className: 'pathlib-editrow' }, editForm())
+      : h('div', { key: path.id, className: 'pathlib-item' },
+          h('div', { className: 'pathlib-path' + (index === activeIdx ? ' on' : '') },
+            h('button', { type: 'button', className: 'pathlib-pick', 'aria-current': index === activeIdx ? 'true' : undefined, onClick: () => { setMenu(null); setActive(index); } },
+              h(Icon, { name: index === activeIdx ? 'check' : 'route', size: 14 }),
+              h('span', { className: 'pathlib-copy' },
+                h('span', { className: 'pathlib-name' }, path.name),
+                showFolder && h('span', { className: 'pathlib-foldername' }, folderName(path.folderId))),
+              h('span', { className: 'pathlib-time' }, times[path.id] == null ? '\u2014' : times[path.id].toFixed(2) + 's')),
+            h('button', { className: 'pathlib-more', type: 'button', title: 'Path actions', 'aria-label': 'Actions for ' + path.name, 'aria-controls': 'path-actions-' + path.id, 'aria-expanded': !!(menu && menu.kind === 'path' && menu.id === path.id), onClick: () => setMenu((current) => current && current.kind === 'path' && current.id === path.id ? null : { kind: 'path', id: path.id }) }, '\u2026')),
+          menu && menu.kind === 'path' && menu.id === path.id && pathActions(path, index));
+    const group = (folder) => {
+      const id = folder ? folder.id : '', label = folder ? folder.name : 'Unfiled';
+      const members = project.paths.map((path, index) => ({ path, index })).filter((row) => (row.path.folderId || '') === id);
+      if (!folder && !members.length) return null;
+      const key = id || '_unfiled', shut = !!collapsed[key];
+      return h('section', { key, className: 'pathlib-group' },
+        editing && editing.kind === 'folder' && editing.id === id ? editForm() : h('div', { className: 'pathlib-folderwrap' },
+          h('div', { className: 'pathlib-folder' },
+            h('button', { type: 'button', className: 'pathlib-foldertoggle', 'aria-expanded': !shut, onClick: () => setCollapsed((state) => ({ ...state, [key]: !shut })) }, h(Icon, { name: 'chevron', size: 13 }), h('span', null, label), h('small', null, members.length)),
+            folder && h('button', { className: 'pathlib-more', type: 'button', title: 'Folder actions', 'aria-label': 'Actions for folder ' + label, 'aria-controls': 'folder-actions-' + id, 'aria-expanded': !!(menu && menu.kind === 'folder' && menu.id === id), onClick: () => setMenu((current) => current && current.kind === 'folder' && current.id === id ? null : { kind: 'folder', id }) }, '\u2026')),
+          folder && menu && menu.kind === 'folder' && menu.id === id && h('div', { id: 'folder-actions-' + id, className: 'pathlib-actionmenu', role: 'group', 'aria-label': label + ' folder actions' },
+            h('div', { className: 'pathlib-actionrow' },
+              h('button', { type: 'button', 'aria-label': 'New path in ' + label, onClick: () => { addPath(id); setMenu(null); } }, h(Icon, { name: 'plus', size: 13 }), h('span', null, 'New path')),
+              h('button', { type: 'button', 'aria-label': 'Rename folder ' + label, onClick: () => beginEdit('folder', id, label) }, h(Icon, { name: 'edit', size: 13 }), h('span', null, 'Rename')),
+              h('button', { className: 'danger', type: 'button', 'aria-label': 'Delete folder ' + label, onClick: () => { if (deletePathFolder(id)) setMenu(null); } }, h(Icon, { name: 'trash', size: 13 }), h('span', null, 'Delete'))))),
+        !shut && h('div', { className: 'pathlib-children' }, members.length ? members.map((row) => pathRow(row.path, row.index, false)) : h('div', { className: 'pathlib-empty' }, 'No paths')));
+    };
+    const needle = query.trim().toLowerCase();
+    const results = project.paths.map((path, index) => ({ path, index })).filter((row) => (row.path.name + ' ' + folderName(row.path.folderId)).toLowerCase().includes(needle));
+    return h('div', { className: 'pathsw pathlib' },
+      h('button', { ref: triggerRef, className: 'pathsw-btn' + (open ? ' open' : ''), type: 'button', title: cur ? cur.name : 'No path', 'aria-haspopup': 'dialog', 'aria-expanded': open, onClick: () => open ? close() : setOpen(true) },
+        h('span', { className: 'pathsw-ic' }, h(Icon, { name: 'route', size: 15 })), h('span', { className: 'pathsw-nm' }, cur ? cur.name : 'No path'), h('span', { className: 'pathsw-t' }, (cur && times[cur.id] != null ? times[cur.id].toFixed(2) : '--') + 's'), h(Icon, { name: 'chevron', size: 14 })),
+      open && h(React.Fragment, null,
+        h('button', { className: 'pathlib-scrim', type: 'button', tabIndex: -1, 'aria-label': 'Close path library', onClick: close }),
+        h('aside', { ref: panelRef, className: 'pathlib-panel', role: 'dialog', 'aria-modal': true, 'aria-label': 'Path library', tabIndex: -1, onKeyDown: trapFocus },
+          h('div', { className: 'pathlib-head' }, h('div', null, h(Icon, { name: 'folder', size: 15 }), h('strong', null, 'Path library'), h('span', null, project.paths.length)), h('button', { type: 'button', 'aria-label': 'Close path library', onClick: close }, h(Icon, { name: 'x', size: 15 }))),
+          h('div', { className: 'pathlib-create' }, h('button', { className: 'primary', type: 'button', onClick: () => addPath() }, h(Icon, { name: 'plus', size: 14 }), 'New path'), h('button', { type: 'button', onClick: () => { const folder = addPathFolder(); if (folder) beginEdit('folder', folder.id, folder.name); } }, h(Icon, { name: 'folder', size: 14 }), 'New folder')),
   function ConstraintBar({ c, robot, active, onOpen }) {
     const chips = [
       { k: 'Max V', v: Math.min(c.maxVel, robot.maxSpeed).toFixed(1), u: 'm/s' },
