@@ -893,3 +893,93 @@
       resetForPath(index); return { index, name, id: null };
     };
     const delPath = (i) => {
+      if (project.paths.length <= 1) return false;
+      const target = project.paths[i]; let referenced = false;
+      window.AUTO.walk(routine.nodes, (node) => { if (node.type === 'path' && node.ref === target.id) referenced = true; });
+      if (referenced) { alert('“' + target.name + '” is used by the autonomous routine. Remove that routine step before deleting the path.'); return false; }
+      if (!confirm('Delete path “' + target.name + '”? This cannot be undone.')) return false;
+      setProject((pr) => { const paths = pr.paths.filter((_, k) => k !== i); return { ...pr, paths }; });
+      setActiveIdx((a) => Math.max(0, a > i ? a - 1 : a === i ? Math.min(a, project.paths.length - 2) : a));
+      setSel({ kind: null, idx: -1 }); setPlayTime(0); setPlaying(false); hist.current = { past: [], future: [] };
+      return true;
+    };
+    const renamePath = (i, name) => { const clean = (name || '').trim(); if (!clean) return false; setProject((pr) => { const paths = pr.paths.slice(); paths[i] = { ...paths[i], name: clean }; return { ...pr, paths }; }); return true; };
+    const addPathFolder = () => {
+      const folders = project.pathFolders || [], used = new Set(folders.map((folder) => folder.name.toLowerCase()));
+      let name = 'New folder', suffix = 2; while (used.has(name.toLowerCase())) name = 'New folder ' + suffix++;
+      const folder = { id: 'folder_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)), name };
+      setProject((pr) => ({ ...pr, pathFolders: [...(pr.pathFolders || []), folder] }));
+      return folder;
+    };
+    const renamePathFolder = (id, name) => {
+      const clean = (name || '').trim(); if (!clean) return false;
+      setProject((pr) => ({ ...pr, pathFolders: (pr.pathFolders || []).map((folder) => folder.id === id ? { ...folder, name: clean } : folder) })); return true;
+    };
+    const deletePathFolder = (id) => {
+      const folder = (project.pathFolders || []).find((candidate) => candidate.id === id); if (!folder) return false;
+      const count = project.paths.filter((path) => path.folderId === id).length;
+      if (!confirm('Delete folder “' + folder.name + '”?' + (count ? ' Its ' + count + ' path' + (count === 1 ? '' : 's') + ' will move to Unfiled.' : ''))) return false;
+      setProject((pr) => ({ ...pr, pathFolders: (pr.pathFolders || []).filter((candidate) => candidate.id !== id), paths: pr.paths.map((path) => path.folderId === id ? (() => { const next = { ...path }; delete next.folderId; return next; })() : path) }));
+      return true;
+    };
+    const movePathToFolder = (i, folderId) => setProject((pr) => ({ ...pr, paths: pr.paths.map((path, index) => {
+      if (index !== i) return path; const next = { ...path }; if (folderId) next.folderId = folderId; else delete next.folderId; return next;
+    }) }));
+    const setActive = (i) => resetForPath(i);
+    const agentCandidates = agentProposal && Array.isArray(agentProposal.candidates) ? agentProposal.candidates : [];
+    const agentCandidate = agentCandidates.find((candidate) => candidate.id === agentCandidateId) || agentCandidates[0] || null;
+    const agentProposalPreviews = useMemo(() => agentCandidates.flatMap((candidate) => {
+      if (!candidate.path) return [];
+      try { return [{ id: candidate.id, label: candidate.label, selected: candidate.id === (agentCandidate && agentCandidate.id), valid: candidate.valid !== false, derived: window.PM.derivePath(candidate.path, robot, PERSEG, plannerId) }]; }
+      catch (_) { return []; }
+    }), [agentProposal, agentCandidateId, robot, plannerId]);
+    const rejectAgentProposal = useCallback(() => {
+      if (!agentProposal) return;
+      if (window.bordeauxAPI && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(agentProposal.id, 'rejected');
+      setAgentProposal({ ...agentProposal, status: 'rejected' });
+    }, [agentProposal]);
+    const applyAgentProposal = useCallback(() => {
+      if (!agentProposal || agentProposal.status !== 'ready' || agentProposal.baseSessionId !== agentSessionId || agentProposal.baseRevision !== agentRevision.current || (agentProposal.blockingIssues && agentProposal.blockingIssues.length)) return;
+      const before = { project: clone(project), activeIdx };
+      let nextIndex = activeIdx;
+      let nextProject;
+      if (agentProposal.operation === 'configureRobot') {
+        if (!agentProposal.planning) return;
+        nextProject = { ...project, robot: { ...project.robot, planning: clone(agentProposal.planning) } };
+      } else if (!agentCandidate || agentCandidate.valid === false || !agentCandidate.path) return;
+      else if (agentProposal.operation === 'replace') {
+        nextIndex = project.paths.findIndex((path) => path.id === agentProposal.targetPathId);
+        if (nextIndex < 0) return;
+        const replacement = clone(agentCandidate.path); replacement.id = project.paths[nextIndex].id;
+        const paths = project.paths.slice(); paths[nextIndex] = replacement; nextProject = { ...project, paths };
+      } else {
+        nextIndex = project.paths.length;
+        nextProject = { ...project, paths: [...project.paths, clone(agentCandidate.path)] };
+      }
+      projectHist.current.past.push(before); if (projectHist.current.past.length > 80) projectHist.current.past.shift(); projectHist.current.future = [];
+      setProject(nextProject); if (agentProposal.operation !== 'configureRobot') resetForPath(nextIndex); setDirty(true);
+      if (window.bordeauxAPI && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(agentProposal.id, 'applied', agentRevision.current + 1);
+      setAgentProposal({ ...agentProposal, status: 'applied', appliedRevision: agentRevision.current + 1 });
+    }, [agentProposal, agentCandidate, project, activeIdx, agentSessionId]);
+
+    // ---- playback loop ----
+    const total = derived.prof.totalTime || 0;
+    const totalRef = useRef(0); totalRef.current = total;
+    const playRef = useRef(0); playRef.current = playTime;
+    const togglePlayback = useCallback(() => {
+      const totalNow = totalRef.current;
+      if (playRef.current >= totalNow - 1e-3) { setPlayTime(0); setPlaying(true); }
+      else setPlaying((value) => !value);
+    }, []);
+    useEffect(() => {
+      if (!playing) return; let raf, last = performance.now();
+      const tick = (now) => { const dt = (now - last) / 1000; last = now; setPlayTime((t) => { let nt = t + dt; if (nt >= total) { nt = total; setPlaying(false); } return nt; }); raf = requestAnimationFrame(tick); };
+      raf = requestAnimationFrame(tick); return () => cancelAnimationFrame(raf);
+    }, [playing, total]);
+    useEffect(() => { if (playTime > total) setPlayTime(total); }, [total]);
+    const restart = () => { setPlayTime(0); setPlaying(true); };
+    const seek = (t) => { setPlaying(false); setPlayTime(Math.max(0, Math.min(total, t))); };
+
+    // ---- routine run engine ----
+    const run = useMemo(() => window.AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId), [routine, project.paths, robot, routineOutcomes, plannerId]);
+    useEffect(() => {
