@@ -538,3 +538,93 @@ describe("legacy compatibility preview", () => {
 
   it("keeps the grid toggle with the field view controls", () => {
     const panels = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const toolbar = panels.slice(panels.indexOf("function Toolbar"), panels.indexOf("// ---------------- canvas tool rail"));
+    const viewControls = panels.slice(panels.indexOf("function ViewControls"), panels.indexOf("function fmt"));
+
+    expect(toolbar).not.toContain("icon: 'grid'");
+    expect(viewControls).toContain("'aria-label': 'Toggle field grid'");
+    expect(viewControls).toContain("showGrid ? ' active' : ''");
+    expect(app).toContain("h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })");
+  });
+
+  it("uses a flat folder-capable path library and stable multi-path metadata", () => {
+    const panels = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+
+    expect(panels).toContain("function PathLibrary");
+    expect(panels).toContain("className: 'pathlib-panel'");
+    expect(panels).toContain("Search paths and folders");
+    expect(panels).toContain("'aria-modal': true");
+    expect(panels).toContain("const trapFocus");
+    expect(panels).toContain("className: 'pathlib-actionmenu'");
+    expect(panels).toContain("className: 'pathlib-actionrow'");
+    expect(panels).toContain("'Move to'");
+    expect(panels).toContain("h('span', null, 'Delete')");
+    expect(panels).not.toContain("className: 'pathlib-actions'");
+    expect(panels).toContain("addPathFolder");
+    expect(panels).toContain("movePathToFolder");
+    expect(panels).toContain("h('form', { className: 'pathlib-rename'");
+    expect(panels).toContain("type: 'submit'");
+    expect(panels).toContain("Enter a name.");
+    expect(panels).toContain("'aria-label': 'Search paths and folders'");
+    expect(panels).toContain("tabIndex: -1");
+    expect(panels).not.toContain("autoFocus: !('ontouchstart' in window)");
+    expect(panels).toContain("'aria-describedby': error ? 'path-library-name-error' : undefined");
+    expect(panels).not.toContain("h(PathSwitcher");
+    expect(panels).not.toContain("onChange: (e) => renamePath(activeIdx");
+    expect(app).toContain("t[doc.id]");
+    expect(app).toContain("const uniquePathName");
+    expect(app).toContain("const addPathFolder");
+    expect(app).toContain("const movePathToFolder");
+    expect(app).toContain("resetForPath(index)");
+  });
+
+  it("uses one Bordeaux accent and does not expose theme customization", () => {
+    const panels = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const html = fs.readFileSync(new URL("../public/legacy/index.html", import.meta.url), "utf8");
+
+    expect(panels).not.toContain("ThemePicker");
+    expect(panels).not.toContain("Choose accent color");
+    expect(panels).toContain("assets/wrlp-chap-bird-original.svg");
+    expect(app).not.toContain("setTheme");
+    expect(app).not.toContain("dataset.theme");
+    expect(app).not.toContain("ACCENTS");
+    expect(html).not.toContain("[data-theme=");
+    expect(html).not.toContain(".themebtn");
+    expect(html).toContain("--accent:#7ea2ed");
+  });
+
+  it("uses the full WRLP Chap for the app mark and startup animation", () => {
+    const html = fs.readFileSync(new URL("../public/legacy/index.html", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const bird = fs.readFileSync(new URL("../public/legacy/assets/wrlp-chap-bird-original.svg", import.meta.url), "utf8");
+    const loader = fs.readFileSync(new URL("../public/legacy/assets/chap-loader-wrlp.js", import.meta.url), "utf8");
+
+    expect(html).toContain('id="boot-splash"');
+    expect(html).toContain('src="assets/wrlp-chap-bird-original.svg"');
+    expect(html).toContain('src="assets/chap-loader-wrlp.js"');
+    expect(html).toContain("boot-chap-leg-l");
+    expect(html).toContain("boot-chap-leg-r");
+    expect(html).toContain("boot-chap-dust 920ms");
+    const splashRule = html.match(/\.boot-splash\{([^}]*)\}/)?.[1] || "";
+    expect(splashRule).toContain("cursor:wait");
+    expect(splashRule).not.toContain("pointer-events:none");
+    expect(html).not.toContain(".boot-splash.boot-splash-ready{pointer-events:none}");
+    expect(html).toContain("class=\"boot-curtain\"");
+    expect(html).toContain(".boot-curtain{position:absolute;inset:-1px;z-index:0;background:var(--bg)");
+    expect(html).toContain("transition:transform var(--boot-curtain) cubic-bezier(.76,0,.24,1) var(--boot-run)");
+    expect(html).toContain(".boot-splash.boot-splash-ready .boot-curtain{transform:translate3d(-101%,0,0)}");
+    expect(html).toContain(".boot-splash-inner{position:absolute;z-index:1;top:50%;left:50%");
+    expect(html).toContain("@keyframes boot-chap-exit{0%{transform:translate3d(-50%,-50%,0);animation-timing-function:cubic-bezier(.3,0,.7,.45)}20%");
+    expect(html).toContain('<div id="root"></div>');
+    expect(bird).toContain(".st5{fill:#FF330D;stroke:#FFFFFF");
+    expect(bird).toContain(".st3{fill:#422397;stroke:#FFFFFF");
+    expect(html).not.toContain("animation-play-state:paused");
+    expect(html).toContain("width:clamp(260px,26vw,370px)");
+    expect(app).toContain("boot-splash-ready");
+    expect(app).toContain("const strideMs = 460");
+    expect(app).toContain("const strideDistancePx = Math.max(1, runnerWidth * 1.7)");
+    expect(app).toContain("const runMs = strideCount * strideMs");
+    expect(app).toContain("const curtainMs = 280");
