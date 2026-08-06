@@ -178,51 +178,51 @@
       const names = new Set(fields.map((field) => field.name));
       const extra = Object.keys(value).find((key) => !names.has(key));
       if (extra) return location + '.' + extra + ' is not part of the discovered type.';
-        h('div', { className: 'seg-hint' }, segHint),
-        h('div', { className: 'fieldlabel' }, 'Constraint ranges here'),
-        affecting.length === 0
-          ? h('div', { className: 'seg-hint', style: { marginTop: '0' } }, 'None \u2014 drag the range tool along this stretch to add one.')
-          : h('div', { className: 'segranges' }, affecting.map((x) => h('button', { key: x.ri, className: 'segrange', type: 'button', onClick: () => actions.select('cr', x.ri) },
-              h('span', { className: 'segrange-dot' }), '\u2264' + x.rg.maxVel.toFixed(1) + ' m/s', x.rg.name ? h('span', { className: 'segrange-nm' }, x.rg.name) : null))),
-        h('button', { className: 'qbtn wide', type: 'button', style: { marginTop: '14px' }, onClick: () => actions.insertWp(i) }, h(Icon, { name: 'plus', size: 14 }), 'Insert waypoint in segment'),
-        h('div', { className: 'chint' }, 'Continuity belongs to the waypoints at each end \u2014 set Corner/Stop there. This card edits the segment\u2019s own geometry.'));
+      for (const field of fields) {
+        const error = schemaValueError(value[field.name], field.schema, location + '.' + field.name, level + 1);
+        if (error) return error;
+      }
+      return '';
     }
+    return location + ' uses an unsupported parameter schema.';
+  }
 
-    // ---------------- ROTATION TARGET ----------------
-    else if (sel.kind === 'rt' && doc.targets[sel.idx]) {
-      const t = doc.targets[sel.idx];
-      icon = 'rotation'; title = 'Rotation Target'; tag = 'heading';
-      body = h(React.Fragment, null,
-        headingMode !== 'targets' && h('div', { className: 'hint' }, h(Icon, { name: 'info', size: 14 }), 'Inactive \u2014 heading mode is \u201c' + headingMode + '\u201d. Switch to Targets to use rotation targets.'),
-        h('div', { className: 'fieldlabel first' }, 'Target heading'),
-        h(Num, { label: null, value: t.deg, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setTarget(sel.idx, { deg: v }) }),
-        h('div', { className: 'fieldlabel' }, 'Position along path'),
-        h(Num, { label: null, value: t.f * 100, unit: '%', step: 1, precision: 0, min: 0, max: 100, onChange: (v) => actions.setTarget(sel.idx, { f: v / 100 }) }),
-        h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delTarget(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete target'));
+  function parameterValueError(value, parameter) {
+    const schemaError = schemaValueError(value, parameter.schema, parameter.label || parameter.name, 0);
+    if (schemaError) return schemaError;
+    if (parameter.min == null && parameter.max == null) return '';
+    if (parameter.schema.kind === 'integerString') {
+      const comparable = BigInt(value);
+      if (parameter.min != null && comparable < BigInt(parameter.min)) return (parameter.label || parameter.name) + ' must be at least ' + parameter.min + '.';
+      if (parameter.max != null && comparable > BigInt(parameter.max)) return (parameter.label || parameter.name) + ' must be at most ' + parameter.max + '.';
+      return '';
     }
-
-    // ---------------- EVENT MARKER ----------------
-    else if (sel.kind === 'em' && doc.markers[sel.idx]) {
-      const m = doc.markers[sel.idx];
-      icon = 'flag2'; title = 'Event Marker';
-      body = h(React.Fragment, null,
-        h('div', { className: 'fieldlabel first' }, 'Name'),
-        h('input', { className: 'textinput', value: m.name, onChange: (e) => actions.setMarker(sel.idx, { name: e.target.value }) }),
-        h('div', { className: 'fieldlabel' }, 'Command'),
-        h('select', { className: 'selectinput', value: m.cmd, onChange: (e) => actions.setMarker(sel.idx, { cmd: e.target.value }) }, COMMANDS.map((c) => h('option', { key: c, value: c }, c))),
-        h('div', { className: 'fieldlabel' }, 'Group type'),
-        h(Seg, { value: m.group || 'sequential', options: [{ v: 'sequential', label: 'Seq' }, { v: 'parallel', label: 'Parallel' }, { v: 'deadline', label: 'Deadline' }], onChange: (v) => actions.setMarker(sel.idx, { group: v }) }),
-        h('div', { className: 'fieldlabel' }, 'Position along path'),
-        h(Num, { label: null, value: m.f * 100, unit: '%', step: 1, precision: 0, min: 0, max: 100, onChange: (v) => actions.setMarker(sel.idx, { f: v / 100 }) }),
-        h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delMarker(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete marker'));
+    if (parameter.schema.kind === 'decimalString') {
+      if (parameter.min != null && compareExactDecimals(value, String(parameter.min)) < 0) return (parameter.label || parameter.name) + ' must be at least ' + parameter.min + '.';
+      if (parameter.max != null && compareExactDecimals(value, String(parameter.max)) > 0) return (parameter.label || parameter.name) + ' must be at most ' + parameter.max + '.';
+      return '';
     }
+    const comparable = typeof value === 'number' ? value : Number(value);
+    if (parameter.min != null && comparable < parameter.min) return (parameter.label || parameter.name) + ' must be at least ' + parameter.min + '.';
+    if (parameter.max != null && comparable > parameter.max) return (parameter.label || parameter.name) + ' must be at most ' + parameter.max + '.';
+    return '';
+  }
 
-    // ---------------- CONSTRAINT RANGE ----------------
-    else if (sel.kind === 'cr' && doc.ranges && doc.ranges[sel.idx]) {
-      const rg = doc.ranges[sel.idx];
-      const len = derived.sample.length || 1;
-      const effR = (derived.effRanges && derived.effRanges[sel.idx]) || { f0: rg.f0 || 0, f1: rg.f1 || 0 };
-      const loF = Math.min(effR.f0, effR.f1), hiF = Math.max(effR.f0, effR.f1);
+  function compareExactDecimals(left, right) {
+    const parse = (value) => {
+      const match = /^([+-])?(?:(\d+)(?:\.(\d*))?|\.(\d+))(?:[eE]([+-]?\d+))?$/.exec(value);
+      const fraction = match[3] || match[4] || '';
+      const digits = ((match[2] || '0') + fraction).replace(/^0+/, '') || '0';
+      return { sign: digits === '0' ? 0 : match[1] === '-' ? -1 : 1, digits, exponent: Number(match[5] || 0) - fraction.length };
+    };
+    const a = parse(left), b = parse(right);
+    if (a.sign !== b.sign) return a.sign < b.sign ? -1 : 1;
+    if (a.sign === 0) return 0;
+    const aPower = a.digits.length + a.exponent, bPower = b.digits.length + b.exponent;
+    let magnitude = aPower === bPower ? 0 : aPower < bPower ? -1 : 1;
+    if (!magnitude) for (let i = 0; i < Math.max(a.digits.length, b.digits.length); i++) {
+      const aDigit = a.digits[i] || '0', bDigit = b.digits[i] || '0';
+      if (aDigit !== bDigit) { magnitude = aDigit < bDigit ? -1 : 1; break; }
       icon = 'gauge'; title = 'Constraint Range';
       tag = (loF * len).toFixed(1) + '\u2013' + (hiF * len).toFixed(1) + ' m';
       body = h(React.Fragment, null,
