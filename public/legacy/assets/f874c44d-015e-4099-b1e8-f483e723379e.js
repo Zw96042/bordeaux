@@ -253,3 +253,4 @@
   }
   // total step count inside a branch (recursive)
   function branchCount(nodes) { let c = 0; walk(nodes || [], () => c++); return c; }
+})();
