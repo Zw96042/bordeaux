@@ -718,3 +718,92 @@ describe("legacy compatibility preview", () => {
     expect(panels).toContain(": 'Waypoint ' + k");
   });
 
+  it("routes overlapping field visits through a stable ordered candidate", () => {
+    const math = fs.readFileSync(new URL("../public/legacy/assets/91d3dc25-ddca-4323-acb3-c8839e67735f.js", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+
+    expect(math).toContain("function nearestVisits");
+    expect(math).toContain("different distances along the path");
+    expect(field).toContain("const [visitFocus, setVisitFocus]");
+    expect(field).toContain("projectVisit(world, d.lastF)");
+    expect(field).toContain("const resolveWaypointVisit");
+    expect(field).toContain("resolveWaypointVisit(waypoint, false, sel.idx)");
+    expect(field).toContain("d.role === 'wp' && !d.moved && d.cycleWaypoint");
+    expect(field).toContain("actions.addWaypoint(d.world, d.segment, !!d.onPath, d.visit)");
+    expect(field).toContain("event.code === 'BracketRight'");
+    expect(field).toContain("window.addEventListener('keydown', onVisitKey, true)");
+    expect(field).toContain("'Pass ' + (visitFocus.index + 1) + ' of ' + visitFocus.candidates.length");
+    expect(field).toContain("waypointOrder.sort");
+    expect(app).toContain("Number.isFinite(visitFraction) ? visitFraction");
+    expect(app).toContain("selectedVisit && Number.isFinite(selectedVisit.t)");
+    expect(app).toContain("selectedVisit.seg === segment");
+  });
+
+  it("keeps the inspector modeless and independently collapsible", () => {
+    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
+    const ui = fs.readFileSync(new URL("../public/legacy/assets/760c13dd-1656-409e-a1f2-58b2285a7f6e.js", import.meta.url), "utf8");
+    const html = fs.readFileSync(new URL("../public/legacy/index.html", import.meta.url), "utf8");
+
+    expect(app).toContain("const [inspectorOpen, setInspectorOpen] = useState(true)");
+    expect(app).toContain("className: 'inspector-tab'");
+    expect(app).toContain("name: 'sliders'");
+    expect(app).toContain("setInspectorOpen(true)");
+    expect(inspector).toContain("title: 'Hide inspector'");
+    expect(ui).toContain("sliders:");
+    expect(html).toContain(".seg-heading .seg-i{display:flex");
+    expect(html).toContain("white-space:normal");
+  });
+
+  it("opens the hidden inspector when editable path items are double-clicked", () => {
+    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const outline = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
+
+    expect(app).toContain("openInspector: () => setInspectorOpen(true)");
+    expect(outline).toContain("const inspectItem = (actions, kind, index, event)");
+    expect(outline).toContain("onDoubleClick: (e) => inspectItem(actions, 'wp', i, e)");
+    expect(outline).toContain("onDoubleClick: (e) => inspectItem(actions, 'seg', i, e)");
+    expect(outline).toContain("onDoubleClick: (e) => inspectItem(actions, 'rt', i, e)");
+    expect(outline).toContain("onDoubleClick: (e) => inspectItem(actions, 'em', i, e)");
+    expect(outline).toContain("onDoubleClick: (e) => inspectItem(actions, 'cr', i, e)");
+    expect(field).toContain("eventTarget.closest('[data-role]')");
+    expect(field).toContain("const lastInspectPress = useRef({ key: null, at: 0 })");
+    expect(field).toContain("pressKey: kind + ':' + selectedIndex");
+    expect(field).toContain("const candidateInspectDouble = inspectItem && pendingInspect.key === inspectItem.pressKey");
+    expect(field).toContain("!e.altKey && !candidateInspectDouble");
+    expect(field).toContain("if (d.inspectItem)");
+    expect(field).toContain("previous.key === d.inspectItem.pressKey && now - previous.at <= 550");
+    expect(field).toContain("if (d.moved)");
+    expect(field).toContain("if (!inspectTarget(e.target)) return");
+  });
+
+  it("wires stationary turns, endpoint jiggles, and draggable segment track points", () => {
+    const math = fs.readFileSync(new URL("../public/legacy/assets/91d3dc25-ddca-4323-acb3-c8839e67735f.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
+
+    expect(math).toContain("function jigglePositions");
+    expect(math).toContain("prof.turns");
+    expect(app).toContain("const setJiggle");
+    expect(app).toContain("const setTurnInPlace");
+    expect(app).toContain("const moveSegmentLookAt");
+    expect(inspector).toContain("'Turn in place'");
+    expect(inspector).toContain("'Add jiggle'");
+    expect(inspector).toContain("without creating waypoints");
+    expect(math).toContain("opts.jiggles");
+    expect(math).toContain("feasibleJiggleStrokeDuration");
+    expect(math).toContain("jiggle.strokeDuration");
+    expect(inspector).toContain("{ v: 'lookAt', label: 'Track point' }");
+    expect(field).toContain("'data-role': 'look'");
+    expect(field).toContain("actions.moveSegmentLookAt");
+    expect(field).toContain("const waypointHeadingDeg = (index)");
+    expect(field).toContain("return Math.atan2(dy, dx) * 180 / Math.PI");
+    expect(field).toContain("wpTangent || wpTracksPoint ? null : i");
+    expect(field).toContain("clientToWorld(e.clientX, e.clientY, d.role !== 'ct')");
+    expect(field).toContain("const p = d.role === 'ct' ? world : clampWorld(world)");
+    expect(math).toContain("function smoothHeadingTransitions");
+  });
+});
