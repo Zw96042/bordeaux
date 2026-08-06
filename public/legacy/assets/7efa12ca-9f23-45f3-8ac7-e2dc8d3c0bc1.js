@@ -43,6 +43,23 @@
           : h('div', null)),
       plannerId === 'labviewBezier' ? h(React.Fragment, null,
         h('div', { className: 'fieldlabel' }, 'Tangents'),
+        h(Seg, { value: labview.bezierTangentMode || 'handles', options: [{ v: 'handles', label: 'Handles' }, { v: 'automatic', label: 'Automatic' }], onChange: (v) => setLabview({ bezierTangentMode: v }) })) : null,
+      h('button', { className: 'morebtn' + (moreBdx ? ' on' : ''), type: 'button', 'aria-expanded': moreBdx, onClick: () => setMoreBdx(!moreBdx) }, h('span', null, 'Advanced .bdx flags'), h(Icon, { name: 'chevron', size: 13 })),
+      flags) : null;
+    return h(React.Fragment, null,
+      h('div', { className: 'cgroup-h' }, 'Translation'),
+      h('div', { className: 'grid2' },
+        h(Num, { label: 'Max vel', value: c.maxVel, unit: 'm/s', min: 0.1, max: robot.maxSpeed, onChange: (v) => setC({ maxVel: v }) }),
+        h(Num, { label: 'Max accel', value: c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxAccel: v }) })),
+      h(Num, { label: 'Max decel', value: c.maxDecel != null ? c.maxDecel : c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxDecel: v }) }),
+      h('button', { className: 'morebtn' + (moreLimits ? ' on' : ''), type: 'button', 'aria-expanded': moreLimits, onClick: () => setMoreLimits(!moreLimits) }, h('span', null, moreLimits ? 'Fewer limits' : 'Rotation limits'), h(Icon, { name: 'chevron', size: 13 })),
+      rotation,
+      compatibility);
+  }
+
+  function Stat3(items) {
+    return h('div', { className: 'rt-stat' }, items.map((it, i) =>
+      h('div', { key: i, className: 'rt-stat-i' }, h('span', { className: 'rt-stat-v', style: it.color ? { color: it.color } : null }, it.v), h('span', { className: 'rt-stat-k' }, it.k))));
   }
 
   function FaceRow({ i, actions, n }) {
@@ -53,41 +70,24 @@
       h('button', { className: 'facebtn', type: 'button', title: 'Align to path tangent', onClick: () => actions.faceWaypoint(i, 'tangent') }, 'Tangent'));
   }
 
-  function ContextInspector(props) {
-    const { doc, sel, derived, actions, drive, robot, onClose } = props;
-    const [moreLimits, setMoreLimits] = React.useState(false);
-    const wps = doc.waypoints;
-    const isTank = drive === 'tank';
-    const n = wps.length;
-    const headingMode = isTank ? 'tangent' : (doc.headingMode || 'targets');
+  function defaultSchemaValue(schema, depth) {
+    const level = depth || 0;
+    if (!schema || level > 16) return null;
+    if (schema.kind === 'boolean') return false;
+    if (schema.kind === 'integer' || schema.kind === 'number') return 0;
+    if (schema.kind === 'integerString') return '0';
+    if (schema.kind === 'decimalString') return '0';
+    if (schema.kind === 'string') return '';
+    if (schema.kind === 'enum') return (schema.enumValues || [])[0] || '';
+    if (schema.kind === 'array') return [];
+    if (schema.kind === 'map' || schema.kind === 'opaque') return {};
+    if (schema.kind === 'optional') return null;
+    if (schema.kind === 'object') return Object.fromEntries((schema.fields || []).map((field) => [field.name, defaultSchemaValue(field.schema, level + 1)]));
+    return null;
+  }
 
-    let icon = 'route', title = '', tag = null, body = null, closable = true;
-
-    // ---------------- NO SELECTION → path summary, heading mode, global constraints ----------------
-    if (!sel.kind) {
-      closable = false;
-      icon = 'route'; title = doc.name || 'Path'; tag = 'summary';
-      const warns = derived.warnings || [];
-      const high = warns.filter((w) => w.sev === 'high').length;
-      body = h(React.Fragment, null,
-        h('div', { className: 'fieldlabel first' }, 'Path summary'),
-        h('div', { className: 'psum' },
-          h('div', { className: 'psum-row' }, h('span', null, 'Duration'), h('b', null, (derived.prof.totalTime || 0).toFixed(2) + ' s')),
-          h('div', { className: 'psum-row' }, h('span', null, 'Length'), h('b', null, (derived.sample.length || 0).toFixed(2) + ' m')),
-          h('div', { className: 'psum-row' }, h('span', null, 'Diagnostics'), h('b', { className: warns.length ? (high ? 'bad' : 'warn') : 'good' }, warns.length ? (warns.length + (high ? ' \u00b7 ' + high + ' critical' : (warns.length > 1 ? ' checks' : ' check'))) : 'No issues'))),
-        h('div', { className: 'qrow', style: { marginTop: '10px' } },
-          h('button', { className: 'qbtn', type: 'button', onClick: () => actions.reversePath() }, h(Icon, { name: 'shuffle', size: 14 }), 'Reverse path'),
-          h('button', { className: 'qbtn', type: 'button', onClick: () => actions.addWaypointEnd() }, h(Icon, { name: 'plus', size: 14 }), 'Add waypoint')),
-
-        h('div', { className: 'cgroup-h' }, 'Heading'),
-        isTank
-          ? h('div', { className: 'hint' }, h(Icon, { name: 'info', size: 14 }), 'Tank drive \u2014 heading always follows the path tangent.')
-          : h(React.Fragment, null,
-              h(Seg, { value: headingMode, options: HEAD_MODES, onChange: (v) => actions.setHeadingMode(v) }),
-              h('div', { className: 'seg-hint' }, HEAD_HINT[headingMode]),
-              h('div', { className: 'inrow' },
-                h('span', { className: 'inrow-l' }, 'Drive backward', h('small', null, 'reverse robot, same geometry')),
-                h(Toggle, { on: !!doc.driveBackward, onChange: () => actions.toggleDriveBackward() }))),
+  function commandArguments(command) {
+    return Object.fromEntries((command.parameters || []).filter((parameter) => parameter.role === 'argument').map((parameter) => [parameter.name, parameterDefaultValue(parameter)]));
 
         h('div', { className: 'cgroup-h' }, 'Endpoints'),
         h('div', { className: 'grid2' },
