@@ -983,3 +983,93 @@
     // ---- routine run engine ----
     const run = useMemo(() => window.AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId), [routine, project.paths, robot, routineOutcomes, plannerId]);
     useEffect(() => {
+      if (page !== 'auto' || !routinePlaying) return;
+      let raf, last = performance.now();
+      const tick = (now) => { const dt = (now - last) / 1000; last = now; setRoutineTime((t) => { let nt = t + dt; if (nt >= run.total) { nt = run.total; setRoutinePlaying(false); } return nt; }); raf = requestAnimationFrame(tick); };
+      raf = requestAnimationFrame(tick); return () => cancelAnimationFrame(raf);
+    }, [page, routinePlaying, run.total]);
+    useEffect(() => { if (routineTime > run.total) setRoutineTime(run.total); }, [run.total]);
+
+    const acq = useMemo(() => ({
+      outcomes: routineOutcomes,
+      set: (id, patch) => setRoutine((r) => window.AUTO.update(r, id, patch)),
+      del: (id) => {
+        const node = window.AUTO.findNode(routine, id);
+        const label = node ? window.AUTO.nodeTitle(node, project.paths) : 'this routine step';
+        if (!confirm('Delete “' + label + '” from the routine? Decision branches beneath it will also be removed.')) return;
+        setRoutine((r) => window.AUTO.remove(r, id)); setRoutineSel(null);
+      },
+      move: (id, dir) => setRoutine((r) => window.AUTO.move(r, id, dir)),
+      reorder: (id, targetId, before) => setRoutine((r) => window.AUTO.reorderRelative(r, id, targetId, before)),
+      select: (id) => setRoutineSel(id),
+      addAfter: (id, type, cat) => setRoutine((r) => { const nn = window.AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return window.AUTO.insertAfter(r, id, nn); }),
+      addBranch: (decId, br, type, cat) => setRoutine((r) => { const nn = window.AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return window.AUTO.appendBranch(r, decId, br, nn); }),
+      addEnd: (type, cat) => setRoutine((r) => { const nn = window.AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return window.AUTO.append(r, nn); }),
+      prepend: (type, cat) => setRoutine((r) => { const nn = window.AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return window.AUTO.prepend(r, nn); }),
+      setOutcome: (id, br) => setRoutineOutcomes((o) => ({ ...o, [id]: br })),
+      rename: (nm) => setRoutine((r) => ({ ...r, name: nm })),
+      openInEditor: (id) => { const idx = project.paths.findIndex((path) => path.id === id); if (idx >= 0) { setActive(idx); setPage('plan'); } },
+    }), [routineOutcomes, routine, project.paths]);
+    const routineControls = useMemo(() => ({
+      toggle: () => { if (routineTime >= run.total - 1e-6) setRoutineTime(0); setRoutinePlaying((p) => !p); },
+      play: () => { if (routineTime >= run.total - 1e-6) setRoutineTime(0); setRoutinePlaying(true); },
+      reset: () => { setRoutinePlaying(false); setRoutineTime(0); },
+      seek: (t) => { setRoutinePlaying(false); setRoutineTime(Math.max(0, Math.min(run.total, t))); },
+      step: (dir) => { setRoutinePlaying(false); const idx = window.AUTO.stepAt(run, routineTime); const ni = Math.max(0, Math.min(run.steps.length - 1, idx + dir)); const s = run.steps[ni]; if (s) setRoutineTime(s.t0 + (s.dur > 0 ? Math.min(0.05, s.dur / 2) : 0)); },
+    }), [run, routineTime]);
+    const routineRunning = routinePlaying || routineTime > 0.001;
+    const routineOverlay = useMemo(() => page === 'auto' ? window.AUTO.fieldOverlay(run, { time: routineTime, running: routineRunning, selectedId: routineSel }) : null, [page, run, routineTime, routineRunning, routineSel]);
+    const routinePose = page === 'auto' ? window.AUTO.poseAt(run, routineTime, robot) : null;
+    const autoFieldActions = useMemo(() => ({ selectNode: (id) => setRoutineSel((s) => s === id ? null : id), select: () => setRoutineSel(null) }), []);
+
+    // ---- view ----
+    const onFit = useCallback(() => setView(FIT), []);
+    const zoomBy = useCallback((factor) => setView((v) => {
+      const cx = v.x + v.w / 2, cy = v.y + v.h / 2;
+      const nw = Math.max(IMG_W * 0.12, Math.min(IMG_W * 1.6, v.w * factor));
+      const nh = nw * (IMG_H / IMG_W);
+      return { x: cx - nw / 2, y: cy - nh / 2, w: nw, h: nh };
+    }), []);
+    const zoomPct = Math.round(FIT.w / view.w * 100);
+
+    // ---- desktop project workflow ----
+    const canReplaceProject = useCallback(() => !dirty || confirm('Discard unsaved changes to this project?'), [dirty]);
+    const loadProject = useCallback((incoming) => {
+      const next = normalizeProject(incoming);
+      skipDirty.current = true;
+      setProject(next);
+      setPlannerId(next.plannerId || 'profiledSpline');
+      setActiveIdx(0); setSel({ kind: null, idx: -1 }); setRoutineSel(null);
+      hist.current = { past: [], future: [] };
+      setDirty(false);
+    }, []);
+    const newProject = useCallback(async () => {
+      if (!canReplaceProject()) return;
+      if (window.bordeauxAPI) await window.bordeauxAPI.newProject();
+      loadProject(freshProject());
+    }, [canReplaceProject, loadProject]);
+    const openProject = useCallback(async (recentIndex) => {
+      if (!window.bordeauxAPI || !canReplaceProject()) return;
+      try {
+        const result = typeof recentIndex === 'number'
+          ? await window.bordeauxAPI.openRecentProject(recentIndex)
+          : await window.bordeauxAPI.openProject();
+        if (result) loadProject(result.project);
+      } catch (error) {
+        alert('Could not open project: ' + (error && error.message ? error.message : error));
+      }
+    }, [canReplaceProject, loadProject]);
+    const saveProject = useCallback(async (saveAs) => {
+      if (!window.bordeauxAPI) return;
+      try {
+        const result = await window.bordeauxAPI.saveProject({ ...project, routine, plannerId }, saveAs === true);
+        if (result && result.canceled) return;
+        setDirty(false);
+      } catch (error) {
+        alert('Could not save project: ' + (error && error.message ? error.message : error));
+      }
+    }, [project, routine, plannerId]);
+
+    const onExportJava = useCallback(async (destination) => {
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.exportJava !== 'function') {
+        alert('Java trajectory export is available in the Bordeaux desktop app.');
