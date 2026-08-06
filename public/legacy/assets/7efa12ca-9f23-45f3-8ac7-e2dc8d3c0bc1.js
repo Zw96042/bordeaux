@@ -797,3 +797,93 @@
         h(Seg, { value: st, options: window.PM.SEGTYPES.map((type) => ({ v: type.id, label: type.label, title: type.hint })), ariaLabel: 'Path type', onChange: (v) => actions.setSegMeta(i, { segType: v }) }),
         h('div', { className: 'seg-hint' }, segHint),
         !isTank && h(React.Fragment, null,
+          h('div', { className: 'fieldlabel' }, 'Heading on this segment'),
+          h(Seg, { value: wps[i].segmentHeadingMode || 'inherit', options: [{ v: 'inherit', label: 'Default', title: 'Use path default (' + HEAD_MODES.find((mode) => mode.v === headingMode).label + ')' }, ...HEAD_MODES, { v: 'lookAt', label: 'Track point' }], ariaLabel: 'Heading on this segment', className: 'seg-heading', onChange: (v) => actions.setSegmentHeadingMode(i, v) }),
+          h('div', { className: 'seg-hint' }, wps[i].segmentHeadingMode ? HEAD_HINT[wps[i].segmentHeadingMode] : 'Uses the path default. Change this segment without affecting its neighbors.')),
+        !isTank && wps[i].segmentHeadingMode === 'lookAt' && wps[i].segmentLookAt && h(React.Fragment, null,
+          h('div', { className: 'grid2 compact-fields' },
+            h(Num, { label: 'Target X', value: wps[i].segmentLookAt.x, unit: 'm', min: 0, max: FIELD_W, onChange: (v) => actions.setSegmentLookAt(i, { x: v }) }),
+            h(Num, { label: 'Target Y', value: wps[i].segmentLookAt.y, unit: 'm', min: 0, max: FIELD_H, onChange: (v) => actions.setSegmentLookAt(i, { y: v }) })),
+          h('div', { className: 'seg-hint' }, 'Drag the crosshair on the field. The rotation limits still control how quickly the robot may turn.')),
+        hasHeadingTransition && h(React.Fragment, null,
+          h('div', { className: 'fieldlabel' }, 'Transition into this segment'),
+          h(Seg, { value: transition.placement, ariaLabel: 'Heading transition side', options: [
+            { v: 'before', label: 'Before', title: 'Use the previous segment' },
+            { v: 'split', label: 'Split', title: 'Share both adjacent segments' },
+            { v: 'after', label: 'After', title: 'Use this segment' },
+          ], onChange: (v) => actions.setHeadingTransition(i, { placement: v }) }),
+          h('div', { className: 'seg-hint' }, transition.placement === 'before' ? 'The previous segment absorbs the heading change.' : transition.placement === 'split' ? 'Both adjacent segments share the heading change.' : 'This segment absorbs the heading change.'),
+          h('div', { className: 'fieldlabel' }, 'Timing priority'),
+          h(Seg, { value: transition.rotationPriority, ariaLabel: 'Heading transition timing priority', options: [
+            { v: 'heading', label: 'Heading', title: 'Keep heading positionally exact' },
+            { v: 'translation', label: 'Translation', title: 'Preserve translational timing' },
+          ], onChange: (v) => actions.setHeadingTransition(i, { rotationPriority: v }) }),
+          h('div', { className: 'seg-hint' }, transition.rotationPriority === 'translation' ? 'Keeps translational timing. Heading may lag, then catch up continuously.' : 'Keeps heading exact along the field. Translation may slow to stay within rotation limits.'),
+          h(Num, { label: 'Blend distance', value: transition.distanceM, unit: 'm', min: 0.05, step: 0.05, precision: 2, onChange: (v) => actions.setHeadingTransition(i, { distanceM: v }) })),
+        h('div', { className: 'fieldlabel' }, 'Constraint ranges here'),
+        affecting.length === 0
+          ? h('div', { className: 'seg-hint', style: { marginTop: '0' } }, 'None \u2014 drag the range tool along this stretch to add one.')
+          : h('div', { className: 'segranges' }, affecting.map((x) => {
+              const summary = constraintRangeSummary(x.rg, doc.constraints, robot);
+              const label = summary ? summary.text : (x.rg.name || 'Constraint range');
+              return h('button', { key: x.ri, className: 'segrange', type: 'button', 'aria-label': 'Open constraint range, ' + (summary ? summary.ariaLabel : label), onClick: () => actions.select('cr', x.ri) },
+                h('span', { className: 'segrange-dot' }), label, summary && x.rg.name ? h('span', { className: 'segrange-nm' }, x.rg.name) : null);
+            })),
+        h('button', { className: 'qbtn wide', type: 'button', style: { marginTop: '14px' }, onClick: () => actions.insertWp(i) }, h(Icon, { name: 'plus', size: 14 }), 'Insert waypoint in segment'),
+        h('div', { className: 'chint' }, 'Continuity belongs to the waypoints at each end \u2014 set Corner/Stop there. This panel edits the segment\u2019s own geometry.'));
+    }
+
+    // ---------------- ROTATION TARGET ----------------
+    else if (sel.kind === 'rt' && doc.targets[sel.idx]) {
+      const t = doc.targets[sel.idx];
+      const targetFraction = window.PM.featureFraction(t, derived.sample);
+      const targetDistance = targetFraction * (derived.sample.length || 0);
+      const targetAnchor = t.anchor === 'dist' ? 'dist' : 'param';
+      let targetSegment = 0;
+      if (derived.wpFrac) for (let i = 0; i < derived.wpFrac.length - 1; i++) if (targetFraction >= derived.wpFrac[i] - 1e-6) targetSegment = i;
+      const targetHeadingMode = isTank ? 'tangent' : (wps[targetSegment]?.segmentHeadingMode || headingMode);
+      icon = 'rotation'; title = 'Rotation Target'; tag = 'heading';
+      body = h(React.Fragment, null,
+        targetHeadingMode !== 'targets' && h('div', { className: 'hint' }, h(Icon, { name: 'info', size: 14 }), 'Inactive on this segment \u2014 switch its heading mode to Targets.'),
+        h(Num, { label: 'Target heading', value: t.deg, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setTarget(sel.idx, { deg: v }) }),
+        h('div', { className: 'fieldlabel' }, 'Position lock'),
+        h(Seg, { value: targetAnchor, ariaLabel: 'Position lock', options: [{ v: 'param', label: 'Path %' }, { v: 'dist', label: 'Distance' }], onChange: (v) => actions.setTarget(sel.idx, { anchor: v }) }),
+        targetAnchor === 'dist'
+          ? h(Num, { label: 'Distance from start', value: targetDistance, unit: 'm', step: 0.1, precision: 2, min: 0, max: derived.sample.length || 0, onChange: (v) => actions.setTarget(sel.idx, { d: v }) })
+          : h(Num, { label: 'Position along path', value: targetFraction * 100, unit: '%', step: 1, precision: 0, min: 0, max: 100, onChange: (v) => actions.setTarget(sel.idx, { f: v / 100 }) }),
+        h('div', { className: 'seg-hint' }, targetAnchor === 'dist' ? 'Stays at this traveled distance when the path grows.' : 'Scales with the path when its length changes.'),
+        h('div', { className: 'seg-hint' }, 'Drag the heading arrow on the field to rotate · hold Shift for 15° steps.'),
+        h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delTarget(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete target'));
+    }
+
+    // ---------------- EVENT MARKER ----------------
+    else if (sel.kind === 'em' && doc.markers[sel.idx]) {
+      const m = doc.markers[sel.idx];
+      const markerFraction = window.PM.featureFraction(m, derived.sample);
+      const markerDistance = markerFraction * (derived.sample.length || 0);
+      const markerAnchor = m.anchor === 'dist' ? 'dist' : 'param';
+      const catalog = javaProject && javaProject.catalog;
+      const integration = javaProject && javaProject.integration;
+      const commands = catalog ? catalog.commands || [] : [];
+      const recentProjects = javaProject && javaProject.recentProjects ? javaProject.recentProjects : [];
+      const currentProject = recentProjects.find((project) => project.id === (javaProject && javaProject.bookmarkId));
+      const invocationId = m.invocation && m.invocation.commandId ? m.invocation.commandId : (m.cmd && m.cmd !== 'none' ? m.cmd : '');
+      const selectedCommand = commands.find((command) => command.id === invocationId);
+      const unresolved = invocationId && !selectedCommand;
+      const pendingActionTag = m.actionIntent && m.actionIntent.semanticTag;
+      const commandPickerItems = [{ value: '', label: 'No command' }]
+        .concat(unresolved ? [{ value: invocationId, label: simpleJavaName(invocationId), meta: 'Saved command is unavailable', badge: 'Missing' }] : [])
+        .concat(commands.map((command) => ({
+          value: command.id,
+          label: command.label,
+          meta: (command.kind === 'constructor' ? 'Command class' : 'Factory') + ' · ' + simpleJavaName(command.ownerType),
+          badge: pendingActionTag && (command.semanticTags || []).includes(pendingActionTag) ? 'Matches action' : command.runtimeReady === true ? '' : 'Not built',
+          searchText: [command.description, command.id, command.ownerType, command.member].concat(command.semanticTags || [])
+            .concat((command.parameters || []).map((parameter) => [parameter.name, parameter.label, parameter.description, parameter.unit, parameter.javaType].filter(Boolean).join(' ')))
+            .filter(Boolean)
+            .join(' '),
+        })));
+      const argumentParameters = selectedCommand ? (selectedCommand.parameters || []).filter((parameter) => parameter.role === 'argument') : [];
+      const dependencyParameters = selectedCommand ? (selectedCommand.parameters || []).filter((parameter) => parameter.role === 'dependency') : [];
+      const invocationArguments = m.invocation && m.invocation.commandId === invocationId ? (m.invocation.arguments || {}) : {};
+      const reconciledArguments = Object.fromEntries(argumentParameters.map((parameter) => {
