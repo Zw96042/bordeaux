@@ -632,3 +632,93 @@
         const stroke = Math.min(config.strokes - 1, Math.floor(elapsed / jiggle.strokeDuration));
         const strokeElapsed = elapsed - stroke * jiggle.strokeDuration;
         const u = stroke === config.strokes - 1 && elapsed >= jiggle.t1 - jiggle.t0 ? 1 : strokeElapsed / jiggle.strokeDuration;
+        const phase = jigglePhase(u), physicalBase = jiggle.baseRad + (rev ? Math.PI : 0);
+        const angle = physicalBase + (config.startDeg + config.stepDeg * stroke) * D2R;
+        const radial = config.distanceM * phase.position;
+        const heading = jiggle.tank ? angle + (u > 0.5 ? Math.PI : 0) : physicalBase;
+        return {
+          x: p.x + Math.cos(angle) * radial,
+          y: p.y + Math.sin(angle) * radial,
+          heading,
+          speed: Math.abs(phase.velocity) * config.distanceM / jiggle.strokeDuration,
+          s: p.s + stroke * config.distanceM * 2 + config.distanceM * phase.travel,
+          f: 1,
+          jiggle: true,
+        };
+      }
+    }
+    let i = 1;
+    if (time <= 0) i = 1; else if (time >= T[n - 1]) i = n - 1;
+    else { // binary search
+      let lo = 1, hi = n - 1;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (T[mid] < time) lo = mid + 1; else hi = mid; }
+      i = lo;
+    }
+    const t0 = T[i - 1], t1 = T[i];
+    const u = t1 - t0 > 1e-6 ? Math.max(0, Math.min(1, (time - t0) / (t1 - t0))) : 0;
+    const a = pts[i - 1], b = pts[i];
+    const x = lerp(a.x, b.x, u), y = lerp(a.y, b.y, u);
+    const s = lerp(a.s, b.s, u);
+    const f = pts[n - 1].s > 1e-6 ? s / pts[n - 1].s : 0;
+    let heading;
+    if (mode === 'tank') heading = Math.atan2(b.y - a.y, b.x - a.x);
+    else heading = headingAt(f, anchors);
+    if (rev) heading += Math.PI;
+    const speed = lerp(prof.v[i - 1], prof.v[i], u);
+    return { x, y, heading, speed, s, f };
+  }
+
+  // build heading anchors from a flat list of {f, rad} entries (waypoint thetas + rotation targets)
+  // ensures coverage of f=0 and f=1 so heading is defined across the whole path
+  function buildAnchors(entries) {
+    const arr = (entries || [])
+      .filter(e => e && isFinite(e.f) && isFinite(e.rad))
+      .map(e => ({ f: Math.max(0, Math.min(1, e.f)), rad: e.rad }))
+      .sort((a, b) => a.f - b.f);
+    if (!arr.length) return [{ f: 0, rad: 0 }, { f: 1, rad: 0 }];
+    if (arr[0].f > 1e-6) arr.unshift({ f: 0, rad: arr[0].rad });
+    if (arr[arr.length - 1].f < 1 - 1e-6) arr.push({ f: 1, rad: arr[arr.length - 1].rad });
+    return arr;
+  }
+
+  // point + fraction lookup by arclength fraction f (for placing markers/targets)
+  function pointAtFraction(f, pts) {
+    const n = pts.length; if (!n) return { x: 0, y: 0, heading: 0 };
+    const target = f * pts[n - 1].s;
+    let lo = 1, hi = n - 1;
+    if (target <= 0) return { ...pts[0] };
+    if (target >= pts[n - 1].s) return { ...pts[n - 1] };
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (pts[mid].s < target) lo = mid + 1; else hi = mid; }
+    const a = pts[lo - 1], b = pts[lo];
+    const u = (target - a.s) / Math.max(1e-6, b.s - a.s);
+    return { x: lerp(a.x, b.x, u), y: lerp(a.y, b.y, u), heading: angLerp(a.heading, b.heading, u) };
+  }
+
+  // nearest fraction on path to a world point (for placing markers by click)
+  function nearestFraction(wx, wy, pts) {
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const dx = pts[i].x - wx, dy = pts[i].y - wy; const d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; best = i; }
+    }
+    return pts.length > 1 ? pts[best].s / pts[pts.length - 1].s : 0;
+  }
+
+  // Return distinct ordered visits near a field point. Unlike nearestFraction,
+  // this projects onto polyline edges and keeps spatially coincident passes
+  // separate when they occur at different distances along the path.
+  function nearestVisits(wx, wy, pts, options) {
+    if (!pts || pts.length < 2) return [];
+    const opts = options || {}, total = pts[pts.length - 1].s || 0;
+    const projected = [];
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i];
+      const dx = b.x - a.x, dy = b.y - a.y, length2 = dx * dx + dy * dy;
+      const u = length2 > 1e-12 ? Math.max(0, Math.min(1, ((wx - a.x) * dx + (wy - a.y) * dy) / length2)) : 0;
+      const x = lerp(a.x, b.x, u), y = lerp(a.y, b.y, u), distance = Math.hypot(wx - x, wy - y);
+      const sameSegment = Number.isInteger(a.seg) && a.seg === b.seg;
+      const seg = sameSegment ? a.seg : (u < 0.5 && Number.isInteger(a.seg) ? a.seg : (Number.isInteger(b.seg) ? b.seg : 0));
+      const aT = sameSegment && Number.isFinite(a.t) ? a.t : 0;
+      const bT = sameSegment && Number.isFinite(b.t) ? b.t : 1;
+      const s = lerp(Number.isFinite(a.s) ? a.s : 0, Number.isFinite(b.s) ? b.s : total, u);
+      projected.push({ x, y, s, f: total > 1e-9 ? s / total : 0, seg, t: lerp(aT, bT, u), heading: angLerp(a.heading || 0, b.heading || 0, u), distance, edge: i - 1 });
