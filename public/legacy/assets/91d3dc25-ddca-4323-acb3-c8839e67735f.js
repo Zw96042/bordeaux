@@ -178,51 +178,51 @@
     }
     const out = [];
     const append = (p) => { const prev = out[out.length - 1]; if (!prev || lvMag(lvSub(p, prev)) > LV_EPS) out.push(p); };
-    const aLat = Math.max(0.1, c.maxAccel);
-    for (let i = 0; i < n; i++) {
-      const k = pts[i].curv;
-      if (k > 1e-4) v[i] = Math.min(v[i], Math.sqrt(aLat / k));
+    append({ x: wps[0].x, y: wps[0].y, heading: Math.atan2(wps[1].y - wps[0].y, wps[1].x - wps[0].x), curvature: 0 });
+    for (let i = 1; i < wps.length - 1; i++) {
+      const r = recipes[i]; if (!r) continue;
+      const entry = { x: wps[i].x - r.incoming.x * r.entryTrim * r.scale, y: wps[i].y - r.incoming.y * r.entryTrim * r.scale };
+      append({ ...entry, heading: r.incomingHeading, curvature: 0 });
+      for (let k = 1; k < r.local.length; k++) { const p = r.local[k], v = lvRotate({ x: p.x * r.scale, y: p.y * r.scale }, r.incomingHeading); append({ x: entry.x + v.x, y: entry.y + v.y, heading: r.incomingHeading + p.heading, curvature: r.scale > LV_EPS ? p.curvature / r.scale : 0 }); }
     }
-    v[0] = Math.min(v[0], startV);
-    v[n - 1] = Math.min(v[n - 1], endV);
-    // hard stops: velocity pinned to 0
-    stopSet.forEach(idx => { if (idx >= 0 && idx < n) v[idx] = 0; });
-    // per-point accel/decel limits, tightened by any constraint ranges (tightest wins)
-    const ranges = opts.ranges || [];
-    const totalS = pts[n - 1].s || 1;
-    const accelG = Math.max(0.1, c.maxAccel);
-    const decelG = (c.maxDecel != null && c.maxDecel > 0) ? c.maxDecel : accelG;
-    const aFwd = new Array(n).fill(accelG), aBack = new Array(n).fill(decelG);
-    const rangeAngV = new Array(n).fill(Infinity);
-    if (ranges.length) {
-      for (let i = 0; i < n; i++) {
-        const f = pts[i].s / totalS;
-        let rv = Infinity, ra = Infinity, rd = Infinity, rw = Infinity;
-        for (let r = 0; r < ranges.length; r++) {
-          const R = ranges[r]; const lo = Math.min(R.f0, R.f1), hi = Math.max(R.f0, R.f1);
-          if (f >= lo && f <= hi) {
-            if (R.maxVel > 0) rv = Math.min(rv, R.maxVel);
-            if (R.maxAccel > 0) ra = Math.min(ra, R.maxAccel);
-            if (R.maxDecel > 0) rd = Math.min(rd, R.maxDecel);
-            if (R.maxAngVel > 0) rw = Math.min(rw, R.maxAngVel);
-          }
-        }
-        if (rv < Infinity) v[i] = Math.min(v[i], rv);
-        if (ra < Infinity) aFwd[i] = Math.min(accelG, ra);
-        if (rd < Infinity) aBack[i] = Math.min(decelG, rd);
-        if (rw < Infinity) rangeAngV[i] = rw * Math.PI / 180;
+    const last = wps.length - 1; append({ x: wps[last].x, y: wps[last].y, heading: Math.atan2(wps[last].y - wps[last - 1].y, wps[last].x - wps[last - 1].x), curvature: 0 });
+    return out;
+  }
+  function labviewClothoidSample(raw, radius) {
+    const pts = []; let start = 0;
+    for (let end = 1; end < raw.length; end++) {
+      if (!(raw[end].stop || end === raw.length - 1)) continue;
+      const piece = lvClothoidPiece(raw.slice(start, end + 1), radius);
+      piece.forEach((p, i) => { if (pts.length && i === 0) return; pts.push({ ...p, curv: Math.abs(p.curvature), seg: Math.min(raw.length - 2, start + Math.max(0, i)), t: 0, s: 0 }); });
+      start = end;
+    }
+    const sample = lvFinishSample(lvDensify(pts), raw.length - 1);
+    sample.wpIdx = lvNearestWaypointIndices(raw, sample.pts); return sample;
+  }
+  function lvNearestWaypointIndices(wps, pts) {
+    let floor = 0;
+    return wps.map((w) => { let best = floor, bestD = Infinity; for (let i = floor; i < pts.length; i++) { const d = (pts[i].x - w.x) ** 2 + (pts[i].y - w.y) ** 2; if (d < bestD) { bestD = d; best = i; } } floor = best; return best; });
+  }
+  function lvDensify(pts, maximumSpacing = 0.02) {
+    if (pts.length < 2) return pts.slice();
+    const out = [{ ...pts[0] }];
+    for (let i = 1; i < pts.length; i++) {
+      const before = pts[i - 1], after = pts[i], count = Math.max(1, Math.ceil(lvMag(lvSub(after, before)) / maximumSpacing));
+      for (let part = 1; part <= count; part++) {
+        const u = part / count;
+        out.push({ ...after, x: lerp(before.x, after.x, u), y: lerp(before.y, after.y, u), heading: before.heading + angWrap(after.heading - before.heading) * u, curv: lerp(before.curv || 0, after.curv || 0, u), s: 0 });
       }
     }
-    // ---- rotational limit: cap v so the commanded heading can actually be tracked ----
-    // omega = (dtheta/ds) * v ; enforce |omega| <= Wmax and |d omega/dt| <= Aang (memo §16)
-    const rotLimited = new Array(n).fill(0);
-    const head = opts.heading;
-    const Wmax = (c.maxAngVel || 0) * Math.PI / 180;
-    const Aang = (c.maxAngAccel || 0) * Math.PI / 180;
-    if (head && head.length === n && Wmax > 1e-4) {
-      const g = new Array(n).fill(0), dth = new Array(n).fill(0);
-      for (let i = 1; i < n; i++) { const ds = pts[i].s - pts[i - 1].s; const dd = angWrap(head[i] - head[i - 1]); dth[i] = Math.abs(dd); g[i] = ds > 1e-6 ? dd / ds : 0; }
-      g[0] = g[1] || 0;
+    return out;
+  }
+  function lvFinishSample(pts, segs, wpIdx) {
+    let s = 0; if (pts[0]) pts[0].s = 0;
+    for (let i = 1; i < pts.length; i++) { s += lvMag(lvSub(pts[i], pts[i - 1])); pts[i].s = s; }
+    return { pts, length: s, segs, wpIdx };
+  }
+
+  // ---- arc primitive: circle tangent to the start handle, through the endpoint ----
+  function arcSetup(p0, p1, c0) {
       const w = new Array(n);
       for (let i = 0; i < n; i++) w[i] = Math.min(Wmax, rangeAngV[i]);
       stopSet.forEach(idx => { if (idx >= 0 && idx < n) w[idx] = 0; });
