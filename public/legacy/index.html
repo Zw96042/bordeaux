@@ -1,48 +1,48 @@
 <!DOCTYPE html>
 <html lang="en"><head>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-v73tgdbXFMGcUUvQdBMP9Ky1HLDHTXGt9KEq1TYfI3E='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'">
 <script>window.__resources = {"fieldImg":"assets/7712d5c0-2769-423d-b736-63afa7798caf.png"};</script>
 <style id="bordeaux-polish">
 :root {
-  --panel-border-strong: rgba(255,255,255,0.13);
-  --panel-soft: rgba(255,255,255,0.045);
+  --panel-border-strong: oklch(1 0 0 / 0.13);
+  --panel-soft: oklch(1 0 0 / 0.045);
+  --polish-control: oklch(0.205 0.009 260);
+  --polish-control-hover: oklch(0.24 0.011 260);
+  --polish-control-border: oklch(1 0 0 / 0.14);
+  --polish-placeholder: oklch(0.68 0.012 260);
+  --polish-elevation: 0 0 0 1px oklch(1 0 0 / 0.1), 0 8px 24px oklch(0 0 0 / 0.28);
+  --hud-surface: oklch(0.165 0.006 260 / 0.94);
+  --hud-ring: 0 0 0 1px oklch(1 0 0 / 0.1);
 }
+html, body { font-synthesis: none; }
+::selection { color: var(--txt); background: oklch(0.62 0.14 260 / 0.34); }
 .toolbar {
   border-bottom-color: var(--panel-border-strong) !important;
-  box-shadow: 0 1px 0 rgba(255,255,255,0.045), 0 18px 34px rgba(0,0,0,0.18);
+  box-shadow: 0 1px 0 var(--panel-soft);
 }
 .brand-name { letter-spacing: 0 !important; }
-.pathsw-btn, .exportbtn, .qbtn, .facebtn, .toolrail-b, .themebtn, .alliance {
-  transition: border-color .14s ease, background .14s ease, transform .08s ease, color .14s ease;
+.pathsw-btn, .exportbtn, .qbtn, .facebtn, .toolrail-b, .alliance {
+  transition: border-color .14s ease, background-color .14s ease, transform .08s ease-out, color .14s ease;
 }
-.pathsw-btn:hover, .exportbtn:hover, .qbtn:hover, .facebtn:hover, .themebtn:hover, .alliance:hover {
-  border-color: rgba(255,255,255,0.18) !important;
-  background: rgba(255,255,255,0.07) !important;
+@media (hover: hover) and (pointer: fine) {
+  .pathsw-btn:hover, .qbtn:hover, .facebtn:hover, .alliance:hover {
+    border-color: rgba(255,255,255,0.18) !important;
+    background-color: rgba(255,255,255,0.07) !important;
+  }
 }
-.pathmgr-pop {
-  width: 390px !important;
-  padding: 10px !important;
-}
-.pathmgr-search, .pathmgr-rename input {
-  width: 100%;
-  box-sizing: border-box;
-  color: var(--text);
-  background: rgba(0,0,0,0.18);
-  border: 1px solid rgba(255,255,255,0.11);
-  border-radius: 6px;
-  padding: 8px 10px;
-  outline: none;
-}
-.pathmgr-search:focus, .pathmgr-rename input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
-}
-.pathmgr-rename {
+.plannercontrol { display: flex; align-items: center; gap: 4px; height: 32px; min-width: 0; }
+.plannercontrol .seg { height: 32px; padding: 3px; gap: 2px; border-color: rgba(255,255,255,0.09); background: rgba(255,255,255,0.035); }
+.plannercontrol .seg-i { height: 24px; min-width: 0; padding: 0 7px; border-radius: 4px; font-size: 10.5px; white-space: nowrap; }
+.plannercontrol .seg-indicator { background: rgba(255,255,255,0.09); }
+.plannercontrol .planner-family { flex: 0 0 124px; }
+.plannercontrol .planner-family .seg-i { padding-inline: 4px; font-size: 10px; }
+.plannercontrol .planner-method { flex: 1 1 0; }
+.plannerdiag {
   display: grid;
-  grid-template-columns: 54px 1fr;
-  align-items: center;
-  gap: 8px;
-  margin: 9px 0;
-  color: var(--muted);
+  grid-template-columns: auto auto;
+  column-gap: 8px;
+  row-gap: 2px;
+  margin-top: 8px;
   font-size: 12px;
 }
 .pathmgr-list { max-height: 310px !important; }
