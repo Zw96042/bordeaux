@@ -487,3 +487,93 @@
           h('svg', { ref: graphRef, className: 'velgraph-svg', viewBox: `0 0 ${GW} ${GH}`, preserveAspectRatio: 'none', onPointerDown: onGraphDown, tabIndex: 0, role: 'slider', 'aria-label': title + ' graph playback position', 'aria-valuemin': 0, 'aria-valuemax': Math.round(total * 1000), 'aria-valuenow': Math.round(playTime * 1000), onKeyDown: (e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); seek(Math.max(0, Math.min(total, playTime + (e.key === 'ArrowRight' ? 1 : -1) * Math.max(0.02, total / 100)))); } else if (e.key === 'Home') { e.preventDefault(); seek(0); } else if (e.key === 'End') { e.preventDefault(); seek(total); } } },
             h('defs', null,
               h('linearGradient', { id: 'telemetry-fill', x1: '0', y1: '0', x2: '0', y2: '1' },
+                h('stop', { offset: '0%', stopColor: 'var(--accent)', stopOpacity: 0.24 }),
+                h('stop', { offset: '100%', stopColor: 'var(--accent)', stopOpacity: 0.02 }))),
+            [0.25, 0.5, 0.75].map((g) => h('line', { key: g, x1: padL, x2: GW - padR, y1: padT + g * (GH - padT - padB), y2: padT + g * (GH - padT - padB), stroke: '#ffffff', strokeOpacity: 0.05, strokeWidth: 1 })),
+            signed && h('line', { x1: padL, x2: GW - padR, y1: zeroY, y2: zeroY, stroke: '#ffffff', strokeOpacity: 0.16, strokeWidth: 1 }),
+            !signed && h('line', { x1: padL, x2: GW - padR, y1: GH - padB, y2: GH - padB, stroke: '#ffffff', strokeOpacity: 0.12, strokeWidth: 1 }),
+            poly && h('path', { d: poly + `L ${GW - padR} ${baseY} L ${padL} ${baseY} Z`, fill: 'url(#telemetry-fill)' }),
+            poly && h('path', { d: poly, fill: 'none', stroke: 'var(--accent)', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', vectorEffect: 'non-scaling-stroke' }),
+            h('line', { x1: playX, x2: playX, y1: padT, y2: GH - padB, stroke: '#fff', strokeOpacity: 0.45, strokeWidth: 1, vectorEffect: 'non-scaling-stroke' }),
+            h('circle', { cx: playX, cy: playY, r: 4, fill: '#fff', stroke: 'var(--accent)', strokeWidth: 2, vectorEffect: 'non-scaling-stroke' })),
+          h('div', { className: 'velgraph-time' }, h('span', null, '0s'), h('span', null, (total / 2).toFixed(1) + 's'), h('span', null, total.toFixed(1) + 's')))),
+      h('div', { className: 'transport' },
+        h('div', { className: 'timeline-toolbar' },
+          h('div', { className: 'transport-controls' },
+            h('button', { className: 'tbtn', type: 'button', onClick: restart, title: 'Restart', 'aria-label': 'Restart trajectory playback' }, h(Icon, { name: 'rewind', size: 14 })),
+            h('button', { className: 'tbtn play', type: 'button', onClick: togglePlayback, title: 'Play / Pause  (Space)', 'aria-label': playing ? 'Pause trajectory playback' : 'Play trajectory' }, h(Icon, { name: playing ? 'pause' : 'play', size: 15, fill: !playing }))),
+          h('span', { className: 'timeline-title' }, 'Timeline'),
+          h('div', { className: 'timecode', 'aria-hidden': true },
+            h('span', { className: 'timecode-now' }, playTime.toFixed(2)),
+            h('span', { className: 'timecode-sep' }, '/'),
+            h('span', { className: 'timecode-total' }, total.toFixed(2)),
+            h('span', { className: 'timecode-unit' }, 's')),
+          featureCount > 0 && h('span', { className: 'timeline-summary', 'aria-hidden': true }, featureSummary),
+          h('div', { className: 'transport-meta' },
+            h('div', { className: 'roi', title: 'Path length' }, h('span', { className: 'roi-v' }, (derived.totalDistance || derived.sample.length).toFixed(2)), h('span', { className: 'roi-u' }, 'm')),
+            h(IconBtn, { icon: 'gauge', active: graphOpen, onClick: () => setGraphOpen(!graphOpen), title: 'Telemetry graph' }))),
+        h('div', { className: 'timeline-editor' },
+          h('div', { className: 'timeline' },
+            h('div', { className: 'timeline-ruler', 'aria-hidden': true },
+              timelineTicks.map((tick, index) => h('span', { key: tick.fraction, className: 'timeline-tick' + (index === 0 ? ' first' : index === timelineTicks.length - 1 ? ' last' : ''), style: { left: (tick.fraction * 100).toFixed(3) + '%' } },
+                h('span', { className: 'timeline-tick-label' }, tick.label)))),
+            h('div', { className: 'timeline-lanes' },
+              h('span', { className: 'timeline-track', 'aria-hidden': true }),
+              timelineTicks.map((tick) => h('span', { key: 'grid-' + tick.fraction, className: 'timeline-gridline', 'aria-hidden': true, style: { left: (tick.fraction * 100).toFixed(3) + '%' } })),
+              timeline.ranges.map((range) => h('span', { key: range.key, className: 'timeline-range', title: range.label, 'aria-hidden': true, style: { left: range.left.toFixed(3) + '%', width: range.width.toFixed(3) + '%' } })),
+              timeline.waypoints.map((waypoint) => h('span', { key: waypoint.key, className: 'timeline-waypoint' + (waypoint.stop ? ' stop' : ''), title: waypoint.label, 'aria-hidden': true, style: { left: waypoint.left.toFixed(3) + '%' } })),
+              timeline.targets.map((target) => h('span', { key: target.key, className: 'timeline-target', title: target.label, 'aria-hidden': true, style: { left: target.left.toFixed(3) + '%' } })),
+              timeline.markers.map((marker) => h('span', { key: marker.key, className: 'timeline-event', title: marker.label, 'aria-hidden': true, style: { left: marker.left.toFixed(3) + '%' } })),
+              h('span', { className: 'timeline-playhead', 'aria-hidden': true, style: { left: (pct * 100).toFixed(3) + '%' } }),
+              h('input', {
+                className: 'scrub', type: 'range', 'aria-label': 'Trajectory playback position',
+                'aria-describedby': 'trajectory-feature-summary',
+                'aria-valuetext': playTime.toFixed(2) + ' seconds of ' + total.toFixed(2) + ' seconds',
+                min: 0, max: total, step: scrubStep, value: Math.min(playTime, total),
+                onChange: (e) => seek(+e.target.value),
+                onKeyDown: (e) => {
+                  if (e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+                    e.preventDefault(); seek(playTime + (e.key === 'ArrowRight' ? 0.1 : -0.1));
+                  }
+                },
+                onPointerUp: (e) => e.currentTarget.blur()
+              }),
+              h('span', { id: 'trajectory-feature-summary', className: 'sr-only' }, featureSummary || 'No authored timeline features'))))));
+  }
+
+  // ---------------- zoom / view controls ----------------
+  function ViewControls({ zoomPct, zoomBy, onFit, showGrid, setShowGrid }) {
+    return h('div', { className: 'viewctl' },
+      h('button', { className: 'vc-btn', type: 'button', title: 'Zoom out', 'aria-label': 'Zoom out', onClick: () => zoomBy(1.18) }, h(Icon, { name: 'zoomout', size: 16 })),
+      h('button', { className: 'vc-pct', type: 'button', title: 'Fit field  (F)', onClick: onFit }, zoomPct + '%'),
+      h('button', { className: 'vc-btn', type: 'button', title: 'Zoom in', 'aria-label': 'Zoom in', onClick: () => zoomBy(1 / 1.18) }, h(Icon, { name: 'zoomin', size: 16 })),
+      h('div', { className: 'vc-div' }),
+      h('button', { className: 'vc-btn' + (showGrid ? ' active' : ''), type: 'button', title: 'Toggle field grid  (G)', 'aria-label': 'Toggle field grid', 'aria-pressed': showGrid, onClick: () => setShowGrid(!showGrid) }, h(Icon, { name: 'grid', size: 16 })),
+      h('button', { className: 'vc-btn', type: 'button', title: 'Fit field  (F)', 'aria-label': 'Fit field to view', onClick: onFit }, h(Icon, { name: 'fit', size: 16 })));
+  }
+
+  function fmt(t) { return (t || 0).toFixed(2) + 's'; }
+
+  // ---------------- routine overlay legend (auto mode, bottom-left) ----------------
+  function RoutineLegend({ run, time, running }) {
+    const items = [
+      { c: 'var(--accent)', t: 'Selected / active' },
+      { c: '#f6a93a', t: 'Generated \u00b7 runtime', dash: true },
+      { c: '#5b636e', t: 'Completed' },
+      { c: '#474e59', t: 'Pending', dash: true },
+    ];
+    let idx = -1;
+    for (let i = 0; i < run.steps.length; i++) { const s = run.steps[i]; if (time >= s.t0 && time < s.t1 + 1e-6) { idx = i; break; } idx = i; }
+    const cur = idx >= 0 ? run.steps[idx] : null;
+    return h('div', { className: 'rlegend' },
+      h('div', { className: 'rlegend-h' }, 'Routine \u00b7 field overlay'),
+      h('div', { className: 'rlegend-grid' }, items.map((it, i) =>
+        h('div', { key: i, className: 'rlegend-row' },
+          h('span', { className: 'rlegend-bar' + (it.dash ? ' dash' : ''), style: { background: it.dash ? 'none' : it.c, borderColor: it.c } }),
+          h('span', { className: 'rlegend-t' }, it.t)))),
+      cur && h('div', { className: 'rlegend-now' },
+        h('span', { className: 'rlegend-dot', style: { background: running ? 'var(--good)' : 'var(--txt-3)' } }),
+        running ? 'Executing' : 'Staged', h('span', { className: 'rlegend-nowt' }, fmt(time) + ' / ' + fmt(run.total))));
+  }
+
+  window.Panels = { Toolbar, ToolRail, ConstraintBar, Outline, Overlay, PathChecks, Transport, ViewControls, RoutineLegend };
