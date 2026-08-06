@@ -358,42 +358,42 @@
         h('span', { className: 'diag-c' }, issueCount ? issueCount : checks.length),
         h('button', { className: 'ctxinsp-x', type: 'button', title: 'Close', 'aria-label': 'Close path checks', onClick: onClose }, h(Icon, { name: 'x', size: 14 }))),
       h('div', { className: 'diag-scroll' },
-        h(IconBtn, { icon: 'gauge', active: graphOpen, onClick: () => setGraphOpen(!graphOpen), title: 'Telemetry graph' })));
+        checks.length === 0
+          ? h('div', { className: 'diag-empty' }, h(Icon, { name: 'check', size: 16 }), 'No constraint violations detected.')
+          : checks.map((check, i) => h('div', { key: i, className: 'diag-row ' + check.level },
+              h('button', { className: 'diag-main', type: 'button', onClick: () => onPick(check) },
+                h('span', { className: 'diag-sev ' + check.level }),
+                h('div', { className: 'diag-body' },
+                  h('div', { className: 'diag-txt' }, check.text),
+                  h('div', { className: 'diag-loc' }, (check.level === 'note' ? 'Performance note \u00b7 ' : 'Constraint check \u00b7 ') + segName(check.seg))),
+                h('span', { className: 'diag-pin' }, h(Icon, { name: 'pin', size: 13 })))))));
   }
 
-  // ---------------- zoom / view controls ----------------
-  function ViewControls({ zoomPct, zoomBy, onFit }) {
-    return h('div', { className: 'viewctl' },
-      h('button', { className: 'vc-btn', type: 'button', title: 'Zoom out', onClick: () => zoomBy(1.18) }, h(Icon, { name: 'zoomout', size: 16 })),
-      h('button', { className: 'vc-pct', type: 'button', title: 'Fit field  (F)', onClick: onFit }, zoomPct + '%'),
-      h('button', { className: 'vc-btn', type: 'button', title: 'Zoom in', onClick: () => zoomBy(1 / 1.18) }, h(Icon, { name: 'zoomin', size: 16 })),
-      h('div', { className: 'vc-div' }),
-      h('button', { className: 'vc-btn', type: 'button', title: 'Fit field  (F)', onClick: onFit }, h(Icon, { name: 'fit', size: 16 })));
-  }
-
-  function fmt(t) { return (t || 0).toFixed(2) + 's'; }
-
-  // ---------------- routine overlay legend (auto mode, bottom-left) ----------------
-  function RoutineLegend({ run, time, running }) {
-    const items = [
-      { c: 'var(--accent)', t: 'Selected / active' },
-      { c: '#f6a93a', t: 'Generated \u00b7 runtime', dash: true },
-      { c: '#5b636e', t: 'Completed' },
-      { c: '#474e59', t: 'Pending', dash: true },
-    ];
-    let idx = -1;
-    for (let i = 0; i < run.steps.length; i++) { const s = run.steps[i]; if (time >= s.t0 && time < s.t1 + 1e-6) { idx = i; break; } idx = i; }
-    const cur = idx >= 0 ? run.steps[idx] : null;
-    return h('div', { className: 'rlegend' },
-      h('div', { className: 'rlegend-h' }, 'Routine \u00b7 field overlay'),
-      h('div', { className: 'rlegend-grid' }, items.map((it, i) =>
-        h('div', { key: i, className: 'rlegend-row' },
-          h('span', { className: 'rlegend-bar' + (it.dash ? ' dash' : ''), style: { background: it.dash ? 'none' : it.c, borderColor: it.c } }),
-          h('span', { className: 'rlegend-t' }, it.t)))),
-      cur && h('div', { className: 'rlegend-now' },
-        h('span', { className: 'rlegend-dot', style: { background: running ? 'var(--good)' : 'var(--txt-3)' } }),
-        running ? 'Executing' : 'Staged', h('span', { className: 'rlegend-nowt' }, fmt(time) + ' / ' + fmt(run.total))));
-  }
-
-  window.Panels = { Toolbar, ToolRail, ConstraintBar, Outline, Overlay, Diagnostics, Transport, ViewControls, RoutineLegend };
-})();
+  // ---------------- telemetry graph + transport ----------------
+  function Transport({ derived, doc, metric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen }) {
+    const total = derived.prof.totalTime || 0.001;
+    const pct = Math.max(0, Math.min(1, playTime / total));
+    const scrubStep = Math.min(0.02, total);
+    const graphRef = useRef(null);
+    const prof = derived.prof, pts = derived.sample.pts, M = derived.metrics;
+    const timeline = useMemo(() => {
+      const motionEnd = Math.max(0, Number(prof.t && prof.t[prof.t.length - 1]) || 0);
+      const distance = pts.length ? Math.max(0, Number(pts[pts.length - 1].s) || 0) : 0;
+      const timeAtFraction = (fraction) => {
+        const f = Math.max(0, Math.min(1, Number(fraction) || 0));
+        if (pts.length < 2 || !prof.t || prof.t.length < 2 || distance <= 1e-9) return f * motionEnd;
+        const target = f * distance;
+        if (target <= 0) return 0;
+        if (target >= distance) return motionEnd;
+        let low = 1, high = pts.length - 1;
+        while (low < high) { const middle = (low + high) >> 1; if (pts[middle].s < target) low = middle + 1; else high = middle; }
+        const before = pts[low - 1], after = pts[low];
+        const part = (target - before.s) / Math.max(1e-9, after.s - before.s);
+        return prof.t[low - 1] + (prof.t[low] - prof.t[low - 1]) * part;
+      };
+      const percentAt = (fraction) => Math.max(0, Math.min(100, timeAtFraction(fraction) / total * 100));
+      const markers = ((doc && doc.markers) || []).map((marker, index) => ({
+        key: 'event-' + index,
+        label: marker.name || 'Event marker ' + (index + 1),
+        left: percentAt(window.PM.featureFraction(marker, derived.sample)),
+      }));
