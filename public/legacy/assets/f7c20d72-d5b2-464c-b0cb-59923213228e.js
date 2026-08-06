@@ -358,51 +358,51 @@
       }
       d.moved = true;
       if (!d.historyStarted && actions.beginHistory) { actions.beginHistory(); d.historyStarted = true; }
-        group.push(h('rect', { key: 'node', x: c.x - s, y: c.y - s, width: s * 2, height: s * 2, rx: P(1.5), fill: '#14161a', stroke: col, strokeWidth: P(2), 'data-role': 'wp', 'data-idx': i, style: { cursor: 'grab' } }));
-        els.push(h('g', { key: 'w' + i }, group));
-      });
+      const p = d.role === 'ct' ? world : clampWorld(world);
+      if (d.role === 'wp') actions.moveWaypoint(d.idx, p);
+      else if (d.role === 'ct') actions.moveHandle(d.idx >> 1, d.idx & 1, p);
+      else if (d.role === 'rt') { const visit = projectVisit(world, d.lastF); if (visit) d.lastF = visit.f; actions.moveTargetTo(d.idx, world, visit && visit.f); }
+      else if (d.role === 'rth') actions.rotateTargetTo(d.idx, world, e.shiftKey);
+      else if (d.role === 'look') actions.moveSegmentLookAt(d.idx, p);
+      else if (d.role === 'em') { const visit = projectVisit(world, d.lastF); if (visit) d.lastF = visit.f; actions.moveMarkerTo(d.idx, world, visit && visit.f); }
+      else if (d.role === 'rs') { const visit = projectVisit(world, d.lastF); const f = visit ? visit.f : window.PM.nearestFraction(world.x, world.y, pts); d.lastF = f; actions.moveRangeHandle(d.idx, 0, f); }
+      else if (d.role === 're') { const visit = projectVisit(world, d.lastF); const f = visit ? visit.f : window.PM.nearestFraction(world.x, world.y, pts); d.lastF = f; actions.moveRangeHandle(d.idx, 1, f); }
+    };
 
-      // segment-type chips at each non-Bézier segment midpoint (legible hybrid paths)
-      if (pts.length > 1 && derived.wpFrac) {
-        const ABBR = { line: 'LIN', arc: 'ARC', clothoid: 'CLO' };
-        for (let i = 0; i < doc.waypoints.length - 1; i++) {
-          const st = doc.waypoints[i].segType;
-          if (!ABBR[st]) continue;
-          const fmid = ((derived.wpFrac[i] || 0) + (derived.wpFrac[i + 1] || 0)) / 2;
-          const pf = window.PM.pointAtFraction(fmid, pts); const c = W2P(pf);
-          const tw = P(30), th = P(15);
-          els.push(h('g', { key: 'sc' + i, transform: `translate(${c.x} ${c.y + P(17)})`, style: { pointerEvents: 'none' } },
-            h('rect', { x: -tw / 2, y: -th / 2, width: tw, height: th, rx: P(2.5), fill: 'rgba(14,16,20,0.9)', stroke: '#3a4250', strokeWidth: P(1) }),
-            h('text', { x: 0, y: P(3.6), fill: '#aeb6c2', fontSize: P(9.5), fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, letterSpacing: P(0.5), textAnchor: 'middle' }, ABBR[st])));
+    const onUp = (e) => {
+      const d = drag.current; drag.current = null;
+      setSnap(null);
+      try { svgRef.current.releasePointerCapture(e.pointerId); } catch (_) {}
+      if (!d) return;
+      if (d.role === 'newrange') {
+        setPreview(null);
+        const f0 = d.f0, f1 = d.f1;
+        if (Math.abs(f1 - f0) >= 0.015) actions.addRange(f0, f1);
+        return;
+      }
+      // Pointer capture and preventDefault make Chromium's native dblclick
+      // unreliable on the SVG. Count only released, unmoved presses so a fast
+      // second drag never gets mistaken for an inspector gesture.
+      if (d.inspectItem) {
+        const previous = lastInspectPress.current;
+        if (d.moved) {
+          if (previous.key === d.inspectItem.pressKey) lastInspectPress.current = { key: null, at: 0 };
+        } else {
+          const now = performance.now();
+          if (previous.key === d.inspectItem.pressKey && now - previous.at <= 550) {
+            actions.select(d.inspectItem.kind, d.inspectItem.selectedIndex);
+            if (actions.openInspector) actions.openInspector();
+            lastInspectPress.current = { key: null, at: 0 };
+            return;
+          }
+          lastInspectPress.current = { key: d.inspectItem.pressKey, at: now };
         }
       }
-
-      // safety warnings — curvature / velocity-spike badges
-      if (derived.warnings && derived.warnings.length) {
-        derived.warnings.forEach((wn, i) => {
-          const pf = window.PM.pointAtFraction(wn.f, pts); const c = W2P(pf);
-          const col = wn.sev === 'high' ? '#d2655f' : '#d9a441';
-          els.push(h('g', { key: 'wn' + i, transform: `translate(${c.x} ${c.y - P(28)})`, style: { pointerEvents: 'none' } },
-            h('path', { d: `M 0 ${-P(8)} L ${P(8)} ${P(6)} L ${-P(8)} ${P(6)} Z`, fill: 'rgba(14,16,20,0.92)', stroke: col, strokeWidth: P(1.4), strokeLinejoin: 'round' }),
-            h('rect', { x: -P(0.8), y: -P(3.5), width: P(1.6), height: P(5.5), rx: P(0.8), fill: col }),
-            h('circle', { cx: 0, cy: P(4), r: P(1), fill: col })));
-        });
+      if (d.role === 'wp' && !d.moved && d.cycleWaypoint) {
+        const visit = resolveWaypointVisit(d.world, true);
+        if (visit && Number.isInteger(visit.wp)) actions.select('wp', visit.wp);
+        return;
       }
-      return els;
-    }, [doc, derived, sel, showGrid, alliance, accent, metric, robot, drive, tool, view.w, cw]);
-
-    // ---------- ROBOT (dynamic) ----------
-    const robotEl = useMemo(() => {
-      const pose = pts.length > 1 ? window.PM.poseAtTime(playTime, pts, derived.prof, derived.anchors, derived.mode, derived.rev)
-        : (doc.waypoints[0] ? { x: doc.waypoints[0].x, y: doc.waypoints[0].y, heading: ((doc.waypoints[0].theta || 0) + (derived.rev ? 180 : 0)) * Math.PI / 180, speed: 0 } : null);
-      if (!pose) return null;
-      const c = W2P(pose);
-      const degHead = pose.heading * 180 / Math.PI + (flip ? 180 : 0);
-      const rw = robot.w * SX, rh = robot.l * SY;
-      const bump = alliance === 'red' ? '#c75450' : '#4271c0';
-      return h('g', { transform: `translate(${c.x} ${c.y}) rotate(${-degHead})`, style: { pointerEvents: 'none' } },
-        h('rect', { x: -rw / 2, y: -rh / 2, width: rw, height: rh, rx: P(2.5), fill: 'rgba(14,16,20,0.82)', stroke: bump, strokeWidth: P(3) }),
-        h('rect', { x: -rw / 2 + P(5), y: -rh / 2 + P(5), width: rw - P(10), height: rh - P(10), rx: P(1.5), fill: 'none', stroke: 'rgba(255,255,255,0.10)', strokeWidth: P(1) }),
         h('line', { x1: 0, y1: 0, x2: rw / 2 + P(3), y2: 0, stroke: '#e8ecf2', strokeWidth: P(2.5) }),
         h('path', { d: `M ${rw / 2 + P(1)} ${-P(6)} L ${rw / 2 + P(13)} 0 L ${rw / 2 + P(1)} ${P(6)} Z`, fill: '#e8ecf2' }));
     }, [playTime, pts, derived, drive, alliance, robot, view.w, cw, flip, doc.waypoints]);
