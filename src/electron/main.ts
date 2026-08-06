@@ -435,3 +435,93 @@ function buildMenu() {
         { label: "Install or Update Support…", click: () => sendCommand("java-install") },
         { label: "Build Command Catalog…", click: () => sendCommand("java-build") },
         { label: "Cancel Catalog Build", click: () => sendCommand("java-cancel-build") },
+        { type: "separator" },
+        { label: "Export to Robot Project…", click: () => sendCommand("export-java") },
+        { label: "Save Java JSON As…", click: () => sendCommand("export-java-save-as") },
+      ],
+    },
+    {
+      label: "Agents",
+      submenu: [
+        {
+          label: "Enable MCP Access",
+          type: "checkbox",
+          checked: agentBridge?.enabled === true,
+          click: () => {
+            if (!agentBridge) return;
+            const operation = agentBridge.enabled ? agentBridge.stop() : agentBridge.start().then(() => undefined);
+            void operation.then(() => { buildMenu(); sendMcpStatus(); }).catch((error) => {
+              buildMenu();
+              sendMcpStatus();
+              void dialog.showErrorBox("Bordeaux MCP access", error instanceof Error ? error.message : String(error));
+            });
+          },
+        },
+        {
+          label: agentBridge?.enabled ? "MCP access is available to this user" : "MCP access is off",
+          enabled: false,
+        },
+        { type: "separator" },
+        {
+          label: "Copy MCP Configuration",
+          click: () => {
+            const electronArgs = app.isPackaged ? ["--mcp-stdio"] : [path.join(__dirname, "main.js"), "--mcp-stdio"];
+            const launch = process.platform === "win32"
+              ? { command: process.execPath, args: electronArgs }
+              : { command: "/usr/bin/env", args: ["-u", "ELECTRON_RUN_AS_NODE", process.execPath, ...electronArgs] };
+            clipboard.writeText(JSON.stringify({ mcpServers: { bordeaux: launch } }, null, 2));
+          },
+        },
+      ],
+    },
+    { label: "View", submenu: [{ role: "reload" }, { role: "forceReload" }, { role: "toggleDevTools" }, { type: "separator" }, { role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" }, { type: "separator" }, { role: "togglefullscreen" }] },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+async function openProjectFile(filePath: string) {
+  const decoded = await readProject(filePath);
+  const { project } = decoded;
+  rememberFile(filePath, saveTargetForOpenedProject(filePath, decoded));
+  dirty = false;
+  return { project };
+}
+
+handle("project:open", async () => {
+  if (smokeDirectory) return openProjectFile(path.join(smokeDirectory, "project.bordeaux.json"));
+  const result = await dialog.showOpenDialog(mainWindow!, { title: "Open Bordeaux Project or Path", properties: ["openFile"], filters: [{ name: "Bordeaux Project or LabVIEW Path", extensions: ["json", "path", "bdx"] }] });
+  if (result.canceled || !result.filePaths[0]) return null;
+  return openProjectFile(result.filePaths[0]);
+});
+
+handle("project:openRecent", async (_event, rawIndex) => {
+  if (!Number.isInteger(rawIndex) || typeof rawIndex !== "number" || rawIndex < 0 || rawIndex >= recentFiles.length) throw new Error("Recent project is no longer available");
+  return openProjectFile(recentFiles[rawIndex]);
+});
+
+handle("project:new", () => {
+  currentProjectPath = null;
+  dirty = false;
+});
+
+handle("project:save", async (_event, project, rawSaveAs) => {
+  const validation = validateProject(project);
+  if (!validation.ok) throw new Error(validation.issues.map((item) => `${item.path}: ${item.message}`).join("\n"));
+  let target = rawSaveAs === true ? null : currentProjectPath;
+  if (!target) {
+    if (smokeDirectory) target = path.join(smokeDirectory, "project.bordeaux.json");
+    else {
+    const projectName = project && typeof project === "object" && "name" in project && typeof project.name === "string" ? project.name : "project";
+    const result = await dialog.showSaveDialog(mainWindow!, { title: "Save Bordeaux Project", defaultPath: `${projectName || "project"}.bordeaux.json`, filters: [{ name: "Bordeaux Project", extensions: ["json"] }] });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    target = result.filePath;
+    }
+  }
+  await writeProject(target, project);
+  rememberFile(target);
+  dirty = false;
+  return { saved: true };
+});
+
+handle("project:exportBdx", async (_event, project, rawPathId) => {
+  const exportData = buildLabviewBdx(project as BordeauxProject, typeof rawPathId === "string" ? rawPathId : undefined);
