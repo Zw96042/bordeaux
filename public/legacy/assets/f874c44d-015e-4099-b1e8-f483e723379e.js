@@ -88,6 +88,7 @@
     if (type === 'decision') return { id: uid('d'), type: 'decision', cond: 'New condition?', thenLabel: 'Yes', elseLabel: 'No', then: [], else: [] };
     const c = cat || 'terminate';
     if (c === 'generate') return { id: uid('g'), type: 'function', cat: 'generate', funcRef: 'GeneratePath', trigger: 'On entry', params: [], note: '', preview: null };
+    if (c === 'sequence') return { id: uid('s'), type: 'function', cat: 'sequence', op: 'skip', target: '', trigger: 'When\u2026', note: '' };
     if (c === 'velocity') return { id: uid('v'), type: 'function', cat: 'velocity', title: 'Velocity rule', trigger: 'When\u2026', scale: 0.5, note: '' };
     return { id: uid('f'), type: 'function', cat: 'terminate', title: 'Terminate', trigger: 'When\u2026', note: '' };
   }
@@ -103,19 +104,19 @@
   function countSteps(routine) { let n = 0; walk(routine.nodes, () => n++); return n; }
 
   // ---- derive a path-bearing node into a field trajectory ----
-  function derivePathNode(node, paths, robot) {
+  function derivePathNode(node, paths, robot, plannerId) {
     let doc = null;
-    if (node.type === 'path') doc = paths[node.ref];
+    if (node.type === 'path') doc = paths.find((path) => path.id === node.ref);
     else if (node.type === 'function' && node.cat === 'generate' && node.preview) doc = node.preview;
     if (!doc) return null;
-    const d = window.PM.derivePath(doc, robot, 56);
+    const d = window.PM.derivePath(doc, robot, 56, plannerId);
     return { doc, deriv: d, pts: d.sample.pts, total: d.prof.totalTime || 0 };
   }
 
   const EVENT_DWELL = 0.45; // seconds a non-driving function holds for, in the run
 
   // ---- flatten a routine into an executed step list given decision outcomes ----
-  function buildRun(routine, paths, robot, outcomes) {
+  function buildRun(routine, paths, robot, outcomes, plannerId) {
     outcomes = outcomes || {};
     const flat = [];
     const collect = (nodes) => {
@@ -132,7 +133,6 @@
           flat.push({ node: n, kind: 'event' });
         }
       });
-    };
     collect(routine.nodes);
 
     let t = 0, pIdx = 0; const steps = []; const segs = []; let lastPose = null;
