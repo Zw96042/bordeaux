@@ -992,3 +992,93 @@
       const boundaryHeading = incoming + delta * beforeShare;
       const afterDistance = Math.min(policy.distanceM * (1 - beforeShare), Math.max(0, pts[nextBoundary].s - pts[boundary].s));
       let previous = boundaryHeading;
+      const afterStartIndex = boundaryProtected ? boundary + 1 : boundary;
+      for (let i = afterStartIndex; i <= nextBoundary; i++) {
+        const base = previous + angWrap(raw[i === boundary ? outgoingStart : i] - previous);
+        const t = afterDistance > 1e-9 ? Math.max(0, Math.min(1, (pts[i].s - pts[boundary].s) / afterDistance)) : 1;
+        const smooth = t * t * t * (t * (t * 6 - 15) + 10);
+        out[i] = base + (boundaryHeading - outgoing) * (1 - smooth);
+        previous = out[i];
+      }
+    }
+    return out;
+  }
+  function effectiveRanges(doc, smp) {
+    const ranges = doc.ranges || []; const total = smp.length || 1;
+    const wf = ranges.some((r) => r.anchor === 'wp') ? waypointFracs(doc, smp) : null;
+    return ranges.map((r) => {
+      let f0 = r.f0, f1 = r.f1;
+      if (r.anchor === 'dist') { f0 = (r.d0 != null ? r.d0 : (r.f0 || 0) * total) / total; f1 = (r.d1 != null ? r.d1 : (r.f1 || 0) * total) / total; }
+      else if (r.anchor === 'wp' && wf) {
+        const localFraction = (waypoint, local, fallback) => {
+          if (local == null) return wf[Math.max(0, Math.min(wf.length - 1, waypoint != null ? waypoint : fallback))];
+          const segment = Math.max(0, Math.min(wf.length - 2, Math.round(waypoint != null ? waypoint : 0)));
+          const t = Math.max(0, Math.min(1, local));
+          return wf[segment] + (wf[segment + 1] - wf[segment]) * t;
+        };
+        f0 = localFraction(r.w0, r.t0, 0); f1 = localFraction(r.w1, r.t1, wf.length - 1);
+      }
+      f0 = Math.max(0, Math.min(1, f0 || 0)); f1 = Math.max(0, Math.min(1, f1 || 0));
+      return { f0, f1, maxVel: r.maxVel, maxAccel: r.maxAccel, maxDecel: r.maxDecel, maxAngVel: r.maxAngVel, maxAngAccel: r.maxAngAccel, rotationPriority: r.rotationPriority, anchor: r.anchor || 'param', name: r.name };
+    });
+  }
+
+  function headingWithTranslationPriority(doc, robot, pts, prof, desired, ranges, transitions) {
+    transitions = transitions || [];
+    if (!robot || robot.drive === 'tank' || (!ranges.some((range) => range.rotationPriority === 'translation') && !transitions.some((transition) => transition.rotationPriority === 'translation')) || desired.length < 2) return desired;
+    const activeAt = (f) => ranges.filter((range) => f >= Math.min(range.f0, range.f1) - 1e-9 && f <= Math.max(range.f0, range.f1) + 1e-9);
+    const translationForInterval = (before, after) => {
+      const start = Math.min(before, after), end = Math.max(before, after);
+      const overlaps = (lo, hi) => Math.min(end, hi) - Math.max(start, lo) >= -1e-9;
+      const active = ranges.filter((range) => overlaps(Math.min(range.f0, range.f1), Math.max(range.f0, range.f1)));
+      const activeTransitions = transitions.filter((transition) => overlaps(transition.start, transition.end));
+      return active.length + activeTransitions.length > 0
+        && active.every((range) => range.rotationPriority === 'translation')
+        && activeTransitions.every((transition) => transition.rotationPriority === 'translation');
+    };
+    const out = desired.slice();
+    let following = false, actual = desired[0], omega = 0;
+    const total = pts[pts.length - 1].s || 1;
+    for (let i = 1; i < desired.length; i++) {
+      const f = pts[i].s / total, previousF = pts[i - 1].s / total;
+      if (translationForInterval(previousF, f)) following = true;
+      const dt = prof.t[i] - prof.t[i - 1];
+      if (!following || dt <= 1e-9) { actual = desired[i]; omega = dt > 1e-9 ? angWrap(desired[i] - desired[i - 1]) / dt : omega; out[i] = actual; continue; }
+      const active = activeAt(f).concat(activeAt(previousF));
+      let maxOmega = (doc.constraints.maxAngVel || 0) * D2R;
+      let maxAccel = (doc.constraints.maxAngAccel || 0) * D2R;
+      let maxDecel = (doc.constraints.maxAngDecel || doc.constraints.maxAngAccel || 0) * D2R;
+      active.forEach((range) => {
+        maxOmega = Math.min(maxOmega, range.maxAngVel * D2R);
+        maxAccel = Math.min(maxAccel, range.maxAngAccel * D2R);
+        maxDecel = Math.min(maxDecel, range.maxAngAccel * D2R);
+      });
+      const error = desired[i] - actual;
+      const desiredOmega = Math.max(-maxOmega, Math.min(maxOmega, (desired[i] - desired[i - 1]) / dt));
+      const brakingOmega = Math.max(0, Math.sqrt(2 * Math.max(1e-9, maxDecel) * Math.abs(error)) - Math.max(1e-9, maxDecel) * dt);
+      const catchUpOmega = Math.sign(error) * brakingOmega;
+      let target = Math.max(-maxOmega, Math.min(maxOmega, desiredOmega + catchUpOmega));
+      const exactOmega = error / dt;
+      const exactReversing = Math.sign(exactOmega) !== 0 && Math.sign(omega) !== 0 && Math.sign(exactOmega) !== Math.sign(omega);
+      const exactRate = exactReversing ? Math.min(maxAccel, maxDecel) : Math.abs(exactOmega) > Math.abs(omega) ? maxAccel : maxDecel;
+      if (Math.abs(exactOmega) <= maxOmega + 1e-9 && Math.abs(exactOmega - omega) <= exactRate * dt + 1e-9) target = exactOmega;
+      const reversing = Math.sign(target) !== 0 && Math.sign(omega) !== 0 && Math.sign(target) !== Math.sign(omega);
+      const increasing = Math.sign(target) === Math.sign(omega) && Math.abs(target) > Math.abs(omega);
+      const rate = reversing ? Math.min(maxAccel, maxDecel) : increasing ? maxAccel : maxDecel;
+      const change = Math.max(1e-9, rate) * dt;
+      omega += Math.max(-change, Math.min(change, target - omega));
+      actual += omega * dt;
+      out[i] = actual;
+    }
+    out.terminalOmega = omega;
+    return out;
+  }
+
+  function appendTerminalHeadingCatchup(doc, prof, tracked, desired, ranges) {
+    const last = tracked.length - 1;
+    if (last < 1 || Math.abs(prof.v[last] || 0) > 1e-3) return;
+    let actual = tracked[last], omega = tracked.terminalOmega || 0;
+    const target = desired[last], errorAtArrival = target - actual;
+    if (Math.abs(errorAtArrival) <= 0.05 * D2R && Math.abs(omega) <= 0.05 * D2R) return;
+    let period = doc.labview && doc.labview.samplePeriodS >= 0.001 ? doc.labview.samplePeriodS : Infinity;
+    for (let i = 1; i < prof.t.length; i++) { const dt = prof.t[i] - prof.t[i - 1]; if (dt > 1e-9) period = Math.min(period, dt); }
