@@ -403,51 +403,51 @@
         if (visit && Number.isInteger(visit.wp)) actions.select('wp', visit.wp);
         return;
       }
-        h('line', { x1: 0, y1: 0, x2: rw / 2 + P(3), y2: 0, stroke: '#e8ecf2', strokeWidth: P(2.5) }),
-        h('path', { d: `M ${rw / 2 + P(1)} ${-P(6)} L ${rw / 2 + P(13)} 0 L ${rw / 2 + P(1)} ${P(6)} Z`, fill: '#e8ecf2' }));
-    }, [playTime, pts, derived, drive, alliance, robot, view.w, cw, flip, doc.waypoints]);
-
-    // ---------- ROUTINE OVERLAY (Autonomous Routine / Auto mode) ----------
-    const routineLayers = useMemo(() => {
-      if (!routine) return null;
-      const els = [];
-      const STYLE = {
-        done:      { col: '#5b636e', w: 2.6, op: 0.5, dash: null },
-        pending:   { col: '#474e59', w: 2.2, op: 0.5, dash: `${P(8)} ${P(7)}` },
-        dim:       { col: '#3b424b', w: 2, op: 0.32, dash: null },
-        active:    { col: accent, w: 3.4, op: 1, dash: null, glow: true },
-        focus:     { col: accent, w: 3.7, op: 1, dash: null, glow: true },
-        generated: { col: '#f6a93a', w: 3.1, op: 0.97, dash: `${P(10)} ${P(7)}`, gen: true },
-        genfocus:  { col: '#ffb347', w: 3.7, op: 1, dash: `${P(10)} ${P(7)}`, gen: true, glow: true },
-      };
-      // order: dim/done/pending first, active + generated + focus on top
-      const rank = (s) => ({ focus: 5, genfocus: 5, active: 4, generated: 3, done: 1, pending: 1, dim: 0 }[s] || 0);
-      const order = routine.map((r, i) => i).sort((a, b) => rank(routine[a].state) - rank(routine[b].state));
-      order.forEach((ri) => {
-        const rp = routine[ri]; if (!rp.pts || rp.pts.length < 2) return;
-        const S = STYLE[rp.state] || STYLE.pending;
-        let d = '';
-        rp.pts.forEach((p, k) => { const q = W2P(p); d += (k ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); });
-        // glow / casing under emphasized paths
-        if (S.glow) els.push(h('path', { key: 'rg' + ri, d, fill: 'none', stroke: S.col, strokeOpacity: 0.22, strokeWidth: P(S.w + 9), strokeLinecap: 'round', strokeLinejoin: 'round', style: { pointerEvents: 'none' } }));
-        if (rp.state === 'active' || rp.state === 'focus') els.push(h('path', { key: 'rc' + ri, d, fill: 'none', stroke: '#05060a', strokeOpacity: 0.7, strokeWidth: P(S.w + 2.5), strokeLinecap: 'round', strokeLinejoin: 'round', style: { pointerEvents: 'none' } }));
-        els.push(h('path', { key: 'rp' + ri, className: S.gen ? 'acq-genpath' : undefined, d, fill: 'none', stroke: S.col, strokeOpacity: S.op, strokeWidth: P(S.w), strokeLinecap: 'round', strokeLinejoin: 'round', strokeDasharray: S.dash || undefined, style: { pointerEvents: 'none' } }));
-        els.push(h('path', { key: 'rh' + ri, d, fill: 'none', stroke: 'transparent', strokeWidth: P(16), strokeLinecap: 'round', 'data-role': 'rpath', 'data-idx': rp.nodeId, style: { cursor: 'pointer' } }));
-        // endpoint nodes
-        const a = W2P(rp.pts[0]), b = W2P(rp.pts[rp.pts.length - 1]);
-        const endCol = S.gen ? S.col : null;
-        [[a, '#4bbf86'], [b, '#d2655f']].forEach(([c, dc], di) => {
-          els.push(h('rect', { key: 'rn' + ri + di, x: c.x - P(4.5), y: c.y - P(4.5), width: P(9), height: P(9), rx: S.gen ? P(4.5) : P(1.5), fill: '#14161a', stroke: rp.state === 'pending' || rp.state === 'dim' ? '#5b636e' : (endCol || dc), strokeWidth: P(1.8), style: { pointerEvents: 'none' } }));
-        });
-        // runtime bolt marker for generated paths (start)
-        if (S.gen && rp.state !== 'dim') {
-          els.push(h('g', { key: 'rb' + ri, transform: `translate(${a.x} ${a.y - P(20)})`, style: { pointerEvents: 'none' } },
-            h('circle', { r: P(8.5), fill: 'rgba(20,16,10,0.92)', stroke: S.col, strokeWidth: P(1.4) }),
-            h('path', { d: `M ${P(1.5)} ${-P(4.5)} L ${-P(3)} ${P(0.8)} L ${P(0.2)} ${P(0.8)} L ${-P(1.5)} ${P(4.5)} L ${P(3)} ${-P(0.8)} L ${P(0.2)} ${-P(0.8)} Z`, fill: S.col })));
+      if (d.role === 'bg' && !d.moved && !d.mid) {
+        if (d.insertWaypoint) actions.addWaypoint(d.world, d.segment, !!d.onPath, d.visit);
+        else if (tool === 'waypoint') actions.appendWaypoint(d.world);
+        else if (tool === 'rotation') actions.addTargetAt(d.world, d.visit && d.visit.f);
+        else if (tool === 'marker') actions.addMarkerAt(d.world, d.visit && d.visit.f);
+        else if (tool === 'select') {
+          if (d.onPath) {
+            const visit = d.visit || resolveVisit(d.world, { cycle: true });
+            const f = visit ? visit.f : window.PM.nearestFraction(d.world.x, d.world.y, pts);
+            let segment = visit ? visit.seg : (Number.isInteger(d.segment) ? d.segment : 0);
+            if (!Number.isInteger(d.segment) && derived.wpFrac) {
+              for (let i = 0; i < derived.wpFrac.length - 1; i++) if (f >= derived.wpFrac[i] - 1e-6) segment = i;
+            }
+            actions.select('seg', Math.max(0, Math.min(doc.waypoints.length - 2, segment)));
+          } else { updateVisitFocus(null); actions.select(null, -1); }
         }
-        // mid label
-        const mid = W2P(rp.pts[Math.floor(rp.pts.length / 2)]);
-        const dim = rp.state === 'dim' || rp.state === 'pending';
+      }
+    };
+
+    const onWheel = (e) => {
+      e.preventDefault();
+      const svg = svgRef.current; const ctm = svg.getScreenCTM();
+      const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+      const u = pt.matrixTransform(ctm.inverse());
+      const factor = e.deltaY > 0 ? 1.12 : 1 / 1.12;
+      let nw = view.w * factor;
+      nw = Math.max(IMG_W * 0.12, Math.min(IMG_W * 1.6, nw)); const nh = nw * (IMG_H / IMG_W);
+      const k = nw / view.w;
+      setView({ x: u.x - (u.x - view.x) * k, y: u.y - (u.y - view.y) * k, w: nw, h: nh });
+    };
+
+    const onDbl = (e) => {
+      if (routine) return;
+      if (!inspectTarget(e.target)) return;
+      e.preventDefault(); e.stopPropagation();
+    };
+    const onCtx = (e) => {
+      e.preventDefault();
+      if (routine) return;
+      const t = e.target; const role = t.getAttribute && t.getAttribute('data-role');
+      if (role === 'head' && actions.headingMenu) actions.headingMenu(parseInt(t.getAttribute('data-idx'), 10), e.clientX, e.clientY);
+    };
+
+    // ---------- STATIC LAYERS ----------
+    const staticLayers = useMemo(() => {
         const lblCol = (rp.state === 'active' || rp.state === 'focus') ? accent : S.gen ? S.col : '#8b94a2';
         const txt = (S.gen ? '\u26a1 ' : (rp.idxLabel ? rp.idxLabel + '  ' : '')) + (rp.label || '');
         const tw = P(8.0 * txt.length + 18), th = P(17);
