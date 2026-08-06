@@ -538,3 +538,93 @@ function estimatedCollectionArea(project: BordeauxProject, samples: readonly Tra
   spans.forEach((span) => {
     const first = Math.max(0, samples.findIndex((sample) => sample.f >= span.f0 - 1e-5));
     let last = samples.findIndex((sample) => sample.f > span.f1 + 1e-5);
+    if (last < 0) last = samples.length;
+    last = Math.max(first, last - 1);
+    let previous: { x: number; y: number; intakeHeading: number } | null = null;
+    for (let index = first; index <= last; index += 1) {
+      const sample = samples[index];
+      const cos = Math.cos(sample.headingRad);
+      const sin = Math.sin(sample.headingRad);
+      const center = {
+        x: sample.x + intake.centerM.x * cos - intake.centerM.y * sin,
+        y: sample.y + intake.centerM.x * sin + intake.centerM.y * cos,
+        intakeHeading: sample.headingRad + intake.directionDeg * Math.PI / 180,
+      };
+      const travel = previous ? Math.hypot(center.x - previous.x, center.y - previous.y) : 0;
+      const alongSteps = Math.max(1, Math.ceil(travel / (cellSize / 2)));
+      const acrossSteps = Math.max(1, Math.ceil(intake.captureWidthM / (cellSize / 2)));
+      for (let along = 0; along <= alongSteps; along += 1) {
+        const progress = previous ? along / alongSteps : 1;
+        const x = previous ? previous.x + (center.x - previous.x) * progress : center.x;
+        const y = previous ? previous.y + (center.y - previous.y) * progress : center.y;
+        const heading = previous ? previous.intakeHeading + Math.atan2(Math.sin(center.intakeHeading - previous.intakeHeading), Math.cos(center.intakeHeading - previous.intakeHeading)) * progress : center.intakeHeading;
+        for (let across = 0; across <= acrossSteps; across += 1) {
+          const offset = -intake.captureWidthM / 2 + intake.captureWidthM * across / acrossSteps;
+          cover(x - Math.sin(heading) * offset, y + Math.cos(heading) * offset);
+        }
+      }
+      previous = center;
+    }
+  });
+  return covered.size * cellSize * cellSize;
+}
+
+function rankCandidates(candidates: RouteCandidate[], nearTieWindowS: number): RouteCandidate[] {
+  const fastest = candidates.filter((candidate) => candidate.valid).reduce((value, candidate) => Math.min(value, candidate.metrics.totalTimeS), Number.POSITIVE_INFINITY);
+  return candidates.sort((left, right): number => {
+    if (left.valid !== right.valid) return left.valid ? -1 : 1;
+    if (!left.valid) return left.id.localeCompare(right.id);
+    const leftNear = left.metrics.totalTimeS <= fastest + nearTieWindowS;
+    const rightNear = right.metrics.totalTimeS <= fastest + nearTieWindowS;
+    if (leftNear !== rightNear) return leftNear ? -1 : 1;
+    if (!leftNear) return left.metrics.totalTimeS - right.metrics.totalTimeS || left.id.localeCompare(right.id);
+    if ((left.metrics.estimatedCollectionAreaM2 ?? 0) !== (right.metrics.estimatedCollectionAreaM2 ?? 0)) return (right.metrics.estimatedCollectionAreaM2 ?? 0) - (left.metrics.estimatedCollectionAreaM2 ?? 0);
+    if ((left.metrics.preferredShootingRangeErrorM ?? Number.POSITIVE_INFINITY) !== (right.metrics.preferredShootingRangeErrorM ?? Number.POSITIVE_INFINITY)) return (left.metrics.preferredShootingRangeErrorM ?? Number.POSITIVE_INFINITY) - (right.metrics.preferredShootingRangeErrorM ?? Number.POSITIVE_INFINITY);
+    if (left.metrics.minimumClearanceM !== right.metrics.minimumClearanceM) return right.metrics.minimumClearanceM - left.metrics.minimumClearanceM;
+    if (left.metrics.peakCurvatureInvM !== right.metrics.peakCurvatureInvM) return left.metrics.peakCurvatureInvM - right.metrics.peakCurvatureInvM;
+    if (left.metrics.peakAngularVelocityRadps !== right.metrics.peakAngularVelocityRadps) return left.metrics.peakAngularVelocityRadps - right.metrics.peakAngularVelocityRadps;
+    return left.metrics.waypointCount - right.metrics.waypointCount || left.id.localeCompare(right.id);
+  });
+}
+
+export function generateRouteCandidates(project: BordeauxProject, request: PlanPathRequest, plannerId?: TrajectoryPlannerId): RouteCandidate[] {
+  if (!request.intent.trim()) throw new Error("A route intent is required.");
+  const hasSteps = Array.isArray(request.steps) && request.steps.length > 0;
+  const hasGoals = Array.isArray(request.goals) && request.goals.length > 0;
+  if (hasSteps === hasGoals) throw new Error("A route must provide either legacy goals or ordered steps, but not both.");
+  if (hasSteps && request.traversal !== undefined) throw new Error("Ordered steps define traversal per leg and cannot be combined with a global traversal policy.");
+  if (hasSteps && request.steps!.length > 12) throw new Error("An ordered route supports at most 12 steps.");
+  if (hasGoals && request.goals!.length > 12) throw new Error("A route supports at most 12 goals.");
+  const base = request.basePathId ? project.paths.find((path) => path.id === request.basePathId) : project.paths[0];
+  if (!base) throw new Error("The project does not contain a base path.");
+  const baseStart = base.waypoints[0];
+  const physicalHeadingRad = baseStart.theta * Math.PI / 180 + (base.driveBackward ? Math.PI : 0);
+  const start = resolveLocation(project, request.start ?? { x: baseStart.x, y: baseStart.y, headingDeg: baseStart.theta }, request, { x: baseStart.x, y: baseStart.y, physicalHeadingRad });
+  const goals = (request.goals ?? []).map((goal) => resolveLocation(project, goal, request, { x: start.x, y: start.y, physicalHeadingRad }));
+  const name = uniqueName(project, request.name ?? "Agent path");
+  const minimumClearanceM = Math.max(0, Math.min(2, request.minimumClearanceM ?? 0.15));
+  const portalRunM = robotFootprintRadius(project.robot) + minimumClearanceM + 0.15;
+  const effectiveRobotHeightM = project.robot.heightM ?? request.robotHeightM;
+  const selectedPlanner = plannerId ?? project.plannerId ?? "profiledSpline";
+  const candidateTraversals: RouteCandidate["traversal"][] = hasSteps ? ["ordered"] : traversalOptions(request);
+  const candidates = candidateTraversals.map((traversal, index): RouteCandidate => {
+    const points = [start];
+    const requiredPortalIds: string[] = [];
+    const collectionSpans: CollectionSpan[] = [];
+    if (hasSteps) {
+      for (const step of request.steps!) {
+        const startWaypointIndex = points.length - 1;
+        if (step.kind === "travel") {
+          const current = points[points.length - 1];
+          const goal = resolveLocation(project, step.to, request, { x: current.x, y: current.y, physicalHeadingRad });
+          requiredPortalIds.push(...appendLeg(points, goal, step.traversal ?? "direct", true, portalRunM));
+        } else {
+          const current = points[points.length - 1];
+          const at = resolveLocation(project, step.at, request, { x: current.x, y: current.y, physicalHeadingRad });
+          requiredPortalIds.push(...appendSwoosh(points, at, step, portalRunM));
+        }
+        if (step.collectFuel) {
+          const previous = collectionSpans.at(-1);
+          if (previous && previous.endWaypointIndex === startWaypointIndex && sameCollectionIntent(previous.intent, step.collectFuel)) previous.endWaypointIndex = points.length - 1;
+          else collectionSpans.push({ startWaypointIndex, endWaypointIndex: points.length - 1, intent: step.collectFuel });
+        }
