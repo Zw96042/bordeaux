@@ -178,51 +178,51 @@
     const applyJavaProjectConnection = useCallback((result) => {
       setJavaProjectState({
         status: 'ready',
-      const wps = d.waypoints; const n = wps.length;
-      const last = wps[n - 1], prev = wps[n - 2] || last;
-      let dx = last.x - prev.x, dy = last.y - prev.y; const L = Math.hypot(dx, dy) || 1; dx /= L; dy /= L;
-      const nx = Math.max(0.3, Math.min(FIELD_W - 0.3, last.x + dx * 1.6));
-      const ny = Math.max(0.3, Math.min(FIELD_H - 0.3, last.y + dy * 1.6));
-      const nw = { x: nx, y: ny, linked: true, thetaOn: false, theta: last.theta || 0, stop: false, segType: last.segType || 'bezier' };
-      wps.push(nw);
-      const hd = window.PM.autoHandles(wps, wps.length - 1); nw.prevC = hd.prevC; nw.nextC = hd.nextC;
-      wps[wps.length - 1].thetaOn = true;
-      d._selAfter = wps.length - 1; return d;
-    }), [commit]);
-    const addTargetMid = useCallback(() => commit((d) => { const pts = derived.sample.pts; const deg = pts.length > 1 ? window.PM.pointAtFraction(0.5, pts).heading * 180 / Math.PI : 0; d.targets.push({ f: 0.5, deg }); if ((d.headingMode || 'targets') !== 'targets') d.headingMode = 'targets'; d._selT = d.targets.length - 1; return d; }), [commit, derived]);
-    const addMarkerMid = useCallback(() => commit((d) => { d.markers.push({ f: 0.5, name: 'event' + (d.markers.length + 1), cmd: 'none', group: 'sequential' }); d._selM = d.markers.length - 1; return d; }), [commit]);
-    const addRangeMid = useCallback(() => addRange(0.35, 0.6), [addRange]);
+        operation: null,
+        catalog: result.catalog,
+        integration: result.integration || null,
+        error: '',
+        notice: result.warning || '',
+        bookmarkId: result.bookmarkId,
+        recentProjects: result.recentProjects || [],
+      });
+    }, []);
 
-    // ---- segment + waypoint structural ops (memo §3 / §4 / §7 / §8) ----
-    const PX = { X0: 397, X1: 3502, Y0: 97, Y1: 1486 };
-    const setSegMeta = useCallback((i, patch) => commit((d) => { Object.assign(d.waypoints[i], patch); return d; }), [commit]);
-    const setStop = useCallback((i, on) => commit((d) => { const w = d.waypoints[i]; w.stop = on; if (on) { w.linked = false; } else { w.linked = !w.corner; delete w.wait; } return d; }), [commit]);
-    const setWait = useCallback((i, sec) => commit((d) => { d.waypoints[i].wait = Math.max(0, sec); return d; }), [commit]);
-    const toggleCorner = useCallback((i, on) => commit((d) => { const w = d.waypoints[i]; w.corner = on; w.linked = !on && !w.stop; return d; }), [commit]);
-    const setHeadingMode = useCallback((m) => commit((d) => { d.headingMode = m; return d; }), [commit]);
-    const toggleDriveBackward = useCallback(() => commit((d) => { d.driveBackward = !d.driveBackward; return d; }), [commit]);
-    const nudgeWp = useCallback((i, dx, dy) => commit((d) => { const w = d.waypoints[i]; if (!w) return d; const nx = Math.max(0, Math.min(FIELD_W, w.x + dx)), ny = Math.max(0, Math.min(FIELD_H, w.y + dy)); const ddx = nx - w.x, ddy = ny - w.y; w.x = nx; w.y = ny; if (w.prevC) { w.prevC.x += ddx; w.prevC.y += ddy; } if (w.nextC) { w.nextC.x += ddx; w.nextC.y += ddy; } return d; }), [commit]);
-    const nudgeFrac = useCallback((kind, i, df) => commit((d) => { const arr = kind === 'rt' ? d.targets : d.markers; if (arr[i]) arr[i].f = Math.max(0, Math.min(1, arr[i].f + df)); return d; }), [commit]);
-    const setWaypointHeading = useCallback((i, deg) => mutate((d) => { const w = d.waypoints[i]; w.theta = deg; w.thetaOn = true; if ((d.headingMode || 'targets') === 'tangent') d.headingMode = 'manual'; return d; }), [mutate]);
-    const faceWaypoint = useCallback((i, mode) => commit((d) => {
-      const w = d.waypoints[i]; let deg = w.theta || 0;
-      if (mode === 'next' && d.waypoints[i + 1]) { const t = d.waypoints[i + 1]; deg = Math.atan2(t.y - w.y, t.x - w.x) * 180 / Math.PI; }
-      else if (mode === 'prev' && d.waypoints[i - 1]) { const t = d.waypoints[i - 1]; deg = Math.atan2(t.y - w.y, t.x - w.x) * 180 / Math.PI; }
-      else if (mode === 'tangent') { const idx = (derived.wpIdx && derived.wpIdx[i]) || 0; const p = derived.sample.pts[idx]; if (p) deg = (p.heading || 0) * 180 / Math.PI; }
-      w.theta = deg; w.thetaOn = true; return d;
-    }), [commit, derived]);
-    const headingMenu = useCallback((i, x, y) => {
-      setHeadMenu({ x, y, items: [
-        { label: 'Face next waypoint', icon: 'compass', onClick: () => faceWaypoint(i, 'next') },
-        { label: 'Face previous waypoint', icon: 'compass', onClick: () => faceWaypoint(i, 'prev') },
-        { label: 'Align to path tangent', icon: 'route', onClick: () => faceWaypoint(i, 'tangent') },
-        { sep: true },
-        { label: 'Type exact angle\u2026', icon: 'compass', onClick: () => select('wp', i) },
-      ] });
-    }, [faceWaypoint, select]);
-    const duplicateWp = useCallback((i) => commit((d) => {
-      const src = JSON.parse(JSON.stringify(d.waypoints[i]));
-      const next = clampWorld({ x: src.x + 0.4, y: src.y + 0.4 }); src.x = next.x; src.y = next.y;
+    const linkJavaProject = useCallback(async () => {
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.linkJavaProject !== 'function') {
+        setJavaProjectState((current) => ({ ...current, status: 'error', error: 'Java project discovery is available in the Bordeaux desktop app.' }));
+        return;
+      }
+      setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', error: '', notice: '' }));
+      try {
+        const result = await window.bordeauxAPI.linkJavaProject();
+        if (!result) {
+          setJavaProjectState((current) => ({ ...current, status: current.catalog ? 'ready' : 'unlinked', operation: null, error: '' }));
+          return;
+        }
+        applyJavaProjectConnection(result);
+      } catch (error) {
+        setJavaProjectState((current) => ({ ...current, status: current.catalog ? 'ready' : 'error', operation: null, error: error && error.message ? error.message : String(error) }));
+      }
+    }, [applyJavaProjectConnection]);
+
+    const openRecentJavaProject = useCallback(async (id) => {
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.openRecentJavaProject !== 'function') return;
+      setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', error: '', notice: '' }));
+      try {
+        applyJavaProjectConnection(await window.bordeauxAPI.openRecentJavaProject(id));
+      } catch (error) {
+        setJavaProjectState((current) => ({ ...current, status: current.catalog ? 'ready' : 'error', operation: null, error: error && error.message ? error.message : String(error) }));
+      }
+    }, [applyJavaProjectConnection]);
+
+    const refreshJavaProject = useCallback(async () => {
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.refreshJavaProject !== 'function') return;
+      setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', error: '', notice: '' }));
+      try {
+        applyJavaProjectConnection(await window.bordeauxAPI.refreshJavaProject());
+      } catch (error) {
+        setJavaProjectState((current) => ({ ...current, status: current.catalog ? 'stale' : 'error', operation: null, error: error && error.message ? error.message : String(error) }));
       d.waypoints.splice(i + 1, 0, src);
       const hd = window.PM.autoHandles(d.waypoints, i + 1); src.prevC = hd.prevC; src.nextC = hd.nextC;
       d.waypoints[0].thetaOn = true; d.waypoints[d.waypoints.length - 1].thetaOn = true;
