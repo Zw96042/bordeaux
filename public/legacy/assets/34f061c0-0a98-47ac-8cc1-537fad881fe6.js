@@ -443,3 +443,93 @@
       }
 
       wps.splice(insertAt, 0, nw);
+      remapWaypointRanges(candidate, Array.from({ length: oldCount }, (_, index) => index < insertAt ? index : index + 1));
+      if (!nw.prevC || !nw.nextC) {
+        const hd = window.PM.autoHandles(wps, insertAt);
+        nw.prevC = hd.prevC; nw.nextC = hd.nextC;
+      }
+      candidate._selAfter = insertAt;
+      return { doc: candidate, index: insertAt, previewRequired, segmentType: originalType };
+    }, [derived, plannerId]);
+
+    const addWaypoint = useCallback((p, segmentHint, onPath, selectedVisit) => {
+      const prepared = prepareWaypointInsertion(p, segmentHint, onPath, selectedVisit);
+      const compatibility = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid';
+      if (compatibility || prepared.previewRequired) {
+        try {
+          const previewDerived = window.PM.derivePath(prepared.doc, robot, PERSEG, plannerId);
+          const message = compatibility
+            ? (plannerId === 'labviewClothoid' ? 'A new clothoid vertex rebuilds the neighboring turn.' : 'Compatibility geometry changes are shown before they are applied.')
+            : 'Splitting this ' + prepared.segmentType + ' may rebuild its geometry. Review the dashed path first.';
+          setWaypointPreview({ ...prepared, derived: previewDerived, plannerId, message });
+        } catch (error) {
+          console.error('Could not preview waypoint insertion:', error);
+        }
+        return;
+      }
+      commit(() => prepared.doc);
+    }, [commit, plannerId, prepareWaypointInsertion, robot]);
+    const appendWaypoint = useCallback((rawPoint) => {
+      const point = clampWorld(rawPoint);
+      const candidate = clone(docRef.current);
+      const wps = candidate.waypoints, oldCount = wps.length;
+      const end = wps[oldCount - 1], before = wps[oldCount - 2] || end;
+      const dx = point.x - end.x, dy = point.y - end.y, distance = Math.hypot(dx, dy);
+      if (distance < 0.05) return;
+
+      const ux = dx / distance, uy = dy / distance;
+      const incomingX = end.prevC ? end.x - end.prevC.x : end.x - before.x;
+      const incomingY = end.prevC ? end.y - end.prevC.y : end.y - before.y;
+      const incomingLength = Math.hypot(incomingX, incomingY);
+      const tx = !end.stop && incomingLength > 1e-6 ? incomingX / incomingLength : ux;
+      const ty = !end.stop && incomingLength > 1e-6 ? incomingY / incomingLength : uy;
+      const handle = Math.max(0.15, distance / 3);
+      const segmentType = end.segType || before.segType || 'bezier';
+      const endpointJiggle = end.jiggle ? { ...end.jiggle } : null;
+      delete end.jiggle;
+      end.segType = segmentType;
+      if (before.segmentHeadingMode) end.segmentHeadingMode = before.segmentHeadingMode;
+      else delete end.segmentHeadingMode;
+      if (before.segmentLookAt) end.segmentLookAt = { ...before.segmentLookAt };
+      else delete end.segmentLookAt;
+      end.nextC = { x: end.x + tx * handle, y: end.y + ty * handle };
+      if (!end.stop) { end.linked = true; end.corner = false; }
+
+      const next = {
+        x: point.x, y: point.y,
+        prevC: { x: point.x - ux * handle, y: point.y - uy * handle },
+        nextC: { x: point.x + ux * handle, y: point.y + uy * handle },
+        linked: true, thetaOn: true, theta: end.theta || 0, stop: false,
+      };
+      if (endpointJiggle) next.jiggle = endpointJiggle;
+      wps.push(next);
+      remapWaypointRanges(candidate, Array.from({ length: oldCount }, (_, index) => index));
+      candidate._selAfter = oldCount;
+
+      const compatibility = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid';
+      if (compatibility || segmentType === 'clothoid') {
+        try {
+          const previewDerived = window.PM.derivePath(candidate, robot, PERSEG, plannerId);
+          const message = compatibility
+            ? 'The new endpoint and compatibility geometry are shown before they are applied.'
+            : 'The new clothoid join may rebuild the previous turn. Review the dashed path first.';
+          setWaypointPreview({ doc: candidate, index: oldCount, derived: previewDerived, plannerId, message, actionLabel: 'Place endpoint' });
+        } catch (error) {
+          console.error('Could not preview waypoint placement:', error);
+        }
+        return;
+      }
+      commit(() => candidate);
+    }, [commit, plannerId, robot]);
+    const setJiggle = useCallback((options) => {
+      if (!options) {
+        commit((d) => { delete d.waypoints[d.waypoints.length - 1].jiggle; return d; });
+        return true;
+      }
+      const config = {
+        distanceM: Math.max(0.03, Math.min(1.5, Number(options.distanceM))),
+        strokes: Math.max(2, Math.min(12, Math.round(Number(options.strokes)))),
+        startDeg: Number(options.startDeg),
+        stepDeg: Number(options.stepDeg),
+        strokeTimeS: Math.max(0.08, Math.min(5, Number(options.strokeTimeS))),
+      };
