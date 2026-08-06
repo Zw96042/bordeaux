@@ -902,3 +902,93 @@
       const nextLength = Math.max(0, Math.max(0, Math.min(1, nextValue)) - boundary);
       const before = Math.min(previousLength, policy.distanceM * beforeShare / total);
       const after = Math.min(nextLength, policy.distanceM * (1 - beforeShare) / total);
+      windows.push({ ...policy, waypointIndex: segment, start: boundary - before, end: boundary + after });
+    }
+    return windows;
+  }
+  function headingTransitionGoals(modes, breaks, wpIdx, pts, anchorsByLaw) {
+    const totalDistance = pts.length ? pts[pts.length - 1].s : 0, goals = [];
+    for (let segment = 1; segment < modes.length; segment++) {
+      const law = modes[segment];
+      if ((law !== 'manual' && law !== 'targets') || modes[segment - 1] === law || breaks[segment]) continue;
+      let spanEndSegment = segment;
+      while (spanEndSegment + 1 < modes.length && modes[spanEndSegment + 1] === law && !breaks[spanEndSegment + 1]) spanEndSegment++;
+      const boundaryIndex = Math.max(0, Math.min(pts.length - 1, wpIdx[segment]));
+      const spanEndIndex = Math.max(boundaryIndex, Math.min(pts.length - 1, wpIdx[spanEndSegment + 1]));
+      const boundaryDistance = pts[boundaryIndex].s, spanEndDistance = pts[spanEndIndex].s;
+      const anchor = anchorsByLaw[law].find((candidate) => {
+        const distance = Math.max(0, Math.min(1, candidate.f)) * totalDistance;
+        return distance >= boundaryDistance - 1e-9 && distance <= spanEndDistance + 1e-9;
+      });
+      if (anchor) goals.push({ segmentIndex: segment, distanceM: Math.max(boundaryDistance, Math.max(0, Math.min(1, anchor.f)) * totalDistance), heading: anchor.rad, spanEndIndex });
+    }
+    return goals;
+  }
+  function smoothHeadingTransitions(raw, modes, breaks, wpIdx, pts, waypoints, transitionGoals) {
+    if (!raw.length) return [];
+    transitionGoals = transitionGoals || [];
+    const unwrappedRaw = [raw[0]];
+    for (let i = 1; i < raw.length; i++) unwrappedRaw.push(unwrappedRaw[i - 1] + angWrap(raw[i] - unwrappedRaw[i - 1]));
+    const out = unwrappedRaw.slice();
+    const protectedAnchorIndices = new Set();
+    for (let segment = 1; segment < modes.length; segment++) {
+      if (modes[segment] === modes[segment - 1] || breaks[segment]) continue;
+      const boundary = Math.max(1, Math.min(out.length - 1, wpIdx[segment]));
+      const previousBoundary = Math.max(0, Math.min(boundary - 1, wpIdx[segment - 1]));
+      const nextBoundary = Math.max(boundary, Math.min(out.length - 1, wpIdx[segment + 1]));
+      let outgoingStart = Math.min(boundary + 1, nextBoundary);
+      while (outgoingStart < nextBoundary && pts[outgoingStart].s - pts[boundary].s <= 1e-9) outgoingStart++;
+      const policy = resolvedHeadingTransition(waypoints[segment]);
+      let protectedBefore = -1;
+      protectedAnchorIndices.forEach((index) => { if (index <= boundary) protectedBefore = Math.max(protectedBefore, index); });
+      const boundaryProtected = protectedBefore === boundary;
+      const authoredBeforeShare = policy.placement === 'before' ? 1 : policy.placement === 'split' ? 0.5 : 0;
+      const beforeShare = boundaryProtected ? 0 : authoredBeforeShare;
+      const incoming = boundaryProtected ? out[boundary] : out[boundary - 1];
+      const transitionGoal = transitionGoals.find((goal) => goal.segmentIndex === segment);
+      if (transitionGoal) {
+        const boundaryDistance = pts[boundary].s;
+        const beforeDistance = Math.min(policy.distanceM * beforeShare, Math.max(0, boundaryDistance - pts[previousBoundary].s));
+        const goalAtBoundary = transitionGoal.distanceM <= boundaryDistance + 1e-9;
+        const afterDistance = Math.min(policy.distanceM * (1 - beforeShare), Math.max(0, (goalAtBoundary ? pts[transitionGoal.spanEndIndex].s : transitionGoal.distanceM) - boundaryDistance));
+        const requestedStart = boundaryDistance - beforeDistance;
+        const requestedEnd = goalAtBoundary ? boundaryDistance + afterDistance : Math.min(transitionGoal.distanceM, boundaryDistance + afterDistance);
+        let startIndex = previousBoundary;
+        while (startIndex < boundary && pts[startIndex].s < requestedStart - 1e-9) startIndex++;
+        if (protectedBefore >= startIndex && protectedBefore < boundary) startIndex = protectedBefore + 1;
+        let anchorIndex = boundary;
+        while (anchorIndex < transitionGoal.spanEndIndex && pts[anchorIndex].s < transitionGoal.distanceM - 1e-9) anchorIndex++;
+        let endIndex = startIndex;
+        while (endIndex < transitionGoal.spanEndIndex && pts[endIndex].s < requestedEnd - 1e-9) endIndex++;
+        const goalIndex = goalAtBoundary ? endIndex : anchorIndex;
+        const startHeading = startIndex < boundary ? out[startIndex] : incoming;
+        const goalHeading = startHeading + angWrap(transitionGoal.heading - startHeading);
+        const startDistance = pts[startIndex].s, endDistance = pts[endIndex].s;
+        for (let i = startIndex; i <= goalIndex; i++) {
+          const t = endDistance > startDistance + 1e-9 ? Math.max(0, Math.min(1, (pts[i].s - startDistance) / (endDistance - startDistance))) : 1;
+          const smooth = t * t * t * (t * (t * 6 - 15) + 10);
+          out[i] = startHeading + (goalHeading - startHeading) * smooth;
+        }
+        if (goalIndex < transitionGoal.spanEndIndex) {
+          const nextIndex = goalIndex + 1;
+          const branchOffset = goalHeading + angWrap(raw[nextIndex] - goalHeading) - unwrappedRaw[nextIndex];
+          for (let i = nextIndex; i <= transitionGoal.spanEndIndex; i++) out[i] = unwrappedRaw[i] + branchOffset;
+        }
+        protectedAnchorIndices.add(goalIndex);
+        continue;
+      }
+      const outgoing = incoming + angWrap(raw[outgoingStart] - incoming), delta = outgoing - incoming;
+      const beforeDistance = Math.min(policy.distanceM * beforeShare, Math.max(0, pts[boundary].s - pts[previousBoundary].s));
+      if (beforeDistance > 1e-9) {
+        const startDistance = pts[boundary].s - beforeDistance;
+        for (let i = previousBoundary; i < boundary; i++) {
+          if (pts[i].s < startDistance - 1e-9) continue;
+          if (i <= protectedBefore) continue;
+          const t = Math.max(0, Math.min(1, (pts[i].s - startDistance) / beforeDistance));
+          const smooth = t * t * t * (t * (t * 6 - 15) + 10);
+          out[i] += delta * beforeShare * smooth;
+        }
+      }
+      const boundaryHeading = incoming + delta * beforeShare;
+      const afterDistance = Math.min(policy.distanceM * (1 - beforeShare), Math.max(0, pts[nextBoundary].s - pts[boundary].s));
+      let previous = boundaryHeading;
