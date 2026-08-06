@@ -88,3 +88,93 @@ export class AgentSessionService {
     for (const proposal of this.proposals.values()) {
       if (proposal.status === "ready") proposal.status = "stale";
     }
+  }
+
+  publishSnapshot(value: AgentSessionSnapshot): void {
+    if (!value || typeof value.sessionId !== "string" || !Number.isSafeInteger(value.revision) || value.revision < 0) throw new Error("Agent session snapshot is invalid");
+    const validation = validateProject(value.project);
+    if (!validation.ok) throw new Error("Agent session project snapshot is invalid");
+    if (!value.project.paths.some((path) => path.id === value.activePathId)) throw new Error("Agent session active path does not exist");
+    const previous = this.snapshot;
+    this.snapshot = value;
+    if (!previous || previous.sessionId !== value.sessionId || previous.revision !== value.revision) {
+      for (const proposal of this.proposals.values()) {
+        if (proposal.status === "ready" && (proposal.baseSessionId !== value.sessionId || proposal.baseRevision !== value.revision)) {
+          proposal.status = "stale";
+          void Promise.resolve(this.sendProposal(proposal, false)).catch(() => undefined);
+        }
+      }
+    }
+    this.expireProposals();
+  }
+
+  updateProposalStatus(proposalId: string, status: "applied" | "rejected" | "stale", appliedRevision?: number): void {
+    const proposal = this.proposals.get(proposalId);
+    if (!proposal) return;
+    proposal.status = status;
+    if (status === "applied" && Number.isSafeInteger(appliedRevision)) proposal.appliedRevision = appliedRevision;
+  }
+
+  getActiveProposal(): AgentProposal | null {
+    this.expireProposals();
+    const proposals = [...this.proposals.values()];
+    for (let index = proposals.length - 1; index >= 0; index -= 1) {
+      const proposal = proposals[index];
+      if (proposal.status === "ready" && this.snapshot && proposal.baseSessionId === this.snapshot.sessionId && proposal.baseRevision === this.snapshot.revision) return proposal;
+    }
+    return null;
+  }
+
+  private expireProposals(): void {
+    const cutoff = Date.now() - PROPOSAL_TTL_MS;
+    for (const proposal of this.proposals.values()) {
+      if (proposal.status === "ready" && Date.parse(proposal.createdAt) < cutoff) proposal.status = "expired";
+    }
+    while (this.proposals.size > MAX_PROPOSALS) this.proposals.delete(this.proposals.keys().next().value!);
+  }
+
+  private async stage<T extends AgentProposal>(proposal: T): Promise<T> {
+    if (!this.snapshot || this.snapshot.sessionId !== proposal.baseSessionId || this.snapshot.revision !== proposal.baseRevision) {
+      throw new Error("The Bordeaux editor session changed while the proposal was being generated. Retry against the current session.");
+    }
+    for (const existing of this.proposals.values()) {
+      if (existing.status !== "ready") continue;
+      existing.status = "stale";
+      void Promise.resolve(this.sendProposal(existing, false)).catch(() => undefined);
+    }
+    this.proposals.set(proposal.id, proposal);
+    this.expireProposals();
+    try { await this.sendProposal(proposal, true); }
+    catch (error) { this.proposals.delete(proposal.id); throw error; }
+    if (!this.snapshot || this.snapshot.sessionId !== proposal.baseSessionId || this.snapshot.revision !== proposal.baseRevision || proposal.status !== "ready") {
+      throw new Error("The Bordeaux editor session changed before it acknowledged the proposal. Retry against the current session.");
+    }
+    return proposal;
+  }
+
+  async request(request: AgentRequest): Promise<unknown> {
+    this.expireProposals();
+    if (request.method === "field_pack") return REBUILT_2026_FIELD;
+    if (request.method === "get_proposal") {
+      const proposal = this.proposals.get(request.params.proposalId);
+      if (!proposal) throw new Error("That proposal does not exist or has expired.");
+      return proposal;
+    }
+    const snapshot = requireSnapshot(this.snapshot);
+    if (request.method === "inspect_session") return publicSession(snapshot, this.getJavaCatalog());
+    if (request.method === "commands") return this.getJavaCatalog() ?? { authoritative: false, commands: [], warnings: ["Link and build a generated Java command catalog to expose team actions."] };
+    if (request.method === "inspect_robot_profile") {
+      const planning = snapshot.project.robot.planning;
+      const missing = [
+        ...(!planning?.intake ? ["intake"] : []),
+        ...(!planning?.shooter ? ["shooter"] : []),
+      ];
+      return {
+        planning: planning ?? null,
+        completeForFuelCollection: Boolean(planning?.intake),
+        missing,
+        questions: [
+          ...(!planning?.intake ? [
+            "Where is the primary intake in the robot-local frame (+X forward, +Y left), which direction does it collect, how wide is its effective opening, and what is the maximum safe collection speed?",
+          ] : []),
+          ...(!planning?.shooter ? [
