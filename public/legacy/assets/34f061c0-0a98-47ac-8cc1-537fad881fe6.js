@@ -1163,3 +1163,83 @@
             if (sel.kind === 'wp') nudgeWp(sel.idx, dx, dy);
             else if (sel.kind === 'rt' || sel.kind === 'em') { const dir = (e.key === 'ArrowRight' || e.key === 'ArrowUp') ? 1 : -1; nudgeFrac(sel.kind, sel.idx, dir * (e.shiftKey ? 0.02 : 0.005)); }
           }
+          return;
+        }
+        if (k === 'g') setShowGrid((s) => !s);
+        else if (k === 'f') setView(FIT);
+        else if (e.key === 'Escape') { setTool('select'); setHeadMenu(null); setDiagOpen(false); setWaypointPreview(null); select(null, -1); }
+        else if ((e.key === 'Backspace' || e.key === 'Delete') && sel.kind) {
+          if (sel.kind === 'wp') delWp(sel.idx); else if (sel.kind === 'rt') delTarget(sel.idx); else if (sel.kind === 'em') delMarker(sel.idx); else if (sel.kind === 'cr') delRange(sel.idx);
+        }
+      };
+      window.addEventListener('keydown', onKey);
+      return () => window.removeEventListener('keydown', onKey);
+    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, nudgeWp, nudgeFrac, alliance, togglePlayback]);
+
+    const selNode = (page === 'auto' && routineSel) ? window.AUTO.findNode(routine, routineSel) : null;
+
+    return h('div', { className: 'app' },
+      h(window.Panels.Toolbar, { project, page, setPage, alliance, setAlliance, onNew: newProject, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExport, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerId }),
+      page === 'robot'
+        ? h('main', { className: 'page-main' }, h(window.RobotPage, { robot, setRobot, accent, mcpEnabled, agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
+        : page === 'auto'
+        ? h('main', { className: 'stage stage-auto' },
+            h('nav', { className: 'rail rail-l', 'aria-label': 'Autonomous routine steps' },
+              h(window.RoutinePanel, { routine, run, paths: project.paths, selId: routineSel, onSelect: setRoutineSel, acq, time: routineTime, running: routineRunning })),
+            h('div', { className: 'fieldcol' },
+              h(window.FieldView, { doc, derived, sel: { kind: null, idx: -1 }, tool: 'select', view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, playTime: 0, actions: autoFieldActions, onSelPos: () => {}, routine: routineOverlay, routinePose }),
+              h(window.Panels.RoutineLegend, { run, time: routineTime, running: routineRunning }),
+              h(window.RoutineTransport, { run, time: routineTime, playing: routinePlaying, controls: routineControls, running: routineRunning, outcomes: routineOutcomes }),
+              h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
+            h('aside', { className: 'rail rail-r' + (selNode ? '' : ' collapsed'), 'aria-label': 'Routine step inspector' },
+              selNode && h(window.StepInspector, { node: selNode, paths: project.paths, acq, run })))
+        : h('main', { className: 'stage stage-plan' },
+            h('nav', { className: 'rail rail-l' + (outlineOpen ? '' : ' collapsed'), 'aria-label': 'Path outline' },
+              h(window.Panels.Outline, { open: outlineOpen, setOpen: setOutlineOpen, doc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot })),
+            h('div', { className: 'fieldcol' },
+              h(window.Panels.ToolRail, { tool, setTool }),
+              h(window.FieldView, { doc, derived, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, playTime, playing, actions: fieldActions, onSelPos, showHandles: plannerId !== 'labviewClothoid' && !(plannerId === 'labviewBezier' && doc.labview && doc.labview.bezierTangentMode === 'automatic') }),
+              tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
+              waypointPreview && h('div', { className: 'insert-preview', role: 'region', 'aria-label': 'Preview waypoint insertion' },
+                h('div', { className: 'insert-preview-copy' },
+                  h('b', null, 'Preview waypoint'),
+                  h('span', null, waypointPreview.message)),
+                h('div', { className: 'insert-preview-actions' },
+                  h('button', { type: 'button', onClick: () => setWaypointPreview(null) }, 'Cancel'),
+                  h('button', { className: 'primary', type: 'button', onClick: applyWaypointPreview }, waypointPreview.actionLabel || 'Insert waypoint'))),
+              agentProposal && h('div', { className: 'insert-preview agent-proposal', role: 'region', 'aria-label': 'Agent path proposal' },
+                h('div', { className: 'insert-preview-copy' },
+                  h('b', null, agentProposal.operation === 'replace' ? 'Agent repair proposal' : 'Agent path proposal'),
+                  h('span', null, agentProposal.intent),
+                  h('span', { className: 'agent-proposal-status' }, agentProposal.status === 'ready' ? 'Preview only — the project has not changed.' : agentProposal.status === 'stale' ? 'Stale — the project changed. Ask the agent to regenerate.' : agentProposal.status === 'applied' ? 'Applied as one undoable project change.' : 'Rejected.'),
+                  agentProposal.status === 'ready' && h('div', { className: 'agent-candidates', role: 'radiogroup', 'aria-label': 'Agent proposal candidates' }, agentCandidates.map((candidate) => h('button', { key: candidate.id, type: 'button', role: 'radio', 'aria-checked': agentCandidate && candidate.id === agentCandidate.id, className: agentCandidate && candidate.id === agentCandidate.id ? 'selected' : '', onClick: () => setAgentCandidateId(candidate.id) }, candidate.label + (candidate.valid === false ? ' · invalid' : candidate.metrics ? ' · ' + candidate.metrics.totalTimeS.toFixed(2) + ' s' : '')))),
+                  agentCandidate && agentCandidate.metrics && h('span', null, agentCandidate.metrics.totalDistanceM.toFixed(2) + ' m · ' + agentCandidate.metrics.minimumClearanceM.toFixed(2) + ' m modeled clearance'),
+                  agentCandidate && agentCandidate.valid === false && agentCandidate.rejectionReason && h('span', { className: 'agent-proposal-status' }, 'Blocked: ' + agentCandidate.rejectionReason),
+                  agentProposal.recommendationReason && h('span', null, agentProposal.recommendationReason),
+                  agentProposal.advisories && agentProposal.advisories.map((notice, index) => h('span', { key: 'advisory-' + index, className: 'agent-proposal-status' }, notice)),
+                  agentProposal.blockingIssues && agentProposal.blockingIssues.map((issue, index) => h('span', { key: 'block-' + index, className: 'agent-proposal-status' }, 'Blocked: ' + issue))),
+                h('div', { className: 'insert-preview-actions' },
+                  agentProposal.status === 'ready' && h('button', { type: 'button', onClick: rejectAgentProposal }, 'Reject'),
+                  agentProposal.status === 'ready' && h('button', { className: 'primary', type: 'button', disabled: !agentCandidate || agentCandidate.valid === false || (agentProposal.blockingIssues && agentProposal.blockingIssues.length > 0), onClick: applyAgentProposal }, agentProposal.operation === 'replace' ? 'Apply repair' : 'Add path'))),
+              h(window.Panels.ConstraintBar, { c: doc.constraints, robot, onOpen: () => select(null, -1) }),
+              h(window.Panels.Overlay, { metric, setMetric, derived, diagOpen, onToggleDiag: () => setDiagOpen((o) => !o), plannerId }),
+              diagOpen && h(window.Panels.PathChecks, { derived, doc, onClose: () => setDiagOpen(false), onPick: pickCheck }),
+              h(window.Panels.Transport, { derived, doc, metric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen }),
+              h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
+            h('aside', { className: 'rail rail-r' + (inspectorOpen ? '' : ' collapsed'), 'aria-label': 'Path inspector' },
+              inspectorOpen
+                ? h(window.ContextInspector, { doc, sel, derived, actions: inspActions, accent, drive: robot.drive, robot, plannerId, javaProject: { ...javaProjectState, link: linkJavaProject, openRecent: openRecentJavaProject, refresh: refreshJavaProject, install: installJavaSupport, build: buildJavaCatalog, cancelBuild: cancelJavaCatalogBuild, export: () => onExportJava('linked') }, onClose: () => setInspectorOpen(false) })
+                : h('button', { className: 'inspector-tab', type: 'button', title: 'Show inspector', onClick: () => setInspectorOpen(true) }, h(window.UI.Icon, { name: 'sliders', size: 16 }), h('span', null, 'Inspector'))),
+            headMenu && h(window.UI.ContextMenu, { x: headMenu.x, y: headMenu.y, items: headMenu.items, onClose: () => setHeadMenu(null) })));
+  }
+
+  function toolHint(tool) {
+    if (tool === 'waypoint') return 'Click the field to place the <b>next endpoint</b>';
+    if (tool === 'rotation') return 'Click the path to set a <b>rotation target</b>';
+    if (tool === 'marker') return 'Click the path to place an <b>event marker</b>';
+    if (tool === 'range') return 'Drag along the path to define a <b>constraint range</b> \u00b7 then edit its limits';
+    return '';
+  }
+
+  ReactDOM.createRoot(document.getElementById('root')).render(h(App));
+})();
