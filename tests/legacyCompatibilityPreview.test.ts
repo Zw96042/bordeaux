@@ -448,3 +448,93 @@ describe("legacy compatibility preview", () => {
   });
 
   it("labels the native planner family as Java", () => {
+    const panels = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
+
+    expect(panels).toContain("{ v: 'native', label: 'Java' }");
+    expect(panels).not.toContain("{ v: 'native', label: 'Native' }");
+  });
+
+  it("treats expected configured clothoid radii in either turn direction as notes, not issues", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.labview = { samplePeriodS: 0.02, minTurnRadiusM: 0.5, bezierTangentMode: "handles" };
+    const math = legacyMath();
+
+    for (const endY of [4, -2]) {
+      path.waypoints = buildWaypoints([{ x: 1, y: 1 }, { x: 4, y: 1 }, { x: 4, y: endY }]);
+      const preview = math.derivePath(path, project.robot, 56, "labviewClothoid");
+
+      expect(preview.checks.filter((check) => check.level !== "note")).toEqual([]);
+      expect(preview.checks.some((check) => check.level === "note" && check.text.includes("limits speed"))).toBe(true);
+    }
+  });
+
+  it("keeps path checks informational until a repair can be validated", () => {
+    const panels = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+
+    expect(panels).toContain("Path checks");
+    expect(panels).not.toContain("diag-fixes");
+    expect(app).not.toContain("Cap velocity on this stretch");
+    expect(app).not.toContain("Insert a waypoint here");
+  });
+
+  it("keeps Select mode non-destructive and previews compatibility insertions", () => {
+    const field = fs.readFileSync(new URL("../public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+
+    expect(field).not.toContain("if (d.onPath) actions.addWaypoint(d.world)");
+    expect(field).not.toContain("if (role === 'seg') actions.addWaypoint");
+    expect(field).toContain("actions.select('seg'");
+    expect(app).toContain("Preview waypoint");
+    expect(app).toContain("window.PM.splitBezier");
+    expect(app).toContain("segType: originalType");
+    expect(app).toContain("addWaypoint(window.PM.pointAtFraction");
+  });
+
+  it("enters explicit waypoint placement and keeps shortcuts active after scrubbing", () => {
+    const panels = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
+    const styles = fs.readFileSync(new URL("../public/legacy/index.html", import.meta.url), "utf8");
+
+    expect(panels).toContain("actions.setTool('waypoint')");
+    expect(inspector).toContain("actions.setTool('waypoint')");
+    expect(app).not.toContain("addWaypointEnd");
+    expect(app).toContain('input:not([type="range"])');
+    expect(app).toContain("nativeKeyboardControl");
+    expect(app).toContain("keyboardNavigation.current = false");
+    expect(app).toContain("const appendWaypoint");
+    expect(field).toContain("actions.appendWaypoint(d.world)");
+    expect(field).toContain("insertWaypoint: e.altKey");
+    expect(field.indexOf("role === 'wp' && e.shiftKey")).toBeLessThan(field.indexOf("tool === 'waypoint' && !e.altKey"));
+    expect(field.indexOf("tool === 'waypoint' && !e.altKey")).toBeLessThan(field.indexOf("if (role === 'head')"));
+    expect(panels).toContain("onPointerUp: (e) => e.currentTarget.blur()");
+    expect(panels).toContain("'aria-valuetext': playTime.toFixed(2)");
+    expect(panels).toContain("min: 0, max: total, step: scrubStep");
+    expect(panels).toContain("e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')");
+    expect(panels).toContain("const timeAtFraction = (fraction)");
+    expect(panels).toContain("window.PM.featureFraction(marker, derived.sample)");
+    expect(panels).toContain("className: 'timeline-event'");
+    expect(panels).toContain("className: 'timeline-target'");
+    expect(panels).toContain("className: 'timeline-range'");
+    expect(panels).toContain("className: 'timeline-waypoint'");
+    expect(panels).toContain("className: 'timeline-toolbar'");
+    expect(panels).toContain("className: 'timeline-ruler'");
+    expect(panels).toContain("className: 'timeline-lanes'");
+    expect(panels).not.toContain("className: 'timeline-gutter'");
+    expect(panels).toContain("const timelineTicks = [0, 0.25, 0.5, 0.75, 1]");
+    expect(panels).not.toContain("className: 'timeline-progress'");
+    expect(styles).toContain(".transport{position:absolute;left:0;right:0;bottom:0");
+    expect(styles).toContain(".timeline{position:relative;min-width:0;margin:0;");
+    expect(styles).toContain(".timeline-playhead{z-index:8;top:-20px;bottom:0;width:1px");
+    expect(styles).toContain(".timeline-event{z-index:5;top:9px;bottom:4px;width:1px");
+    expect(styles).toContain("transform:translate(-50%,-50%) rotate(45deg)");
+    expect(app).toContain("derived, doc, metric, playTime");
+    expect(app).not.toContain("bordeaux-notice");
+    expect(app).not.toContain("setNotice(");
+  });
+
+  it("keeps the grid toggle with the field view controls", () => {
+    const panels = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
