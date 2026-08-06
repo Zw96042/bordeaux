@@ -88,3 +88,43 @@ describe("2026 field vocabulary", () => {
     expect(back.matches[0].point.x).toBeCloseTo(6);
     const sampled = resolveFieldTerm("front of robot", { pose: { headingSource: "physical", x: 5, y: 4, physicalHeadingRad: Math.PI }, relativeDistanceM: 1 });
     expect(sampled.matches[0].point.x).toBeCloseTo(4);
+  });
+
+  it("keeps an unspecified trench side ambiguous and reports unresolved height legality", () => {
+    const result = resolveFieldTerm("under the trench", { alliance: "blue" });
+    expect(result.status).toBe("ambiguous");
+    expect(result.matches).toHaveLength(2);
+    expect(result.warnings?.[0]).toContain("robot height");
+    expect(resolveFieldTerm("scoring table side trench", { alliance: "blue", robotHeightM: 0.7 }).message).toContain("exceeds");
+  });
+
+  it("matches negative table-side phrases before their positive substrings", () => {
+    expect(resolveFieldTerm("red non-scoring-table-side trench", { alliance: "red", robotHeightM: 0.5 }).matches[0].id).toBe("red-trench-away");
+    expect(resolveFieldTerm("blue non table side bump", { alliance: "blue" }).matches[0].id).toBe("blue-bump-away");
+  });
+
+  it("preserves validated team-owned named poses and regions", () => {
+    const project = createDemoProject();
+    project.strategy = {
+      locations: [
+        { id: "safe-shot", name: "Our safe shot", aliases: ["safe shot"], kind: "pose", x: 2.5, y: 2, headingDeg: 15 },
+        { id: "intake-lane", name: "Centerline intake lane", kind: "region", bounds: { xMin: 7, xMax: 8, yMin: 1, yMax: 2 } },
+      ],
+      actionBindings: [{ semanticTag: "shoot-fuel", commandId: "robot.shoot" }],
+    };
+    expect(validateProject(project).ok).toBe(true);
+    const pose = resolveStrategyTerm("safe shot", project.strategy);
+    const region = resolveStrategyTerm("Centerline intake lane", project.strategy);
+    expect(pose?.matches[0]).toMatchObject({ id: "safe-shot", point: { x: 2.5, y: 2 }, headingDeg: 15 });
+    expect(region?.matches[0].point).toEqual({ x: 7.5, y: 1.5 });
+  });
+
+  it("does not let team aliases shadow official terms or clamp robot-relative intent", () => {
+    const collision = resolveProjectFieldTerm("center line", { locations: [{ id: "team-center", name: "center line", kind: "pose", x: 1, y: 1 }] });
+    expect(collision.status).toBe("ambiguous");
+    expect(collision.message).toContain("both team strategy vocabulary and the official field pack");
+    const outside = resolveFieldTerm("front of bot", { pose: { headingSource: "physical", x: 0.1, y: 2, physicalHeadingRad: Math.PI }, relativeDistanceM: 0.5 });
+    expect(outside.status).toBe("unresolved");
+    expect(outside.message).toContain("will not shorten or clamp");
+  });
+});
