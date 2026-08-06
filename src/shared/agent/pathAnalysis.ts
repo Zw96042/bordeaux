@@ -358,3 +358,93 @@ export function minimumPathClearance(project: BordeauxProject, samples: readonly
       const occupied = section ?? { minY: footprintBounds.min.y, maxY: footprintBounds.max.y };
       const lateral = barrier.portals.reduce((best, portal) => {
         const bounds = portalBounds(portal);
+        return Math.max(best, Math.min(occupied.minY - bounds.minY, bounds.maxY - occupied.maxY));
+      }, Number.NEGATIVE_INFINITY);
+      if (section) minimum = Math.min(minimum, lateral);
+      else if (lateral < 0) {
+        const longitudinal = barrierX < footprintBounds.min.x
+          ? footprintBounds.min.x - barrierX
+          : barrierX > footprintBounds.max.x ? barrierX - footprintBounds.max.x : 0;
+        minimum = Math.min(minimum, longitudinal);
+      }
+    }
+    let previousIndex = -1;
+    let previousSide = 0;
+    samples.forEach((sample, index) => {
+      const delta = sample.x - barrierX;
+      const side = Math.abs(delta) <= EPSILON ? 0 : Math.sign(delta);
+      if (side === 0) return;
+      if (previousIndex >= 0 && previousSide !== side) {
+        const previous = samples[previousIndex];
+        const pose = crossingPose(previous, sample, barrierX);
+        const section = footprintSectionAt(project, pose, barrierX);
+        const portalClearance = barrier.portals.reduce((best, portal) => {
+          if (!section) return best;
+          const bounds = portalBounds(portal);
+          return Math.max(best, Math.min(section.minY - bounds.minY, bounds.maxY - section.maxY));
+        }, Number.NEGATIVE_INFINITY);
+        minimum = Math.min(minimum, portalClearance);
+      }
+      previousIndex = index;
+      previousSide = side;
+    });
+  });
+  return Number.isFinite(minimum) ? minimum : 0;
+}
+
+function analyzeGeneratedPath(
+  project: BordeauxProject,
+  path: PathDoc,
+  plannerId: TrajectoryPlannerId,
+  samples: readonly TrajectorySample[],
+  plannerDiagnostics: ValidationIssue[],
+  sampleLimit: number,
+  minimumClearanceM: number,
+  robotHeightM?: number,
+  requiredTraversal?: AnalyzePathOptions["requiredTraversal"],
+  requiredPortalIds: readonly string[] = [],
+): Pick<PathAnalysis, "rawSamples" | "samplesTruncated" | "extrema" | "findings"> {
+  const values = measuredValues(samples);
+  const waypointDistances = waypointArrivalIndices(path, samples).map((index) => samples[index].s);
+  const extrema: PathAnalysisExtremum[] = [];
+  const retainedIndices = new Set<number>();
+  retainWaypointArrivals(path, samples, retainedIndices);
+  const metrics: PathAnalysisMetric[] = ["velocity", "acceleration", "deceleration", "angularVelocity", "angularAcceleration", "angularDeceleration", "jerk", "angularJerk", "curvature"];
+  metrics.forEach((metric) => {
+    const measured = maxBy(values, metric);
+    if (!measured) return;
+    retainedIndices.add(measured.sampleIndex);
+    extrema.push({ metric, value: measured.value, unit: measured.unit, sample: sampleReference(path, samples, measured.sampleIndex) });
+  });
+
+  const findings: PathAnalysisFinding[] = [];
+  findings.push(...barrierCrossingFindings(project, path, samples, robotHeightM, requiredTraversal));
+  findings.push(...requiredPortalSequenceFindings(project, path, samples, requiredPortalIds));
+  const checkedMetrics: PathAnalysisMetric[] = ["velocity", "acceleration", "deceleration", "angularVelocity", "angularAcceleration", "angularDeceleration", "jerk", "angularJerk"];
+  checkedMetrics.forEach((metric) => {
+    const violation = values.filter((item) => item.metric === metric).reduce<{ measured: MeasuredValue; limit: number; source: string; ratio: number } | undefined>((worst, measured) => {
+      const active = metricLimit(path, samples[measured.sampleIndex], samples.at(-1)?.s ?? 0, waypointDistances, metric);
+      if (active.limit === undefined || measured.value <= active.limit + Math.max(EPSILON, active.limit * 1e-3)) return worst;
+      const candidate = { measured, limit: active.limit, source: active.source, ratio: measured.value / active.limit };
+      return !worst || candidate.ratio > worst.ratio ? candidate : worst;
+    }, undefined);
+    if (!violation) return;
+    const { measured, limit, source } = violation;
+    retainedIndices.add(measured.sampleIndex);
+    findings.push({
+      id: `constraint:${metric}`,
+      severity: "error",
+      kind: "constraint",
+      metric,
+      measured: measured.value,
+      limit,
+      unit: measured.unit,
+      sample: sampleReference(path, samples, measured.sampleIndex),
+      sourcePath: source,
+      message: `${metric} reaches ${measured.value.toFixed(3)} ${measured.unit}, above the authored ${limit.toFixed(3)} ${measured.unit} limit.`,
+    });
+  });
+
+  if (plannerId === "labviewBezier" || plannerId === "labviewClothoid") {
+    const motorViolation = samples.reduce<{ index: number; measured: number; limit: number; ratio: number } | undefined>((worst, sample, index) => {
+      if (index === 0 || sample.accelerationMps2 <= 0) return worst;
