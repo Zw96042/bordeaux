@@ -268,3 +268,93 @@ function barrierCrossingFindings(
       if (side === 0) return;
       if (previousIndex >= 0 && previousSide !== side) {
         traversalUseCount += 1;
+        const previous = samples[previousIndex];
+        const pose = crossingPose(previous, sample, barrierX);
+        const section = footprintSectionAt(project, pose, barrierX);
+        const suffix = `${barrier.id}:${findings.length}`;
+        validatePortal(section ? portalsForSection(barrier, section) : [], index, suffix, "crosses");
+      }
+      previousIndex = index;
+      previousSide = side;
+    });
+  });
+  if (requiredTraversal !== "direct" && traversalUseCount === 0 && samples.length > 0) findings.push({ id: "geometry:required-traversal-missing", severity: "error", kind: "geometry", message: `The route requires ${requiredTraversal.replace("-", " ")} but does not cross or start/end inside that typed alliance-barrier portal.`, sample: sampleReference(path, samples, 0), sourcePath: "field.2026-rebuilt.crossingBarriers" });
+  return findings;
+}
+
+function observedPortalIds(project: BordeauxProject, samples: readonly TrajectorySample[]): Array<{ id: string; sampleIndex: number }> {
+  if (samples.length === 0) return [];
+  const observed: Array<{ id: string; sampleIndex: number }> = [];
+  const portalAt = (barrier: typeof REBUILT_2026_FIELD.crossingBarriers[number], pose: { x: number; y: number; headingRad: number }, barrierX: number) => {
+    const section = footprintSectionAt(project, pose, barrierX);
+    if (!section) return undefined;
+    const portals = portalsForSection(barrier, section);
+    return portals.length === 1 ? portals[0] : undefined;
+  };
+  const add = (id: string | undefined, sampleIndex: number) => {
+    const previous = observed.at(-1);
+    if (!id || (previous?.id === id && sampleIndex - previous.sampleIndex <= 1)) return;
+    observed.push({ id, sampleIndex });
+  };
+
+  for (const barrier of REBUILT_2026_FIELD.crossingBarriers) {
+    const barrierX = officialToAppPoint({ x: barrier.x, y: 0 }).x;
+    if (footprintSectionAt(project, samples[0], barrierX)) add(portalAt(barrier, samples[0], barrierX)?.id, 0);
+  }
+  for (let index = 1; index < samples.length; index += 1) {
+    const previous = samples[index - 1];
+    const sample = samples[index];
+    const visits: Array<{ id: string; ratio: number }> = [];
+    for (const barrier of REBUILT_2026_FIELD.crossingBarriers) {
+      const barrierX = officialToAppPoint({ x: barrier.x, y: 0 }).x;
+      const left = previous.x - barrierX;
+      const right = sample.x - barrierX;
+      if (left * right >= 0 || Math.abs(sample.x - previous.x) <= EPSILON) continue;
+      const pose = crossingPose(previous, sample, barrierX);
+      const portal = portalAt(barrier, pose, barrierX);
+      if (portal) visits.push({ id: portal.id, ratio: pose.ratio });
+    }
+    visits.sort((left, right) => left.ratio - right.ratio).forEach((visit) => add(visit.id, index));
+  }
+  for (const barrier of REBUILT_2026_FIELD.crossingBarriers) {
+    const barrierX = officialToAppPoint({ x: barrier.x, y: 0 }).x;
+    const lastIndex = samples.length - 1;
+    if (footprintSectionAt(project, samples[lastIndex], barrierX)) add(portalAt(barrier, samples[lastIndex], barrierX)?.id, lastIndex);
+  }
+  return observed;
+}
+
+function requiredPortalSequenceFindings(project: BordeauxProject, path: PathDoc, samples: readonly TrajectorySample[], requiredPortalIds: readonly string[]): PathAnalysisFinding[] {
+  if (requiredPortalIds.length === 0 || samples.length === 0) return [];
+  const observed = observedPortalIds(project, samples);
+  if (observed.length === requiredPortalIds.length && observed.every((visit, index) => visit.id === requiredPortalIds[index])) return [];
+  const mismatchIndex = requiredPortalIds.findIndex((id, index) => observed[index]?.id !== id);
+  const sampleIndex = mismatchIndex >= 0 ? (observed[mismatchIndex]?.sampleIndex ?? 0) : (observed.at(-1)?.sampleIndex ?? 0);
+  return [{
+    id: "geometry:ordered-traversal-mismatch",
+    severity: "error",
+    kind: "geometry",
+    message: `The route must visit ${requiredPortalIds.join(" → ")} in that exact order; the generated path visits ${observed.map((visit) => visit.id).join(" → ") || "no typed portal"}.`,
+    sample: sampleReference(path, samples, sampleIndex),
+    sourcePath: "request.steps[].traversal",
+  }];
+}
+
+export function minimumPathClearance(project: BordeauxProject, samples: readonly TrajectorySample[]): number {
+  let minimum = Number.POSITIVE_INFINITY;
+  for (const sample of samples) {
+    const footprint = robotFootprintAt(project.robot, sample);
+    minimum = Math.min(minimum, footprintBoundsClearance(footprint, FIELD_W, FIELD_H));
+    for (const obstacle of appObstacleBounds()) {
+      minimum = Math.min(minimum, convexPolygonClearance(footprint, boundsPolygon(obstacle)));
+    }
+  }
+  REBUILT_2026_FIELD.crossingBarriers.forEach((barrier) => {
+    const barrierX = officialToAppPoint({ x: barrier.x, y: 0 }).x;
+    for (const sample of samples) {
+      const footprint = robotFootprintAt(project.robot, sample);
+      const footprintBounds = polygonBounds(footprint);
+      const section = verticalLineSection(footprint, barrierX);
+      const occupied = section ?? { minY: footprintBounds.min.y, maxY: footprintBounds.max.y };
+      const lateral = barrier.portals.reduce((best, portal) => {
+        const bounds = portalBounds(portal);
