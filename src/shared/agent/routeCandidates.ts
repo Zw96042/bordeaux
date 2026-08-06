@@ -358,3 +358,93 @@ function appendSwoosh(
   // deterministic 180-degree reversal without inventing an arbitrary loop.
   const entry = { x: far.x - ux * step.radiusM, y: far.y - uy * step.radiusM };
   const outer = { x: far.x + nx * step.radiusM, y: far.y + ny * step.radiusM };
+  const exit = { x: entry.x + nx * step.radiusM * 2, y: entry.y + ny * step.radiusM * 2 };
+  assertPointInside(entry, "The swoosh entry");
+  assertPointInside(outer, "The swoosh outer arc");
+  assertPointInside(exit, "The swoosh exit");
+  let required: string[];
+  if (targetsFuelEdge) {
+    required = appendLeg(points, nearEdge, step.traversal ?? "direct", true, portalRunM);
+    appendPoint(points, entry);
+  } else {
+    required = appendLeg(points, entry, step.traversal ?? "direct", true, portalRunM);
+  }
+  const handle = step.radiusM * 0.5522847498307936;
+  Object.assign(points.at(-1)!, {
+    segType: "clothoid",
+    prevC: { x: entry.x - ux * handle, y: entry.y - uy * handle },
+    nextC: { x: entry.x + ux * handle, y: entry.y + uy * handle },
+  });
+  points.push(
+    {
+      ...outer,
+      segType: "clothoid",
+      prevC: { x: outer.x - nx * handle, y: outer.y - ny * handle },
+      nextC: { x: outer.x + nx * handle, y: outer.y + ny * handle },
+    } as FieldPointInput,
+    {
+      ...exit,
+      prevC: { x: exit.x + ux * handle, y: exit.y + uy * handle },
+    } as FieldPointInput,
+  );
+  if (targetsFuelEdge) appendPoint(points, { x: nearEdge.x, y: exit.y });
+  return required;
+}
+
+function addBumpRange(path: PathDoc, anchor: { w0: number; t0: number; w1: number; t1: number }, suffix: number): void {
+  const limits = {
+    maxVel: Math.min(path.constraints.maxVel, 2),
+    maxAccel: path.constraints.maxAccel,
+    maxDecel: path.constraints.maxDecel,
+    maxAngVel: path.constraints.maxAngVel,
+    maxAngAccel: path.constraints.maxAngAccel,
+    name: `BUMP traversal${suffix ? ` ${suffix + 1}` : ""}`,
+  };
+  path.ranges.push({ anchor: "wp", f0: 0, f1: 0, ...anchor, ...limits });
+}
+
+function splitContainingRangeForBump(path: PathDoc, containerIndex: number, anchor: { w0: number; t0: number; w1: number; t1: number }, suffix: number): void {
+  const container = path.ranges[containerIndex];
+  const start = (container.w0 ?? 0) + (container.t0 ?? 0);
+  const end = (container.w1 ?? 0) + (container.t1 ?? 0);
+  const bumpStart = anchor.w0 + anchor.t0;
+  const bumpEnd = anchor.w1 + anchor.t1;
+  const baseName = container.name ?? "Speed limit";
+  const replacements: PathDoc["ranges"] = [];
+  if (start < bumpStart - 1e-6) replacements.push({ ...container, w1: anchor.w0, t1: anchor.t0, name: baseName });
+  replacements.push({
+    ...container,
+    ...anchor,
+    maxVel: Math.min(container.maxVel, 2),
+    name: `${baseName} + BUMP traversal${suffix ? ` ${suffix + 1}` : ""}`,
+  });
+  if (bumpEnd < end - 1e-6) replacements.push({ ...container, w0: anchor.w1, t0: anchor.t1, name: baseName });
+  path.ranges.splice(containerIndex, 1, ...replacements);
+}
+
+function waypointArrivalIndices(path: PathDoc, samples: readonly TrajectorySample[]): number[] {
+  let cursor = 0;
+  return path.waypoints.map((waypoint, waypointIndex) => {
+    let best = cursor;
+    let distance = Number.POSITIVE_INFINITY;
+    const last = waypointIndex === path.waypoints.length - 1 ? samples.length - 1 : Math.max(cursor, samples.length - (path.waypoints.length - waypointIndex));
+    for (let index = cursor; index <= last; index += 1) {
+      const candidate = Math.hypot(samples[index].x - waypoint.x, samples[index].y - waypoint.y);
+      if (candidate < distance) { distance = candidate; best = index; }
+    }
+    cursor = best;
+    return best;
+  });
+}
+
+function localAnchor(path: PathDoc, samples: readonly TrajectorySample[], sampleIndex: number): { waypointIndex: number; t: number } {
+  const arrivals = waypointArrivalIndices(path, samples);
+  let waypointIndex = 0;
+  while (waypointIndex + 1 < arrivals.length - 1 && arrivals[waypointIndex + 1] <= sampleIndex) waypointIndex += 1;
+  const start = samples[arrivals[waypointIndex]]?.s ?? 0;
+  const end = samples[arrivals[Math.min(arrivals.length - 1, waypointIndex + 1)]]?.s ?? start;
+  const t = end > start + 1e-9 ? (samples[sampleIndex].s - start) / (end - start) : 0;
+  return { waypointIndex, t: Math.max(0, Math.min(1, t)) };
+}
+
+function bumpCrossingRanges(project: BordeauxProject, path: PathDoc, samples: readonly TrajectorySample[]): Array<{ w0: number; t0: number; w1: number; t1: number }> {
