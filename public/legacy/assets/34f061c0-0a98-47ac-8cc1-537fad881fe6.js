@@ -43,51 +43,51 @@
     const inX = inLen > 1e-6 ? (w.x - w.prevC.x) / inLen : 0;
     const inY = inLen > 1e-6 ? (w.y - w.prevC.y) / inLen : 0;
     const outX = outLen > 1e-6 ? (w.nextC.x - w.x) / outLen : 0;
-    });
-    const [activeIdx, setActiveIdx] = useState(0);
-    const [sel, setSel] = useState({ kind: null, idx: -1 });
-    const [page, setPage] = useState('plan');
-    const [alliance, setAlliance] = useState('blue');
-    const [showGrid, setShowGrid] = useState(true);
-    const [view, setView] = useState(FIT);
-    const [playTime, setPlayTime] = useState(0);
-    const [playing, setPlaying] = useState(false);
-    const [graphOpen, setGraphOpen] = useState(false);
-    const [outlineOpen, setOutlineOpen] = useState(true);
-    const [secOpen, setSecOpen] = useState({ wp: true, rt: true, em: true, cr: true });
-    const [theme, setTheme] = useState('slate');
-    const [times, setTimes] = useState({});
-    const [selPos, setSelPos] = useState(null);
-    const [metric, setMetric] = useState('velocity');
-    const [tool, setTool] = useState('select');
-    const [diagOpen, setDiagOpen] = useState(false);
-    const [headMenu, setHeadMenu] = useState(null);
-    const [plannerId, setPlannerId] = useState('profiledSpline');
+    const outY = outLen > 1e-6 ? (w.nextC.y - w.y) / outLen : 0;
+    let dx = inX + outX, dy = inY + outY;
+    let mag = Math.hypot(dx, dy);
+    if (mag < 1e-6) { dx = outLen > 1e-6 ? outX : inX; dy = outLen > 1e-6 ? outY : inY; mag = Math.hypot(dx, dy); }
+    if (mag < 1e-6) { dx = 1; dy = 0; mag = 1; }
+    dx /= mag; dy /= mag;
+    w.prevC = { x: w.x - dx * inLen, y: w.y - dy * inLen };
+    w.nextC = { x: w.x + dx * outLen, y: w.y + dy * outLen };
+    w.linked = true;
+    w.corner = false;
+  }
 
-    // ---- Autonomous Routine ----
-    const [routine, setRoutine] = useState(() => ({ name: 'Autonomous Routine', nodes: [] }));
-    const [routineOutcomes, setRoutineOutcomes] = useState({});
-    const [routineTime, setRoutineTime] = useState(0);
-    const [routinePlaying, setRoutinePlaying] = useState(false);
-    const [routineSel, setRoutineSel] = useState(null);
+  function buildWps(raw) {
+    const out = raw.map((w) => ({ linked: true, thetaOn: false, theta: 0, stop: false, ...w }));
+    out.forEach((w, i) => { const hd = window.PM.autoHandles(out, i); if (!w.prevC) w.prevC = hd.prevC; if (!w.nextC) w.nextC = hd.nextC; });
+    out.forEach((w, i) => { if (!w.stop && i > 0 && i < out.length - 1) alignWaypointHandles(w); });
+    if (out.length) { out[0].thetaOn = true; out[out.length - 1].thetaOn = true; }
+    return out;
+  }
 
-    const robot = project.robot;
-    const accent = ACCENTS[theme] || ACCENTS.slate;
+  function remapWaypointRanges(doc, oldToNew, removedIndex) {
+    doc.ranges = (doc.ranges || []).map((range) => window.PM.remapWaypointRange(range, oldToNew, removedIndex, doc.waypoints.length));
+  }
 
-    const doc = project.paths[activeIdx];
-    const docRef = useRef(doc); docRef.current = doc;
-    const hist = useRef({ past: [], future: [] });
-    const [, force] = useState(0);
+  // ---- blank startup path ----
+  function blankPath(name) {
+    return {
+      id: pathId(),
+      name,
+      waypoints: buildWps([{ x: 2.2, y: 4.0, theta: 0 }, { x: 5.0, y: 4.0, theta: 0 }]),
+      targets: [], markers: [],
+      ranges: [],
+      constraints: { ...DEF_CONS },
+      headingMode: 'targets',
+      startVel: 0, goalVel: 0,
+      labview: { ...LV_DEFAULTS },
+    };
+  }
 
-    // ---- derived path data ----
-    const derived = useMemo(() => window.PM.derivePath(doc, robot, PERSEG), [doc, robot]);
-
-    useEffect(() => { setTimes((t) => (t[activeIdx] === derived.prof.totalTime ? t : { ...t, [activeIdx]: derived.prof.totalTime })); }, [derived, activeIdx]);
-
-    // ---- doc mutation ----
-    const writeDoc = useCallback((nd) => { setProject((pr) => { const paths = pr.paths.slice(); paths[activeIdx] = nd; return { ...pr, paths }; }); }, [activeIdx]);
-    const beginHistory = useCallback(() => { hist.current.past.push(clone(docRef.current)); if (hist.current.past.length > 80) hist.current.past.shift(); hist.current.future = []; force((x) => x + 1); }, []);
-    const commit = useCallback((fn) => { beginHistory(); writeDoc(fn(clone(docRef.current))); }, [beginHistory, writeDoc]);
+  function freshProject() {
+    return {
+      schemaVersion: '1.0',
+      name: 'Untitled',
+      robot: { drive: 'swerve', w: 0.84, l: 0.84, heightM: 0.5, maxSpeed: 5.0 },
+      paths: [blankPath('NewPath')],
     const mutate = useCallback((fn) => { writeDoc(fn(clone(docRef.current))); }, [writeDoc]);
 
     const undo = useCallback(() => { const H = hist.current; if (!H.past.length) return; H.future.push(clone(docRef.current)); writeDoc(H.past.pop()); force((x) => x + 1); }, [writeDoc]);
