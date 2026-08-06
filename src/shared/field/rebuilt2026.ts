@@ -268,3 +268,58 @@ export const REBUILT_2026_FIELD: FieldPack = {
     "Official +Y points away from the scoring table: low-Y is scoring-table side and high-Y is non-scoring-table side.",
     "The ROBOT STARTING LINE is the alliance-side face of the HUB/BUMP/TRENCH band, not the center of those structures.",
     "AprilTags and HUB faces are perception/aiming references, not collision-free chassis poses.",
+    "DEPOT barrier dimensions are official, but its exact floor polygon is not certified in this pack; never invent a center or route through a DEPOT reference.",
+  ],
+  landmarks,
+  solidObstacles,
+  crossingBarriers,
+  sources: [
+    {
+      label: "2026 FIRST Field Dimension Drawings",
+      url: "https://firstfrc.blob.core.windows.net/frc2026/FieldAssets/2026-field-dimension-dwgs.pdf",
+      revision: "2026-02-27",
+      sha256: "3e2c1a0c35424a66821186584dda4f6709221ac8eb88036e09091452b8235f82",
+    },
+    {
+      label: "2026 FIRST Robotics Competition Game Manual",
+      url: "https://firstfrc.blob.core.windows.net/frc2026/Manual/HTML/2026GameManual.htm",
+      revision: "Team Update 19",
+    },
+    {
+      label: "WPILib 2026 REBUILT welded field fixture",
+      url: "https://github.com/wpilibsuite/allwpilib/tree/c610ffd17fb144e7348af48caad7f3944a7765b6",
+      revision: "c610ffd17fb144e7348af48caad7f3944a7765b6",
+      sha256: "d638062440a5970cdaeb3702d2113fecb6bfb5b0d2a095bd75d21aab0d8ee6b9",
+    },
+  ],
+};
+
+export const REBUILT_2026_OFFICIAL_CROSSINGS = {
+  blue: {
+    trenchTable: landmarks.find((item) => item.id === "blue-trench-table")!.point!,
+    trenchAway: landmarks.find((item) => item.id === "blue-trench-away")!.point!,
+    bumpTable: landmarks.find((item) => item.id === "blue-bump-table")!.point!,
+    bumpAway: landmarks.find((item) => item.id === "blue-bump-away")!.point!,
+  },
+  red: {
+    trenchTable: landmarks.find((item) => item.id === "red-trench-table")!.point!,
+    trenchAway: landmarks.find((item) => item.id === "red-trench-away")!.point!,
+    bumpTable: landmarks.find((item) => item.id === "red-bump-table")!.point!,
+    bumpAway: landmarks.find((item) => item.id === "red-bump-away")!.point!,
+  },
+} as const;
+
+export const REBUILT_2026_CROSSINGS = {
+  blue: {
+    trenchTable: officialToAppPoint(REBUILT_2026_OFFICIAL_CROSSINGS.blue.trenchTable),
+    trenchAway: officialToAppPoint(REBUILT_2026_OFFICIAL_CROSSINGS.blue.trenchAway),
+    bumpTable: officialToAppPoint(REBUILT_2026_OFFICIAL_CROSSINGS.blue.bumpTable),
+    bumpAway: officialToAppPoint(REBUILT_2026_OFFICIAL_CROSSINGS.blue.bumpAway),
+  },
+  red: {
+    trenchTable: officialToAppPoint(REBUILT_2026_OFFICIAL_CROSSINGS.red.trenchTable),
+    trenchAway: officialToAppPoint(REBUILT_2026_OFFICIAL_CROSSINGS.red.trenchAway),
+    bumpTable: officialToAppPoint(REBUILT_2026_OFFICIAL_CROSSINGS.red.bumpTable),
+    bumpAway: officialToAppPoint(REBUILT_2026_OFFICIAL_CROSSINGS.red.bumpAway),
+  },
+} as const;
