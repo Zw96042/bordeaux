@@ -493,14 +493,14 @@
       if (pts.length > 1) {
         const totalS = derived.sample.length || 1;
         const ranges = derived.effRanges || doc.ranges || [];
-      h('rect', { x: X0 - 6, y: Y0 - 6, width: (X1 - X0) + 12, height: (Y1 - Y0) + 12, rx: 4, fill: 'none', stroke: '#ffffff', strokeOpacity: 0.07, strokeWidth: P(1), style: { pointerEvents: 'none' } }),
-      routine ? routineLayers : staticLayers,
-      routine ? null : previewEl,
-      routine ? routineRobot : robotEl,
-      routine ? null : snapEl,
-    );
-  }
-
-  window.FieldView = FieldView;
-  window.FIELD_DIMS = { FIELD_W, FIELD_H, IMG_W, IMG_H };
-})();
+        // constraint range bands (under the centerline)
+        ranges.forEach((rg, ri) => {
+          const lo = Math.min(rg.f0, rg.f1), hi = Math.max(rg.f0, rg.f1);
+          const isSel = sel.kind === 'cr' && sel.idx === ri;
+          let dd = ''; let started = false;
+          for (let k = 0; k < pts.length; k++) { const f = pts[k].s / totalS; if (f >= lo && f <= hi) { const q = W2P(pts[k]); dd += (started ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); started = true; } }
+          if (dd) els.push(h('path', { key: 'rb' + ri, d: dd, fill: 'none', stroke: isSel ? accent : '#caa23a', strokeOpacity: isSel ? 0.5 : 0.32, strokeWidth: P(12), strokeLinecap: 'round', strokeLinejoin: 'round', style: { pointerEvents: 'none' } }));
+        });
+        let dCase = `M ${W2P(pts[0]).x} ${W2P(pts[0]).y}`;
+        for (let i = 1; i < pts.length; i++) { const q = W2P(pts[i]); dCase += ` L ${q.x} ${q.y}`; }
+        els.push(h('path', { key: 'case', d: dCase, fill: 'none', stroke: '#05060a', strokeOpacity: 0.75, strokeWidth: P(5), strokeLinecap: 'round', strokeLinejoin: 'round' }));
