@@ -43,51 +43,51 @@
     return best;
   }
   function bezDD(p0, c0, c1, p1, t) {
-    const dx = p1.x - p0.x, dy = p1.y - p0.y; const r = Math.hypot(dx, dy);
-    if (r < 1e-6) return null;
-    const tau = Math.atan2(dy, dx);
-    const ph0 = angWrap(th0 - tau), ph1 = angWrap(th1 - tau);
-    const dphi = ph1 - ph0;
-    const Hsin = (b) => { let s = 0; const N = 24; for (let k = 0; k <= N; k++) { const t = k / N; const th = ph0 + (dphi - b) * t + b * t * t; const w = (k === 0 || k === N) ? 1 : (k % 2 ? 4 : 2); s += w * Math.sin(th); } return s / (3 * N); };
-    const Hcos = (b) => { let s = 0; const N = 24; for (let k = 0; k <= N; k++) { const t = k / N; const th = ph0 + (dphi - b) * t + b * t * t; const w = (k === 0 || k === N) ? 1 : (k % 2 ? 4 : 2); s += w * Math.cos(th); } return s / (3 * N); };
-    // root of Hsin(b)=0 with the smallest |b| (closest to a gentle spiral)
-    let best = null; const lo = -6 * Math.PI, hi = 6 * Math.PI, STEPS = 240; let pb = lo, pf = Hsin(lo);
-    for (let k = 1; k <= STEPS; k++) {
-      const b = lo + (hi - lo) * k / STEPS, f = Hsin(b);
-      if (pf * f < 0) { let a = pb, bb = b, fa = pf; for (let it = 0; it < 44; it++) { const m = (a + bb) / 2, fm = Hsin(m); if (fa * fm <= 0) bb = m; else { a = m; fa = fm; } } const root = (a + bb) / 2; if (best === null || Math.abs(root) < Math.abs(best)) best = root; }
-      pb = b; pf = f;
-    }
-    if (best === null) return null;
-    const b = best, denom = Hcos(b); if (denom <= 1e-3) return null; // path would double back
-    const L = r / denom; if (!isFinite(L) || L <= 0 || L > r * 30) return null;
-    const thAbs = (t) => tau + ph0 + (dphi - b) * t + b * t * t;
-    const xs = new Array(M + 1), ys = new Array(M + 1), hs = new Array(M + 1), ks = new Array(M + 1);
-    xs[0] = p0.x; ys[0] = p0.y; hs[0] = thAbs(0); ks[0] = (dphi - b) / L;
-    let cx = 0, cy = 0; const dt = 1 / M;
-    for (let m = 1; m <= M; m++) { const tm = (m - 0.5) / M; const a = thAbs(tm); cx += Math.cos(a) * L * dt; cy += Math.sin(a) * L * dt; const t = m / M; xs[m] = p0.x + cx; ys[m] = p0.y + cy; hs[m] = thAbs(t); ks[m] = ((dphi - b) + 2 * b * t) / L; }
-    return { xs, ys, hs, ks };
+    const u = 1 - t;
+    return { x: 6 * u * (c1.x - 2 * c0.x + p0.x) + 6 * t * (p1.x - 2 * c1.x + c0.x), y: 6 * u * (c1.y - 2 * c0.y + p0.y) + 6 * t * (p1.y - 2 * c1.y + c0.y) };
   }
 
-  // ---- sample the whole path into dense points with arclength + curvature ----
-  // waypoints: [{x,y, prevC, nextC, segType?}]  segType: bezier | line | arc | clothoid
-  function sample(waypoints, perSeg = 60) {
-    const pts = [];
-    const segs = waypoints.length - 1;
-    if (segs < 1) return { pts: [], length: 0, segs: 0 };
-    const steps = perSeg;
+  // shortest signed angle difference (radians)
+  function angWrap(a) { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; }
+  function angLerp(a, b, t) { return a + angWrap(b - a) * t; }
+  const D2R = Math.PI / 180, R2D = 180 / Math.PI;
 
-    const segTypeAt = (i) => (waypoints[i] && waypoints[i].segType) || 'bezier';
-    const pointOf = (w) => ({ x: w.x, y: w.y });
-    const chordHeading = (a, b) => Math.atan2(b.y - a.y, b.x - a.x);
-    const outHeading = (i) => {
-      const w0 = waypoints[i], w1 = waypoints[i + 1];
-      const p0 = pointOf(w0), p1 = pointOf(w1), c0 = w0.nextC || p1;
-      return Math.hypot(c0.x - p0.x, c0.y - p0.y) > 1e-6 ? Math.atan2(c0.y - p0.y, c0.x - p0.x) : chordHeading(p0, p1);
-    };
-    const inHeading = (i) => {
-      const w0 = waypoints[i - 1], w1 = waypoints[i];
-      const p0 = pointOf(w0), p1 = pointOf(w1), c1 = w1.prevC || p0;
-      return Math.hypot(p1.x - c1.x, p1.y - c1.y) > 1e-6 ? Math.atan2(p1.y - c1.y, p1.x - c1.x) : chordHeading(p0, p1);
+  // ---- rebuilt LabVIEW compatibility geometry ------------------------------
+  // These are browser copies of the shared compatibility planners. Keep their
+  // constants and endpoint derivative formulas aligned with src/shared/math.
+  const LV_EPS = 1e-10, LV_TAU_STEP = 0.001;
+  const lvAdd = (a, b) => ({ x: a.x + b.x, y: a.y + b.y });
+  const lvSub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y });
+  const lvScale = (p, n) => ({ x: p.x * n, y: p.y * n });
+  const lvMag = (p) => Math.hypot(p.x, p.y);
+  function lvFallbackTangent(wps, i) {
+    if (i === 0) return lvSub(wps[1], wps[0]);
+    if (i === wps.length - 1) return lvSub(wps[i], wps[i - 1]);
+    const ld = lvMag(lvSub(wps[i], wps[i - 1])), rd = lvMag(lvSub(wps[i + 1], wps[i]));
+    const dir = lvAdd(lvScale(lvSub(wps[i], wps[i - 1]), 1 / Math.max(ld, LV_EPS)), lvScale(lvSub(wps[i + 1], wps[i]), 1 / Math.max(rd, LV_EPS)));
+    return lvMag(dir) <= LV_EPS ? { x: 0, y: 0 } : lvScale(dir, 0.5 * Math.min(ld, rd) / lvMag(dir));
+  }
+  function lvTangents(wps) {
+    return wps.map((w, i) => {
+      const incoming = w.prevC ? lvScale(lvSub(w, w.prevC), 5) : null;
+      const outgoing = w.nextC ? lvScale(lvSub(w.nextC, w), 5) : null;
+      const hasIn = incoming && lvMag(incoming) > LV_EPS, hasOut = outgoing && lvMag(outgoing) > LV_EPS;
+      if (i === 0 && hasOut) return outgoing;
+      if (i === wps.length - 1 && hasIn) return incoming;
+      if (hasIn && hasOut) { const avg = lvScale(lvAdd(incoming, outgoing), 0.5); if (lvMag(avg) > LV_EPS) return avg; }
+      return hasOut ? outgoing : hasIn ? incoming : lvFallbackTangent(wps, i);
+    });
+  }
+  function lvCubicSecond(a, b, ta, tb) {
+    const p1 = lvAdd(a, lvScale(ta, 1 / 3)), p2 = lvSub(b, lvScale(tb, 1 / 3));
+    return { start: lvScale(lvAdd(lvSub(a, lvScale(p1, 2)), p2), 6), end: lvScale(lvAdd(lvSub(p1, lvScale(p2, 2)), b), 6) };
+  }
+  function lvSecondDerivatives(wps, tangents) {
+    const cubics = [], chords = [];
+    for (let i = 0; i < wps.length - 1; i++) { cubics.push(lvCubicSecond(wps[i], wps[i + 1], tangents[i], tangents[i + 1])); chords.push(lvMag(lvSub(wps[i + 1], wps[i]))); }
+    const out = [cubics[0].start];
+    for (let i = 1; i < wps.length - 1; i++) {
+      const lw = 1 / Math.max(chords[i - 1], LV_EPS), rw = 1 / Math.max(chords[i], LV_EPS);
     };
     const blendedJointHeading = (i) => {
       const prevIsClothoid = i > 0 && segTypeAt(i - 1) === 'clothoid';
