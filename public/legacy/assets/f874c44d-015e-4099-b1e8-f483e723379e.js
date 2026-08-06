@@ -50,12 +50,13 @@
 
   // ---- demo routine: a blue-side Reefscape qualification auto ----
   // Generate steps reference robot-code functions (funcRef); the dashed preview is sim-only.
-  function demoRoutine() {
+  function demoRoutine(paths) {
     _id = 0;
+    paths = paths || [];
     return {
       name: 'Qual_Auto_A',
       nodes: [
-        { id: uid('p'), type: 'path', ref: 0 },
+        { id: uid('p'), type: 'path', ref: paths[0] ? paths[0].id : '' },
         { id: uid('f'), type: 'function', cat: 'terminate', title: 'Coral scored', trigger: 'Vision confirms L4 placement', note: 'Cuts the scoring dwell the instant the coral clears the gripper instead of waiting out a fixed timer.' },
         {
           id: uid('d'), type: 'decision', cond: 'Coral remaining \u2265 1', metric: 'gamePieces',
@@ -71,8 +72,8 @@
             { id: uid('s'), type: 'function', cat: 'sequence', op: 'skip', target: 'Reef_Station', trigger: 'No target in view', note: 'Abandons the opportunistic pickup and proceeds straight to the next scored path.' },
           ],
         },
-        { id: uid('p'), type: 'path', ref: 1 },
-        { id: uid('p'), type: 'path', ref: 2 },
+        { id: uid('p'), type: 'path', ref: paths[1] ? paths[1].id : '' },
+        { id: uid('p'), type: 'path', ref: paths[2] ? paths[2].id : '' },
         { id: uid('g'), type: 'function', cat: 'generate', funcRef: 'GenerateParkingPath', trigger: 'Routine end',
           params: [{ k: 'zone', v: 'alliance' }],
           note: 'Robot code plans a clean exit to the park zone from wherever the robot finishes.',
@@ -82,12 +83,11 @@
   }
 
   // ---- node factory ----
-  function newNode(type, cat) {
-    if (type === 'path') return { id: uid('p'), type: 'path', ref: 0 };
+  function newNode(type, cat, pathRef) {
+    if (type === 'path') return { id: uid('p'), type: 'path', ref: pathRef || '' };
     if (type === 'decision') return { id: uid('d'), type: 'decision', cond: 'New condition?', thenLabel: 'Yes', elseLabel: 'No', then: [], else: [] };
     const c = cat || 'terminate';
     if (c === 'generate') return { id: uid('g'), type: 'function', cat: 'generate', funcRef: 'GeneratePath', trigger: 'On entry', params: [], note: '', preview: null };
-    if (c === 'sequence') return { id: uid('s'), type: 'function', cat: 'sequence', op: 'skip', target: '', trigger: 'When\u2026', note: '' };
     if (c === 'velocity') return { id: uid('v'), type: 'function', cat: 'velocity', title: 'Velocity rule', trigger: 'When\u2026', scale: 0.5, note: '' };
     return { id: uid('f'), type: 'function', cat: 'terminate', title: 'Terminate', trigger: 'When\u2026', note: '' };
   }
