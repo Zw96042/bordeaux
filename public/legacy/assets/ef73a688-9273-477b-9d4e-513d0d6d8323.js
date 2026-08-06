@@ -185,3 +185,6 @@
                 h(AddStep, { variant: 'gap', onPick: (t, c) => acq.addAfter(n.id, t, c) }))),
               h(AddStep, { variant: 'end', onPick: (t, c) => acq.addEnd(t, c) }))));
   }
+
+  window.RoutinePanel = RoutinePanel;
+})();
