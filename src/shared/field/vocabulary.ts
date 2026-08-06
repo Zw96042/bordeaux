@@ -178,3 +178,93 @@ export function resolveFieldTerm(rawPhrase: string, options: ResolveFieldTermOpt
     const officialPoint = allianceOfficialPoint(requested.alliance, bluePoint);
     return {
       phrase: rawPhrase,
+      status: "resolved",
+      matches: [fieldMatch(`${requested.alliance}-neutral-far-edge`, `Far edge of the NEUTRAL ZONE for ${requested.alliance}`, officialPoint, "Resolved away from the selected alliance wall.")],
+    };
+  }
+
+  if (phrase.includes("neutral") && hasAny(phrase, ["near side", "near edge", "our side"])) {
+    const requested = requestedAlliance(rawPhrase, phrase, options);
+    if (requested.error) return requested.error;
+    if (!requested.alliance) return { phrase: rawPhrase, status: "unresolved", matches: [], message: "The near side of the NEUTRAL ZONE needs an alliance context." };
+    const bluePoint = { x: REBUILT_2026_NEUTRAL_ZONE.xMin, y: options.pose ? appToOfficialPoint(options.pose).y : REBUILT_2026_FIELD_WIDTH_M / 2 };
+    const officialPoint = allianceOfficialPoint(requested.alliance, bluePoint);
+    return {
+      phrase: rawPhrase,
+      status: "resolved",
+      matches: [fieldMatch(`${requested.alliance}-neutral-near-edge`, `Near edge of the NEUTRAL ZONE for ${requested.alliance}`, officialPoint, "Resolved toward the selected alliance wall.")],
+    };
+  }
+
+  if (phrase.includes("trench") || phrase.includes("bump")) {
+    const requested = requestedAlliance(rawPhrase, phrase, options);
+    if (requested.error) return requested.error;
+    if (!requested.alliance) return { phrase: rawPhrase, status: "unresolved", matches: [], message: "A TRENCH or BUMP reference needs an alliance context." };
+    const alliance = requested.alliance;
+    const crossingType = phrase.includes("trench") ? "trench" : "bump";
+    const physicalSide = hasAny(phrase, ["non scoring table", "non table", "away side", "far guardrail"]) ? "away"
+      : hasAny(phrase, ["scoring table", "table side"]) ? "table"
+        : null;
+    const allianceSide = /(?:^| )left(?: |$)/.test(phrase) ? "left"
+      : /(?:^| )right(?: |$)/.test(phrase) ? "right"
+        : null;
+    const relativeSide = allianceSide === "left"
+      ? (alliance === "red" ? "table" : "away")
+      : allianceSide === "right"
+        ? (alliance === "red" ? "away" : "table")
+        : null;
+    if (physicalSide && relativeSide && physicalSide !== relativeSide) {
+      return { phrase: rawPhrase, status: "unresolved", matches: [], message: `“${rawPhrase}” gives conflicting physical-side and ${alliance}-driver-relative directions; Bordeaux will not guess which one to use.` };
+    }
+    const side = physicalSide ?? relativeSide;
+    const crossings = REBUILT_2026_CROSSINGS[alliance];
+    const candidates = crossingType === "trench"
+      ? [
+          { id: `${alliance}-trench-table`, label: `${alliance} scoring-table-side TRENCH`, point: crossings.trenchTable, side: "table" as const },
+          { id: `${alliance}-trench-away`, label: `${alliance} non-scoring-table-side TRENCH`, point: crossings.trenchAway, side: "away" as const },
+        ]
+      : [
+          { id: `${alliance}-bump-table`, label: `${alliance} scoring-table-side BUMP`, point: crossings.bumpTable, side: "table" as const },
+          { id: `${alliance}-bump-away`, label: `${alliance} non-scoring-table-side BUMP`, point: crossings.bumpAway, side: "away" as const },
+        ];
+    const selected = side ? candidates.filter((candidate) => candidate.side === side) : candidates;
+    if (crossingType === "trench" && options.robotHeightM !== undefined && options.robotHeightM > REBUILT_2026_TRENCH_CLEARANCE_M) {
+      return { phrase: rawPhrase, status: "unresolved", matches: [], message: `The authored robot height (${options.robotHeightM.toFixed(3)} m) exceeds the TRENCH opening height (0.565 m).` };
+    }
+    return {
+      phrase: rawPhrase,
+      status: selected.length === 1 ? "resolved" : "ambiguous",
+      matches: selected.map((candidate) => ({
+        id: candidate.id,
+        label: candidate.label,
+        point: { ...candidate.point },
+        confidence: selected.length === 1 ? 1 : 0.5,
+        reason: selected.length === 1 ? `Resolved the requested ${allianceSide ? `${alliance}-driver ${allianceSide}` : candidate.side} side without using the current display view as field ownership.` : "Both field sides match; specify alliance-left/right or scoring-table/non-scoring-table side.",
+        traversal: crossingType,
+      })),
+      ...(selected.length > 1 ? { message: `Which ${crossingType.toUpperCase()} side should Bordeaux use?` } : {}),
+      ...(crossingType === "trench" && options.robotHeightM === undefined
+        ? { warnings: ["TRENCH clearance is unresolved because this project does not specify robot height."] }
+        : {}),
+    };
+  }
+
+  const exact = REBUILT_2026_FIELD.landmarks.filter((landmark) => {
+    const terms = [landmark.name, ...landmark.aliases].map(normalized);
+    return terms.includes(phrase);
+  });
+  const matches = exact.flatMap((landmark) => {
+    const point = landmark.point ?? (landmark.bounds ? {
+      x: (landmark.bounds.xMin + landmark.bounds.xMax) / 2,
+      y: (landmark.bounds.yMin + landmark.bounds.yMax) / 2,
+    } : null);
+    return point ? [{ id: landmark.id, label: landmark.name, officialPoint: point, point: officialToAppPoint(point), confidence: 1, reason: "Exact official field-pack alias, transformed into Bordeaux coordinates.", navigable: landmark.navigable !== false, ...(landmark.traversal ? { traversal: landmark.traversal } : {}) }] : [];
+  });
+  const descriptive = exact.filter((landmark) => !landmark.point && !landmark.bounds);
+  return matches.length
+    ? { phrase: rawPhrase, status: matches.length === 1 ? "resolved" : "ambiguous", matches }
+    : descriptive.length
+      ? { phrase: rawPhrase, status: "unresolved", matches: [], message: `${descriptive.map((landmark) => landmark.name).join(" / ")} is official field vocabulary but is not an on-field robot drive coordinate. ${descriptive.map((landmark) => landmark.description).filter(Boolean).join(" ")}` }
+    : { phrase: rawPhrase, status: "unresolved", matches: [], message: `Bordeaux does not recognize “${rawPhrase}” in the active field pack.` };
+}
+
