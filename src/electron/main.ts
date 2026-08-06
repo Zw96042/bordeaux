@@ -345,3 +345,93 @@ function createWindow() {
         const largeEnumOptions = [...document.querySelectorAll('#event-command-param-mode-listbox [role="option"]')];
         const largeEnumOverflowNotice = document.querySelector('#event-command-param-mode-listbox .cmd-picker-more')?.textContent || '';
         const largeEnumSearch = document.getElementById('event-command-param-mode-search');
+        if (largeEnumSearch) {
+          setInputValue.call(largeEnumSearch, 'MODE_150');
+          largeEnumSearch.dispatchEvent(new Event('input', { bubbles: true }));
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        const largeEnumChoice = [...document.querySelectorAll('#event-command-param-mode-listbox [role="option"]')]
+          .find((option) => option.getAttribute('data-value') === 'MODE_150');
+        largeEnumChoice?.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const javaUi = {
+          markerInspector: Boolean(document.querySelector('.cmd-project')),
+          linkAction: Boolean(linkButton),
+          commandEnabled: Boolean(commandPicker && !commandPicker.disabled),
+          commandOptions: commandOptions.length,
+          searchHiddenForSmallCatalog: !commandSearch,
+          recentHiddenForSingleProject: !document.getElementById('event-marker-java-project'),
+          cancelSwitch: Boolean(document.getElementById('event-command-cancel') && document.querySelector('.cmd-toggle-track')),
+          parameter: smokeParametersPresent,
+          jsonShapeRejected,
+          jsonShapeAccepted: jsonParameter?.getAttribute('aria-invalid') === 'false',
+          longRangeRejected,
+          exactInteger: exactIntegerParameter?.value === '9007199254740993' && exactIntegerParameter?.type === 'text',
+          largeEnumPicker: largeEnumOptions.length === 80
+            && largeEnumOverflowNotice.includes('80 of 160 shown')
+            && Boolean(largeEnumSearch)
+            && document.getElementById('event-command-param-mode-value')?.textContent === 'MODE_150',
+          accessible: unnamedOnPage().length === 0,
+        };
+        await window.bordeauxAPI.newProject();
+        const javaExported = await window.bordeauxAPI.exportJava(project, 'linked');
+        const saved = await window.bordeauxAPI.saveProject(project, true);
+        await window.bordeauxAPI.newProject();
+        const opened = await window.bordeauxAPI.openProject();
+        const exported = await window.bordeauxAPI.exportBdx(opened.project);
+        window.bordeauxAPI.setDirty(true);
+        const probe = document.createElement('script'); probe.textContent = 'window.__bordeauxInlineScriptRan = true'; document.head.appendChild(probe);
+        return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, chapLoader, validation: validation.ok, javaDiscovery: javaConnection.catalog.projectName === 'SmokeRobot' && javaConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), javaInstalled: installedJavaConnection.integration.installed, javaBuilt: builtJavaConnection.catalog.authoritative === true && builtJavaConnection.catalog.catalogHash === reopenedJavaConnection.catalog.catalogHash, javaRecent: recentJavaProjects.length === 1 && reopenedJavaConnection.catalog.projectName === 'SmokeRobot', javaUi, javaExported: javaExported.exported && javaExported.eventCount === 1, roundTrip: saved.saved && opened.project.name === project.name && opened.project.routine.nodes[0].ref === 'path_smoke', exported: exported.exported, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
+      })()`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      window.close();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const filesWritten = smokeDirectory ? fs.existsSync(path.join(smokeDirectory, "project.bordeaux.json")) && fs.existsSync(path.join(smokeDirectory, "export.bdx")) && fs.existsSync(path.join(smokeDirectory, "java-project", "src", "main", "deploy", "bordeaux", "Smoke-edited.bordeaux.json")) : false;
+      result.filesWritten = filesWritten;
+      result.closeGuard = smokeCloseGuardTriggered && !window.isDestroyed();
+      console.log(`BORDEAUX_SMOKE_OK ${JSON.stringify(result)}`);
+      const passed = result.api && result.root && result.unnamed.length === 0 && result.main > 0 && result.nav > 0 && result.chapLoader === "rigged" && result.validation && result.javaDiscovery && result.javaInstalled && result.javaBuilt && result.javaRecent && result.javaUi.markerInspector && result.javaUi.linkAction && result.javaUi.commandEnabled && result.javaUi.commandOptions === 4 && result.javaUi.searchHiddenForSmallCatalog && result.javaUi.recentHiddenForSingleProject && result.javaUi.cancelSwitch && result.javaUi.parameter && result.javaUi.jsonShapeRejected && result.javaUi.jsonShapeAccepted && result.javaUi.longRangeRejected && result.javaUi.exactInteger && result.javaUi.largeEnumPicker && result.javaUi.accessible && result.javaExported && result.roundTrip && result.exported && result.nodeGlobalsBlocked && result.popupBlocked && result.inlineScriptBlocked && result.filesWritten && result.closeGuard;
+      allowClose = true;
+      app.exit(passed ? 0 : 1);
+    });
+  }
+}
+
+function sendCommand(command: string, payload?: unknown) {
+  mainWindow?.webContents.send("menu-command", { command, payload });
+}
+
+function sendMcpStatus(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("agent:mcpStatus", { enabled: agentBridge?.enabled === true });
+}
+
+function buildMenu() {
+  const recentSubmenu = recentFiles.length > 0
+    ? recentFiles.map((filePath, index) => ({ label: path.basename(filePath), sublabel: filePath, click: () => sendCommand("open-recent", index) }))
+    : [{ label: "No Recent Projects", enabled: false }];
+
+  const template: Electron.MenuItemConstructorOptions[] = [
+    ...(process.platform === "darwin" ? [{ label: app.name, submenu: [{ role: "about" }, { type: "separator" }, { role: "quit" }] } as Electron.MenuItemConstructorOptions] : []),
+    {
+      label: "File",
+      submenu: [
+        { label: "New Project", accelerator: "CmdOrCtrl+N", click: () => sendCommand("new-project") },
+        { label: "Open Project...", accelerator: "CmdOrCtrl+O", click: () => sendCommand("open-project") },
+        { label: "Open Recent", submenu: recentSubmenu },
+        { type: "separator" },
+        { label: "Save", accelerator: "CmdOrCtrl+S", click: () => sendCommand("save-project") },
+        { label: "Save As...", accelerator: "CmdOrCtrl+Shift+S", click: () => sendCommand("save-project-as") },
+        { type: "separator" },
+        { label: "Export .bdx...", accelerator: "CmdOrCtrl+E", click: () => sendCommand("export-bdx") },
+        { label: "Export Java Trajectory…", accelerator: "CmdOrCtrl+Shift+E", click: () => sendCommand("export-java") },
+        { type: "separator" },
+        process.platform === "darwin" ? { role: "close" } : { role: "quit" },
+      ],
+    },
+    {
+      label: "Java",
+      submenu: [
+        { label: "Link Robot Project…", click: () => sendCommand("java-link") },
+        { label: "Install or Update Support…", click: () => sendCommand("java-install") },
+        { label: "Build Command Catalog…", click: () => sendCommand("java-build") },
+        { label: "Cancel Catalog Build", click: () => sendCommand("java-cancel-build") },
