@@ -448,51 +448,51 @@
         const activeRanges = ranges.filter((R) => overlaps(Math.min(R.f0, R.f1), Math.max(R.f0, R.f1)));
         const activeTransitions = headingTransitions.filter((policy) => overlaps(policy.start, policy.end));
         const activePolicies = activeRanges.length + activeTransitions.length;
-  }
-
-  // Path type belongs to the SEGMENT between two waypoints. The list stays honest:
-  // only true geometry types live here, grouped Basic / Spline. Snapping, heading-hold,
-  // approach and auto-smooth are tooling/constraint behaviours and live elsewhere.
-  const SEGTYPES = [
-    { id: 'line', label: 'Straight', abbr: 'LIN', group: 'Basic', hint: 'Straight line \u2014 control handles ignored.' },
-    { id: 'arc', label: 'Arc', abbr: 'ARC', group: 'Basic', hint: 'Constant-radius turn, tangent to the out-handle.' },
-    { id: 'bezier', label: 'B\u00e9zier', abbr: 'BEZ', group: 'Spline', hint: 'Hand-shaped spline driven by the control handles.' },
-    { id: 'clothoid', label: 'Clothoid', abbr: 'CLO', group: 'Spline', hint: 'Euler spiral \u2014 curvature ramps smoothly (swerve-friendly).' },
-  ];
-
-  // ---- constraint-range anchoring -------------------------------------------
-  // A range can be anchored three ways (the memo's request). We resolve each to
-  // concrete arclength fractions [f0,f1] against the CURRENT path so the profile
-  // engine + overlays stay simple, while the stored anchor keeps the range
-  // attached the way the user intends as the path is edited.
-  //   param : fixed percent of the path        {f0,f1}
-  //   dist  : fixed metres of travel           {d0,d1}
-  //   wp    : pinned to a waypoint span        {w0,w1}
-  function waypointFracs(doc, smp) {
-    const pts = smp.pts; const total = smp.length || 1; const n = doc.waypoints.length;
-    if (!pts.length) return doc.waypoints.map(() => 0);
-    const perSeg = (pts.length - 1) / Math.max(1, n - 1);
-    return doc.waypoints.map((_, k) => { const i = Math.min(pts.length - 1, Math.round(k * perSeg)); return pts[i].s / total; });
-  }
-  function effectiveRanges(doc, smp) {
-    const ranges = doc.ranges || []; const total = smp.length || 1;
-    const wf = ranges.some((r) => r.anchor === 'wp') ? waypointFracs(doc, smp) : null;
-    return ranges.map((r) => {
-      let f0 = r.f0, f1 = r.f1;
-      if (r.anchor === 'dist') { f0 = (r.d0 != null ? r.d0 : (r.f0 || 0) * total) / total; f1 = (r.d1 != null ? r.d1 : (r.f1 || 0) * total) / total; }
-      else if (r.anchor === 'wp' && wf) { const lo = Math.max(0, Math.min(wf.length - 1, r.w0 != null ? r.w0 : 0)); const hi = Math.max(0, Math.min(wf.length - 1, r.w1 != null ? r.w1 : wf.length - 1)); f0 = wf[lo]; f1 = wf[hi]; }
-      f0 = Math.max(0, Math.min(1, f0 || 0)); f1 = Math.max(0, Math.min(1, f1 || 0));
-      return { f0, f1, maxVel: r.maxVel, maxAccel: r.maxAccel, maxDecel: r.maxDecel, maxAngVel: r.maxAngVel, maxAngAccel: r.maxAngAccel, anchor: r.anchor || 'param', name: r.name };
-    });
-  }
-
-  // ---- one-call derivation: everything the field + panels need for a path ----
-  function derivePath(doc, robot, perSeg) {
-    perSeg = perSeg || 56;
-    const smp = sample(doc.waypoints, perSeg);
-    const pts = smp.pts;
-    const nWp = doc.waypoints.length;
-    const lastI = Math.max(0, pts.length - 1);
+        translationPriority[i] = activePolicies > 0
+          && activeRanges.every((R) => R.rotationPriority === 'translation')
+          && activeTransitions.every((policy) => policy.rotationPriority === 'translation');
+      }
+    }
+    // ---- rotational limit: cap v so the commanded heading can actually be tracked ----
+    // omega = (dtheta/ds) * v ; enforce |omega| <= Wmax and |d omega/dt| <= Aang (memo §16)
+    const rotLimited = new Array(n).fill(0);
+    const head = opts.heading;
+    const Wmax = (c.maxAngVel || 0) * Math.PI / 180;
+    const Aang = (c.maxAngAccel || 0) * Math.PI / 180;
+    if (head && head.length === n && Wmax > 1e-4) {
+      const g = new Array(n).fill(0), dth = new Array(n).fill(0);
+      for (let i = 1; i < n; i++) { const ds = pts[i].s - pts[i - 1].s; const dd = angWrap(head[i] - head[i - 1]); dth[i] = Math.abs(dd); g[i] = ds > 1e-6 ? dd / ds : 0; }
+      g[0] = g[1] || 0;
+      const w = new Array(n);
+      for (let i = 0; i < n; i++) w[i] = Math.min(Wmax, rangeAngV[i]);
+      stopSet.forEach(idx => { if (idx >= 0 && idx < n) w[idx] = 0; });
+      if (Aang > 1e-4) {
+        for (let i = 1; i < n; i++) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i - 1] * w[i - 1] + 2 * Aang * dth[i])));
+        for (let i = n - 2; i >= 0; i--) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i + 1] * w[i + 1] + 2 * Aang * dth[i + 1])));
+      }
+      for (let i = 0; i < n; i++) { const gi = Math.abs(g[i]); const translationInterval = i > 0 && translationPriority[i]; if (!translationInterval && gi > 1e-4) { const vr = w[i] / gi; if (vr < v[i] - 0.05) rotLimited[i] = 1; v[i] = Math.min(v[i], vr); } }
+    }
+    // forward
+    for (let i = 1; i < n; i++) {
+      const ds = pts[i].s - pts[i - 1].s;
+      const availableAccel = opts.motorMaxSpeed > 1e-6
+        ? aFwd[i - 1] * Math.max(0, 1 - Math.abs(v[i - 1]) / opts.motorMaxSpeed)
+        : aFwd[i];
+      v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * availableAccel * ds)));
+    }
+    // backward (dedicated deceleration limit, tightened by ranges)
+    for (let i = n - 2; i >= 0; i--) {
+      const ds = pts[i + 1].s - pts[i].s;
+      v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i + 1] * v[i + 1] + 2 * aBack[i] * ds)));
+    }
+    // Enforce angular acceleration in generated timing instead of manufacturing
+    // visible velocity constraint ranges around ordinary moving turns.
+    if (head && head.length === n && Aang > 1e-4) {
+      const angularBudget = Aang * 0.8;
+      const intervalDt = (index, candidate, candidateIndex) => {
+        const ds = pts[index].s - pts[index - 1].s;
+        const before = candidateIndex === index - 1 ? candidate : v[index - 1];
+        const after = candidateIndex === index ? candidate : v[index];
     const wpIdx = doc.waypoints.map((_, k) => Math.min(lastI, k * perSeg));
     const total = smp.length || 1;
     const wpFrac = wpIdx.map((i) => (pts.length ? pts[i].s / total : 0));
