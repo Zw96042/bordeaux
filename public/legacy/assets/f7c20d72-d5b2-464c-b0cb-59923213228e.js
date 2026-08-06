@@ -864,3 +864,93 @@
       }
       const center = W2P(candidate), labelX = Math.max(X0 + P(48), Math.min(X1 - P(48), center.x + P(13)));
       const labelY = Math.max(Y0 + P(18), center.y - P(19));
+      return h('g', { className: 'visit-focus', style: { pointerEvents: 'none' } },
+        h('path', { d: path, fill: 'none', stroke: '#05060a', strokeWidth: P(8), strokeOpacity: 0.72, strokeLinecap: 'round' }),
+        h('path', { d: path, fill: 'none', stroke: accent, strokeWidth: P(4.2), strokeOpacity: 0.96, strokeLinecap: 'round' }),
+        h('line', { x1: center.x, y1: center.y - P(8), x2: center.x, y2: center.y + P(8), stroke: accent, strokeWidth: P(1.5) }),
+        h('text', { x: labelX, y: labelY, fill: '#e9edf5', stroke: '#0b0c0f', strokeWidth: P(5), paintOrder: 'stroke', fontSize: P(10.5), fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 },
+          'Pass ' + (visitFocus.index + 1) + ' of ' + visitFocus.candidates.length));
+    }, [visitFocus, pts, derived.sample.length, accent, view.w, cw, W2P]);
+
+    // ---------- ROBOT (dynamic) ----------
+    const robotEl = useMemo(() => {
+      const pose = pts.length > 1 ? window.PM.poseAtTime(playTime, pts, derived.prof, derived.anchors, derived.mode, derived.rev)
+        : (doc.waypoints[0] ? { x: doc.waypoints[0].x, y: doc.waypoints[0].y, heading: ((doc.waypoints[0].theta || 0) + (derived.rev ? 180 : 0)) * Math.PI / 180, speed: 0 } : null);
+      if (!pose) return null;
+      const c = W2P(pose);
+      const degHead = pose.heading * 180 / Math.PI + (flip ? 180 : 0);
+      const front = forwardExtent(robot);
+      const bump = alliance === 'red' ? '#c75450' : '#4271c0';
+      return h('g', { transform: `translate(${c.x} ${c.y}) rotate(${-degHead})`, style: { pointerEvents: 'none' } },
+        h('polygon', { points: footprintPoints(robot, 1), fill: 'rgba(14,16,20,0.82)', stroke: bump, strokeWidth: P(3), strokeLinejoin: 'round' }),
+        h('polygon', { points: footprintPoints(robot, 0.86), fill: 'none', stroke: 'rgba(255,255,255,0.10)', strokeWidth: P(1), strokeLinejoin: 'round' }),
+        h('line', { x1: 0, y1: 0, x2: front + P(3), y2: 0, stroke: '#e8ecf2', strokeWidth: P(2.5) }),
+        h('path', { d: `M ${front + P(1)} ${-P(6)} L ${front + P(13)} 0 L ${front + P(1)} ${P(6)} Z`, fill: '#e8ecf2' }));
+    }, [playTime, pts, derived, drive, alliance, robot, view.w, cw, flip, doc.waypoints]);
+
+    // ---------- ROUTINE OVERLAY (Autonomous Routine / Auto mode) ----------
+    const routineLayers = useMemo(() => {
+      if (!routine) return null;
+      const els = [];
+      const STYLE = {
+        done:      { col: '#5b636e', w: 2.6, op: 0.5, dash: null },
+        pending:   { col: '#474e59', w: 2.2, op: 0.5, dash: `${P(8)} ${P(7)}` },
+        dim:       { col: '#3b424b', w: 2, op: 0.32, dash: null },
+        active:    { col: accent, w: 3.4, op: 1, dash: null, glow: true },
+        focus:     { col: accent, w: 3.7, op: 1, dash: null, glow: true },
+        generated: { col: '#f6a93a', w: 3.1, op: 0.97, dash: `${P(10)} ${P(7)}`, gen: true },
+        genfocus:  { col: '#ffb347', w: 3.7, op: 1, dash: `${P(10)} ${P(7)}`, gen: true, glow: true },
+      };
+      // order: dim/done/pending first, active + generated + focus on top
+      const rank = (s) => ({ focus: 5, genfocus: 5, active: 4, generated: 3, done: 1, pending: 1, dim: 0 }[s] || 0);
+      const order = routine.map((r, i) => i).sort((a, b) => rank(routine[a].state) - rank(routine[b].state));
+      order.forEach((ri) => {
+        const rp = routine[ri]; if (!rp.pts || rp.pts.length < 2) return;
+        const S = STYLE[rp.state] || STYLE.pending;
+        let d = '';
+        rp.pts.forEach((p, k) => { const q = W2P(p); d += (k ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); });
+        // glow / casing under emphasized paths
+        if (S.glow) els.push(h('path', { key: 'rg' + ri, d, fill: 'none', stroke: S.col, strokeOpacity: 0.22, strokeWidth: P(S.w + 9), strokeLinecap: 'round', strokeLinejoin: 'round', style: { pointerEvents: 'none' } }));
+        if (rp.state === 'active' || rp.state === 'focus') els.push(h('path', { key: 'rc' + ri, d, fill: 'none', stroke: '#05060a', strokeOpacity: 0.7, strokeWidth: P(S.w + 2.5), strokeLinecap: 'round', strokeLinejoin: 'round', style: { pointerEvents: 'none' } }));
+        els.push(h('path', { key: 'rp' + ri, className: S.gen ? 'acq-genpath' : undefined, d, fill: 'none', stroke: S.col, strokeOpacity: S.op, strokeWidth: P(S.w), strokeLinecap: 'round', strokeLinejoin: 'round', strokeDasharray: S.dash || undefined, style: { pointerEvents: 'none' } }));
+        els.push(h('path', { key: 'rh' + ri, d, fill: 'none', stroke: 'transparent', strokeWidth: P(16), strokeLinecap: 'round', 'data-role': 'rpath', 'data-idx': rp.nodeId, style: { cursor: 'pointer' } }));
+        // endpoint nodes
+        const a = W2P(rp.pts[0]), b = W2P(rp.pts[rp.pts.length - 1]);
+        const endCol = S.gen ? S.col : null;
+        [[a, '#4bbf86'], [b, '#d2655f']].forEach(([c, dc], di) => {
+          els.push(h('rect', { key: 'rn' + ri + di, x: c.x - P(4.5), y: c.y - P(4.5), width: P(9), height: P(9), rx: S.gen ? P(4.5) : P(1.5), fill: '#14161a', stroke: rp.state === 'pending' || rp.state === 'dim' ? '#5b636e' : (endCol || dc), strokeWidth: P(1.8), style: { pointerEvents: 'none' } }));
+        });
+        // runtime bolt marker for generated paths (start)
+        if (S.gen && rp.state !== 'dim') {
+          els.push(h('g', { key: 'rb' + ri, transform: `translate(${a.x} ${a.y - P(20)})`, style: { pointerEvents: 'none' } },
+            h('circle', { r: P(8.5), fill: 'rgba(20,16,10,0.92)', stroke: S.col, strokeWidth: P(1.4) }),
+            h('path', { d: `M ${P(1.5)} ${-P(4.5)} L ${-P(3)} ${P(0.8)} L ${P(0.2)} ${P(0.8)} L ${-P(1.5)} ${P(4.5)} L ${P(3)} ${-P(0.8)} L ${P(0.2)} ${-P(0.8)} Z`, fill: S.col })));
+        }
+        // mid label
+        const mid = W2P(rp.pts[Math.floor(rp.pts.length / 2)]);
+        const dim = rp.state === 'dim' || rp.state === 'pending';
+        const lblCol = (rp.state === 'active' || rp.state === 'focus') ? accent : S.gen ? S.col : '#8b94a2';
+        const txt = (S.gen ? '\u26a1 ' : (rp.idxLabel ? rp.idxLabel + '  ' : '')) + (rp.label || '');
+        const tw = P(8.0 * txt.length + 18), th = P(17);
+        els.push(h('g', { key: 'rl' + ri, transform: `translate(${mid.x} ${mid.y - P(15)})`, style: { pointerEvents: 'none' }, opacity: dim ? 0.55 : 1 },
+          h('rect', { x: -tw / 2, y: -th / 2, width: tw, height: th, rx: P(3), fill: 'rgba(11,12,14,0.92)', stroke: (rp.state === 'active' || rp.state === 'focus') ? accent : S.gen ? S.col : '#2a2e34', strokeWidth: P(1) }),
+          h('text', { x: 0, y: P(3.8), fill: lblCol, fontSize: P(11), fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, textAnchor: 'middle' }, txt)));
+      });
+      return els;
+    }, [routine, accent, view.w, cw, flip]);
+
+    const routineRobot = useMemo(() => {
+      if (!routine || !routinePose) return null;
+      const c = W2P(routinePose);
+      const degHead = (routinePose.heading || 0) * 180 / Math.PI + (flip ? 180 : 0);
+      const front = forwardExtent(robot);
+      const bump = alliance === 'red' ? '#c75450' : '#4271c0';
+      return h('g', { transform: `translate(${c.x} ${c.y}) rotate(${-degHead})`, style: { pointerEvents: 'none' } },
+        h('polygon', { points: footprintPoints(robot, 1), fill: 'rgba(14,16,20,0.85)', stroke: bump, strokeWidth: P(3), strokeLinejoin: 'round' }),
+        h('line', { x1: 0, y1: 0, x2: front + P(3), y2: 0, stroke: '#e8ecf2', strokeWidth: P(2.5) }),
+        h('path', { d: `M ${front + P(1)} ${-P(6)} L ${front + P(13)} 0 L ${front + P(1)} ${P(6)} Z`, fill: '#e8ecf2' }));
+    }, [routine, routinePose, alliance, robot, view.w, cw, flip]);
+
+    const previewEl = (preview && pts.length > 1) ? (function () {
+      const lo = Math.min(preview.f0, preview.f1), hi = Math.max(preview.f0, preview.f1);
+      const totalS = derived.sample.length || 1;
