@@ -705,3 +705,12 @@ app.whenReady().then(async () => {
   if (enableMcpAccessOnLaunch) await agentBridge.start();
   buildMenu();
   createWindow();
+  app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+});
+
+app.on("before-quit", () => {
+  cancelJavaCatalogBuild(true);
+  if (agentBridge?.enabled) void agentBridge.stop();
+});
+app.on("web-contents-created", (_event, contents) => contents.on("will-attach-webview", (event) => event.preventDefault()));
+app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
