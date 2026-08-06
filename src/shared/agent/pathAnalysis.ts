@@ -538,3 +538,36 @@ export function analyzePath(project: BordeauxProject, pathId: string, options: A
       plannerDiagnostics: [],
     };
   }
+  const measured = analyzeGeneratedPath(
+    projectClone,
+    path,
+    plannerId,
+    generated.samples,
+    generated.diagnostics,
+    Math.max(50, Math.min(2_000, options.sampleLimit ?? DEFAULT_SAMPLE_LIMIT)),
+    Math.max(0, Math.min(2, options.minimumClearanceM ?? 0)),
+    options.robotHeightM,
+    options.requiredTraversal,
+    options.requiredPortalIds,
+  );
+  const structureFindings: PathAnalysisFinding[] = structural.map((item, index) => ({
+    id: `structure:${index}`,
+    severity: item.severity,
+    kind: "structure",
+    message: item.message,
+    sourcePath: item.path,
+  }));
+  return {
+    pathId: path.id,
+    pathName: path.name,
+    authoredPath: clone(path),
+    planner: generated.planner,
+    totalTimeS: generated.totalTimeS,
+    totalDistanceM: generated.totalDistanceM,
+    sampleCount: generated.samples.length,
+    plannerDiagnostics: generated.diagnostics.map((item) => ({ ...item })),
+    optimization: generated.optimization,
+    ...measured,
+    findings: [...structureFindings, ...measured.findings],
+  };
+}
