@@ -133,35 +133,35 @@ async function connectJavaProject(projectPath: string) {
   const warning = await rememberLinkedJavaProject(canonicalPath, catalog.projectName);
   return {
     catalog,
-});
+    integration,
+    bookmarkId: linkedJavaProjectBookmarkId!,
+    recentProjects: summarizeJavaProjectBookmarks(javaProjectBookmarks),
+    ...((warning || integrationWarning) ? { warning: [warning, integrationWarning].filter(Boolean).join(" ") } : {}),
+  };
+}
 
-ipcMain.handle("project:exportBdx", async (_event, project: BordeauxProject, outputPath?: string | null) => {
-  const exportData = buildBdxExport(project);
-  let target = outputPath ?? null;
-  if (!target) {
-    const result = await dialog.showSaveDialog(mainWindow!, {
-      title: "Export Bordeaux Trajectories",
-      defaultPath: `${project.name || "trajectories"}.bdx`,
-      filters: [{ name: "Bordeaux Trajectory Export", extensions: ["bdx"] }],
-    });
-    if (result.canceled || !result.filePath) return { canceled: true };
-    target = result.filePath;
+async function assertSafeJavaExportTarget(projectRoot: string, fileName: string): Promise<string> {
+  const relativeDirectory = path.join("src", "main", "deploy", "bordeaux");
+  let current = projectRoot;
+  for (const component of relativeDirectory.split(path.sep)) {
+    current = path.join(current, component);
+    try {
+      const stat = await fs.promises.lstat(current);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Java export path ${path.relative(projectRoot, current)} must be a regular directory`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
   }
-  await fs.writeFile(target, `${JSON.stringify(exportData, null, 2)}\n`, "utf8");
-  return { path: target, export: exportData };
-});
+  await fs.promises.mkdir(path.join(projectRoot, relativeDirectory), { recursive: true });
+  const directory = await fs.promises.realpath(path.join(projectRoot, relativeDirectory));
+  if (directory !== projectRoot && !directory.startsWith(`${projectRoot}${path.sep}`)) throw new Error("Java export destination escaped the linked project");
+  const target = path.join(directory, fileName);
+  try {
+    const stat = await fs.promises.lstat(target);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Existing Java export target must be a regular file");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return target;
+}
 
-ipcMain.handle("project:validate", (_event, project: BordeauxProject) => validateProject(project));
-ipcMain.handle("shell:showItem", (_event, filePath: string) => shell.showItemInFolder(filePath));
-
-app.whenReady().then(() => {
-  buildMenu();
-  createWindow();
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
-});
-
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
