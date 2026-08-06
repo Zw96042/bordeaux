@@ -1073,3 +1073,93 @@
     const onExportJava = useCallback(async (destination) => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.exportJava !== 'function') {
         alert('Java trajectory export is available in the Bordeaux desktop app.');
+        return;
+      }
+      if (!javaProjectState.catalog) {
+        alert('Link a Java robot project before exporting Java trajectory JSON.');
+        return;
+      }
+      setJavaProjectState((current) => ({ ...current, operation: 'export', error: '', notice: '' }));
+      try {
+        const result = await window.bordeauxAPI.exportJava({ schemaVersion: '1.0', ...project, routine, plannerId }, destination === 'saveAs' ? 'saveAs' : 'linked');
+        setJavaProjectState((current) => ({
+          ...current,
+          operation: null,
+          notice: result && result.exported ? 'Exported Java trajectory to ' + result.relativePath + '.' : '',
+        }));
+      } catch (error) {
+        setJavaProjectState((current) => ({ ...current, operation: null, error: error && error.message ? error.message : String(error) }));
+      }
+    }, [project, routine, plannerId, javaProjectState.catalog]);
+
+    useEffect(() => {
+      if (!window.bordeauxAPI) return undefined;
+      return window.bordeauxAPI.onMenuCommand(({ command, payload }) => {
+        if (command === 'new-project') void newProject();
+        else if (command === 'open-project') void openProject();
+        else if (command === 'open-recent') void openProject(payload);
+        else if (command === 'save-project') void saveProject(false);
+        else if (command === 'save-project-as') void saveProject(true);
+        else if (command === 'export-bdx') onExport();
+        else if (command === 'export-java') void onExportJava('linked');
+        else if (command === 'export-java-save-as') void onExportJava('saveAs');
+        else if (command === 'java-link') void linkJavaProject();
+        else if (command === 'java-install') void installJavaSupport();
+        else if (command === 'java-build') void buildJavaCatalog();
+        else if (command === 'java-cancel-build') void cancelJavaCatalogBuild();
+      });
+    }, [newProject, openProject, saveProject, project, routine, plannerId, onExportJava, linkJavaProject, installJavaSupport, buildJavaCatalog, cancelJavaCatalogBuild]);
+
+    // ---- export ----
+    const onExport = () => {
+      if (window.bordeauxAPI && typeof window.bordeauxAPI.exportBdx === 'function') {
+        window.bordeauxAPI.exportBdx({ schemaVersion: '1.0', ...project, routine, plannerId }, doc.id).catch((err) => {
+          console.error('BDX export failed:', err);
+          alert('BDX export failed: ' + (err && err.message ? err.message : err));
+        });
+        return;
+      }
+      const out = { version: '2.0', name: doc.name, robot: project.robot, ...doc };
+      const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = doc.name + '.path'; a.click();
+    };
+
+    // ---- keyboard ----
+    useEffect(() => {
+      const onKey = (e) => {
+        if (document.getElementById('boot-splash')) return;
+        const matches = e.target.matches && e.target.matches.bind(e.target);
+        if (e.key === 'Tab') { keyboardNavigation.current = true; return; }
+        const nativeKeyboardControl = keyboardNavigation.current && matches && matches('button,select,input[type="range"]');
+        const textEditing = nativeKeyboardControl || (matches && (matches('textarea,[contenteditable="true"]') || (matches('input:not([type="range"])') && !matches('.numinput'))));
+        const k = e.key.toLowerCase();
+        if (page === 'plan' && e.key === ' ' && !textEditing) {
+          e.preventDefault();
+          if (e.repeat) return;
+          if (typeof e.target.blur === 'function') e.target.blur();
+          togglePlayback();
+          return;
+        }
+        const toolShortcut = !e.metaKey && !e.ctrlKey && !e.altKey && !textEditing && ({ v: 'select', w: 'waypoint', r: 'rotation', m: 'marker', c: 'range' })[k];
+        if (page === 'plan' && toolShortcut) {
+          e.preventDefault();
+          if (typeof e.target.blur === 'function') e.target.blur();
+          setTool(toolShortcut);
+          return;
+        }
+        const formControl = matches && matches('input,select,textarea,[contenteditable="true"]');
+        if (formControl) return;
+        if ((e.metaKey || e.ctrlKey) && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+        if ((e.metaKey || e.ctrlKey) && k === 'y') { e.preventDefault(); redo(); return; }
+        if (page !== 'plan') return;
+        if (e.key.indexOf('Arrow') === 0 && sel.kind) {
+          const base = e.shiftKey ? 0.25 : e.altKey ? 0.01 : 0.05;
+          const flip = alliance === 'red' ? -1 : 1;
+          let dx = 0, dy = 0;
+          if (e.key === 'ArrowUp') dy = base * flip; else if (e.key === 'ArrowDown') dy = -base * flip;
+          else if (e.key === 'ArrowRight') dx = base * flip; else if (e.key === 'ArrowLeft') dx = -base * flip;
+          if (dx || dy) {
+            e.preventDefault();
+            if (sel.kind === 'wp') nudgeWp(sel.idx, dx, dy);
+            else if (sel.kind === 'rt' || sel.kind === 'em') { const dir = (e.key === 'ArrowRight' || e.key === 'ArrowUp') ? 1 : -1; nudgeFrac(sel.kind, sel.idx, dir * (e.shiftKey ? 0.02 : 0.005)); }
+          }
