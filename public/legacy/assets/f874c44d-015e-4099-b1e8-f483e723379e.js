@@ -178,6 +178,7 @@
   function stepAt(run, time) {
     for (let i = 0; i < run.steps.length; i++) { const s = run.steps[i]; if (time >= s.t0 && time < s.t1 + 1e-6) return i; }
     return run.steps.length - 1;
+  }
 
   // ---- field overlay descriptor for FieldView ----
   function fieldOverlay(run, opts) {
@@ -222,7 +223,6 @@
   function append(routine, node) { const r = _clone(routine); r.nodes.push(node); return r; }
   // move a node up/down within its own containing array
   function move(routine, id, dir) {
-    const r = _clone(routine);
     const mv = (arr) => {
       const i = arr.findIndex((n) => n.id === id);
       if (i >= 0) { const j = i + dir; if (j < 0 || j >= arr.length) return true; const t = arr[i]; arr[i] = arr[j]; arr[j] = t; return true; }
