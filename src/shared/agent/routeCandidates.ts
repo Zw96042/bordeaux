@@ -88,3 +88,93 @@ function configureCollectionHeading(path: PathDoc, spans: readonly ActiveCollect
   if (alignedSegments.size === 0) return;
   const firstAlignedSegment = Math.min(...alignedSegments);
   const lastControlledSegment = Math.max(...alignedSegments);
+  const intakeOffset = intakeDirectionDeg * Math.PI / 180;
+  if (Math.abs(Math.atan2(Math.sin(intakeOffset), Math.cos(intakeOffset))) < 1e-6) {
+    alignedSegments.forEach((segment) => { path.waypoints[segment].segmentHeadingMode = "tangent"; });
+    return;
+  }
+  for (let segment = firstAlignedSegment; segment <= lastControlledSegment; segment += 1) path.waypoints[segment].segmentHeadingMode = "targets";
+  const sampled = PM.sample(path.waypoints, 56);
+  const points = sampled.pts as Array<{ s: number; seg: number; heading: number }>;
+  const total = sampled.length || 1;
+  const targets: PathDoc["targets"] = [];
+  const first = points.findIndex((point) => point.seg >= firstAlignedSegment);
+  let last = points.length - 1;
+  for (let index = points.length - 1; index >= first; index -= 1) {
+    if (alignedSegments.has(points[index].seg)) { last = index; break; }
+  }
+  const tangentDesired: number[] = [];
+  for (let index = first; index <= last; index += 1) {
+    const raw = points[index].heading - intakeOffset;
+    tangentDesired.push(tangentDesired.length ? unwrapNear(raw, tangentDesired[tangentDesired.length - 1]) : raw);
+  }
+  let smoothed = [...tangentDesired];
+  // Project a low-curvature heading law into each collection span's permitted
+  // intake-error band. Non-collection approach samples remain free so the same
+  // solve can blend continuously into a target-facing shooting pose.
+  for (let pass = 0; pass < 320; pass += 1) {
+    const next = [...smoothed];
+    for (let local = 1; local < smoothed.length - 1; local += 1) {
+      const relaxed = (smoothed[local - 1] + 2 * smoothed[local] + smoothed[local + 1]) / 4;
+      const segment = points[first + local].seg;
+      const active = spans.filter((span) => span.intent.allowCrosswiseHeading !== true && segment >= span.startSegmentIndex && segment <= span.endSegmentIndex);
+      if (active.length === 0) next[local] = relaxed;
+      else {
+        const allowed = Math.max(0.25, Math.min(...active.map((span) => span.intent.maxHeadingErrorDeg ?? 5))) * Math.PI / 180;
+        next[local] = Math.max(tangentDesired[local] - allowed, Math.min(tangentDesired[local] + allowed, relaxed));
+      }
+    }
+    smoothed = next;
+  }
+  let lastAnchorLocal = -1;
+  for (let local = 0; local < smoothed.length; local += 1) {
+    const endpoint = local === 0 || local === smoothed.length - 1;
+    const farEnough = lastAnchorLocal < 0 || points[first + local].s - points[first + lastAnchorLocal].s >= 0.3;
+    const turnedEnough = lastAnchorLocal < 0 || Math.abs(smoothed[local] - smoothed[lastAnchorLocal]) >= 5 * Math.PI / 180;
+    if (!endpoint && !farEnough && !turnedEnough) continue;
+    const index = first + local;
+    const fraction = points[index].s / total;
+    const deg = smoothed[local] * 180 / Math.PI;
+    if (fraction <= 1e-8) path.waypoints[0].theta = deg;
+    else if (fraction >= 1 - 1e-8) path.waypoints[path.waypoints.length - 1].theta = deg;
+    else targets.push({ f: fraction, deg });
+    lastAnchorLocal = local;
+  }
+  path.targets = targets;
+}
+
+function activeCollectionSpans(path: PathDoc, requested: readonly CollectionSpan[]): ActiveCollectionSpan[] {
+  if (requested.length === 0) return [];
+  const sampled = PM.sample(path.waypoints, 120);
+  const points = sampled.pts as Array<{ x: number; y: number; seg: number; t: number; s: number }>;
+  const total = sampled.length || 1;
+  const fuel = officialToAppRect(REBUILT_2026_INITIAL_FUEL_REGION);
+  const insideFuel = (point: { x: number; y: number }) => point.x >= fuel.xMin - 0.01 && point.x <= fuel.xMax + 0.01 && point.y >= fuel.yMin - 0.01 && point.y <= fuel.yMax + 0.01;
+  const active: ActiveCollectionSpan[] = [];
+  requested.forEach((span) => {
+    let first = -1;
+    const flush = (last: number) => {
+      if (first < 0 || last < first) return;
+      const start = points[first];
+      const end = points[last];
+      active.push({
+        startSegmentIndex: start.seg,
+        startT: start.t,
+        endSegmentIndex: end.seg,
+        endT: end.t,
+        f0: start.s / total,
+        f1: end.s / total,
+        intent: span.intent,
+      });
+      first = -1;
+    };
+    points.forEach((point, index) => {
+      const inRequestedLeg = point.seg >= span.startWaypointIndex && point.seg < span.endWaypointIndex;
+      if (inRequestedLeg && insideFuel(point)) {
+        if (first < 0) first = index;
+      } else flush(index - 1);
+    });
+    flush(points.length - 1);
+  });
+  return active;
+}
