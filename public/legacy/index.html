@@ -178,51 +178,51 @@ html, body { font-synthesis: none; }
     width: auto;
     min-width: 0;
     max-width: none;
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url("assets/75942de6-7641-4396-9ec1-6f8aecca76d2.woff2") format('woff2');
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+  .fieldcol .overlayctl { left: 12px; bottom: 106px; width: 200px; }
+  .fieldcol .viewctl { right: 12px; bottom: 106px; }
+  .fieldcol .velgraph { bottom: 230px !important; width: min(560px, calc(100% - 24px)) !important; min-width: 0; }
+  .fieldcol .diag { left: 12px; bottom: 230px; width: min(316px, calc(100% - 24px)); }
+  .fieldcol .cbar-chip { padding-inline: 8px; }
 }
-/* cyrillic-ext */
-@font-face {
-  font-family: 'JetBrains Mono';
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url("assets/9720fba3-d472-4015-8174-9a76a96ee3a7.woff2") format('woff2');
-  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+@container (max-width: 420px) {
+  .fieldcol .cbar {
+    width: calc(100% - 24px);
+    height: auto;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 5px 6px;
+  }
+  .fieldcol .cbar-ic, .fieldcol .cbar-edit { display: none; }
+  .fieldcol .cbar-chip {
+    justify-content: center;
+    min-width: 0;
+    padding: 5px 6px;
+    border-right: 0;
+  }
+  .fieldcol .cbar-chip:nth-of-type(2), .fieldcol .cbar-chip:nth-of-type(3) {
+    border-bottom: 1px solid var(--line);
+  }
+  .fieldcol .cbar-chip:nth-of-type(even) { border-right: 1px solid var(--line); }
+  .fieldcol .stage-hint { top: 88px; width: calc(100% - 32px); white-space: normal; text-align: center; }
+  .fieldcol .plannerdiag {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 6px;
+    padding: 6px 7px;
+  }
+  .fieldcol .plannerdiag span { margin-left: auto; }
+  .fieldcol .plannerdiag em { display: none; }
+  .fieldcol .viewctl { bottom: 272px; }
+  .fieldcol .velgraph { bottom: 250px !important; height: 150px !important; }
+  .fieldcol .diag { bottom: 250px; max-height: 150px; }
+  .fieldcol .transport-meta,
+  .fieldcol .timeline-summary,
+  .fieldcol .timeline-title { display: none; }
+  .fieldcol .timeline-tick:nth-child(even) .timeline-tick-label { display: none; }
 }
-/* cyrillic */
-@font-face {
-  font-family: 'JetBrains Mono';
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url("assets/9159e081-66f2-48ad-986a-f8a7ce5ae00c.woff2") format('woff2');
-  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
-}
-/* greek */
-@font-face {
-  font-family: 'JetBrains Mono';
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url("assets/f43a65b8-4147-4e04-867c-3e12cc9ad7ef.woff2") format('woff2');
-  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
-}
-/* vietnamese */
-@font-face {
-  font-family: 'JetBrains Mono';
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url("assets/5212942a-e8a9-49c9-9687-e590adce5f6e.woff2") format('woff2');
-  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
-}
-/* latin-ext */
-@font-face {
-  font-family: 'JetBrains Mono';
+.pathsw-btn:active, .exportbtn:active, .qbtn:active, .facebtn:active, .toolrail-b:active,
   font-style: normal;
   font-weight: 500;
   font-display: swap;
