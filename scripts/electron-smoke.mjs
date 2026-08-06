@@ -88,3 +88,9 @@ child.stderr.on("data", (chunk) => { output += chunk; process.stderr.write(chunk
 
 const timeout = setTimeout(() => child.kill("SIGTERM"), 30000);
 const code = await new Promise((resolve) => child.once("exit", resolve));
+clearTimeout(timeout);
+await fs.rm(smokeDirectory, { recursive: true, force: true });
+
+if (code !== 0 || !output.includes("BORDEAUX_SMOKE_OK")) {
+  throw new Error(`Electron smoke test failed with exit code ${code}`);
+}
