@@ -437,3 +437,93 @@
       if (!message && commit) onChange(next.trim());
       return !message;
     };
+    return h('div', { className: 'cmd-param' },
+      h('label', { className: 'fieldlabel', htmlFor: id }, label),
+      h('input', {
+        id,
+        className: 'textinput cmd-param-input',
+        type: 'text',
+        inputMode: 'numeric',
+        pattern: '[+-]?[0-9]+',
+        value: draft,
+        autoComplete: 'off',
+        spellCheck: false,
+        'data-lpignore': 'true',
+        'data-1p-ignore': true,
+        'aria-invalid': !!error,
+        'aria-describedby': error ? id + '-error' : id + '-type',
+        onChange: (event) => { setDraft(event.target.value); if (error) validate(event.target.value, false); },
+        onBlur: () => validate(draft, true),
+        onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(draft, true); event.currentTarget.blur(); } },
+      }),
+      h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, javaType + ' · exact integer')),
+      error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
+  }
+
+  function DecimalStringValueEditor({ id, label, value, javaType, parameter, onChange }) {
+    const formatted = typeof value === 'string' ? value : '';
+    const [draft, setDraft] = React.useState(formatted);
+    const [error, setError] = React.useState('');
+    React.useEffect(() => { setDraft(formatted); setError(''); }, [formatted, id]);
+    const validate = (next, commit) => {
+      const value = next.trim();
+      const exactError = exactDecimalStringError(value);
+      let message = exactError ? 'Value ' + exactError : '';
+      if (!message && parameter && parameter.min != null && compareExactDecimals(value, String(parameter.min)) < 0) message = 'Enter a value of at least ' + parameter.min + '.';
+      if (!message && parameter && parameter.max != null && compareExactDecimals(value, String(parameter.max)) > 0) message = 'Enter a value of at most ' + parameter.max + '.';
+      setError(message);
+      if (!message && commit) onChange(value);
+      return !message;
+    };
+    return h('div', { className: 'cmd-param' },
+      h('label', { className: 'fieldlabel', htmlFor: id }, label),
+      h('input', {
+        id,
+        className: 'textinput cmd-param-input',
+        type: 'text',
+        inputMode: 'decimal',
+        value: draft,
+        autoComplete: 'off',
+        spellCheck: false,
+        'data-lpignore': 'true',
+        'data-1p-ignore': true,
+        'aria-invalid': !!error,
+        'aria-describedby': error ? id + '-error' : id + '-type',
+        onChange: (event) => { setDraft(event.target.value); if (error) validate(event.target.value, false); },
+        onBlur: () => validate(draft, true),
+        onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(draft, true); event.currentTarget.blur(); } },
+      }),
+      h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, javaType + ' · exact decimal')),
+      error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
+  }
+
+  function JsonValueEditor({ id, label, value, schema, onChange }) {
+    const javaType = schema && schema.javaType ? schema.javaType : 'unknown';
+    const formatted = JSON.stringify(value == null ? {} : value, null, 2);
+    const [draft, setDraft] = React.useState(formatted);
+    const [error, setError] = React.useState('');
+    React.useEffect(() => { setDraft(formatted); setError(''); }, [formatted, id]);
+    const validate = (next, commit) => {
+      try {
+        const parsed = JSON.parse(next);
+        const schemaError = schemaValueError(parsed, schema, 'Value', 0);
+        if (schemaError) {
+          setError(schemaError);
+          return false;
+        }
+        setError('');
+        if (commit) onChange(parsed);
+        return true;
+      } catch (reason) {
+        setError(reason && reason.message ? reason.message : 'Enter valid JSON.');
+        return false;
+      }
+    };
+    return h('div', { className: 'cmd-param' },
+      h('label', { className: 'fieldlabel', htmlFor: id }, label),
+      h('textarea', {
+        id,
+        className: 'textinput cmd-json-input',
+        value: draft,
+        rows: 4,
+        spellCheck: false,
