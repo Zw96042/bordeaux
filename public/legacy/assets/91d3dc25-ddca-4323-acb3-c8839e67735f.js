@@ -722,3 +722,93 @@
       const bT = sameSegment && Number.isFinite(b.t) ? b.t : 1;
       const s = lerp(Number.isFinite(a.s) ? a.s : 0, Number.isFinite(b.s) ? b.s : total, u);
       projected.push({ x, y, s, f: total > 1e-9 ? s / total : 0, seg, t: lerp(aT, bT, u), heading: angLerp(a.heading || 0, b.heading || 0, u), distance, edge: i - 1 });
+    }
+    const minimum = projected.reduce((best, candidate) => Math.min(best, candidate.distance), Infinity);
+    const tolerance = Number.isFinite(opts.tolerance) ? Math.max(0, opts.tolerance) : minimum + 1e-9;
+    const nearby = projected.filter((candidate) => candidate.distance <= Math.max(tolerance, minimum + 1e-9)).sort((a, b) => a.s - b.s);
+    const clusters = [];
+    nearby.forEach((candidate) => {
+      const cluster = clusters[clusters.length - 1];
+      // One traversal can contribute several adjacent polyline edges inside the
+      // hit radius. Keep that entire ordered edge run as one pass; arclength
+      // spacing varies with sampling density and must not split it apart.
+      if (!cluster || candidate.edge > cluster.lastEdge + 1) clusters.push({ lastEdge: candidate.edge, best: candidate });
+      else {
+        cluster.lastEdge = candidate.edge;
+        if (candidate.distance < cluster.best.distance - 1e-9) cluster.best = candidate;
+      }
+    });
+    return clusters.map((cluster) => cluster.best).sort((a, b) => a.s - b.s);
+  }
+
+  // auto control handles for a fresh waypoint (smooth Catmull-Rom-ish)
+  function autoHandles(waypoints, i) {
+    const w = waypoints[i];
+    const prev = waypoints[i - 1] || w, next = waypoints[i + 1] || w;
+    let dx = next.x - prev.x, dy = next.y - prev.y;
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len; dy /= len;
+    const handle = Math.max(0.6, len * 0.28);
+    return {
+      prevC: { x: w.x - dx * handle, y: w.y - dy * handle },
+      nextC: { x: w.x + dx * handle, y: w.y + dy * handle },
+    };
+  }
+
+  // ---- per-point engineering metrics aligned to the sampled path ----
+  // returns arrays + maxima for velocity / acceleration / angular velocity / curvature
+  function metrics(pts, prof, anchors, mode) {
+    const n = pts.length;
+    const v = prof.v && prof.v.length ? prof.v : new Array(n).fill(0);
+    const t = prof.t && prof.t.length ? prof.t : new Array(n).fill(0);
+    const accel = new Array(n).fill(0), omega = new Array(n).fill(0), curv = new Array(n).fill(0), head = new Array(n).fill(0);
+    const totalS = n ? pts[n - 1].s : 0;
+    for (let i = 0; i < n; i++) {
+      const f = totalS > 1e-6 ? pts[i].s / totalS : 0;
+      head[i] = mode === 'tank' ? pts[i].heading : headingAt(f, anchors);
+      curv[i] = pts[i].curv || 0;
+    }
+    for (let i = 1; i < n; i++) {
+      const dt = t[i] - t[i - 1];
+      accel[i] = dt > 1e-5 ? (v[i] - v[i - 1]) / dt : 0;
+      omega[i] = dt > 1e-5 ? angWrap(head[i] - head[i - 1]) / dt : 0;
+    }
+    if (n > 1) { accel[0] = accel[1]; omega[0] = omega[1]; }
+    let vMax = 0.1, aMax = 0.1, wMax = 0.01, kMax = 0;
+    for (let i = 0; i < n; i++) {
+      vMax = Math.max(vMax, v[i]); aMax = Math.max(aMax, Math.abs(accel[i]));
+      wMax = Math.max(wMax, Math.abs(omega[i])); kMax = Math.max(kMax, Math.abs(curv[i]));
+    }
+    return { v, accel, omega, curv, head, vMax, aMax, wMax, kMax };
+  }
+
+  // ---- colour scales for the metric overlays ----
+  function hex2rgb(hx) { return [parseInt(hx.slice(1, 3), 16), parseInt(hx.slice(3, 5), 16), parseInt(hx.slice(5, 7), 16)]; }
+  const RAMPS_M = {
+    velocity:  [[0, '#3f6fd0'], [0.4, '#2fa36b'], [0.7, '#d28f37'], [1, '#cf4f4a']],
+    accel:     [[0, '#3f6fd0'], [0.5, '#4d535e'], [1, '#cf4f4a']],
+    angvel:    [[0, '#343d47'], [0.5, '#2f8fa6'], [1, '#5fcfe6']],
+    curvature: [[0, '#39342b'], [0.5, '#a87c30'], [1, '#edbf5c']],
+  };
+  function metricColor(mode, tt) {
+    const s = RAMPS_M[mode] || RAMPS_M.velocity;
+    let t = Math.max(0, Math.min(1, tt));
+    for (let i = 0; i < s.length - 1; i++) {
+      const a = s[i], b = s[i + 1];
+      if (t >= a[0] && t <= b[0]) {
+        const u = (t - a[0]) / Math.max(1e-6, b[0] - a[0]);
+        const ca = hex2rgb(a[1]), cb = hex2rgb(b[1]);
+        return `rgb(${Math.round(ca[0] + (cb[0] - ca[0]) * u)},${Math.round(ca[1] + (cb[1] - ca[1]) * u)},${Math.round(ca[2] + (cb[2] - ca[2]) * u)})`;
+      }
+    }
+    return s[s.length - 1][1];
+  }
+  function metricGradient(mode) {
+    const s = RAMPS_M[mode] || RAMPS_M.velocity;
+    return 'linear-gradient(90deg,' + s.map((x) => x[1] + ' ' + Math.round(x[0] * 100) + '%').join(',') + ')';
+  }
+  const METRICS = [
+    { id: 'velocity', label: 'Velocity', unit: 'm/s', kind: 'seq' },
+    { id: 'accel', label: 'Acceleration', unit: 'm/s\u00b2', kind: 'div' },
+    { id: 'angvel', label: 'Angular velocity', unit: '\u00b0/s', kind: 'div' },
+    { id: 'curvature', label: 'Curvature', unit: '1/m', kind: 'seq' },
