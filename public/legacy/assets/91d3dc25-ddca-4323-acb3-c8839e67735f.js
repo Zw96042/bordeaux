@@ -812,3 +812,93 @@
     { id: 'accel', label: 'Acceleration', unit: 'm/s\u00b2', kind: 'div' },
     { id: 'angvel', label: 'Angular velocity', unit: '\u00b0/s', kind: 'div' },
     { id: 'curvature', label: 'Curvature', unit: '1/m', kind: 'seq' },
+  ];
+
+  // ---- path checks ----------------------------------------------------------
+  // Only measured constraint violations are issues. Expected slowdowns are
+  // neutral notes so the UI never calls normal planner behavior a failure.
+  function analyze(pts, prof, m, robot, context) {
+    const n = pts.length, checks = [], cfg = context || {}, constraints = cfg.constraints || {};
+    if (n < 2) return [{ f: 0, kind: 'geometry', level: 'error', text: 'Path needs at least two distinct samples' }];
+    const totalS = pts[n - 1].s || 1;
+    const finite = pts.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.s))
+      && [prof.totalTime, m.vMax, m.aMax, m.wMax, m.kMax].every(Number.isFinite);
+    if (!finite) return [{ f: 0, kind: 'geometry', level: 'error', text: 'Trajectory contains invalid numeric values' }];
+
+    let accelAt = 0, accelPeak = 0, decelAt = 0, decelPeak = 0, omegaAt = 0, omegaPeak = 0, curvatureAt = 0, curvaturePeak = 0;
+    for (let i = 0; i < n; i++) {
+      if (m.accel[i] > accelPeak) { accelPeak = m.accel[i]; accelAt = i; }
+      if (-m.accel[i] > decelPeak) { decelPeak = -m.accel[i]; decelAt = i; }
+      if (Math.abs(m.omega[i]) > omegaPeak) { omegaPeak = Math.abs(m.omega[i]); omegaAt = i; }
+      if (Math.abs(m.curv[i]) > curvaturePeak) { curvaturePeak = Math.abs(m.curv[i]); curvatureAt = i; }
+    }
+    const at = (index) => pts[index].s / totalS;
+    if (constraints.maxAccel > 0 && accelPeak > constraints.maxAccel * 1.025)
+      checks.push({ f: at(accelAt), kind: 'constraint', level: 'warning', text: 'Acceleration exceeds limit \u00b7 ' + accelPeak.toFixed(1) + ' m/s\u00b2' });
+    const maxDecel = constraints.maxDecel > 0 ? constraints.maxDecel : constraints.maxAccel;
+    if (maxDecel > 0 && decelPeak > maxDecel * 1.025)
+      checks.push({ f: at(decelAt), kind: 'constraint', level: 'warning', text: 'Deceleration exceeds limit \u00b7 ' + decelPeak.toFixed(1) + ' m/s\u00b2' });
+    const omegaLimit = (constraints.maxAngVel || 0) * D2R;
+    if (omegaLimit > 0 && omegaPeak > omegaLimit * 1.025)
+      checks.push({ f: at(omegaAt), kind: 'constraint', level: 'warning', text: 'Angular velocity exceeds limit \u00b7 ' + (omegaPeak / D2R).toFixed(0) + '\u00b0/s' });
+
+    if (cfg.plannerId === 'labviewClothoid' && cfg.minTurnRadiusM > 0 && curvaturePeak > 1e-6) {
+      const actualRadius = 1 / curvaturePeak;
+      if (actualRadius < cfg.minTurnRadiusM * 0.975) {
+        checks.push({ f: at(curvatureAt), kind: 'geometry', level: 'warning', text: 'Corner spacing cannot maintain the ' + cfg.minTurnRadiusM.toFixed(2) + ' m minimum radius' });
+      }
+    }
+
+    if (curvaturePeak > 1e-6 && constraints.maxVel > 0 && constraints.maxAccel > 0) {
+      const curveLimit = Math.sqrt(constraints.maxAccel / curvaturePeak);
+      if (curveLimit < constraints.maxVel * 0.7) {
+        const planned = Math.min(curveLimit, m.v[curvatureAt] || curveLimit);
+        checks.push({ f: at(curvatureAt), kind: 'performance', level: 'note', text: 'Turn limits speed to ' + planned.toFixed(1) + ' m/s' });
+      }
+    }
+    return checks;
+  }
+
+  // Path type belongs to the SEGMENT between two waypoints. The list stays honest:
+  // only true geometry types live here, grouped Basic / Spline. Snapping, heading-hold,
+  // approach and auto-smooth are tooling/constraint behaviours and live elsewhere.
+  const SEGTYPES = [
+    { id: 'line', label: 'Straight', abbr: 'LIN', group: 'Basic', hint: 'Straight line \u2014 control handles ignored.' },
+    { id: 'arc', label: 'Arc', abbr: 'ARC', group: 'Basic', hint: 'Constant-radius turn, tangent to the out-handle.' },
+    { id: 'bezier', label: 'B\u00e9zier', abbr: 'BEZ', group: 'Spline', hint: 'Hand-shaped spline driven by the control handles.' },
+    { id: 'clothoid', label: 'Clothoid', abbr: 'CLO', group: 'Spline', hint: 'Euler spiral \u2014 curvature ramps smoothly (swerve-friendly).' },
+  ];
+
+  // ---- constraint-range anchoring -------------------------------------------
+  // A range can be anchored three ways. We resolve each to
+  // concrete arclength fractions [f0,f1] against the CURRENT path so the profile
+  // engine + overlays stay simple, while the stored anchor keeps the range
+  // attached the way the user intends as the path is edited.
+  //   param : fixed percent of the path        {f0,f1}
+  //   dist  : legacy fixed metres of travel    {d0,d1}
+  //   wp    : local positions within segments  {w0,t0,w1,t1}; omitted t values
+  //           preserve legacy whole-waypoint spans
+  function waypointFracs(doc, smp) {
+    const pts = smp.pts; const total = smp.length || 1; const n = doc.waypoints.length;
+    if (!pts.length) return doc.waypoints.map(() => 0);
+    if (Array.isArray(smp.wpIdx) && smp.wpIdx.length === n) return smp.wpIdx.map((index) => pts[Math.max(0, Math.min(pts.length - 1, index))].s / total);
+    const perSeg = (pts.length - 1) / Math.max(1, n - 1);
+    return doc.waypoints.map((_, k) => { const i = Math.min(pts.length - 1, Math.round(k * perSeg)); return pts[i].s / total; });
+  }
+  function resolvedHeadingTransition(waypoint) {
+    const value = (waypoint && waypoint.headingTransition) || {};
+    return { placement: value.placement || 'after', rotationPriority: value.rotationPriority || 'heading', distanceM: value.distanceM != null ? value.distanceM : 0.75 };
+  }
+  function headingTransitionWindows(waypoints, modes, breaks, wpFrac, totalDistance) {
+    const total = Math.max(totalDistance || 0, 1e-9), windows = [];
+    for (let segment = 1; segment < modes.length; segment++) {
+      if (modes[segment] === modes[segment - 1] || breaks[segment]) continue;
+      const policy = resolvedHeadingTransition(waypoints[segment]);
+      const boundary = Math.max(0, Math.min(1, wpFrac[segment] != null ? wpFrac[segment] : 0));
+      const beforeShare = policy.placement === 'before' ? 1 : policy.placement === 'split' ? 0.5 : 0;
+      const previousValue = wpFrac[segment - 1] != null ? wpFrac[segment - 1] : boundary;
+      const nextValue = wpFrac[segment + 1] != null ? wpFrac[segment + 1] : boundary;
+      const previousLength = Math.max(0, boundary - Math.max(0, Math.min(1, previousValue)));
+      const nextLength = Math.max(0, Math.max(0, Math.min(1, nextValue)) - boundary);
+      const before = Math.min(previousLength, policy.distanceM * beforeShare / total);
+      const after = Math.min(nextLength, policy.distanceM * (1 - beforeShare) / total);
