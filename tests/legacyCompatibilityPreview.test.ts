@@ -268,3 +268,93 @@ describe("legacy compatibility preview", () => {
     expect(visits[1].f).toBeCloseTo(6 / 7, 10);
   });
 
+  it("keeps two visits inside one self-intersecting authored segment", () => {
+    const math = legacyMath();
+    const samples = [
+      { x: 0, y: 0, s: 0, seg: 0, t: 0, heading: 0 },
+      { x: 2, y: 2, s: Math.sqrt(8), seg: 0, t: 0.25, heading: Math.PI / 4 },
+      { x: 0, y: 2, s: Math.sqrt(8) + 2, seg: 0, t: 0.5, heading: Math.PI },
+      { x: 2, y: 0, s: Math.sqrt(8) * 2 + 2, seg: 0, t: 0.75, heading: -Math.PI / 4 },
+      { x: 3, y: 1, s: Math.sqrt(8) * 2 + 2 + Math.sqrt(2), seg: 0, t: 1, heading: Math.PI / 4 },
+    ];
+
+    const visits = math.nearestVisits(1, 1, samples, { tolerance: 0.04 });
+
+    expect(visits).toHaveLength(2);
+    expect(visits.map((visit) => visit.seg)).toEqual([0, 0]);
+    expect(visits[0].t).toBeCloseTo(0.125, 10);
+    expect(visits[1].t).toBeCloseTo(0.625, 10);
+  });
+
+  it("clusters adjacent polyline edges into one visit", () => {
+    const math = legacyMath();
+    const samples = [
+      { x: 0, y: 0, s: 0, seg: 0, t: 0, heading: 0 },
+      { x: 1, y: 0, s: 1, seg: 0, t: 0.5, heading: 0 },
+      { x: 2, y: 0, s: 2, seg: 0, t: 1, heading: 0 },
+    ];
+
+    expect(math.nearestVisits(1, 0, samples, { tolerance: 0.04 })).toHaveLength(1);
+  });
+
+  it("does not count neighboring samples on the same pass as separate passes", () => {
+    const math = legacyMath();
+    const samples = [
+      { x: -0.3, y: 0.05, s: 0, seg: 0, t: 0, heading: 0 },
+      { x: -0.1, y: 0.05, s: 0.2, seg: 0, t: 0.1, heading: 0 },
+      { x: 0.1, y: 0.05, s: 0.4, seg: 0, t: 0.2, heading: 0 },
+      { x: 0.3, y: 0.05, s: 0.6, seg: 0, t: 0.3, heading: 0 },
+      { x: 1, y: 1, s: 1.78, seg: 0, t: 0.4, heading: Math.PI / 4 },
+      { x: 1, y: -1, s: 3.78, seg: 0, t: 0.6, heading: -Math.PI / 2 },
+      { x: 0.3, y: -0.05, s: 4.96, seg: 0, t: 0.7, heading: Math.PI * 0.75 },
+      { x: 0.1, y: -0.05, s: 5.16, seg: 0, t: 0.8, heading: Math.PI },
+      { x: -0.1, y: -0.05, s: 5.36, seg: 0, t: 0.9, heading: Math.PI },
+      { x: -0.3, y: -0.05, s: 5.56, seg: 0, t: 1, heading: Math.PI },
+    ];
+
+    const visits = math.nearestVisits(0, 0, samples, { tolerance: 0.22, clusterDistance: 0.01 });
+
+    expect(visits).toHaveLength(2);
+    expect(visits[0].y).toBeCloseTo(0.05, 10);
+    expect(visits[1].y).toBeCloseTo(-0.05, 10);
+  });
+
+  it("switches a handled two-waypoint path between quintic Bezier and straight clothoid geometry", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, nextC: { x: 2, y: 3 } },
+      { x: 6, y: 4, prevC: { x: 5, y: 6 } },
+    ]);
+    const math = legacyMath();
+    const bezier = math.derivePath(path, project.robot, 56, "labviewBezier");
+    const clothoid = math.derivePath(path, project.robot, 56, "labviewClothoid");
+    const a = path.waypoints[0], b = path.waypoints[1];
+    const chordDistance = (point: { x: number; y: number }) => Math.abs((b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x));
+
+    expect(bezier.sample.pts.some((point) => chordDistance(point) > 0.1)).toBe(true);
+    expect(clothoid.sample.pts.every((point) => chordDistance(point) < 1e-9)).toBe(true);
+    expect(bezier.sample.length).not.toBeCloseTo(clothoid.sample.length, 3);
+    expect(bezier.prof.totalTime).not.toBeCloseTo(clothoid.prof.totalTime, 3);
+  });
+
+  it("previews a stopped Bezier as two independent pieces without a loop", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, nextC: { x: 2, y: 1 } },
+      { x: 4, y: 1, stop: true, linked: false, prevC: { x: 3, y: 1 }, nextC: { x: 4, y: 2 } },
+      { x: 4, y: 5, prevC: { x: 4, y: 4 } },
+    ]);
+
+    const points = legacyMath().derivePath(path, project.robot, 56, "labviewBezier").sample.pts;
+    const stopIndex = points.reduce((best, point, index) => (
+      Math.hypot(point.x - 4, point.y - 1) < Math.hypot(points[best].x - 4, points[best].y - 1) ? index : best
+    ), 0);
+
+    expect(points.slice(0, stopIndex + 1).every((point) => Math.abs(point.y - 1) < 1e-8)).toBe(true);
+    expect(points.slice(stopIndex).every((point) => Math.abs(point.x - 4) < 1e-8)).toBe(true);
+  });
+
+  it("resolves heading mode independently for each segment", () => {
