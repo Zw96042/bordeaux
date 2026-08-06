@@ -178,51 +178,51 @@
           h(IconBtn, { icon: 'undo', onClick: onUndo, title: 'Undo  (\u2318Z)' }),
           h(IconBtn, { icon: 'redo', onClick: onRedo, title: 'Redo  (\u21e7\u2318Z)' }),
           h('div', { className: 'tbdiv' }),
-        h('span', { className: 'featnm' }, label),
-        mid && w.thetaOn && h('span', { className: 'pill th' }, (w.theta || 0).toFixed(0) + '\u00b0'),
-        bp ? h('span', { className: 'pill ' + bp.c }, bp.t) : h('span', { className: 'featmeta' }, w.x.toFixed(1) + ', ' + w.y.toFixed(1)),
-        mid && h('button', { className: 'featdel', title: 'Delete', onClick: (e) => { e.stopPropagation(); actions.delWp(i); } }, h(Icon, { name: 'trash', size: 12 })));
-    }));
+          h(PlannerControl, { plannerId, setPlannerId })),
+        (plan || page === 'auto') && h(React.Fragment, null,
+          h('button', { className: 'alliance ' + alliance, type: 'button', 'aria-pressed': alliance === 'red', onClick: () => setAlliance(alliance === 'blue' ? 'red' : 'blue'), title: 'Flip alliance' },
+            h('span', { className: 'alliance-dot' }), alliance === 'blue' ? 'Blue' : 'Red')),
+        (plan || page === 'auto') && h(React.Fragment, null,
+          h('button', { className: 'exportbtn exportjava' + (javaReady ? ' ready' : ''), type: 'button', disabled: !javaReady || !!(javaProject && javaProject.operation), title: javaReady ? 'Export native Java trajectory JSON to the linked robot project' : 'Link a Java project, install support, and build its annotated command catalog first', 'aria-label': javaReady ? 'Export Java trajectory' : 'Java trajectory export unavailable until Java support is ready', onClick: onExportJava }, h(Icon, { name: 'share', size: 15 }), javaProject && javaProject.operation === 'export' ? 'Exporting…' : 'Java JSON'),
+          h('button', { className: 'exportbtn', type: 'button', title: 'Export .bdx', 'aria-label': 'Export .bdx', onClick: onExport }, h(Icon, { name: 'share', size: 15 }), 'Export .bdx'))));
   }
 
-  function SegmentList({ wps, sel, actions }) {
-    if (wps.length < 2) return h('div', { className: 'featempty' }, 'Add a second waypoint to form a segment');
-    const name = (k) => k === 0 ? 'Start' : k === wps.length - 1 ? 'End' : 'WP' + k;
-    const abbr = (id) => (window.PM.SEGTYPES.find((s) => s.id === id) || window.PM.SEGTYPES[2]).abbr;
-    return h(React.Fragment, null, wps.slice(0, -1).map((w, i) =>
-      h('div', { key: i, className: 'featrow' + (sel.kind === 'seg' && sel.idx === i ? ' sel' : ''), onClick: () => actions.select('seg', i) },
-        h('span', { className: 'featdot b' }),
-        h('span', { className: 'featnm' }, name(i) + ' \u2192 ' + name(i + 1)),
-        h('span', { className: 'segabbr' }, abbr(w.segType)))));
+  // ---------------- canvas tool rail (left edge) — spatial creation (memo §2) ----------------
+  const TOOLS = [
+    { id: 'select', icon: 'select', label: 'Select / move', key: 'V' },
+    { id: 'waypoint', icon: 'waypoint', label: 'Place waypoint', key: 'W' },
+    { id: 'rotation', icon: 'rotation', label: 'Rotation target', key: 'R' },
+    { id: 'marker', icon: 'flag2', label: 'Event marker', key: 'M' },
+    { id: 'range', icon: 'gauge', label: 'Constraint range', key: 'C' },
+  ];
+  function ToolRail({ tool, setTool }) {
+    return h('div', { className: 'toolrail' }, TOOLS.map((t) =>
+      h('button', { key: t.id, className: 'toolrail-b' + (tool === t.id ? ' on' : ''), type: 'button', 'aria-label': t.label, 'aria-pressed': tool === t.id, title: t.label + '  (' + t.key + ')', onClick: () => setTool(t.id) },
+        h(Icon, { name: t.icon, size: 18 }), h('span', { className: 'toolrail-k' }, t.key))));
   }
 
-  function Outline({ open, setOpen, doc, sel, actions, secOpen, setSecOpen }) {
-    const tog = (k) => setSecOpen((o) => ({ ...o, [k]: !o[k] }));
-    const wps = doc.waypoints;
-    if (!open) {
-      return h('button', { className: 'outline-tab', type: 'button', title: 'Show outline', onClick: () => setOpen(true) },
-        h(Icon, { name: 'zones', size: 16 }), h('span', null, 'Outline'));
-    }
-    return h('div', { className: 'outline' },
-      h('div', { className: 'outline-hd' },
-        h('span', { className: 'outline-t' }, 'Outline'),
-        h('button', { className: 'mini', type: 'button', title: 'Hide outline', onClick: () => setOpen(false) }, h('span', { className: 'rot90' }, h(Icon, { name: 'chevron', size: 15 })))),
-      h('div', { className: 'outline-scroll' },
-        h('div', { className: 'outline-grp' }, 'Geometry'),
-        h(Section, { icon: 'waypoint', title: 'Waypoints', count: wps.length, open: secOpen.wp, onToggle: () => tog('wp'),
-          right: h('button', { className: 'mini', type: 'button', title: 'Add waypoint', onClick: (e) => { e.stopPropagation(); actions.addWaypointEnd(); } }, h(Icon, { name: 'plus', size: 13 })) },
-          h(WaypointList, { wps, sel, actions })),
-        h(Section, { icon: 'route', title: 'Segments', count: Math.max(0, wps.length - 1), open: !!secOpen.sg, onToggle: () => tog('sg') },
-          h(SegmentList, { wps, sel, actions })),
-        h('div', { className: 'outline-grp' }, 'Motion'),
-        h(Section, { icon: 'rotation', title: 'Rotation Targets', count: doc.targets.length, open: secOpen.rt, onToggle: () => tog('rt'),
-          right: h('button', { className: 'mini', type: 'button', title: 'Place on path — R then click', onClick: (e) => { e.stopPropagation(); actions.setTool('rotation'); } }, h(Icon, { name: 'plus', size: 13 })) },
-          doc.targets.length === 0 ? h('div', { className: 'featempty' }, 'None · press R, click the path') :
-            doc.targets.map((t, i) => h('div', { key: i, className: 'featrow' + (sel.kind === 'rt' && sel.idx === i ? ' sel' : ''), onClick: () => actions.select('rt', i) },
-              h('span', { className: 'featdot n' }), h('span', { className: 'featnm' }, t.deg.toFixed(0) + '\u00b0'), h('span', { className: 'featmeta' }, (t.f * 100).toFixed(0) + '%'),
-              h('button', { className: 'featdel', title: 'Delete', onClick: (e) => { e.stopPropagation(); actions.delTarget(i); } }, h(Icon, { name: 'trash', size: 12 }))))),
-        h(Section, { icon: 'flag2', title: 'Event Markers', count: doc.markers.length, open: secOpen.em, onToggle: () => tog('em'),
-          right: h('button', { className: 'mini', type: 'button', title: 'Place on path — M then click', onClick: (e) => { e.stopPropagation(); actions.setTool('marker'); } }, h(Icon, { name: 'plus', size: 13 })) },
+  // ---------------- global-constraint chip bar (top of canvas) — memo §6 ----------------
+  function ConstraintBar({ c, robot, onOpen }) {
+    const chips = [
+      { k: 'Max V', v: Math.min(c.maxVel, robot.maxSpeed).toFixed(1), u: 'm/s' },
+      { k: 'Max A', v: c.maxAccel.toFixed(1), u: 'm/s\u00b2' },
+      { k: 'Decel', v: (c.maxDecel != null ? c.maxDecel : c.maxAccel).toFixed(1), u: 'm/s\u00b2' },
+      { k: 'Max \u03c9', v: (c.maxAngVel || 0).toFixed(0), u: '\u00b0/s' },
+    ];
+    return h('button', { className: 'cbar', type: 'button', title: 'Edit global constraints in the inspector', onClick: onOpen },
+      h('span', { className: 'cbar-ic' }, h(Icon, { name: 'gauge', size: 14 })),
+      chips.map((ch, i) => h('span', { key: i, className: 'cbar-chip' },
+        h('span', { className: 'cbar-k' }, ch.k),
+        h('span', { className: 'cbar-v' }, ch.v),
+        h('span', { className: 'cbar-u' }, ch.u))),
+      h('span', { className: 'cbar-edit' }, 'Edit'));
+  }
+
+  // ---------------- outline: document STRUCTURE only (memo §5 / §7) ----------------
+  const behPill = (w) => w.stop ? { t: w.wait ? 'stop ' + (w.wait) + 's' : 'stop', c: 'r' } : w.corner ? { t: 'corner', c: 'n' } : null;
+  const inspectItem = (actions, kind, index, event) => {
+    event.preventDefault(); event.stopPropagation();
+    actions.select(kind, index);
           doc.markers.length === 0 ? h('div', { className: 'featempty' }, 'None · press M, click the path') :
             doc.markers.map((m, i) => h('div', { key: i, className: 'featrow' + (sel.kind === 'em' && sel.idx === i ? ' sel' : ''), onClick: () => actions.select('em', i) },
               h('span', { className: 'featdot n' }), h('span', { className: 'featnm' }, m.name), h('span', { className: 'featmeta' }, m.cmd),
