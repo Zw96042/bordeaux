@@ -92,3 +92,58 @@
               h('div', { className: 'rp-note rp-agent-note' }, h(Icon, { name: 'info', size: 14 }), 'Used by MCP agents to plan physical heading, FUEL collection, and shooting poses. Agent changes still require your approval.'),
               agentProposal && h('div', { className: 'rp-proposal', role: 'region', 'aria-label': 'Agent robot profile proposal' },
                 h('b', null, 'Agent robot profile proposal'),
+                h('span', null, agentProposal.intent),
+                agentProposal.summary && agentProposal.summary.map((line, index) => h('span', { key: index }, line)),
+                h('span', { className: 'agent-proposal-status' }, agentProposal.status === 'ready' ? 'Preview only — the robot profile has not changed.' : agentProposal.status === 'stale' ? 'Stale — ask the agent to regenerate.' : agentProposal.status === 'applied' ? 'Applied as one undoable project change.' : 'Rejected.'),
+                agentProposal.status === 'ready' && h('div', { className: 'rp-proposal-actions' },
+                  h('button', { type: 'button', onClick: onRejectProposal }, 'Reject'),
+                  h('button', { className: 'primary', type: 'button', onClick: onApplyProposal }, 'Apply robot info'))),
+              intake
+                ? h(React.Fragment, null,
+                    h('div', { className: 'rp-field' },
+                      h('div', { className: 'rp-flabel' }, 'Primary intake'),
+                      h('input', { className: 'rp-text', value: intake.name || '', 'aria-label': 'Primary intake name', maxLength: 80, onChange: (e) => setIntake({ name: e.target.value }) })),
+                    h('div', { className: 'rp-two' },
+                      h('div', { className: 'rp-field' }, h('div', { className: 'rp-flabel' }, 'Local X', h('small', null, '+ forward')), h(BigNum, { label: 'Intake local X', value: intake.centerM && intake.centerM.x, unit: 'm', min: -2, max: 2, onChange: (v) => setIntake({ centerM: { ...(intake.centerM || { x: 0, y: 0 }), x: v } }) })),
+                      h('div', { className: 'rp-field' }, h('div', { className: 'rp-flabel' }, 'Local Y', h('small', null, '+ left')), h(BigNum, { label: 'Intake local Y', value: intake.centerM && intake.centerM.y, unit: 'm', min: -2, max: 2, onChange: (v) => setIntake({ centerM: { ...(intake.centerM || { x: 0, y: 0 }), y: v } }) }))),
+                    h('div', { className: 'rp-field' }, h('div', { className: 'rp-flabel' }, 'Collection direction', h('small', null, '0° = front')), h(BigNum, { label: 'Intake collection direction', value: intake.directionDeg, unit: '°', min: -180, max: 180, precision: 0, step: 1, onChange: (v) => setIntake({ directionDeg: v }) })),
+                    h('div', { className: 'rp-two' },
+                      h('div', { className: 'rp-field' }, h('div', { className: 'rp-flabel' }, 'Capture width'), h(BigNum, { label: 'Intake capture width', value: intake.captureWidthM, unit: 'm', min: 0.05, max: 3, onChange: (v) => setIntake({ captureWidthM: v }) })),
+                      h('div', { className: 'rp-field' }, h('div', { className: 'rp-flabel' }, 'Collect speed'), h(BigNum, { label: 'Maximum collection speed', value: intake.maxCollectSpeedMps, unit: 'm/s', min: 0.1, max: robot.maxSpeed, precision: 1, step: 0.1, onChange: (v) => setIntake({ maxCollectSpeedMps: v }) }))),
+                    h('button', { className: 'rp-add-profile', type: 'button', onClick: () => setPlanning({ intake: undefined }) }, 'Remove intake details'))
+                  : h('button', { className: 'rp-add-profile', type: 'button', onClick: () => setPlanning({ intake: { name: 'Front intake', centerM: { x: robot.l / 2, y: 0 }, directionDeg: 0, captureWidthM: Math.min(robot.w, 0.7), maxCollectSpeedMps: Math.min(robot.maxSpeed, 2) } }) }, 'Add intake details'),
+              shooter
+                ? h(React.Fragment, null,
+                    h('div', { className: 'rp-two' },
+                      h('div', { className: 'rp-field' }, h('div', { className: 'rp-flabel' }, 'Shooter direction'), h(BigNum, { label: 'Shooter direction', value: shooter.directionDeg, unit: '°', min: -180, max: 180, precision: 0, step: 1, onChange: (v) => setShooter({ directionDeg: v }) })),
+                      h('div', { className: 'rp-field' }, h('div', { className: 'rp-flabel' }, 'Preferred range'), h(BigNum, { label: 'Preferred shooting range', value: shooter.preferredRangeM, unit: 'm', min: 0.1, max: 20, onChange: (v) => setShooter({ preferredRangeM: v }) }))),
+                    h('label', { className: 'rp-check' }, h('input', { type: 'checkbox', checked: shooter.requiresTargetFacing === true, onChange: (e) => setShooter({ requiresTargetFacing: e.target.checked }) }), 'Shooter direction must face the target'),
+                    typeof shooter.preferredRangeM === 'number' && h('button', { className: 'rp-add-profile', type: 'button', onClick: () => setPlanning({ shooter: { ...shooter, preferredRangeM: undefined } }) }, 'Clear preferred range'),
+                    h('button', { className: 'rp-add-profile', type: 'button', onClick: () => setPlanning({ shooter: undefined }) }, 'Remove shooter details'))
+                : h('button', { className: 'rp-add-profile', type: 'button', onClick: () => setPlanning({ shooter: { directionDeg: 0, requiresTargetFacing: true } }) }, 'Add shooter details'),
+              h('div', { className: 'rp-field' },
+                h('div', { className: 'rp-flabel' }, 'Planning notes'),
+                h('textarea', { className: 'rp-notes', value: planning.notes || '', maxLength: 4000, 'aria-label': 'Robot planning notes', placeholder: 'Mechanism timing, preferred lanes, stability limits…', onChange: (e) => setPlanning({ notes: e.target.value }) }))),
+
+          // ---- right column: live preview ----
+          h('div', { className: 'rp-col' },
+            h('div', { className: 'rp-preview' },
+              h('div', { className: 'rp-stage' },
+                h('svg', { width: 260, height: 260, viewBox: '0 0 260 260' },
+                  h('g', { transform: 'translate(130 130)' },
+                    h('polygon', { points: footprintPoints, fill: 'var(--accent-soft)', stroke: 'var(--accent)', strokeWidth: 2.5, strokeLinejoin: 'round' }),
+                    // forward indicator (front = +X)
+                    h('line', { x1: 0, y1: 0, x2: rw / 2 + 4, y2: 0, stroke: '#fff', strokeWidth: 2.5 }),
+                    h('path', { d: `M ${rw / 2 + 2} -6 L ${rw / 2 + 14} 0 L ${rw / 2 + 2} 6 Z`, fill: '#fff' }),
+                    // width / length ticks
+                    h('text', { x: 0, y: -rh / 2 - 10, fill: 'var(--txt-3)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace', textAnchor: 'middle' }, robot.w.toFixed(2) + ' m'),
+                    h('text', { x: rw / 2 + 26, y: 4, fill: 'var(--txt-3)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace', transform: `rotate(90 ${rw / 2 + 26} 0)`, textAnchor: 'middle' }, robot.l.toFixed(2) + ' m')))),
+              h('div', { className: 'rp-readout' },
+                h('div', { className: 'rr' }, h('div', { className: 'rrv' }, isSwerve ? 'Swerve' : 'Tank'), h('div', { className: 'rru' }, 'drive')),
+                h('div', { className: 'rr' }, h('div', { className: 'rrv' }, footprintArea.toFixed(2)), h('div', { className: 'rru' }, 'm\u00b2 footprint')),
+                h('div', { className: 'rr' }, h('div', { className: 'rrv' }, typeof robot.heightM === 'number' ? robot.heightM.toFixed(2) : '—'), h('div', { className: 'rru' }, 'm high')),
+                h('div', { className: 'rr' }, h('div', { className: 'rrv' }, robot.maxSpeed.toFixed(1)), h('div', { className: 'rru' }, 'm/s top'))))))));
+  }
+
+  window.RobotPage = RobotPage;
+})();
