@@ -617,3 +617,93 @@
     const [moreBdx, setMoreBdx] = React.useState(false);
     const [jiggleDistance, setJiggleDistance] = React.useState(0.18);
     const [jiggleStrokes, setJiggleStrokes] = React.useState(4);
+    const [jiggleStart, setJiggleStart] = React.useState(90);
+    const [jiggleStep, setJiggleStep] = React.useState(-90);
+    const [jiggleStrokeTime, setJiggleStrokeTime] = React.useState(0.4);
+    const [jiggleError, setJiggleError] = React.useState(false);
+    const wps = doc.waypoints;
+    const isTank = drive === 'tank';
+    const n = wps.length;
+    const headingMode = isTank ? 'tangent' : (doc.headingMode || 'targets');
+    const handlesEffective = plannerId !== 'labviewClothoid' && !(plannerId === 'labviewBezier' && doc.labview?.bezierTangentMode === 'automatic');
+    const endpointJiggle = wps[n - 1] && wps[n - 1].jiggle;
+
+    React.useEffect(() => {
+      if (!endpointJiggle) return;
+      setJiggleDistance(endpointJiggle.distanceM);
+      setJiggleStrokes(endpointJiggle.strokes);
+      setJiggleStart(endpointJiggle.startDeg);
+      setJiggleStep(endpointJiggle.stepDeg);
+      setJiggleStrokeTime(endpointJiggle.strokeTimeS);
+      setJiggleError(false);
+    }, [doc.id, endpointJiggle?.distanceM, endpointJiggle?.strokes, endpointJiggle?.startDeg, endpointJiggle?.stepDeg, endpointJiggle?.strokeTimeS]);
+
+    let icon = 'route', title = '', tag = null, body = null;
+
+    // ---------------- NO SELECTION → path summary, heading mode, global constraints ----------------
+    if (!sel.kind) {
+      icon = 'route'; title = doc.name || 'Path'; tag = 'summary';
+      const checks = derived.checks || [];
+      const issues = checks.filter((check) => check.level !== 'note');
+      const errors = issues.filter((check) => check.level === 'error').length;
+      body = h(React.Fragment, null,
+        Stat3([
+          { v: (derived.prof.totalTime || 0).toFixed(2) + 's', k: 'Time' },
+          { v: (derived.totalDistance || derived.sample.length || 0).toFixed(2) + 'm', k: 'Length' },
+          { v: issues.length ? String(issues.length) : '\u2713', k: issues.length ? 'Issues' : 'Clear', color: issues.length ? (errors ? 'var(--bad)' : 'var(--warn)') : 'var(--good)' },
+        ]),
+        h('div', { className: 'qrow', style: { marginTop: '10px' } },
+          h('button', { className: 'qbtn', type: 'button', onClick: () => actions.reversePath() }, h(Icon, { name: 'shuffle', size: 14 }), 'Reverse path'),
+          h('button', { className: 'qbtn', type: 'button', onClick: () => { actions.select(null, -1); actions.setTool('waypoint'); } }, h(Icon, { name: 'plus', size: 14 }), 'Place waypoint')),
+
+        h('div', { className: 'cgroup-h' }, 'Default heading'),
+        isTank
+          ? h('div', { className: 'hint' }, h(Icon, { name: 'info', size: 14 }), 'Tank drive \u2014 heading always follows the path tangent.')
+          : h(React.Fragment, null,
+              h(Seg, { value: headingMode, options: HEAD_MODES, ariaLabel: 'Default heading', onChange: (v) => actions.setHeadingMode(v) }),
+              h('div', { className: 'inrow' },
+                h('span', { className: 'inrow-l' }, 'Drive backward'),
+                h(Toggle, { on: !!doc.driveBackward, ariaLabel: 'Drive backward', onChange: () => actions.toggleDriveBackward() }))),
+
+        h('div', { className: 'cgroup-h' }, 'Endpoints'),
+        h('div', { className: 'grid2' },
+          h(Num, { label: 'Start vel', value: doc.startVel || 0, unit: 'm/s', min: 0, onChange: (v) => actions.setDoc({ startVel: v }) }),
+          h(Num, { label: 'Goal vel', value: doc.goalVel || 0, unit: 'm/s', min: 0, onChange: (v) => actions.setDoc({ goalVel: v }) })),
+        h('div', { style: { height: '2px' } }),
+        h('div', { className: 'cgroup-h' }, 'Global constraints'),
+        h(ConstraintsBody, {
+          c: doc.constraints,
+          robot,
+          setC: actions.setConstraint,
+          labview: doc.labview || {},
+          plannerId,
+          moreLimits,
+          setMoreLimits,
+          moreBdx,
+          setMoreBdx,
+          setLabview: (patch) => actions.setDoc({ labview: { samplePeriodS: 0.02, minTurnRadiusM: 0.5, bezierTangentMode: 'handles', reversePath: false, zeroVelocity: false, pickupBalls: false, currentLimit: 0, zeroTranslationalVelocity: false, correctAtBeginningOfPath: false, ...(doc.labview || {}), ...patch } }),
+        }));
+    }
+
+    // ---------------- WAYPOINT ----------------
+    else if (sel.kind === 'wp' && wps[sel.idx]) {
+      const i = sel.idx, w = wps[i];
+      const isStart = i === 0, isEnd = i === n - 1, isAnchor = isStart || isEnd;
+      const headingSegment = Math.max(0, Math.min(n - 2, i));
+      const waypointHeadingMode = isTank ? 'tangent' : (wps[headingSegment].segmentHeadingMode || headingMode);
+      icon = 'waypoint'; title = wpName(i, n); tag = isAnchor ? 'anchor' : null;
+      body = h(React.Fragment, null,
+        h('div', { className: 'grid2' },
+          h(Num, { label: 'X', value: w.x, unit: 'm', onChange: (v) => actions.setWp(i, { x: v }) }),
+          h(Num, { label: 'Y', value: w.y, unit: 'm', onChange: (v) => actions.setWp(i, { y: v }) })),
+
+        // Heading — mode-aware
+        h('div', { className: 'fieldlabel' }, 'Heading \u03b8'),
+        isTank
+          ? h('div', { className: 'hint' }, h(Icon, { name: 'info', size: 14 }), 'Tank \u2014 heading follows the path tangent.')
+          : waypointHeadingMode === 'lookAt'
+            ? h('div', { className: 'hint' }, h(Icon, { name: 'compass', size: 14 }), 'This segment continuously faces its tracked field point. Select the segment to edit or drag it.')
+          : waypointHeadingMode === 'tangent'
+            ? h(React.Fragment, null,
+                h('div', { className: 'hint' }, h(Icon, { name: 'compass', size: 14 }), 'This segment follows the path tangent. Set a manual heading to override only this segment.'),
+                h('button', { className: 'qbtn wide', type: 'button', style: { marginTop: '4px' }, onClick: () => { actions.setSegmentHeadingMode(headingSegment, 'manual'); actions.faceWaypoint(i, 'tangent'); } }, h(Icon, { name: 'compass', size: 14 }), 'Set manual heading on segment'))
