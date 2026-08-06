@@ -358,3 +358,93 @@ describe("legacy compatibility preview", () => {
   });
 
   it("resolves heading mode independently for each segment", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, theta: 0 },
+      { x: 4, y: 1, theta: 0 },
+      { x: 7, y: 1, theta: 0 },
+    ]);
+    path.waypoints[0].segmentHeadingMode = "tangent";
+    path.waypoints[1].segmentHeadingMode = "targets";
+    path.targets = [{ f: 0.75, deg: 180 }];
+
+    const math = legacyMath();
+    const preview = math.derivePath(path, project.robot, 56, "labviewBezier");
+
+    expect(math.headingAt(0.25, preview.anchors)).toBeCloseTo(0, 6);
+    expect(Math.abs(math.headingAt(0.75, preview.anchors))).toBeGreaterThan(Math.PI / 2);
+  });
+
+  it("acquires the next target without reversing when Targets follows Tangent", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "targets";
+    path.waypoints = buildWaypoints([
+      { x: 9, y: 5, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "tangent" },
+      {
+        x: 6, y: 5, theta: 0, thetaOn: false, segType: "line", segmentHeadingMode: "targets",
+        headingTransition: { placement: "after", rotationPriority: "heading", distanceM: 0.05 },
+      },
+      { x: 3, y: 5, theta: 0, thetaOn: true, segType: "line" },
+    ]);
+    path.targets = [{ f: 0.75, deg: -45 }];
+
+    const preview = legacyMath().derivePath(path, project.robot, 80, "profiledSpline");
+    const throughTarget = preview.sample.pts
+      .map((point, index) => ({ f: point.s / preview.sample.length, heading: preview.metrics.head[index] }))
+      .filter((sample) => sample.f >= 0.49 && sample.f <= 0.75 + 1e-6);
+    for (let index = 1; index < throughTarget.length; index += 1) {
+      expect(throughTarget[index].heading).toBeGreaterThanOrEqual(throughTarget[index - 1].heading - 1e-10);
+    }
+    expect(Math.max(...throughTarget.map((sample) => sample.heading))).toBeLessThanOrEqual(7 * Math.PI / 4 + 1e-8);
+  });
+
+  it("blends heading laws without snapping at a segment boundary", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.waypoints = buildWaypoints([
+      { x: 2, y: 2, theta: 45, segType: "line", segmentHeadingMode: "lookAt", segmentLookAt: { x: 4, y: 4 } },
+      { x: 4, y: 2, theta: 0, segType: "line", segmentHeadingMode: "tangent" },
+      { x: 7, y: 2, theta: 0 },
+    ]);
+    const math = legacyMath();
+    const preview = math.derivePath(path, project.robot, 56, "profiledSpline");
+    const before = math.headingAt(0.4 - 1 / 140, preview.anchors);
+    const after = math.headingAt(0.4, preview.anchors);
+
+    expect(Math.abs(after - before)).toBeLessThan(0.12);
+    expect(math.headingAt(1, preview.anchors)).toBeCloseTo(0, 2);
+  });
+
+  it("keeps a duplicate clothoid waypoint from crashing the live preview", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([{ x: 1, y: 1 }, { x: 1, y: 1 }, { x: 4, y: 3 }]);
+
+    const preview = legacyMath().derivePath(path, project.robot, 56, "labviewClothoid");
+
+    expect(preview.sample.pts.length).toBeGreaterThan(2);
+    expect(preview.sample.pts.at(-1)).toMatchObject({ x: 4, y: 3 });
+  });
+
+  it("assigns LabVIEW clothoid samples to every authored waypoint span", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([{ x: 1, y: 1 }, { x: 4, y: 1 }, { x: 4, y: 4 }]);
+
+    const preview = legacyMath().derivePath(path, project.robot, 56, "labviewClothoid");
+    const counts = preview.sample.pts.reduce((result, point) => {
+      result[point.seg] = (result[point.seg] || 0) + 1;
+      return result;
+    }, {} as Record<number, number>);
+
+    expect(counts[0]).toBeGreaterThan(10);
+    expect(counts[1]).toBeGreaterThan(10);
+    expect(preview.sample.pts.filter((point) => point.seg === 0).at(-1)?.t).toBeCloseTo(1, 6);
+    expect(preview.sample.pts.filter((point) => point.seg === 1).at(-1)?.t).toBeCloseTo(1, 6);
+  });
+
+  it("labels the native planner family as Java", () => {
