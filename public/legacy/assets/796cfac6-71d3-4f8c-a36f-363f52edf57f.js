@@ -313,51 +313,51 @@
   }
 
   // ---------------- metric overlay + legend (bottom-left) ----------------
-        let lo = 1, hi = prof.t.length - 1;
-        while (lo < hi) { const mid = (lo + hi) >> 1; if (prof.t[mid] < tt) lo = mid + 1; else hi = mid; }
-        const t0 = prof.t[lo - 1], t1 = prof.t[lo]; const u = t1 - t0 > 1e-6 ? (tt - t0) / (t1 - t0) : 0;
-        const val = arr[lo - 1] + (arr[lo] - arr[lo - 1]) * u;
-        const x = padL + (k / N) * (GW - padL - padR);
-        poly += (k === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + yOf(val).toFixed(1) + ' ';
-      }
-    }
-    const baseY = signed ? zeroY : (GH - padB);
-    const playX = padL + pct * (GW - padL - padR);
-    const onGraphDown = (e) => {
-      const seekTo = (cx) => { const r = graphRef.current.getBoundingClientRect(); const f = Math.max(0, Math.min(1, (cx - r.left) / r.width)); seek(f * total); };
-      seekTo(e.clientX);
-      const mv = (ev) => seekTo(ev.clientX);
-      const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); };
-      window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
-    };
+  function Overlay({ metric, setMetric, derived, diagOpen, onToggleDiag, plannerId }) {
+    const M = derived.metrics || {};
+    const checks = derived.checks || [];
+    const issues = checks.filter((check) => check.level !== 'note');
+    const notes = checks.filter((check) => check.level === 'note');
+    const grad = window.PM.metricGradient(metric);
+    const def = (window.PM.METRICS || []).find((m) => m.id === metric) || {};
+    let lo = '0', hi = '0';
+    if (metric === 'velocity') { lo = '0'; hi = (M.vMax || 0).toFixed(1); }
+    else if (metric === 'accel') { const a = (M.aMax || 0).toFixed(1); lo = '-' + a; hi = '+' + a; }
+    else if (metric === 'angvel') { const w = ((M.wMax || 0) * R2D).toFixed(0); lo = '-' + w; hi = '+' + w; }
+    else { lo = '0'; hi = (M.kMax || 0).toFixed(2); }
+    const errors = issues.filter((check) => check.level === 'error').length;
+    return h('div', { className: 'overlayctl' },
+      h('div', { className: 'ovrow' },
+        h('span', { className: 'ovlabel' }, 'Overlay'),
+        (plannerId === 'labviewBezier' || plannerId === 'labviewClothoid') && h('span', { className: 'ovapprox', title: 'The canvas mirrors the compatibility math; exported samples remain authoritative.' }, '\u2248 preview'),
+        h('div', { className: 'ovselwrap' },
+          h('select', { className: 'ovselect', 'aria-label': 'Field overlay metric', value: metric, onChange: (e) => setMetric(e.target.value) },
+            (window.PM.METRICS || []).map((m) => h('option', { key: m.id, value: m.id }, m.label))),
+          h('span', { className: 'ovchev' }, h(Icon, { name: 'chevron', size: 13 })))),
+      h('div', { className: 'ovlegend' },
+        h('div', { className: 'ovbar', style: { background: grad } }),
+        h('div', { className: 'ovscale' },
+          h('span', null, lo), h('span', { className: 'ovunit' }, def.unit || ''), h('span', null, hi))),
+      checks.length > 0 && h('button', { className: 'ovsafety ' + (issues.length ? (errors ? 'bad' : 'warn') : 'note') + (diagOpen ? ' open' : ''), type: 'button', onClick: onToggleDiag, title: 'Open path checks' },
+        h('span', { className: 'ovsafety-dot' }),
+        h('span', null, issues.length
+          ? issues.length + (issues.length > 1 ? ' issues' : ' issue')
+          : notes.length + (notes.length > 1 ? ' notes' : ' note')),
+        h('span', { className: 'ovsafety-go' }, h(Icon, { name: 'chevron', size: 13 }))));
+  }
 
-    return h(React.Fragment, null,
-      graphOpen && h('div', { className: 'velgraph' },
-        h('div', { className: 'velgraph-top' },
-          h('span', { className: 'velgraph-ttl' }, title),
-          h('span', { className: 'velgraph-mx' }, (signed ? '\u00b1' + vmax.toFixed(metric === 'angvel' ? 0 : 1) : vmax.toFixed(metric === 'curvature' ? 2 : 1)) + ' ' + unit)),
-        h('div', { className: 'velgraph-plot' },
-          h('div', { className: 'velgraph-yaxis' },
-            h('span', null, (metric === 'curvature' ? vmax.toFixed(2) : vmax.toFixed(metric === 'angvel' ? 0 : 1))),
-            h('span', null, signed ? '0' : (vmax / 2).toFixed(metric === 'angvel' ? 0 : 1)),
-            h('span', null, signed ? '-' + vmax.toFixed(metric === 'angvel' ? 0 : 1) : '0')),
-          h('svg', { ref: graphRef, className: 'velgraph-svg', viewBox: `0 0 ${GW} ${GH}`, preserveAspectRatio: 'none', onPointerDown: onGraphDown },
-            [0.25, 0.5, 0.75].map((g) => h('line', { key: g, x1: padL, x2: GW - padR, y1: padT + g * (GH - padT - padB), y2: padT + g * (GH - padT - padB), stroke: '#ffffff', strokeOpacity: 0.05, strokeWidth: 1 })),
-            signed && h('line', { x1: padL, x2: GW - padR, y1: zeroY, y2: zeroY, stroke: '#ffffff', strokeOpacity: 0.16, strokeWidth: 1 }),
-            !signed && h('line', { x1: padL, x2: GW - padR, y1: GH - padB, y2: GH - padB, stroke: '#ffffff', strokeOpacity: 0.12, strokeWidth: 1 }),
-            poly && h('path', { d: poly + `L ${GW - padR} ${baseY} L ${padL} ${baseY} Z`, fill: 'var(--accent)', fillOpacity: 0.12 }),
-            poly && h('path', { d: poly, fill: 'none', stroke: 'var(--accent)', strokeWidth: 2, vectorEffect: 'non-scaling-stroke' }),
-            h('line', { x1: playX, x2: playX, y1: padT - 5, y2: GH - padB, stroke: '#fff', strokeWidth: 1.5, vectorEffect: 'non-scaling-stroke' }),
-            h('circle', { cx: playX, cy: padT - 5, r: 3.5, fill: '#fff' })))),
-      h('div', { className: 'transport' },
-        h('button', { className: 'tbtn', type: 'button', onClick: restart, title: 'Restart' }, h(Icon, { name: 'rewind', size: 16 })),
-        h('button', { className: 'tbtn play', type: 'button', onClick: () => setPlaying(!playing), title: 'Play / Pause  (Space)' }, h(Icon, { name: playing ? 'pause' : 'play', size: 17, fill: true })),
-        h('div', { className: 'scrubwrap' },
-          h('div', { className: 'timecode' }, fmt(playTime)),
-          h('input', { className: 'scrub', type: 'range', min: 0, max: 1000, value: Math.round(pct * 1000), onChange: (e) => seek((e.target.value / 1000) * total) }),
-          h('div', { className: 'timecode dim' }, fmt(total))),
-        h('div', { className: 'tbdiv' }),
-        h('div', { className: 'roi' }, h('span', { className: 'roi-v' }, derived.sample.length.toFixed(2)), h('span', { className: 'roi-u' }, 'm')),
+  // ---------------- path checks drawer ----------------
+  function PathChecks({ derived, doc, onClose, onPick }) {
+    const checks = derived.checks || [];
+    const issueCount = checks.filter((check) => check.level !== 'note').length;
+    const n = doc.waypoints.length;
+    const segName = (s) => (s === 0 ? 'Start' : 'WP' + s) + ' \u2192 ' + (s + 1 === n - 1 ? 'End' : 'WP' + (s + 1));
+    return h('div', { className: 'diag' },
+      h('div', { className: 'diag-hd' },
+        h('span', { className: 'diag-t' }, 'Path checks'),
+        h('span', { className: 'diag-c' }, issueCount ? issueCount : checks.length),
+        h('button', { className: 'ctxinsp-x', type: 'button', title: 'Close', 'aria-label': 'Close path checks', onClick: onClose }, h(Icon, { name: 'x', size: 14 }))),
+      h('div', { className: 'diag-scroll' },
         h(IconBtn, { icon: 'gauge', active: graphOpen, onClick: () => setGraphOpen(!graphOpen), title: 'Telemetry graph' })));
   }
 
