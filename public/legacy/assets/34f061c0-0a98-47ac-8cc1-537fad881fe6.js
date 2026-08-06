@@ -88,51 +88,51 @@
       name: 'Untitled',
       robot: { drive: 'swerve', w: 0.84, l: 0.84, heightM: 0.5, maxSpeed: 5.0 },
       paths: [blankPath('NewPath')],
-    const mutate = useCallback((fn) => { writeDoc(fn(clone(docRef.current))); }, [writeDoc]);
+      routine: { name: 'Autonomous Routine', nodes: [] },
+      plannerId: 'profiledSpline',
+    };
+  }
 
-    const undo = useCallback(() => { const H = hist.current; if (!H.past.length) return; H.future.push(clone(docRef.current)); writeDoc(H.past.pop()); force((x) => x + 1); }, [writeDoc]);
-    const redo = useCallback(() => { const H = hist.current; if (!H.future.length) return; H.past.push(clone(docRef.current)); writeDoc(H.future.pop()); force((x) => x + 1); }, [writeDoc]);
+  const FIT = { x: 307, y: 7, w: 3285, h: 1569 };
 
-    const select = useCallback((kind, idx) => setSel(kind ? { kind, idx } : { kind: null, idx: -1 }), []);
-    const onSelPos = useCallback((p) => setSelPos(p), []);
+  function App() {
+    const [project, setProject] = useState(() => freshProject());
+    const [activeIdx, setActiveIdx] = useState(0);
+    const [sel, setSel] = useState({ kind: null, idx: -1 });
+    const [page, setPage] = useState('plan');
+    const [alliance, setAlliance] = useState('blue');
+    const [showGrid, setShowGrid] = useState(true);
+    const [view, setView] = useState(FIT);
+    const [playTime, setPlayTime] = useState(0);
+    const [playing, setPlaying] = useState(false);
+    const [graphOpen, setGraphOpen] = useState(false);
+    const [outlineOpen, setOutlineOpen] = useState(true);
+    const [inspectorOpen, setInspectorOpen] = useState(true);
+    const [secOpen, setSecOpen] = useState({ wp: true, sg: false, rt: false, em: false, cr: false });
+    const [times, setTimes] = useState({});
+    const [selPos, setSelPos] = useState(null);
+    const [metric, setMetric] = useState('velocity');
+    const [tool, setTool] = useState('select');
+    const [diagOpen, setDiagOpen] = useState(false);
+    const [waypointPreview, setWaypointPreview] = useState(null);
+    const [headMenu, setHeadMenu] = useState(null);
+    const [plannerId, setPlannerId] = useState('profiledSpline');
+    const [dirty, setDirty] = useState(false);
+    const [agentProposal, setAgentProposal] = useState(null);
+    const [agentCandidateId, setAgentCandidateId] = useState(null);
+    const [mcpEnabled, setMcpEnabled] = useState(false);
+    const [agentSessionId] = useState(() => 'session_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)));
+    const agentRevision = useRef(-1);
+    const [javaProjectState, setJavaProjectState] = useState({ status: 'unlinked', operation: null, catalog: null, integration: null, error: '', notice: '', bookmarkId: null, recentProjects: [] });
+    const skipDirty = useRef(true);
+    const keyboardNavigation = useRef(false);
 
-    // ---- field actions ----
-    const moveWaypoint = useCallback((i, p) => mutate((d) => {
-      p = clampWorld(p);
-      const w = d.waypoints[i]; const dx = p.x - w.x, dy = p.y - w.y;
-      w.x = p.x; w.y = p.y; w.prevC.x += dx; w.prevC.y += dy; w.nextC.x += dx; w.nextC.y += dy; return d;
-    }), [mutate]);
-    const moveHandle = useCallback((i, which, p) => mutate((d) => {
-      const w = d.waypoints[i]; const key = which ? 'nextC' : 'prevC'; const other = which ? 'prevC' : 'nextC';
-      w[key] = { x: p.x, y: p.y };
-      if (w.linked !== false && !w.stop && i > 0 && i < d.waypoints.length - 1) {
-        const ol = Math.hypot(w[other].x - w.x, w[other].y - w.y);
-        const ang = Math.atan2(p.y - w.y, p.x - w.x) + Math.PI;
-        w[other] = { x: w.x + Math.cos(ang) * ol, y: w.y + Math.sin(ang) * ol };
-      }
-      return d;
-    }), [mutate]);
-    const addWaypoint = useCallback((p) => { commit((d) => {
-      p = clampWorld(p);
-      const wps = d.waypoints; let insertAt = wps.length;
-      if (derived.sample.pts.length > 1) {
-        const f = window.PM.nearestFraction(p.x, p.y, derived.sample.pts);
-        insertAt = Math.max(1, Math.min(wps.length, Math.round(f * (wps.length - 1)) + 1));
-      }
-      const nw = { x: p.x, y: p.y, linked: true, thetaOn: false, theta: 0, stop: false };
-      wps.splice(insertAt, 0, nw);
-      const hd = window.PM.autoHandles(wps, insertAt); nw.prevC = hd.prevC; nw.nextC = hd.nextC;
-      d._selAfter = insertAt; return d;
-    }); }, [commit, derived]);
-    useEffect(() => { if (doc._selAfter != null) { select('wp', doc._selAfter); mutate((d) => { delete d._selAfter; return d; }); } }, [doc._selAfter]);
-
-    const setWp = useCallback((i, patch) => commit((d) => {
-      const w = d.waypoints[i];
-      if (patch.x != null || patch.y != null) {
-        const next = clampWorld({ x: patch.x != null ? patch.x : w.x, y: patch.y != null ? patch.y : w.y });
-        patch = { ...patch, x: next.x, y: next.y };
-      }
-      Object.assign(w, patch); return d;
+    useEffect(() => {
+      const splash = document.getElementById('boot-splash');
+      if (!splash) return;
+      const appRoot = document.getElementById('root');
+      const reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const runner = splash.querySelector('.boot-splash-inner');
     }), [commit]);
     const toggleStop = useCallback((i, on) => commit((d) => { const w = d.waypoints[i]; w.stop = on; if (on) w.linked = false; return d; }), [commit]);
     const toggleTheta = useCallback((i, on) => commit((d) => { d.waypoints[i].thetaOn = on; return d; }), [commit]);
