@@ -88,51 +88,51 @@ function assertTrustedSender(event: Electron.IpcMainInvokeEvent | Electron.IpcMa
     throw new Error("Unauthorized renderer request");
   }
 }
-      ],
-    },
-  ];
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+function javaProjectBookmarksFile(): string {
+  const directory = smokeDirectory ?? app.getPath("userData");
+  return path.join(directory, "java-projects.json");
 }
 
-async function readProjectFile(filePath: string) {
-  const raw = await fs.readFile(filePath, "utf8");
-  const project = JSON.parse(raw) as BordeauxProject;
-  const validation = validateProject(project);
-  if (!validation.ok) {
-    const message = validation.issues.map((item) => `${item.path}: ${item.message}`).join("\n");
-    throw new Error(`Invalid project file:\n${message}`);
-  }
-  rememberFile(filePath);
-  return { path: filePath, project };
+function javaSupportArtifactsDirectory(): string {
+  return app.isPackaged ? path.join(process.resourcesPath, "java") : path.resolve(__dirname, "../../java/dist");
 }
 
-ipcMain.handle("project:open", async () => {
-  const result = await dialog.showOpenDialog(mainWindow!, {
-    title: "Open Bordeaux Project",
-    properties: ["openFile"],
-    filters: [{ name: "Bordeaux Project", extensions: ["json"] }],
-  });
-  if (result.canceled || !result.filePaths[0]) return null;
-  return readProjectFile(result.filePaths[0]);
-});
-
-ipcMain.handle("project:openRecent", async (_event, filePath: string) => readProjectFile(filePath));
-
-ipcMain.handle("project:save", async (_event, project: BordeauxProject, savePath?: string | null) => {
-  let target = savePath ?? null;
-  if (!target) {
-    const result = await dialog.showSaveDialog(mainWindow!, {
-      title: "Save Bordeaux Project",
-      defaultPath: `${project.name || "project"}.bordeaux.json`,
-      filters: [{ name: "Bordeaux Project", extensions: ["json"] }],
-    });
-    if (result.canceled || !result.filePath) return { canceled: true };
-    target = result.filePath;
+async function rememberLinkedJavaProject(projectPath: string, projectName: string): Promise<string | undefined> {
+  javaProjectBookmarks = rememberJavaProject(javaProjectBookmarks, projectPath, projectName);
+  linkedJavaProjectBookmarkId = javaProjectBookmarks[0].id;
+  try {
+    await writeJavaProjectBookmarks(javaProjectBookmarksFile(), javaProjectBookmarks);
+    return undefined;
+  } catch (error) {
+    console.warn("Could not save Java project bookmarks:", error);
+    return "The project is linked for this session, but Bordeaux could not save it to Recent projects.";
   }
-  await fs.writeFile(target, `${JSON.stringify(project, null, 2)}\n`, "utf8");
-  rememberFile(target);
-  return { path: target };
+}
+
+async function connectJavaProject(projectPath: string) {
+  const canonicalPath = await fs.promises.realpath(projectPath);
+  const catalog = await discoverJavaProject(canonicalPath);
+  let integration: JavaIntegrationStatus;
+  let integrationWarning: string | undefined;
+  try {
+    integration = await inspectJavaSupport(canonicalPath, catalog, javaSupportArtifactsDirectory());
+  } catch (error) {
+    integration = {
+      installed: false,
+      generatedCatalog: catalog.authoritative === true,
+      ...(catalog.catalogHash ? { catalogHash: catalog.catalogHash } : {}),
+      buildFile: "build.gradle",
+      wrapperAvailable: false,
+    };
+    integrationWarning = error instanceof Error ? error.message : String(error);
+  }
+  linkedJavaProjectPath = canonicalPath;
+  linkedJavaCatalog = catalog;
+  linkedJavaIntegration = integration;
+  const warning = await rememberLinkedJavaProject(canonicalPath, catalog.projectName);
+  return {
+    catalog,
 });
 
 ipcMain.handle("project:exportBdx", async (_event, project: BordeauxProject, outputPath?: string | null) => {
