@@ -448,51 +448,51 @@
 
     // ---------- STATIC LAYERS ----------
     const staticLayers = useMemo(() => {
-        const lblCol = (rp.state === 'active' || rp.state === 'focus') ? accent : S.gen ? S.col : '#8b94a2';
-        const txt = (S.gen ? '\u26a1 ' : (rp.idxLabel ? rp.idxLabel + '  ' : '')) + (rp.label || '');
-        const tw = P(8.0 * txt.length + 18), th = P(17);
-        els.push(h('g', { key: 'rl' + ri, transform: `translate(${mid.x} ${mid.y - P(15)})`, style: { pointerEvents: 'none' }, opacity: dim ? 0.55 : 1 },
-          h('rect', { x: -tw / 2, y: -th / 2, width: tw, height: th, rx: P(3), fill: 'rgba(11,12,14,0.92)', stroke: (rp.state === 'active' || rp.state === 'focus') ? accent : S.gen ? S.col : '#2a2e34', strokeWidth: P(1) }),
-          h('text', { x: 0, y: P(3.8), fill: lblCol, fontSize: P(11), fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, textAnchor: 'middle' }, txt)));
-      });
-      return els;
-    }, [routine, accent, view.w, cw, flip]);
+      const els = [];
+      const M = derived.metrics;
+      const headingMode = derived.headingMode;
+      const segmentMode = (segment) => isTank ? 'tangent' : ((doc.waypoints[segment] && doc.waypoints[segment].segmentHeadingMode) || headingMode);
+      const waypointMode = (index) => segmentMode(Math.min(index, Math.max(0, doc.waypoints.length - 2)));
+      const waypointTangent = (index) => waypointMode(index) === 'tangent';
+      const waypointTracksPoint = (index) => waypointMode(index) === 'lookAt';
+      const targetActive = (target) => {
+        const f = window.PM.featureFraction(target, derived.sample); let segment = 0;
+        if (derived.wpFrac) for (let i = 0; i < derived.wpFrac.length - 1; i++) if (f >= derived.wpFrac[i] - 1e-6) segment = i;
+        return segmentMode(segment) === 'targets';
+      };
+      const tanDeg = (i) => { const idx = derived.wpIdx ? derived.wpIdx[i] : 0; const p = pts[idx]; return p ? p.heading * 180 / Math.PI : 0; };
+      const waypointHeadingDeg = (index) => {
+        const waypoint = doc.waypoints[index];
+        if (!waypoint) return 0;
+        if (waypointTangent(index)) return tanDeg(index);
+        if (waypointTracksPoint(index)) {
+          const segment = Math.min(index, Math.max(0, doc.waypoints.length - 2));
+          const target = doc.waypoints[segment] && doc.waypoints[segment].segmentLookAt;
+          if (target) {
+            const dx = target.x - waypoint.x, dy = target.y - waypoint.y;
+            if (Math.hypot(dx, dy) > 1e-6) return Math.atan2(dy, dx) * 180 / Math.PI;
+          }
+        }
+        return waypoint.theta || 0;
+      };
+      const colAt = (i) => {
+        if (metric === 'accel') return window.PM.metricColor('accel', 0.5 + 0.5 * (M.accel[i] / (M.aMax || 1)));
+        if (metric === 'angvel') return window.PM.metricColor('angvel', 0.5 + 0.5 * (M.omega[i] / (M.wMax || 1)));
+        if (metric === 'curvature') return window.PM.metricColor('curvature', M.curv[i] / (M.kMax || 1));
+        return window.PM.metricColor('velocity', M.v[i] / (M.vMax || 1));
+      };
 
-    const routineRobot = useMemo(() => {
-      if (!routine || !routinePose) return null;
-      const c = W2P(routinePose);
-      const degHead = (routinePose.heading || 0) * 180 / Math.PI + (flip ? 180 : 0);
-      const rw = robot.w * SX, rh = robot.l * SY;
-      const bump = alliance === 'red' ? '#c75450' : '#4271c0';
-      return h('g', { transform: `translate(${c.x} ${c.y}) rotate(${-degHead})`, style: { pointerEvents: 'none' } },
-        h('rect', { x: -rw / 2, y: -rh / 2, width: rw, height: rh, rx: P(2.5), fill: 'rgba(14,16,20,0.85)', stroke: bump, strokeWidth: P(3) }),
-        h('line', { x1: 0, y1: 0, x2: rw / 2 + P(3), y2: 0, stroke: '#e8ecf2', strokeWidth: P(2.5) }),
-        h('path', { d: `M ${rw / 2 + P(1)} ${-P(6)} L ${rw / 2 + P(13)} 0 L ${rw / 2 + P(1)} ${P(6)} Z`, fill: '#e8ecf2' }));
-    }, [routine, routinePose, alliance, robot, view.w, cw, flip]);
+      if (showGrid) {
+        const g = [];
+        for (let m = 0; m <= Math.round(FIELD_W); m++) { const x = X0 + m * SX; g.push(h('line', { key: 'gx' + m, x1: x, y1: Y0, x2: x, y2: Y1, stroke: '#ffffff', strokeOpacity: 0.045, strokeWidth: P(1) })); }
+        for (let m = 0; m <= Math.round(FIELD_H); m++) { const y = Y1 - m * SY; g.push(h('line', { key: 'gy' + m, x1: X0, y1: y, x2: X1, y2: y, stroke: '#ffffff', strokeOpacity: 0.045, strokeWidth: P(1) })); }
+        els.push(h('g', { key: 'grid' }, g));
+      }
 
-    const previewEl = (preview && pts.length > 1) ? (function () {
-      const lo = Math.min(preview.f0, preview.f1), hi = Math.max(preview.f0, preview.f1);
-      const totalS = derived.sample.length || 1;
-      let dd = '', started = false;
-      for (let k = 0; k < pts.length; k++) { const f = pts[k].s / totalS; if (f >= lo && f <= hi) { const q = W2P(pts[k]); dd += (started ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); started = true; } }
-      return dd ? h('path', { d: dd, fill: 'none', stroke: accent, strokeOpacity: 0.45, strokeWidth: P(12), strokeLinecap: 'round', style: { pointerEvents: 'none' } }) : null;
-    })() : null;
-
-    const snapEl = (snap && doc.waypoints[snap.idx]) ? (function () { const c = W2P(doc.waypoints[snap.idx]); return h('g', { transform: `translate(${c.x} ${c.y - P(34)})`, style: { pointerEvents: 'none' } }, h('rect', { x: -P(37), y: -P(11), width: P(74), height: P(20), rx: P(4), fill: 'rgba(11,12,14,0.95)', stroke: accent, strokeWidth: P(1) }), h('text', { x: 0, y: P(4), fill: accent, fontSize: P(11), fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, textAnchor: 'middle' }, snap.label)); })() : null;
-
-    const vb = `${view.x} ${view.y} ${view.w} ${view.h}`;
-    const cursor = drag.current && drag.current.moved && drag.current.role === 'bg' ? 'grabbing' : (tool === 'waypoint' || tool === 'rotation' || tool === 'marker') ? 'crosshair' : 'default';
-
-    return h('svg', {
-      ref: svgRef, className: 'fieldsvg', viewBox: vb, preserveAspectRatio: 'xMidYMid meet',
-      onPointerDown: onDown, onPointerMove: onMove, onPointerUp: onUp, onWheel: onWheel, onDoubleClick: onDbl,
-      style: { cursor, userSelect: 'none', WebkitUserSelect: 'none', touchAction: 'none' },
-      onContextMenu: onCtx, onDragStart: (e) => e.preventDefault(), draggable: false,
-    },
-      h('rect', { x: -2000, y: -2000, width: IMG_W + 4000, height: IMG_H + 4000, fill: '#0a0b0d', 'data-role': 'bg' }),
-      h('rect', { x: X0 - 6, y: Y0 - 6, width: (X1 - X0) + 12, height: (Y1 - Y0) + 12, rx: 4, fill: '#131418', stroke: '#2a2d33', strokeWidth: P(1.5), 'data-role': 'bg' }),
-      h('foreignObject', { x: 0, y: 0, width: IMG_W, height: IMG_H, 'data-role': 'bg', style: { pointerEvents: 'none' } },
-        h('img', { src: (window.__resources && window.__resources.fieldImg) || 'uploads/FE-2026-_REBUILT_Playing_Field.png', width: IMG_W, height: IMG_H, draggable: false, style: { width: IMG_W + 'px', height: IMG_H + 'px', display: 'block', opacity: 0.9, filter: 'brightness(0.38) saturate(0.32) contrast(1.06)', WebkitUserDrag: 'none', userSelect: 'none', pointerEvents: 'none' } })),
+      // thin CAD centerline: subtle casing + metric-colored body + invisible insert hit-line
+      if (pts.length > 1) {
+        const totalS = derived.sample.length || 1;
+        const ranges = derived.effRanges || doc.ranges || [];
       h('rect', { x: X0 - 6, y: Y0 - 6, width: (X1 - X0) + 12, height: (Y1 - Y0) + 12, rx: 4, fill: 'none', stroke: '#ffffff', strokeOpacity: 0.07, strokeWidth: P(1), style: { pointerEvents: 'none' } }),
       routine ? routineLayers : staticLayers,
       routine ? null : previewEl,
