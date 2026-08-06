@@ -542,3 +542,93 @@
     }
     // Stationary turns happen after arrival and before any wait.
     const turns = [], turnDelay = new Map(); let terminalDelay = 0;
+    (opts.turns || []).slice().sort((a, b) => a.idx - b.idx).forEach((turn) => {
+      if (turn.idx < 0 || turn.idx >= n) return;
+      let delta = angWrap(turn.end - turn.start);
+      if (turn.direction === 'clockwise' && delta > 0) delta -= Math.PI * 2;
+      if (turn.direction === 'counterclockwise' && delta < 0) delta += Math.PI * 2;
+      if (Math.abs(delta) < 1e-9) return;
+      const wMax = Math.max(1e-6, (turn.maxAngVel || 540) * D2R), aMax = Math.max(1e-6, (turn.maxAngAccel || 720) * D2R), jMax = Math.max(0, (turn.maxAngJerk || 0) * D2R);
+      const duration = Math.max(Math.abs(delta) * 1.875 / wMax, Math.sqrt(Math.abs(delta) * 5.77351 / aMax), jMax > 1e-9 ? Math.cbrt(Math.abs(delta) * 60 / jMax) : 0);
+      const t0 = t[turn.idx]; turns.push({ idx: turn.idx, t0, t1: t0 + duration, start: turn.start, delta }); turnDelay.set(turn.idx, duration);
+      for (let j = turn.idx + 1; j < n; j++) t[j] += duration;
+      if (turn.idx === n - 1) terminalDelay += duration;
+    });
+    // Endpoint jiggles are compact waypoint actions, not authored geometry.
+    const jiggles = [], jiggleDelay = new Map(); let jiggleDistance = 0;
+    (opts.jiggles || []).slice().sort((a, b) => a.idx - b.idx).forEach((jiggle) => {
+      if (jiggle.idx < 0 || jiggle.idx >= n || !jiggle.config || !(jiggle.config.strokeTimeS > 0)) return;
+      const strokeDuration = feasibleJiggleStrokeDuration(jiggle.config.strokeTimeS, jiggle.config.distanceM, vLimit[jiggle.idx], aFwd[jiggle.idx], aBack[jiggle.idx], Math.max(1e-9, opts.freeSpeed || vmax));
+      const duration = strokeDuration * jiggle.config.strokes;
+      const t0 = t[jiggle.idx] + (turnDelay.get(jiggle.idx) || 0);
+      jiggles.push({ ...jiggle, strokeDuration, t0, t1: t0 + duration });
+      jiggleDistance += jiggle.config.distanceM * 2 * jiggle.config.strokes;
+      jiggleDelay.set(jiggle.idx, duration);
+      for (let j = jiggle.idx + 1; j < n; j++) t[j] += duration;
+      if (jiggle.idx === n - 1) terminalDelay += duration;
+    });
+    // dwell / wait-at-waypoint holds (memo §15) — only meaningful at stop points
+    const holds = [];
+    const dwell = (opts.dwell || []).slice().sort((a, b) => a.idx - b.idx);
+    for (let d = 0; d < dwell.length; d++) {
+      const dw = dwell[d]; if (!(dw.wait > 0) || dw.idx < 0 || dw.idx >= n) continue;
+      const t0 = t[dw.idx] + (turnDelay.get(dw.idx) || 0) + (jiggleDelay.get(dw.idx) || 0); holds.push({ idx: dw.idx, t0, t1: t0 + dw.wait });
+      for (let j = dw.idx + 1; j < n; j++) t[j] += dw.wait;
+      if (dw.idx === n - 1) terminalDelay += dw.wait;
+    }
+    return { v, t, totalTime: t[n - 1] + terminalDelay, holds, turns, jiggles, actionDistance: jiggleDistance, rotLimited };
+  }
+
+  // heading anchors -> continuous heading along arclength fraction f in [0,1]
+  // anchors: [{f, rad}] must include f=0 and f=1, sorted
+  function headingAt(f, anchors) {
+    if (!anchors.length) return 0;
+    if (f <= anchors[0].f) return anchors[0].rad;
+    for (let i = 0; i < anchors.length - 1; i++) {
+      const a = anchors[i], b = anchors[i + 1];
+      if (f >= a.f && f <= b.f) {
+        const tt = (b.f - a.f) < 1e-6 ? 0 : (f - a.f) / (b.f - a.f);
+        // smoothstep for nicer rotation
+        const ss = tt * tt * (3 - 2 * tt);
+        return angLerp(a.rad, b.rad, ss);
+      }
+    }
+    return anchors[anchors.length - 1].rad;
+  }
+
+  // pose at time given sampled pts, profile times, and heading anchors / mode
+  function poseAtTime(time, pts, prof, anchors, mode, rev) {
+    const n = pts.length;
+    if (n < 2) return null;
+    const T = prof.t;
+    // wait/dwell hold: robot is stationary at the stop point for the dwell window (memo §15)
+    if (prof.holds && prof.holds.length) {
+      for (let k = 0; k < prof.holds.length; k++) {
+        const hd = prof.holds[k];
+        if (time >= hd.t0 - 1e-9 && time <= hd.t1 + 1e-9) {
+          const p = pts[hd.idx]; const f = pts[n - 1].s > 1e-6 ? p.s / pts[n - 1].s : 0;
+          let heading = mode === 'tank' ? p.heading : headingAt(f, anchors); if (rev) heading += Math.PI;
+          return { x: p.x, y: p.y, heading, speed: 0, s: p.s, f, hold: true };
+        }
+      }
+    }
+    if (prof.turns && prof.turns.length) {
+      for (let k = 0; k < prof.turns.length; k++) {
+        const turn = prof.turns[k];
+        if (time >= turn.t0 - 1e-9 && time <= turn.t1 + 1e-9) {
+          const p = pts[turn.idx], u = Math.max(0, Math.min(1, (time - turn.t0) / Math.max(1e-9, turn.t1 - turn.t0)));
+          const q = 10 * u ** 3 - 15 * u ** 4 + 6 * u ** 5, f = pts[n - 1].s > 1e-6 ? p.s / pts[n - 1].s : 0;
+          let heading = turn.start + turn.delta * q; if (rev) heading += Math.PI;
+          return { x: p.x, y: p.y, heading, speed: 0, s: p.s, f, turn: true };
+        }
+      }
+    }
+    if (prof.jiggles && prof.jiggles.length) {
+      for (let k = 0; k < prof.jiggles.length; k++) {
+        const jiggle = prof.jiggles[k];
+        if (time < jiggle.t0 - 1e-9 || time > jiggle.t1 + 1e-9) continue;
+        const p = pts[jiggle.idx], config = jiggle.config;
+        const elapsed = Math.max(0, Math.min(jiggle.t1 - jiggle.t0, time - jiggle.t0));
+        const stroke = Math.min(config.strokes - 1, Math.floor(elapsed / jiggle.strokeDuration));
+        const strokeElapsed = elapsed - stroke * jiggle.strokeDuration;
+        const u = stroke === config.strokes - 1 && elapsed >= jiggle.t1 - jiggle.t0 ? 1 : strokeElapsed / jiggle.strokeDuration;
