@@ -1,6 +1,6 @@
 // Bordeaux — shared UI primitives. Exports window.UI
 (function () {
-  const { useState, useRef, useEffect } = React;
+  const { useState, useRef, useEffect, useId } = React;
   const h = React.createElement;
 
   const PATHS = {
@@ -30,6 +30,10 @@
     zoomout: 'M7 11h8 M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z M16 16l5 5',
     fit: 'M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5',
     copy: 'M9 9h10v10H9z M5 15H4V4h11v1',
+    edit: 'M4 20h4l11-11-4-4L4 16v4z M13.5 6.5l4 4',
+    folder: 'M3 6h7l2 2h9v11H3z',
+    search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z M16 16l5 5',
+    refresh: 'M20 7v5h-5 M4 17v-5h5 M18.5 10a7 7 0 0 0-12-3L4 10 M5.5 14a7 7 0 0 0 12 3l2.5-3',
     zones: 'M4 12h16 M4 7h16 M4 17h16',
     car: 'M5 6h14v12H5z M9 6V4h6v2',
     info: 'M12 8h.01 M11 12h1v5h1 M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z',
@@ -39,10 +43,6 @@
     palette: 'M12 3a9 9 0 1 0 0 18 2 2 0 0 0 1.6-3.2 2 2 0 0 1 1.6-3.2H17a4 4 0 0 0 4-4 9 9 0 0 0-9-7.6z M7.5 12.5h.01 M9.5 8.5h.01 M14.5 8.5h.01',
     x: 'M6 6l12 12M18 6L6 18',
     compass: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M15.5 8.5l-2 5-5 2 2-5z',
-    drag: 'M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01',
-    shuffle: 'M4 5h4l9 14h3 M17 5h3 M4 19h4l3-4.5 M15.5 7.5L20 5l-2 4 M18 22l2-3-3-1',
-    branch: 'M6 4v6a4 4 0 0 0 4 4h4 M18 4v6a4 4 0 0 1-4 4 M6 20a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M6 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4z M18 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
-    dot: 'M12 12m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0',
     check: 'M5 13l4 4L19 7',
     bolt: 'M13 3L5 13h6l-1 8 8-10h-6z',
     layers: 'M12 3l9 5-9 5-9-5z M3 13l9 5 9-5',
