@@ -887,3 +887,93 @@
       const dependencyParameters = selectedCommand ? (selectedCommand.parameters || []).filter((parameter) => parameter.role === 'dependency') : [];
       const invocationArguments = m.invocation && m.invocation.commandId === invocationId ? (m.invocation.arguments || {}) : {};
       const reconciledArguments = Object.fromEntries(argumentParameters.map((parameter) => {
+        const saved = Object.prototype.hasOwnProperty.call(invocationArguments, parameter.name) ? invocationArguments[parameter.name] : undefined;
+        return [parameter.name, parameterValueError(saved, parameter) ? parameterDefaultValue(parameter) : saved];
+      }));
+      const argumentNames = new Set(argumentParameters.map((parameter) => parameter.name));
+      const argumentSchemaMismatch = !!selectedCommand && (
+        Object.keys(invocationArguments).some((name) => !argumentNames.has(name))
+        || argumentParameters.some((parameter) => parameterValueError(invocationArguments[parameter.name], parameter))
+      );
+      const operation = javaProject && javaProject.operation;
+      const catalogReady = !!(catalog && catalog.authoritative && catalog.catalogHash);
+      const supportInstalled = !!(integration && integration.installed);
+      const supportCompatible = !!(supportInstalled && (!catalogReady || integration.supportVersion === catalog.supportVersion));
+      const javaReady = catalogReady && supportCompatible;
+      const projectStateLabel = operation === 'scan' ? 'Checking project…'
+        : operation === 'install' ? 'Installing support…'
+          : operation === 'build' ? 'Building catalog…'
+            : javaReady ? 'Ready'
+              : supportInstalled && !supportCompatible ? 'Support update required'
+                : supportInstalled ? 'Catalog build required'
+                  : 'Support setup required';
+      icon = 'flag2'; title = 'Event Marker';
+      body = h(React.Fragment, null,
+        h('label', { className: 'fieldlabel first', htmlFor: 'event-marker-name' }, 'Name'),
+        h('input', { id: 'event-marker-name', className: 'textinput', value: m.name, autoComplete: 'off', spellCheck: false, 'data-lpignore': 'true', 'data-1p-ignore': true, onChange: (e) => actions.setMarker(sel.idx, { name: e.target.value }) }),
+
+        h('div', { className: 'cgroup-h' }, 'Java command'),
+        h('section', { className: 'cmd-project', 'aria-label': 'Linked Java project' },
+          h('div', { className: 'cmd-project-head' },
+            h('span', { className: 'cmd-project-icon' }, h(Icon, { name: 'folder', size: 15 })),
+            h('div', { className: 'cmd-project-copy' },
+              h('strong', { title: catalog ? catalog.projectName : 'No Java project linked' }, catalog ? catalog.projectName : 'No Java project linked'),
+              h('span', { title: currentProject && currentProject.folderName }, currentProject ? currentProject.folderName : catalog ? catalog.sourceFileCount + ' Java source files' : 'Choose the GradleRIO project folder'))),
+          catalog && h('div', { className: 'cmd-project-foot' },
+            h('div', { className: 'cmd-project-summary' },
+              h('span', {
+                className: 'cmd-project-state ' + (javaReady ? 'ready' : ''),
+                title: catalogReady && catalog.catalogHash ? catalog.catalogHash : undefined,
+                role: 'status',
+                'aria-live': 'polite',
+              }, h('i', null), projectStateLabel),
+              h('span', { className: 'cmd-project-count' }, commands.length + ' command' + (commands.length === 1 ? '' : 's'))),
+            h('div', { className: 'cmd-project-actions' },
+              h('button', { className: 'cmd-iconbtn', type: 'button', title: 'Refresh project', 'aria-label': operation === 'scan' ? 'Checking project' : 'Refresh Java project', disabled: !!operation, onClick: javaProject.refresh }, h(Icon, { name: 'refresh', size: 15 })),
+              catalogReady && supportCompatible && h('button', { className: 'cmd-iconbtn', type: 'button', title: 'Rebuild command catalog', 'aria-label': operation === 'build' ? 'Building command catalog' : 'Rebuild command catalog', disabled: !!operation || !integration || !integration.wrapperAvailable, onClick: javaProject.build }, h(Icon, { name: 'bolt', size: 15 })),
+              h('button', { className: 'cmd-iconbtn', type: 'button', title: 'Choose another project', 'aria-label': 'Choose Java project', disabled: !!operation, onClick: javaProject && javaProject.link }, h(Icon, { name: 'folder', size: 15 })))),
+          catalog && !supportCompatible && h('button', { className: 'cmd-primary-action', type: 'button', disabled: !!operation || !integration || !integration.wrapperAvailable, onClick: javaProject.install }, operation === 'install' ? 'Installing support…' : integration && integration.supportVersion ? 'Update support' : 'Install support'),
+          catalog && supportCompatible && !catalogReady && h('button', { className: 'cmd-primary-action', type: 'button', disabled: !!operation || !integration || !integration.wrapperAvailable, onClick: javaProject.build }, operation === 'build' ? 'Building catalog…' : 'Build command catalog'),
+          operation === 'build' && h('button', { className: 'cmd-cancel-action', type: 'button', onClick: javaProject.cancelBuild }, 'Cancel build'),
+          recentProjects.length > 1 && h('div', { className: 'cmd-project-switcher' },
+            h(InlinePicker, {
+              id: 'event-marker-java-project',
+              label: 'Switch project',
+              value: javaProject.bookmarkId || '',
+              items: recentProjects.map((project) => ({ value: project.id, label: project.projectName, meta: project.folderName })),
+              placeholder: 'Choose a project',
+              icon: 'folder',
+              disabled: javaProject.status === 'loading',
+              onChange: (projectId) => { if (projectId) javaProject.openRecent(projectId); },
+            })),
+          !catalog && h('button', { className: 'cmd-primary-action', type: 'button', disabled: !!operation, onClick: javaProject && javaProject.link }, 'Choose Java project'),
+          integration && !integration.wrapperAvailable && h('div', { className: 'cmd-project-warning' }, 'Add a Gradle wrapper to install support or build commands.')),
+        javaProject && javaProject.error && h('div', { className: 'cmd-project-error', role: 'alert' }, javaProject.error),
+        javaProject && javaProject.notice && h('div', { className: 'cmd-project-notice', role: 'status' }, javaProject.notice),
+        m.actionIntent && h('div', { className: 'cmd-project-notice', role: 'status' }, 'Pending action: ' + m.actionIntent.description + ' (' + m.actionIntent.semanticTag + '). Choose a generated command marked “Matches action” before Java export.'),
+        catalog && catalog.warnings && catalog.warnings.length > 0 && h('div', { className: 'seg-hint' }, catalog.warnings.length + ' source discovery warning' + (catalog.warnings.length === 1 ? '' : 's') + '. Generated annotations remain authoritative.'),
+        h('section', { className: 'cmd-command-editor', 'aria-label': 'Marker command' },
+          h(InlinePicker, {
+            id: 'event-marker-command',
+            label: 'Command',
+            value: invocationId,
+            items: commandPickerItems,
+            placeholder: catalog ? 'Choose a command' : 'Choose a Java project',
+            icon: 'bolt',
+            searchThreshold: 6,
+            disabled: !catalog || javaProject.status === 'loading',
+            onChange: (commandId) => {
+              const command = commands.find((candidate) => candidate.id === commandId);
+              const resolvesAction = command && pendingActionTag && (command.semanticTags || []).includes(pendingActionTag);
+              actions.setMarker(sel.idx, {
+                cmd: command ? command.id : 'none',
+                invocation: command ? { commandId: command.id, arguments: commandArguments(command) } : undefined,
+                actionIntent: resolvesAction ? undefined : m.actionIntent,
+              });
+            },
+          }),
+          unresolved && h('div', { className: 'cmd-project-error', role: 'status' }, 'This command is not in the linked project. Its saved ID and arguments are unchanged.'),
+          selectedCommand && selectedCommand.runtimeReady !== true && h('div', { className: 'cmd-project-error', role: 'status' }, 'Build the annotated catalog before exporting this source preview.'),
+          selectedCommand && h('div', {
+            className: 'cmd-command-summary',
+            title: selectedCommand.source ? selectedCommand.source.file + ':' + selectedCommand.source.line : undefined,
