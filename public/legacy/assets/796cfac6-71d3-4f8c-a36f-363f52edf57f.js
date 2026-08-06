@@ -223,51 +223,51 @@
   const inspectItem = (actions, kind, index, event) => {
     event.preventDefault(); event.stopPropagation();
     actions.select(kind, index);
-          doc.markers.length === 0 ? h('div', { className: 'featempty' }, 'None · press M, click the path') :
-            doc.markers.map((m, i) => h('div', { key: i, className: 'featrow' + (sel.kind === 'em' && sel.idx === i ? ' sel' : ''), onClick: () => actions.select('em', i) },
-              h('span', { className: 'featdot n' }), h('span', { className: 'featnm' }, m.name), h('span', { className: 'featmeta' }, m.cmd),
-              h('button', { className: 'featdel', title: 'Delete', onClick: (e) => { e.stopPropagation(); actions.delMarker(i); } }, h(Icon, { name: 'trash', size: 12 }))))),
-        h(Section, { icon: 'gauge', title: 'Constraint Ranges', count: (doc.ranges || []).length, open: secOpen.cr !== false, onToggle: () => tog('cr'),
-          right: h('button', { className: 'mini', type: 'button', title: 'Drag along the path — C then drag', onClick: (e) => { e.stopPropagation(); actions.setTool('range'); } }, h(Icon, { name: 'plus', size: 13 })) },
-          (doc.ranges || []).length === 0 ? h('div', { className: 'featempty' }, 'None · press C, drag the path') :
-            doc.ranges.map((rg, i) => h('div', { key: i, className: 'featrow' + (sel.kind === 'cr' && sel.idx === i ? ' sel' : ''), onClick: () => actions.select('cr', i) },
-              h('span', { className: 'featdot w' }), h('span', { className: 'featnm' }, '\u2264' + rg.maxVel.toFixed(1) + ' m/s'), h('span', { className: 'featmeta' }, (Math.min(rg.f0, rg.f1) * 100).toFixed(0) + '\u2013' + (Math.max(rg.f0, rg.f1) * 100).toFixed(0) + '%'),
-              h('button', { className: 'featdel', title: 'Delete', onClick: (e) => { e.stopPropagation(); actions.delRange(i); } }, h(Icon, { name: 'trash', size: 12 }))))),
-        h('div', { className: 'outline-foot' }, 'Constraints & summary live in the inspector \u2192')));
+    if (actions.openInspector) actions.openInspector();
+  };
+
+  function WaypointList({ wps, sel, actions }) {
+    const [drag, setDrag] = useState(null);
+    const rows = useRef([]);
+    const startDrag = (i) => (e) => {
+      e.preventDefault(); e.stopPropagation();
+      setDrag({ from: i, over: i });
+      const mv = (ev) => {
+        let over = 0;
+        rows.current.forEach((el, k) => { if (!el) return; const r = el.getBoundingClientRect(); if (ev.clientY > r.top + r.height / 2) over = k + 1; });
+        over = Math.max(0, Math.min(wps.length - 1, over));
+        setDrag((d) => (d && d.over === over) ? d : (d ? { ...d, over } : d));
+      };
+      const up = () => {
+        window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up);
+        setDrag((d) => { if (d && d.from !== d.over) actions.reorderWp(d.from, d.over); return null; });
+      };
+      window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+    };
+    return h('div', { className: 'wplist' + (drag ? ' dragging' : '') }, wps.map((w, i) => {
+      const label = i === 0 ? 'Start' : i === wps.length - 1 ? 'End' : 'Waypoint ' + i;
+      const mid = i !== 0 && i !== wps.length - 1;
+      const bp = behPill(w);
+      const cls = 'featrow wpfeatrow' + (sel.kind === 'wp' && sel.idx === i ? ' sel' : '') + (drag && drag.from === i ? ' dragging' : '') + (drag && drag.over === i && drag.from !== i ? ' over' : '');
+      return h('div', { key: i, ref: (el) => (rows.current[i] = el), className: cls },
+        h('button', { className: 'featgrip', type: 'button', 'aria-label': 'Drag ' + label + ' to reorder', title: 'Drag to reorder', onPointerDown: startDrag(i) }, h(Icon, { name: 'drag', size: 13 })),
+        h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'wp' && sel.idx === i, onClick: (e) => { if (e.shiftKey && wps.length > 2) actions.delWp(i); else actions.select('wp', i); }, onDoubleClick: (e) => inspectItem(actions, 'wp', i, e) },
+          h('span', { className: 'featdot ' + (w.stop ? 'r sq' : i === 0 ? 'g' : i === wps.length - 1 ? 'r' : 'b') }),
+          h('span', { className: 'featnm', title: label }, label),
+          mid && w.thetaOn && h('span', { className: 'pill th' }, (w.theta || 0).toFixed(0) + '\u00b0'),
+          bp ? h('span', { className: 'pill ' + bp.c }, bp.t) : h('span', { className: 'featmeta' }, w.x.toFixed(1) + ', ' + w.y.toFixed(1))),
+        i > 0 && h('button', { className: 'featmove', type: 'button', 'aria-label': 'Move ' + label + ' up', onClick: () => actions.reorderWp(i, i - 1) }, '\u2191'),
+        i < wps.length - 1 && h('button', { className: 'featmove', type: 'button', 'aria-label': 'Move ' + label + ' down', onClick: () => actions.reorderWp(i, i + 1) }, '\u2193'),
+        wps.length > 2 && h('button', { className: 'featdel', 'aria-label': 'Delete ' + label, title: 'Delete', onClick: () => actions.delWp(i) }, h(Icon, { name: 'trash', size: 12 })));
+    }));
   }
 
-  // ---------------- metric overlay + legend (bottom-left) ----------------
-  function Overlay({ metric, setMetric, derived, diagOpen, onToggleDiag, plannerId }) {
-    const M = derived.metrics || {};
-    const warns = derived.warnings || [];
-    const grad = window.PM.metricGradient(metric);
-    const def = (window.PM.METRICS || []).find((m) => m.id === metric) || {};
-    let lo = '0', hi = '0';
-    if (metric === 'velocity') { lo = '0'; hi = (M.vMax || 0).toFixed(1); }
-    else if (metric === 'accel') { const a = (M.aMax || 0).toFixed(1); lo = '-' + a; hi = '+' + a; }
-    else if (metric === 'angvel') { const w = ((M.wMax || 0) * R2D).toFixed(0); lo = '-' + w; hi = '+' + w; }
-    else { lo = '0'; hi = (M.kMax || 0).toFixed(2); }
-    const high = warns.filter((w) => w.sev === 'high').length;
-    return h('div', { className: 'overlayctl' },
-      h('div', { className: 'ovrow' },
-        h('span', { className: 'ovlabel' }, 'Overlay'),
-        h('div', { className: 'ovselwrap' },
-          h('select', { className: 'ovselect', value: metric, onChange: (e) => setMetric(e.target.value) },
-            (window.PM.METRICS || []).map((m) => h('option', { key: m.id, value: m.id }, m.label))),
-          h('span', { className: 'ovchev' }, h(Icon, { name: 'chevron', size: 13 })))),
-      h('div', { className: 'ovlegend' },
-        h('div', { className: 'ovbar', style: { background: grad } }),
-        h('div', { className: 'ovscale' },
-          h('span', null, lo), h('span', { className: 'ovunit' }, def.unit || ''), h('span', null, hi))),
-      plannerId === 'optimizedTrajectory' && h('div', { className: 'plannerdiag' }, h('b', null, 'Optimized'), h('span', null, 'export planner'), h('em', null, 'baseline timing pass')),
-      h('button', { className: 'ovsafety' + (warns.length ? (high ? ' bad' : ' warn') : ' ok') + (diagOpen ? ' open' : ''), type: 'button', onClick: onToggleDiag, title: warns.length ? 'Open diagnostics' : 'No issues' },
-        h('span', { className: 'ovsafety-dot' }),
-        warns.length === 0
-          ? h('span', null, 'No curvature or velocity spikes')
-          : h('span', null, warns.length + (warns.length > 1 ? ' checks' : ' check') + (high ? ' \u00b7 ' + high + ' critical' : '')),
-        warns.length > 0 && h('span', { className: 'ovsafety-go' }, h(Icon, { name: 'chevron', size: 13 }))));
-  }
-
+  function SegmentList({ wps, sel, actions }) {
+    if (wps.length < 2) return h('div', { className: 'featempty' }, 'Add a second waypoint to form a segment');
+    const name = (k) => k === 0 ? 'Start' : k === wps.length - 1 ? 'End' : 'Waypoint ' + k;
+    const typeName = (id) => (window.PM.SEGTYPES.find((s) => s.id === id) || window.PM.SEGTYPES[2]).label;
+    return h(React.Fragment, null, wps.slice(0, -1).map((w, i) =>
+      h('div', { key: i, className: 'featrow segfeatrow' + (sel.kind === 'seg' && sel.idx === i ? ' sel' : '') },
   // ---------------- diagnostics drawer (memo §9) ----------------
   function Diagnostics({ derived, doc, onClose, onPick, onFix }) {
     const warns = derived.warnings || [];
