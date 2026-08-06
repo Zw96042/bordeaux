@@ -178,3 +178,54 @@ export interface RouteCandidate {
   label: string;
   traversal: RouteTraversal | "ordered";
   requiredPortalIds?: string[];
+  path: PathDoc;
+  metrics: RouteCandidateMetrics;
+  analysis: PathAnalysis;
+  diagnostics: ValidationIssue[];
+  valid: boolean;
+  rejectionReason?: string;
+}
+
+export interface RepairCandidate {
+  id: string;
+  label: string;
+  path: PathDoc;
+  targetFindingIds: string[];
+  before: PathAnalysis;
+  after: PathAnalysis;
+  changedFields: string[];
+  valid: boolean;
+  rejectionReason?: string;
+}
+
+export interface PathProposal {
+  id: string;
+  baseSessionId: string;
+  baseRevision: number;
+  intent: string;
+  operation: "add" | "replace";
+  targetPathId?: string;
+  candidates: Array<RouteCandidate | RepairCandidate>;
+  recommendedCandidateId: string;
+  recommendationReason: string;
+  blockingIssues?: string[];
+  advisories?: string[];
+  status: "ready" | "stale" | "applied" | "rejected" | "expired";
+  createdAt: string;
+  appliedRevision?: number;
+}
+
+export interface RobotProfileProposal {
+  id: string;
+  baseSessionId: string;
+  baseRevision: number;
+  intent: string;
+  operation: "configureRobot";
+  planning: RobotPlanningProfile;
+  summary: string[];
+  status: "ready" | "stale" | "applied" | "rejected" | "expired";
+  createdAt: string;
+  appliedRevision?: number;
+}
+
+export type AgentProposal = PathProposal | RobotProfileProposal;
