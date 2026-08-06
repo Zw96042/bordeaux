@@ -69,7 +69,7 @@
     const pick = (type, cat) => { onPick(type, cat); setOpen(false); };
     if (variant === 'gap') {
       return h('div', { className: 'rt-gap' + (open ? ' open' : '') },
-        h('button', { className: 'rt-gap-btn', type: 'button', title: 'Insert step here', onClick: () => setOpen((o) => !o) }, h(Icon, { name: open ? 'x' : 'plus', size: 13 })),
+        h('button', { className: 'rt-gap-btn', type: 'button', title: 'Insert step here', 'aria-label': open ? 'Close step chooser' : 'Insert step here', 'aria-expanded': open, onClick: () => setOpen((o) => !o) }, h(Icon, { name: open ? 'x' : 'plus', size: 13 })),
         open && h(Chooser, { onPick: pick }));
     }
     return h('div', { className: 'rt-addwrap' },
@@ -78,7 +78,7 @@
       open && h(Chooser, { onPick: pick }));
   }
 
-  function Grip(props) { return h('button', { className: 'rt-grip', type: 'button', title: 'Drag to reorder', onPointerDown: props.onPointerDown, onClick: (e) => e.stopPropagation() }, h(Icon, { name: 'drag', size: 13 })); }
+  function Grip(props) { return h('button', { className: 'rt-grip', type: 'button', title: 'Drag to reorder', 'aria-label': 'Drag step to reorder', onPointerDown: props.onPointerDown, onClick: (e) => e.stopPropagation() }, h(Icon, { name: 'drag', size: 13 })); }
 
   // ---- one step card ----
   function StepCard(props) {
