@@ -6,19 +6,32 @@
   // ---- field calibration (image px) ----
   const IMG_W = 3901, IMG_H = 1583;
   const X0 = 397, X1 = 3502, Y0 = 97, Y1 = 1486; // playing surface in image px
+  const FIELD_CX = (X0 + X1) / 2, FIELD_CY = (Y0 + Y1) / 2;
   const FIELD_W = 17.548, FIELD_H = 8.052;        // meters (WPILib 2025/26)
   const SX = (X1 - X0) / FIELD_W, SY = (Y1 - Y0) / FIELD_H;
 
   // muted semantic colors (reserved for meaning, low saturation)
   const C_START = '#4bbf86', C_END = '#d2655f', C_NODE = '#8b94a2', C_NEUTRAL = '#9aa3b0';
 
+  const localFootprint = (robot) => robot.footprint && robot.footprint.kind === 'polygon' && Array.isArray(robot.footprint.verticesM)
+    ? robot.footprint.verticesM
+    : [{ x: -robot.l / 2, y: -robot.w / 2 }, { x: robot.l / 2, y: -robot.w / 2 }, { x: robot.l / 2, y: robot.w / 2 }, { x: -robot.l / 2, y: robot.w / 2 }];
+  const footprintPoints = (robot, scale) => localFootprint(robot).map((point) => `${point.x * SX * scale},${-point.y * SY * scale}`).join(' ');
+  const forwardExtent = (robot) => Math.max(...localFootprint(robot).map((point) => point.x)) * SX;
+
   function FieldView(props) {
-    const { doc, derived, sel, tool, view, setView, alliance, showGrid, robot, drive, accent, metric, playTime, actions, onSelPos, routine, routinePose } = props;
+    const { doc, derived, insertionPreview, proposalPreviews, sel, tool, view, setView, alliance, showGrid, robot, drive, accent, metric, playTime, actions, onSelPos, routine, routinePose } = props;
+    const showHandles = props.showHandles !== false;
     const svgRef = useRef(null);
     const [cw, setCw] = useState(1200);
     const [preview, setPreview] = useState(null);
     const [snap, setSnap] = useState(null);
+    const [visitFocus, setVisitFocus] = useState(null);
+    const visitFocusRef = useRef(null);
+    const actionsRef = useRef(actions);
+    actionsRef.current = actions;
     const drag = useRef(null);
+    const lastInspectPress = useRef({ key: null, at: 0 });
     const flip = alliance === 'red';
     const isTank = drive === 'tank';
 
@@ -28,21 +41,8 @@
     const wy = (y) => Y1 - y * SY;
     const W2P = useCallback((p) => { const q = tf(p); return { x: wx(q.x), y: wy(q.y) }; }, [tf]);
 
-    const clientToWorld = useCallback((cx, cy) => {
+    const clientToWorld = useCallback((cx, cy, bounded = true) => {
       const svg = svgRef.current; if (!svg) return { x: 0, y: 0 };
-      const ctm = svg.getScreenCTM(); if (!ctm) return { x: 0, y: 0 };
-      const pt = svg.createSVGPoint(); pt.x = cx; pt.y = cy;
-      const u = pt.matrixTransform(ctm.inverse());
-      const mx = (u.x - X0) / SX, my = (Y1 - u.y) / SY;
-      return clampWorld(tf({ x: mx, y: my }));
-    }, [tf]);
-
-    useEffect(() => {
-      const svg = svgRef.current; if (!svg) return;
-      const ro = new ResizeObserver(() => setCw(svg.clientWidth || 1200));
-      ro.observe(svg); setCw(svg.clientWidth || 1200);
-      return () => ro.disconnect();
-    }, []);
 
     // report selected element's screen position for the floating inspector
     useEffect(() => {
