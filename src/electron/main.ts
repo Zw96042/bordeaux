@@ -255,3 +255,93 @@ function createWindow() {
 
   if (process.env.BORDEAUX_SMOKE_TEST === "1") {
     window.webContents.once("did-finish-load", async () => {
+      const result: any = await window.webContents.executeJavaScript(`(async () => {
+        for (let attempt = 0; attempt < 50 && document.documentElement.dataset.chapLoader === 'loading'; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        const chapLoader = document.documentElement.dataset.chapLoader;
+        const unnamedOnPage = () => {
+          const controls = [...document.querySelectorAll('button,input,select,textarea,[role="button"]')];
+          const name = (el) => el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.getAttribute('title') || el.labels?.[0]?.textContent || (el.matches('button,[role="button"]') ? el.textContent : '');
+          return controls.filter((el) => !String(name(el) || '').trim()).map((el) => el.className);
+        };
+        const unnamed = [...unnamedOnPage()];
+        for (const page of ['Auto', 'Robot']) {
+          [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === page)?.click();
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          unnamed.push(...unnamedOnPage());
+        }
+        const project = { schemaVersion: '1.0', name: 'Smoke edited', robot: { drive: 'swerve', w: .8, l: .8, maxSpeed: 4 }, paths: [{ id: 'path_smoke', name: 'Smoke', waypoints: [{ x: 1, y: 1, theta: 0, thetaOn: true, linked: true, stop: false, prevC: { x: .8, y: 1 }, nextC: { x: 1.2, y: 1 } }, { x: 2, y: 1, theta: 0, thetaOn: true, linked: true, stop: false, prevC: { x: 1.8, y: 1 }, nextC: { x: 2.2, y: 1 } }], targets: [], markers: [{ id: 'event_smoke', f: .5, name: 'Smoke event', invocation: { commandId: 'frc.robot.SmokeCommand', arguments: { count: 2, sequence: '9007199254740993', tags: ['auto'] }, cancelOnPathEnd: true } }], ranges: [], constraints: { maxVel: 2, maxAccel: 2, maxDecel: 2, maxAngVel: 180, maxAngAccel: 360 }, startVel: 0, goalVel: 0 }], routine: { name: 'Smoke routine', nodes: [{ id: 'routine_smoke', type: 'path', ref: 'path_smoke' }] } };
+        const validation = await window.bordeauxAPI.validateProject(project);
+        const javaConnection = await window.bordeauxAPI.linkJavaProject();
+        const installedJavaConnection = await window.bordeauxAPI.installJavaSupport();
+        const builtJavaConnection = await window.bordeauxAPI.buildJavaCatalog();
+        const recentJavaProjects = await window.bordeauxAPI.listRecentJavaProjects();
+        const reopenedJavaConnection = await window.bordeauxAPI.openRecentJavaProject(recentJavaProjects[0].id);
+        [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === 'Plan')?.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        document.querySelector('button[aria-label="Add event marker"]')?.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const linkButton = document.querySelector('button[aria-label="Choose Java project"]')
+          || [...document.querySelectorAll('.cmd-primary-action')].find((button) => button.textContent.trim() === 'Choose Java project');
+        linkButton?.click();
+        for (let attempt = 0; attempt < 50 && document.getElementById('event-marker-command')?.disabled; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        const commandPicker = document.getElementById('event-marker-command');
+        const setInputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+        commandPicker?.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const commandOptions = [...document.querySelectorAll('#event-marker-command-listbox [role="option"]')];
+        const commandSearch = document.getElementById('event-marker-command-search');
+        const smokeCommandOption = commandOptions.find((option) => option.getAttribute('data-value') === 'frc.robot.SmokeCommand');
+        if (smokeCommandOption) {
+          smokeCommandOption.click();
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        const jsonParameter = document.getElementById('event-command-param-tags');
+        const exactIntegerParameter = document.getElementById('event-command-param-sequence');
+        const smokeParametersPresent = Boolean(document.getElementById('event-command-param-count') && jsonParameter && exactIntegerParameter);
+        const setTextAreaValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+        if (jsonParameter) {
+          setTextAreaValue.call(jsonParameter, '{}');
+          jsonParameter.dispatchEvent(new Event('input', { bubbles: true }));
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          jsonParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        const jsonShapeRejected = jsonParameter?.getAttribute('aria-invalid') === 'true';
+        if (jsonParameter) {
+          setTextAreaValue.call(jsonParameter, '["auto"]');
+          jsonParameter.dispatchEvent(new Event('input', { bubbles: true }));
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          jsonParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        if (exactIntegerParameter) {
+          setInputValue.call(exactIntegerParameter, '9223372036854775808');
+          exactIntegerParameter.dispatchEvent(new Event('input', { bubbles: true }));
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          exactIntegerParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        const longRangeRejected = exactIntegerParameter?.getAttribute('aria-invalid') === 'true';
+        if (exactIntegerParameter) {
+          setInputValue.call(exactIntegerParameter, '9007199254740993');
+          exactIntegerParameter.dispatchEvent(new Event('input', { bubbles: true }));
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          exactIntegerParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        document.getElementById('event-marker-command')?.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const largeEnumCommandOption = [...document.querySelectorAll('#event-marker-command-listbox [role="option"]')]
+          .find((option) => option.getAttribute('data-value') === 'frc.robot.LargeEnumCommand');
+        largeEnumCommandOption?.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const largeEnumPicker = document.getElementById('event-command-param-mode');
+        largeEnumPicker?.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const largeEnumOptions = [...document.querySelectorAll('#event-command-param-mode-listbox [role="option"]')];
+        const largeEnumOverflowNotice = document.querySelector('#event-command-param-mode-listbox .cmd-picker-more')?.textContent || '';
+        const largeEnumSearch = document.getElementById('event-command-param-mode-search');
