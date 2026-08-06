@@ -223,51 +223,51 @@
         applyJavaProjectConnection(await window.bordeauxAPI.refreshJavaProject());
       } catch (error) {
         setJavaProjectState((current) => ({ ...current, status: current.catalog ? 'stale' : 'error', operation: null, error: error && error.message ? error.message : String(error) }));
-      d.waypoints.splice(i + 1, 0, src);
-      const hd = window.PM.autoHandles(d.waypoints, i + 1); src.prevC = hd.prevC; src.nextC = hd.nextC;
-      d.waypoints[0].thetaOn = true; d.waypoints[d.waypoints.length - 1].thetaOn = true;
-      d._selAfter = i + 1; return d;
-    }), [commit]);
-    const reversePath = useCallback(() => commit((d) => {
-      const oldSeg = d.waypoints.map((w) => w.segType);
-      const w = d.waypoints.slice().reverse(); const n = w.length;
-      w.forEach((x) => { const p = x.prevC; x.prevC = x.nextC; x.nextC = p; });
-      for (let j = 0; j < n; j++) { if (j < n - 1) w[j].segType = oldSeg[n - 2 - j]; else delete w[j].segType; }
-      d.waypoints = w; const sv = d.startVel, gv = d.goalVel; d.startVel = gv; d.goalVel = sv;
-      w[0].thetaOn = true; w[n - 1].thetaOn = true; return d;
-    }), [commit]);
-    const reorderWp = useCallback((from, to) => commit((d) => {
-      const w = d.waypoints; if (to < 0 || to >= w.length || from === to) return d;
-      const [m] = w.splice(from, 1); w.splice(to, 0, m);
-      w[0].thetaOn = true; w[w.length - 1].thetaOn = true; d._selAfter = to; return d;
-    }), [commit]);
-    const insertWp = useCallback((i) => commit((d) => {
-      const a = d.waypoints[i], b = d.waypoints[i + 1]; if (!a || !b) return d;
-      const mid = clampWorld({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
-      const nw = { x: mid.x, y: mid.y, linked: true, thetaOn: false, theta: 0, stop: false, segType: a.segType || 'bezier' };
-      d.waypoints.splice(i + 1, 0, nw);
-      const hd = window.PM.autoHandles(d.waypoints, i + 1); nw.prevC = hd.prevC; nw.nextC = hd.nextC;
-      d._selAfter = i + 1; return d;
-    }), [commit]);
-    const zoomToFraction = useCallback((f) => {
-      const pts = derived.sample.pts; if (!pts || pts.length < 2) return;
-      const p = window.PM.pointAtFraction(f, pts);
-      const sx = (PX.X1 - PX.X0) / FIELD_W, sy = (PX.Y1 - PX.Y0) / FIELD_H;
-      const q = alliance === 'red' ? { x: FIELD_W - p.x, y: FIELD_H - p.y } : p;
-      const cx = PX.X0 + q.x * sx, cy = PX.Y1 - q.y * sy;
-      const nw = IMG_W * 0.42, nh = nw * (IMG_H / IMG_W);
-      setView({ x: cx - nw / 2, y: cy - nh / 2, w: nw, h: nh });
-    }, [derived, alliance]);
-    const pickWarning = useCallback((wn) => { select('seg', wn.seg); zoomToFraction(wn.f); setDiagOpen(true); }, [select, zoomToFraction]);
-    const applyFix = useCallback((wn, id) => {
-      if (id === 'clothoid') setSegMeta(wn.seg, { segType: 'clothoid' });
-      else if (id === 'handles') commit((d) => {
-        const a = d.waypoints[wn.seg], b = d.waypoints[wn.seg + 1];
-        [[a, 'nextC'], [b, 'prevC']].forEach(([w, key]) => { if (!w || !w[key]) return; const ang = Math.atan2(w[key].y - w.y, w[key].x - w.x); const L = Math.hypot(w[key].x - w.x, w[key].y - w.y) * 1.35; w[key] = { x: w.x + Math.cos(ang) * L, y: w.y + Math.sin(ang) * L }; });
-        return d;
-      });
-      else if (id === 'cap') addRange(Math.max(0, wn.f - 0.09), Math.min(1, wn.f + 0.09));
-      else if (id === 'angvel') setConstraint({ maxAngVel: +(doc.constraints.maxAngVel * 1.25).toFixed(0) });
+      }
+    }, [applyJavaProjectConnection]);
+
+    const installJavaSupport = useCallback(async () => {
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.installJavaSupport !== 'function') return;
+      setJavaProjectState((current) => ({ ...current, operation: 'install', error: '', notice: '' }));
+      try {
+        const result = await window.bordeauxAPI.installJavaSupport();
+        if (result) {
+          applyJavaProjectConnection(result);
+          setJavaProjectState((current) => ({ ...current, notice: 'Support installed. Annotate command factories, follow .bordeaux/INTEGRATION.md for RobotContainer wiring, then build the catalog.' }));
+        }
+        else setJavaProjectState((current) => ({ ...current, operation: null }));
+      } catch (error) {
+        setJavaProjectState((current) => ({ ...current, operation: null, error: error && error.message ? error.message : String(error) }));
+      }
+    }, [applyJavaProjectConnection]);
+
+    const buildJavaCatalog = useCallback(async () => {
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.buildJavaCatalog !== 'function') return;
+      setJavaProjectState((current) => ({ ...current, operation: 'build', error: '', notice: '' }));
+      try {
+        const result = await window.bordeauxAPI.buildJavaCatalog();
+        if (result) {
+          applyJavaProjectConnection(result);
+          setJavaProjectState((current) => ({ ...current, notice: 'Generated command catalog built and loaded.' }));
+        }
+        else setJavaProjectState((current) => ({ ...current, operation: null }));
+      } catch (error) {
+        setJavaProjectState((current) => ({ ...current, operation: null, status: current.catalog ? 'stale' : 'error', error: error && error.message ? error.message : String(error) }));
+      }
+    }, [applyJavaProjectConnection]);
+
+    const cancelJavaCatalogBuild = useCallback(async () => {
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.cancelJavaCatalogBuild !== 'function') return;
+      const result = await window.bordeauxAPI.cancelJavaCatalogBuild();
+      setJavaProjectState((current) => ({ ...current, notice: result && result.canceled ? 'Canceling the Java catalog build…' : 'No Java catalog build is running.' }));
+    }, []);
+
+    // ---- Autonomous Routine ----
+    const routine = project.routine || { name: 'Autonomous Routine', nodes: [] };
+    const setRoutine = useCallback((update) => setProject((current) => {
+      const value = typeof update === 'function' ? update(current.routine || { name: 'Autonomous Routine', nodes: [] }) : update;
+      return { ...current, routine: value };
+    }), []);
       else if (id === 'insert') { const p = window.PM.pointAtFraction(wn.f, derived.sample.pts); addWaypoint(p); }
     }, [setSegMeta, commit, addRange, addWaypoint, setConstraint, doc, derived]);
 
