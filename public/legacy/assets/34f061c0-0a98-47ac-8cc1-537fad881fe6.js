@@ -803,3 +803,93 @@
           if (oldHeading[n - 2 - j]) w[j].segmentHeadingMode = oldHeading[n - 2 - j];
           else delete w[j].segmentHeadingMode;
           if (oldLookAt[n - 2 - j]) w[j].segmentLookAt = { ...oldLookAt[n - 2 - j] };
+          else delete w[j].segmentLookAt;
+        } else {
+          delete w[j].segType;
+          delete w[j].segmentHeadingMode;
+          delete w[j].segmentLookAt;
+        }
+        delete w[j].headingTransition;
+      }
+      for (let oldIndex = 1; oldIndex < n - 1; oldIndex++) {
+        const transition = oldTransitions[oldIndex]; if (!transition) continue;
+        const newIndex = n - 1 - oldIndex;
+        w[newIndex].headingTransition = { ...transition,
+          placement: transition.placement === 'before' ? 'after' : transition.placement === 'split' ? 'split' : 'before' };
+      }
+      d.waypoints = w; remapWaypointRanges(d, Array.from({ length: n }, (_, index) => n - 1 - index));
+      w.forEach((waypoint) => delete waypoint.jiggle);
+      if (endpointJiggle) w[n - 1].jiggle = endpointJiggle;
+      const sv = d.startVel, gv = d.goalVel; d.startVel = gv; d.goalVel = sv;
+      if (endpointJiggle) d.goalVel = 0;
+      w[0].thetaOn = true; w[n - 1].thetaOn = true; return d;
+    }), [commit]);
+    const reorderWp = useCallback((from, to) => commit((d) => {
+      const w = d.waypoints; if (to < 0 || to >= w.length || from === to) return d;
+      const endpointJiggle = w[w.length - 1].jiggle ? { ...w[w.length - 1].jiggle } : null;
+      const order = Array.from({ length: w.length }, (_, index) => index);
+      const [oldIndex] = order.splice(from, 1); order.splice(to, 0, oldIndex);
+      const indexMap = []; order.forEach((value, index) => { indexMap[value] = index; });
+      const [m] = w.splice(from, 1); w.splice(to, 0, m);
+      w.forEach((waypoint) => delete waypoint.jiggle);
+      if (endpointJiggle) w[w.length - 1].jiggle = endpointJiggle;
+      delete w[w.length - 1].segmentHeadingMode;
+      delete w[w.length - 1].segmentLookAt;
+      delete w[0].headingTransition;
+      delete w[w.length - 1].headingTransition;
+      remapWaypointRanges(d, indexMap);
+      w[0].thetaOn = true; w[w.length - 1].thetaOn = true; d._selAfter = to; return d;
+    }), [commit]);
+    const insertWp = useCallback((i) => {
+      const pts = derived.sample.pts;
+      if (!pts || pts.length < 2) return;
+      const lo = derived.wpFrac && Number.isFinite(derived.wpFrac[i]) ? derived.wpFrac[i] : i / Math.max(1, doc.waypoints.length - 1);
+      const hi = derived.wpFrac && Number.isFinite(derived.wpFrac[i + 1]) ? derived.wpFrac[i + 1] : (i + 1) / Math.max(1, doc.waypoints.length - 1);
+      addWaypoint(window.PM.pointAtFraction((lo + hi) / 2, pts), i, true);
+    }, [addWaypoint, derived, doc.waypoints.length]);
+    const zoomToFraction = useCallback((f) => {
+      const pts = derived.sample.pts; if (!pts || pts.length < 2) return;
+      const p = window.PM.pointAtFraction(f, pts);
+      const sx = (PX.X1 - PX.X0) / FIELD_W, sy = (PX.Y1 - PX.Y0) / FIELD_H;
+      const q = alliance === 'red' ? { x: FIELD_W - p.x, y: FIELD_H - p.y } : p;
+      const cx = PX.X0 + q.x * sx, cy = PX.Y1 - q.y * sy;
+      const nw = IMG_W * 0.42, nh = nw * (IMG_H / IMG_W);
+      setView({ x: cx - nw / 2, y: cy - nh / 2, w: nw, h: nh });
+    }, [derived, alliance]);
+    const pickCheck = useCallback((check) => { select('seg', check.seg); zoomToFraction(check.f); setDiagOpen(true); }, [select, zoomToFraction]);
+
+    const inspActions = { setWp, toggleStop, toggleTheta, setHandleLen, delWp, setTarget, delTarget, setMarker, delMarker, setRange, setRangeAnchor, delRange, setConstraint, setDoc, rename, select, setTool,
+      addTargetMid, addMarkerMid, addRangeMid,
+      setSegMeta, setSegmentHeadingMode, setHeadingTransition, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, reorderWp, insertWp,
+      setStop, setWait, setTurnInPlace, setTurnInPlaceMeta, setHeadingMode, toggleDriveBackward,
+      openInspector: () => setInspectorOpen(true) };
+    const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginHistory,
+      setWaypointHeading, moveSegmentLookAt, headingMenu, faceWaypoint, delWp, delTarget, delMarker, delRange,
+      openInspector: () => setInspectorOpen(true),
+      select };
+
+    // ---- project ops ----
+    const uniquePathName = (base) => {
+      const used = new Set(project.paths.map((path) => path.name.toLowerCase()));
+      if (!used.has(base.toLowerCase())) return base;
+      let suffix = 2;
+      while (used.has((base + ' ' + suffix).toLowerCase())) suffix++;
+      return base + ' ' + suffix;
+    };
+    const resetForPath = (i) => {
+      setActiveIdx(i); setSel({ kind: null, idx: -1 }); setPlayTime(0); setPlaying(false);
+      hist.current = { past: [], future: [] }; setPage('plan');
+    };
+    const addPath = (folderId) => {
+      const name = uniquePathName('New path'), index = project.paths.length;
+      const path = blankPath(name); if (folderId) path.folderId = folderId;
+      setProject((pr) => ({ ...pr, paths: [...pr.paths, path] })); resetForPath(index);
+      return { index, name, id: path.id };
+    };
+    const dupPath = (i) => {
+      const source = project.paths[i]; if (!source) return null;
+      const name = uniquePathName(source.name + ' copy'), index = i + 1;
+      setProject((pr) => { const cp = clone(pr.paths[i]); cp.id = pathId(); cp.name = name; const paths = pr.paths.slice(); paths.splice(index, 0, cp); return { ...pr, paths }; });
+      resetForPath(index); return { index, name, id: null };
+    };
+    const delPath = (i) => {
