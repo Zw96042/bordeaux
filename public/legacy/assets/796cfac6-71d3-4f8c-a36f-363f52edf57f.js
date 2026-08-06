@@ -43,51 +43,51 @@
       window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
     }, [open, editing, menu, query]);
     useEffect(() => {
-      try {
-        const d = window.PM.derivePath(p, project.robot, 24);
-        return { time: times[i] != null ? times[i] : d.prof.totalTime || 0, len: d.sample.length || 0, warnings: (d.warnings || []).length };
-      } catch (_) {
-        return { time: times[i] || 0, len: 0, warnings: 1 };
-      }
+      if (!menu) return;
+      const actionId = (menu.kind === 'path' ? 'path-actions-' : 'folder-actions-') + menu.id;
+      requestAnimationFrame(() => {
+        const action = document.getElementById(actionId);
+        if (action) action.scrollIntoView({ block: 'nearest' });
+      });
+      const away = (e) => {
+        if (!(e.target instanceof Element) || !e.target.closest('.pathlib-actionmenu,.pathlib-more')) setMenu(null);
+      };
+      window.addEventListener('pointerdown', away); return () => window.removeEventListener('pointerdown', away);
+    }, [menu]);
+    const trapFocus = (e) => {
+      if (e.key !== 'Tab' || !panelRef.current) return;
+      const focusable = Array.from(panelRef.current.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex]:not([tabindex="-1"])'));
+      if (!focusable.length) return;
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     };
-    const filtered = project.paths.map((p, i) => ({ p, i, stats: statsFor(p, i) })).filter((row) => row.p.name.toLowerCase().includes(query.toLowerCase()));
-    const pick = (i) => { setActive(i); setOpen(false); };
-    const onKey = (e) => {
-      if (!open) return;
-      if (e.key === 'ArrowDown') { e.preventDefault(); setFocus((f) => filtered.length ? filtered[Math.min(filtered.length - 1, Math.max(0, filtered.findIndex((r) => r.i === f)) + 1)].i : f); }
-      else if (e.key === 'ArrowUp') { e.preventDefault(); setFocus((f) => filtered.length ? filtered[Math.max(0, Math.max(0, filtered.findIndex((r) => r.i === f)) - 1)].i : f); }
-      else if (e.key === 'Enter') { e.preventDefault(); if (filtered.some((r) => r.i === focus)) pick(focus); }
-      else if (e.key === 'Escape') setOpen(false);
+    useEffect(() => { if (editing) requestAnimationFrame(() => { if (editRef.current) { editRef.current.focus(); editRef.current.select(); } }); }, [editing]);
+    useEffect(() => { if (open && !editing) requestAnimationFrame(() => { if (panelRef.current) panelRef.current.focus({ preventScroll: true }); }); }, [open]);
+    useEffect(() => {
+      if (!open || editing || !editOriginRef.current) return;
+      const origin = editOriginRef.current;
+      const controlId = (origin.kind === 'path' ? 'path-actions-' : 'folder-actions-') + origin.id;
+      const trigger = panelRef.current && Array.from(panelRef.current.querySelectorAll('[aria-controls]')).find((node) => node.getAttribute('aria-controls') === controlId);
+      editOriginRef.current = null;
+      const target = trigger || searchRef.current;
+      if (target) target.focus();
+    }, [open, editing]);
+    const folderName = (id) => (folders.find((folder) => folder.id === id) || {}).name || 'Unfiled';
+    const beginEdit = (kind, id, name) => { editOriginRef.current = { kind, id }; setMenu(null); setEditing({ kind, id }); setDraft(name); setError(''); };
+    const submitEdit = (e) => {
+      e.preventDefault(); const clean = draft.trim(); if (!clean) { setError('Enter a name.'); return; }
+      if (editing.kind === 'path') renamePath(project.paths.findIndex((path) => path.id === editing.id), clean);
+      else renamePathFolder(editing.id, clean);
+      finishEdit();
     };
-    return h('div', { className: 'pathsw pathmgr', ref, onKeyDown: onKey },
-      h('button', { className: 'pathsw-btn' + (open ? ' open' : ''), type: 'button', onClick: () => setOpen((o) => !o) },
-        h('span', { className: 'pathsw-ic' }, h(Icon, { name: 'route', size: 15 })),
-        h('span', { className: 'pathsw-nm' }, cur ? cur.name : 'No path'),
-        h('span', { className: 'pathsw-t' }, (times[activeIdx] != null ? times[activeIdx].toFixed(2) : '--') + 's'),
-        h('span', { className: 'pathsw-chev' }, h(Icon, { name: 'chevron', size: 14 }))),
-      open && h('div', { className: 'pathsw-pop pathmgr-pop' },
-        h('div', { className: 'pathsw-poph' }, 'Path Manager', h('span', null, project.paths.length)),
-        h('input', { className: 'pathmgr-search', autoFocus: true, placeholder: 'Search paths', value: query, onChange: (e) => setQuery(e.target.value) }),
-        cur && h('div', { className: 'pathmgr-rename' },
-          h('span', null, 'Active'),
-          h('input', { value: cur.name, onChange: (e) => renamePath(activeIdx, e.target.value), onClick: (e) => e.stopPropagation() })),
-        h('div', { className: 'pathsw-list pathmgr-list' }, filtered.length ? filtered.map(({ p, i, stats }) =>
-          h('div', { key: i, className: 'pathsw-row pathmgr-row' + (i === activeIdx ? ' on' : '') + (i === focus ? ' focus' : ''), onMouseEnter: () => setFocus(i), onClick: () => pick(i) },
-            h('span', { className: 'pathsw-rowic' }, h(Icon, { name: 'route', size: 14 })),
-            h('span', { className: 'pathsw-rownm' }, p.name),
-            h('span', { className: 'pathmgr-stats' }, stats.len.toFixed(1) + 'm', h('b', null, stats.time.toFixed(2) + 's'), stats.warnings ? h('em', null, stats.warnings) : null),
-            h('button', { className: 'rowbtn', title: 'Duplicate', onClick: (e) => { e.stopPropagation(); dupPath(i); } }, h(Icon, { name: 'copy', size: 13 })),
-            project.paths.length > 1 && h('button', { className: 'rowbtn danger', title: 'Delete', onClick: (e) => { e.stopPropagation(); delPath(i); } }, h(Icon, { name: 'trash', size: 13 }))))
-          : h('div', { className: 'featempty' }, 'No matching paths')),
-        h('button', { className: 'pathsw-add', type: 'button', onClick: () => { addPath(); setOpen(false); } }, h(Icon, { name: 'plus', size: 14 }), 'New path')));
-  }
-
-  function PlannerSelect({ plannerId, setPlannerId }) {
-    return h('div', { className: 'plannerselect', title: 'Planner used for .bdx export' },
-      h('span', null, 'Planner'),
-      h('select', { value: plannerId, onChange: (e) => setPlannerId(e.target.value) },
-        h('option', { value: 'profiledSpline' }, 'Profiled spline'),
-        h('option', { value: 'optimizedTrajectory' }, 'Optimized trajectory (experimental)')));
+    const editForm = () => h('form', { className: 'pathlib-rename', onSubmit: submitEdit },
+      h('label', { className: 'sr-only', htmlFor: 'path-library-name' }, 'Name'),
+      h('input', { id: 'path-library-name', ref: editRef, value: draft, autoComplete: 'off', spellCheck: false, 'aria-invalid': !!error, 'aria-describedby': error ? 'path-library-name-error' : undefined, onChange: (e) => { setDraft(e.target.value); setError(''); } }),
+      h('button', { type: 'submit' }, 'Save'), h('button', { type: 'button', onClick: finishEdit }, 'Cancel'),
+      error && h('span', { id: 'path-library-name-error', className: 'pathlib-error', role: 'status' }, error));
+    const pathActions = (path, index) => h('div', { id: 'path-actions-' + path.id, className: 'pathlib-actionmenu', role: 'group', 'aria-label': path.name + ' actions' },
+      h('div', { className: 'pathlib-actionrow' },
   }
 
   // ---------------- top bar ----------------
