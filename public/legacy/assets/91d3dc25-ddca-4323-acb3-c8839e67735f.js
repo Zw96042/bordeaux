@@ -538,7 +538,7 @@
     for (let i = 1; i < n; i++) {
       const ds = pts[i].s - pts[i - 1].s;
       const vm = (v[i] + v[i - 1]) / 2;
-  }
-
-  window.PM = { bez, bezD, sample, profile, poseAtTime, headingAt, metrics, analyze, metricColor, metricGradient, METRICS, SEGTYPES, buildAnchors, pointAtFraction, nearestFraction, autoHandles, angWrap, angLerp, D2R, R2D, lerp, derivePath, effectiveRanges, waypointFracs };
-})();
+      t[i] = t[i - 1] + (vm > 1e-4 ? ds / vm : 0);
+    }
+    // Stationary turns happen after arrival and before any wait.
+    const turns = [], turnDelay = new Map(); let terminalDelay = 0;
