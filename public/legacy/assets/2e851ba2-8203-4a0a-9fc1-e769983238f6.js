@@ -90,38 +90,38 @@
           h('div', { className: 'seg-hint' }, op.blurb),
           (node.op !== 'reorder') && h(React.Fragment, null,
             FieldLabel('Target path'),
-            h('select', { className: 'selectinput', value: node.target || '', onChange: (e) => set({ target: e.target.value }) },
+            h('select', { className: 'selectinput', 'aria-label': 'Sequence target path', value: node.target || '', onChange: (e) => set({ target: e.target.value }) },
               h('option', { value: '' }, '— choose a path —'),
               paths.map((p, i) => h('option', { key: i, value: p.name }, p.name)))),
           FieldLabel('Trigger'),
-          h('input', { className: 'textinput', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
+          h('input', { className: 'textinput', 'aria-label': 'Sequence trigger', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
           FieldLabel('Notes'),
-          h('textarea', { className: 'rt-note', value: node.note || '', placeholder: 'Why this re-sequences the run\u2026', onChange: (e) => set({ note: e.target.value }) }),
+          h('textarea', { className: 'rt-note', 'aria-label': 'Sequence notes', value: node.note || '', placeholder: 'Why this re-sequences the run\u2026', onChange: (e) => set({ note: e.target.value }) }),
           h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete function'));
 
       } else if (node.cat === 'velocity') {
         const pct = Math.round((node.scale != null ? node.scale : 0.5) * 100);
         body = h(React.Fragment, null,
           FieldLabel('Title'),
-          h('input', { className: 'textinput', value: node.title, spellCheck: false, onChange: (e) => set({ title: e.target.value }) }),
+          h('input', { className: 'textinput', 'aria-label': 'Velocity rule title', value: node.title, spellCheck: false, onChange: (e) => set({ title: e.target.value }) }),
           FieldLabel('Trigger'),
-          h('input', { className: 'textinput', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
+          h('input', { className: 'textinput', 'aria-label': 'Velocity rule trigger', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
           FieldLabel('Velocity scale', h('span', { className: 'rt-scaleval' }, pct + '%')),
-          h('input', { className: 'rt-slider', type: 'range', min: 5, max: 100, step: 5, value: pct, onChange: (e) => set({ scale: +e.target.value / 100 }) }),
+          h('input', { className: 'rt-slider', type: 'range', 'aria-label': 'Velocity scale', min: 5, max: 100, step: 5, value: pct, onChange: (e) => set({ scale: +e.target.value / 100 }) }),
           h('div', { className: 'seg-hint' }, 'Caps drive speed to ' + pct + '% of the active constraints while this is held.'),
           FieldLabel('Notes'),
-          h('textarea', { className: 'rt-note', value: node.note || '', placeholder: 'When and why to slow down\u2026', onChange: (e) => set({ note: e.target.value }) }),
+          h('textarea', { className: 'rt-note', 'aria-label': 'Velocity rule notes', value: node.note || '', placeholder: 'When and why to slow down\u2026', onChange: (e) => set({ note: e.target.value }) }),
           h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete function'));
 
       } else { // terminate
         body = h(React.Fragment, null,
           FieldLabel('Title'),
-          h('input', { className: 'textinput', value: node.title, spellCheck: false, onChange: (e) => set({ title: e.target.value }) }),
+          h('input', { className: 'textinput', 'aria-label': 'Terminate rule title', value: node.title, spellCheck: false, onChange: (e) => set({ title: e.target.value }) }),
           FieldLabel('Trigger'),
-          h('input', { className: 'textinput', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
+          h('input', { className: 'textinput', 'aria-label': 'Terminate rule trigger', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
           h('div', { className: 'seg-hint' }, 'Ends the running path the moment the trigger fires and advances to the next step.'),
           FieldLabel('Notes'),
-          h('textarea', { className: 'rt-note', value: node.note || '', placeholder: 'What this ends and why\u2026', onChange: (e) => set({ note: e.target.value }) }),
+          h('textarea', { className: 'rt-note', 'aria-label': 'Terminate rule notes', value: node.note || '', placeholder: 'What this ends and why\u2026', onChange: (e) => set({ note: e.target.value }) }),
           h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete function'));
       }
     }
@@ -129,9 +129,9 @@
     return h('div', { className: 'ctxinsp' },
       h('div', { className: 'ctxinsp-hd' },
         h('span', { className: 'ctxinsp-ic', style: { background: 'color-mix(in srgb,' + accent + ' 16%, transparent)', color: accent } }, h(Icon, { name: icon, size: 15 })),
-        h('span', { className: 'ctxinsp-t' }, title),
+        h('span', { className: 'ctxinsp-t', title }, title),
         tag && h('span', { className: 'ctxinsp-tag' }, tag),
-        h('button', { className: 'ctxinsp-x', type: 'button', title: 'Close', onClick: () => acq.select(null) }, h(Icon, { name: 'x', size: 14 }))),
+        h('button', { className: 'ctxinsp-x', type: 'button', title: 'Close', 'aria-label': 'Close step inspector', onClick: () => acq.select(null) }, h(Icon, { name: 'x', size: 14 }))),
       h('div', { className: 'ctxinsp-body' }, body));
   }
 
