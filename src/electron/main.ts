@@ -43,51 +43,51 @@ const smokeDirectory = process.env.BORDEAUX_SMOKE_DIRECTORY;
 const mcpStdioMode = process.argv.includes("--mcp-stdio");
 const enableMcpAccessOnLaunch = process.argv.includes("--enable-mcp-access");
 let agentBridge: AgentBridgeServer | null = null;
-  const recentSubmenu =
-    recentFiles.length > 0
-      ? recentFiles.map((filePath) => ({
-          label: path.basename(filePath),
-          sublabel: filePath,
-          click: () => sendCommand("open-recent", filePath),
-        }))
-      : [{ label: "No Recent Projects", enabled: false }];
+const proposalReceipts = new Map<string, { resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
 
-  const template: Electron.MenuItemConstructorOptions[] = [
-    ...(process.platform === "darwin"
-      ? [
-          {
-            label: app.name,
-            submenu: [{ role: "about" }, { type: "separator" }, { role: "quit" }],
-          } as Electron.MenuItemConstructorOptions,
-        ]
-      : []),
-    {
-      label: "File",
-      submenu: [
-        { label: "New Project", accelerator: "CmdOrCtrl+N", click: () => sendCommand("new-project") },
-        { label: "Open Project...", accelerator: "CmdOrCtrl+O", click: () => sendCommand("open-project") },
-        { label: "Open Recent", submenu: recentSubmenu },
-        { type: "separator" },
-        { label: "Save", accelerator: "CmdOrCtrl+S", click: () => sendCommand("save-project") },
-        { label: "Save As...", accelerator: "CmdOrCtrl+Shift+S", click: () => sendCommand("save-project-as") },
-        { type: "separator" },
-        { label: "Export .bdx...", accelerator: "CmdOrCtrl+E", click: () => sendCommand("export-bdx") },
-        { type: "separator" },
-        process.platform === "darwin" ? { role: "close" } : { role: "quit" },
-      ],
-    },
-    {
-      label: "View",
-      submenu: [
-        { role: "reload" },
-        { role: "forceReload" },
-        { role: "toggleDevTools" },
-        { type: "separator" },
-        { role: "resetZoom" },
-        { role: "zoomIn" },
-        { role: "zoomOut" },
-        { type: "separator" },
-        { role: "togglefullscreen" },
+function rejectProposalReceipts(message: string): void {
+  for (const receipt of proposalReceipts.values()) {
+    clearTimeout(receipt.timer);
+    receipt.reject(new Error(message));
+  }
+  proposalReceipts.clear();
+}
+
+const agentSessions = new AgentSessionService(
+  (proposal, requireReceipt) => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isLoading()) throw new Error("The Bordeaux editor is not ready to preview an agent proposal.");
+    if (!requireReceipt) {
+      mainWindow.webContents.send("agent:proposal", proposal);
+      return;
+    }
+    const receipt = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        proposalReceipts.delete(proposal.id);
+        reject(new Error("The Bordeaux editor did not acknowledge the proposal preview."));
+      }, 2_000);
+      proposalReceipts.set(proposal.id, { resolve, reject, timer });
+    });
+    mainWindow.webContents.send("agent:proposal", proposal);
+    return receipt;
+  },
+  () => linkedJavaCatalog,
+);
+
+app.setName("Bordeaux");
+app.setAppUserModelId("org.frc2468.bordeaux");
+
+function rememberFile(filePath: string, saveTarget: string | null = filePath) {
+  currentProjectPath = saveTarget;
+  recentFiles = [filePath, ...recentFiles.filter((item) => item !== filePath)].slice(0, 8);
+  app.addRecentDocument(filePath);
+  buildMenu();
+}
+
+function assertTrustedSender(event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent) {
+  if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) {
+    throw new Error("Unauthorized renderer request");
+  }
+}
       ],
     },
   ];
