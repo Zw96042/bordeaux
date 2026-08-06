@@ -178,3 +178,93 @@ export class AgentSessionService {
             "Where is the primary intake in the robot-local frame (+X forward, +Y left), which direction does it collect, how wide is its effective opening, and what is the maximum safe collection speed?",
           ] : []),
           ...(!planning?.shooter ? [
+            "Which robot-relative direction does the shooter fire, must that direction face the target, and is there a preferred shooting range?",
+          ] : []),
+          "Are there any strategy constraints or mechanism details the path planner must always honor?",
+        ],
+        coordinateFrame: "+X forward, +Y left, positions in meters, directions in degrees counterclockwise from +X.",
+      };
+    }
+    if (request.method === "propose_robot_profile") {
+      if (!request.params.intent.trim()) throw new Error("A robot-profile intent is required.");
+      const planning: RobotPlanningProfile = {
+        ...(snapshot.project.robot.planning ?? {}),
+        ...clone(request.params.planning),
+      };
+      const candidateProject = clone(snapshot.project);
+      candidateProject.robot.planning = planning;
+      const validation = validateProject(candidateProject);
+      const planningIssues = validation.issues.filter((item) => item.path.startsWith("$.robot.planning"));
+      if (planningIssues.length) throw new Error(planningIssues.map((item) => `${item.path}: ${item.message}`).join("; "));
+      const summary = [
+        planning.intake
+          ? `${planning.intake.name}: ${planning.intake.captureWidthM.toFixed(2)} m capture width, ${planning.intake.maxCollectSpeedMps.toFixed(2)} m/s collection limit, ${planning.intake.directionDeg.toFixed(0)}° from robot forward.`
+          : "No intake is configured; FUEL-collection heading cannot be certified.",
+        planning.shooter
+          ? `Shooter direction ${planning.shooter.directionDeg.toFixed(0)}°${planning.shooter.requiresTargetFacing ? " must face its target" : " does not require target-facing heading"}.`
+          : "No shooter geometry is configured.",
+        ...(planning.notes?.trim() ? [planning.notes.trim()] : []),
+      ];
+      const proposal: RobotProfileProposal = {
+        id: `proposal_${randomUUID()}`,
+        baseSessionId: snapshot.sessionId,
+        baseRevision: snapshot.revision,
+        intent: request.params.intent,
+        operation: "configureRobot",
+        planning: clone(planning),
+        summary,
+        status: "ready",
+        createdAt: new Date().toISOString(),
+      };
+      return this.stage(proposal);
+    }
+    if (request.method === "resolve_field_terms") {
+      if (!Array.isArray(request.params.phrases) || request.params.phrases.length < 1 || request.params.phrases.length > 24) throw new Error("Provide between 1 and 24 field phrases.");
+      return request.params.phrases.map((phrase) => withAllianceView(resolveProjectFieldTerm(phrase, snapshot.project.strategy, {
+        alliance: request.params.alliance,
+        defaultAlliance: snapshot.allianceView,
+        allianceView: snapshot.allianceView,
+        pose: request.params.pose,
+        relativeDistanceM: request.params.relativeDistanceM,
+        robotHeightM: snapshot.project.robot.heightM ?? request.params.robotHeightM,
+      }), snapshot.allianceView));
+    }
+    const pathId = "pathId" in request.params && request.params.pathId ? request.params.pathId : snapshot.activePathId;
+    if (request.method === "analyze_path") {
+      return analyzePath(snapshot.project, pathId, {
+        plannerId: snapshot.plannerId,
+        sampleLimit: request.params.sampleLimit,
+        minimumClearanceM: request.params.minimumClearanceM,
+      });
+    }
+    if (request.method === "repair_path") {
+      const candidates = generateRepairCandidates(snapshot.project, pathId, request.params.findingIds, snapshot.plannerId, request.params.minimumClearanceM);
+      if (candidates.length === 0) throw new Error("Bordeaux could not generate a targeted repair for those findings without changing unrelated intent.");
+      const valid = candidates.filter((candidate) => candidate.valid);
+      const proposal: PathProposal = {
+        id: `proposal_${randomUUID()}`,
+        baseSessionId: snapshot.sessionId,
+        baseRevision: snapshot.revision,
+        intent: `Repair ${request.params.findingIds.join(", ")} on ${pathId}`,
+        operation: "replace",
+        targetPathId: pathId,
+        candidates,
+        recommendedCandidateId: (valid[0] ?? candidates[0]).id,
+        recommendationReason: valid.length
+          ? `${valid[0].label} materially improves the requested finding without introducing a worse error or warning.`
+          : "No generated repair passed the no-worse validation; the first candidate is shown only for diagnosis.",
+        status: "ready",
+        createdAt: new Date().toISOString(),
+      };
+      return this.stage(proposal);
+    }
+    if (request.method !== "plan_path") throw new Error("Unsupported Bordeaux agent request.");
+    if (request.params.endAction && request.params.endActionIntent) throw new Error("Provide either a verified endAction binding or an unresolved endActionIntent, not both.");
+    const endSemanticTag = request.params.endAction?.semanticTag ?? request.params.endActionIntent?.semanticTag;
+    if (endSemanticTag === "shoot-fuel" && snapshot.project.robot.planning?.shooter?.requiresTargetFacing && !request.params.finishFacing) {
+      throw new Error("This robot profile requires target-facing shooter alignment. Add finishFacing with an official HUB reference before requesting shoot-fuel.");
+    }
+    const candidates = generateRouteCandidates(snapshot.project, request.params, snapshot.plannerId);
+    if (candidates.length === 0) throw new Error("Bordeaux could not generate route candidates for that request.");
+    if (request.params.endAction) {
+      const catalog = this.getJavaCatalog();
