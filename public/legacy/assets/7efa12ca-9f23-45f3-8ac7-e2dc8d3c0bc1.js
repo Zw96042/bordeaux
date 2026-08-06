@@ -88,51 +88,51 @@
 
   function commandArguments(command) {
     return Object.fromEntries((command.parameters || []).filter((parameter) => parameter.role === 'argument').map((parameter) => [parameter.name, parameterDefaultValue(parameter)]));
+  }
 
-        h('div', { className: 'cgroup-h' }, 'Endpoints'),
-        h('div', { className: 'grid2' },
-          h(Num, { label: 'Start vel', value: doc.startVel || 0, unit: 'm/s', min: 0, onChange: (v) => actions.setDoc({ startVel: v }) }),
-          h(Num, { label: 'Goal vel', value: doc.goalVel || 0, unit: 'm/s', min: 0, onChange: (v) => actions.setDoc({ goalVel: v }) })),
-        h('div', { style: { height: '2px' } }),
-        h('div', { className: 'cgroup-h' }, 'Global constraints'),
-        h(ConstraintsBody, { c: doc.constraints, robot, setC: actions.setConstraint }));
+  function parameterDefaultValue(parameter) {
+    return Object.prototype.hasOwnProperty.call(parameter, 'defaultValue') ? parameter.defaultValue : defaultSchemaValue(parameter.schema, 0);
+  }
+
+  function safeControlId(value) {
+    return String(value).replace(/[^A-Za-z0-9_-]+/g, '-');
+  }
+
+  function simpleJavaName(value) {
+    return String(value || '').split('.').pop() || String(value || '');
+  }
+
+  function javaIntegerRange(javaType) {
+    const simple = String(javaType || '').split('.').pop();
+    if (simple === 'byte' || simple === 'Byte') return [-128, 127];
+    if (simple === 'short' || simple === 'Short') return [-32768, 32767];
+    if (simple === 'int' || simple === 'Integer') return [-2147483648, 2147483647];
+    return null;
+  }
+
+  function exactIntegerStringError(value, javaType) {
+    if (typeof value !== 'string' || !/^[+-]?\d+$/.test(value)) return 'must be a whole number written as digits.';
+    if (value.length > 1024) return 'cannot exceed 1024 characters.';
+    const simple = String(javaType || '').split('.').pop();
+    if (simple === 'long' || simple === 'Long') {
+      const parsed = BigInt(value);
+      if (parsed < BigInt('-9223372036854775808') || parsed > BigInt('9223372036854775807')) return 'must fit the signed 64-bit long range.';
     }
+    return '';
+  }
 
-    // ---------------- WAYPOINT ----------------
-    else if (sel.kind === 'wp' && wps[sel.idx]) {
-      const i = sel.idx, w = wps[i];
-      const isStart = i === 0, isEnd = i === n - 1, isAnchor = isStart || isEnd;
-      icon = 'waypoint'; title = wpName(i, n); tag = isAnchor ? 'anchor' : null;
-      body = h(React.Fragment, null,
-        h('div', { className: 'grid2' },
-          h(Num, { label: 'X', value: w.x, unit: 'm', onChange: (v) => actions.setWp(i, { x: v }) }),
-          h(Num, { label: 'Y', value: w.y, unit: 'm', onChange: (v) => actions.setWp(i, { y: v }) })),
+  function exactDecimalStringError(value) {
+    if (typeof value !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value)) return 'must be a decimal number written as text.';
+    if (value.length > 1024) return 'cannot exceed 1024 characters.';
+    const exponent = /[eE]([+-]?\d+)$/.exec(value);
+    if (exponent && Math.abs(Number(exponent[1])) > 10000) return 'exponent cannot exceed 10000 in magnitude.';
+    return '';
+  }
 
-        // Heading — mode-aware
-        h('div', { className: 'fieldlabel' }, 'Heading \u03b8'),
-        isTank
-          ? h('div', { className: 'hint' }, h(Icon, { name: 'info', size: 14 }), 'Tank \u2014 heading follows the path tangent.')
-          : headingMode === 'tangent'
-            ? h(React.Fragment, null,
-                h('div', { className: 'hint' }, h(Icon, { name: 'compass', size: 14 }), 'Follows the path tangent. Drag the arrow on the field, or override here.'),
-                h('button', { className: 'qbtn wide', type: 'button', style: { marginTop: '4px' }, onClick: () => { actions.setHeadingMode('manual'); actions.faceWaypoint(i, 'tangent'); } }, h(Icon, { name: 'compass', size: 14 }), 'Override \u2014 set manual heading'))
-            : isAnchor
-              ? h(React.Fragment, null,
-                  h(Num, { label: null, value: w.theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v }) }),
-                  h(FaceRow, { i, actions, n }))
-              : h(React.Fragment, null,
-                  h('div', { className: 'inrow first' },
-                    h('span', { className: 'inrow-l' }, 'Pin heading here', h('small', null, 'otherwise it interpolates')),
-                    h(Toggle, { on: !!w.thetaOn, onChange: (v) => actions.toggleTheta(i, v) })),
-                  w.thetaOn && h(Num, { label: null, value: w.theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v }) }),
-                  h(FaceRow, { i, actions, n })),
-
-        // Stop & wait
-        !isAnchor && h('div', { className: 'inrow' },
-          h('span', { className: 'inrow-l' }, 'Stop here', h('small', null, 'decelerate to a full stop')),
-          h(Toggle, { on: !!w.stop, onChange: (v) => actions.setStop(i, v) })),
-        !isAnchor && w.stop && h('div', { className: 'fieldlabel' }, 'Wait at waypoint'),
-        !isAnchor && w.stop && h(Num, { label: null, value: w.wait || 0, unit: 's', step: 0.1, precision: 1, min: 0, onChange: (v) => actions.setWait(i, v) }),
+  function schemaValueError(value, schema, path, depth) {
+    const location = path || 'Value';
+    const level = depth || 0;
+    if (!schema) return location + ' has no discovered schema.';
         isAnchor && h('div', { className: 'fieldlabel' }, isStart ? 'Start velocity' : 'End velocity'),
         isAnchor && h(Num, { label: null, value: isStart ? (doc.startVel || 0) : (doc.goalVel || 0), unit: 'm/s', min: 0, onChange: (v) => actions.setDoc(isStart ? { startVel: v } : { goalVel: v }) }),
 
