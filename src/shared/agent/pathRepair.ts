@@ -88,3 +88,25 @@ export function generateRepairCandidates(
     localSpeedRepair(path, primary, 0.75),
     localSpeedRepair(path, primary, 0.6),
     geometryRepair(path, primary, -1),
+    geometryRepair(path, primary, 1),
+  ].filter((item): item is { path: PathDoc; fields: string[] } => item !== null);
+  const targets = new Set(findingIds);
+  return mutations.map((mutation, index) => {
+    const candidateProject = { ...clone(project), paths: project.paths.map((item) => item.id === pathId ? mutation.path : clone(item)) };
+    const after = analyzePath(candidateProject, pathId, { plannerId, minimumClearanceM });
+    const improved = targetImproved(before, after, findingIds);
+    const noWorse = !hasNewOrWorseError(before, after, targets);
+    const valid = improved && noWorse;
+    return {
+      id: `repair_${index + 1}_${pathId}`,
+      label: mutation.fields[0] === "ranges" ? `Localized speed repair ${index + 1}` : `Geometry repair ${index + 1}`,
+      path: mutation.path,
+      targetFindingIds: [...findingIds],
+      before,
+      after,
+      changedFields: mutation.fields,
+      valid,
+      ...(valid ? {} : { rejectionReason: improved ? "The candidate introduced a new or worse error." : "The target finding did not improve by at least 25%." }),
+    };
+  });
+}
