@@ -178,3 +178,17 @@ describe("agent session and private bridge", () => {
     const service = new AgentSessionService(() => {}, () => null);
     service.publishSnapshot(snapshot());
     const server = new AgentBridgeServer(directory, service);
+    try {
+      await server.start();
+      process.env.TMPDIR = alternateTmp;
+      const result: any = await new AgentBridgeClient(directory).request({ method: "inspect_session" });
+      expect(result.sessionId).toBe("session_test");
+    } finally {
+      if (originalTmp === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = originalTmp;
+      await server.stop();
+      await fs.rm(directory, { recursive: true, force: true });
+      await fs.rm(alternateTmp, { recursive: true, force: true });
+    }
+  });
+});
