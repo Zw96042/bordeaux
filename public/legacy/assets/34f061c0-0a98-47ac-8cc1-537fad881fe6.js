@@ -623,3 +623,93 @@
     const setMarker = useCallback((i, patch) => commit((d) => { setFeature(d.markers, i, patch); return d; }), [commit, derived]);
     const delMarker = useCallback((i) => { commit((d) => { d.markers.splice(i, 1); return d; }); select(null, -1); }, [commit, select]);
 
+    const addRange = useCallback((f0, f1) => commit((d) => {
+      if (!d.ranges) d.ranges = [];
+      const a = Math.max(0, Math.min(f0, f1)), b = Math.min(1, Math.max(f0, f1));
+      const c = d.constraints;
+      // purely where it was drawn (percent of path), inheriting the global limits
+      d.ranges.push({ f0: a, f1: b, anchor: 'param', maxVel: c.maxVel, maxAccel: c.maxAccel, maxDecel: (c.maxDecel != null ? c.maxDecel : c.maxAccel), maxAngVel: c.maxAngVel, maxAngAccel: c.maxAngAccel });
+      d._selR = d.ranges.length - 1; return d;
+    }), [commit]);
+    const setRange = useCallback((i, patch) => commit((d) => { Object.assign(d.ranges[i], patch); return d; }), [commit]);
+    const localRangeEndpoint = (fraction, fractions) => {
+      const f = Math.max(0, Math.min(1, fraction));
+      let segment = Math.max(0, fractions.length - 2);
+      for (let i = 0; i < fractions.length - 1; i++) {
+        if (f <= fractions[i + 1] + 1e-9) { segment = i; break; }
+      }
+      const lo = fractions[segment] || 0, hi = fractions[segment + 1] != null ? fractions[segment + 1] : lo;
+      return { waypoint: segment, local: hi > lo ? Math.max(0, Math.min(1, (f - lo) / (hi - lo))) : 0 };
+    };
+    const setRangeAnchor = useCallback((i, anchor) => commit((d) => {
+      const range = d.ranges[i]; if (!range) return d;
+      const effective = (derived.effRanges && derived.effRanges[i]) || range;
+      const f0 = effective.f0 || 0, f1 = effective.f1 || 0;
+      range.f0 = f0; range.f1 = f1; range.anchor = anchor;
+      if (anchor === 'dist') {
+        const length = derived.sample.length || 0;
+        range.d0 = +(f0 * length).toFixed(3); range.d1 = +(f1 * length).toFixed(3);
+        delete range.w0; delete range.w1; delete range.t0; delete range.t1;
+      } else if (anchor === 'wp') {
+        const fractions = window.PM.waypointFracs(d, derived.sample);
+        const start = localRangeEndpoint(f0, fractions), end = localRangeEndpoint(f1, fractions);
+        range.w0 = start.waypoint; range.t0 = start.local; range.w1 = end.waypoint; range.t1 = end.local;
+        delete range.d0; delete range.d1;
+      } else {
+        delete range.d0; delete range.d1; delete range.w0; delete range.w1; delete range.t0; delete range.t1;
+      }
+      return d;
+    }), [commit, derived]);
+    const delRange = useCallback((i) => { commit((d) => { d.ranges.splice(i, 1); return d; }); select(null, -1); }, [commit, select]);
+    const moveRangeHandle = useCallback((i, which, f) => mutate((d) => {
+      const rg = d.ranges[i]; const key = which ? 'f1' : 'f0'; const cf = Math.max(0, Math.min(1, f));
+      const len = derived.sample.length || 1;
+      if (rg.anchor === 'dist') { rg[which ? 'd1' : 'd0'] = +(cf * len).toFixed(2); }
+      else if (rg.anchor === 'wp') {
+        const wf = window.PM.waypointFracs(d, derived.sample);
+        const local = localRangeEndpoint(cf, wf);
+        rg[which ? 'w1' : 'w0'] = local.waypoint; rg[which ? 't1' : 't0'] = local.local;
+      }
+      else { rg[key] = cf; }
+      return d;
+    }), [mutate, derived]);
+    useEffect(() => { if (doc._selR != null) { select('cr', doc._selR); mutate((d) => { delete d._selR; return d; }); } }, [doc._selR]);
+
+    const setConstraint = useCallback((patch) => commit((d) => { Object.assign(d.constraints, patch); return d; }), [commit]);
+    const setDoc = useCallback((patch) => commit((d) => Object.assign(d, patch)), [commit]);
+    const rename = useCallback((nm) => mutate((d) => { d.name = nm; return d; }), [mutate]);
+    const setRobot = useCallback((patch) => setProject((pr) => ({ ...pr, robot: { ...pr.robot, ...patch } })), []);
+
+    // ---- modeless “add” actions: create + select, then edit on canvas / inspector ----
+    const addTargetMid = useCallback(() => commit((d) => {
+      const pts = derived.sample.pts;
+      const deg = pts.length > 1 ? window.PM.pointAtFraction(0.5, pts).heading * 180 / Math.PI : 0;
+      d.targets.push({ f: 0.5, deg });
+      enableTargetsAtFraction(d, 0.5);
+      d._selT = d.targets.length - 1;
+      return d;
+    }), [commit, derived]);
+    const addMarkerMid = useCallback(() => commit((d) => { d.markers.push({ id: markerId(), f: 0.5, name: 'event' + (d.markers.length + 1), cmd: 'none', group: 'sequential' }); d._selM = d.markers.length - 1; return d; }), [commit]);
+    const addRangeMid = useCallback(() => addRange(0.35, 0.6), [addRange]);
+
+    // ---- segment + waypoint structural ops (memo §3 / §4 / §7 / §8) ----
+    const PX = { X0: 397, X1: 3502, Y0: 97, Y1: 1486 };
+    const setSegMeta = useCallback((i, patch) => commit((d) => { Object.assign(d.waypoints[i], patch); return d; }), [commit]);
+    const setSegmentHeadingMode = useCallback((i, mode) => commit((d) => {
+      const w = d.waypoints[i], next = d.waypoints[i + 1];
+      if (mode === 'inherit') delete w.segmentHeadingMode;
+      else w.segmentHeadingMode = mode;
+      if (mode === 'lookAt' && !w.segmentLookAt && next) {
+        const dx = next.x - w.x, dy = next.y - w.y, length = Math.hypot(dx, dy) || 1;
+        w.segmentLookAt = clampWorld({ x: (w.x + next.x) / 2 - dy / length * 1.25, y: (w.y + next.y) / 2 + dx / length * 1.25 });
+      }
+      return d;
+    }), [commit]);
+    const setHeadingTransition = useCallback((i, patch) => commit((d) => {
+      const w = d.waypoints[i]; if (!w || i <= 0 || i >= d.waypoints.length - 1) return d;
+      w.headingTransition = Object.assign({ placement: 'after', rotationPriority: 'heading', distanceM: 0.75 }, w.headingTransition || {}, patch);
+      return d;
+    }), [commit]);
+    const setSegmentLookAt = useCallback((i, patch) => commit((d) => {
+      const w = d.waypoints[i]; if (!w) return d;
+      w.segmentLookAt = clampWorld({ x: patch.x != null ? patch.x : w.segmentLookAt.x, y: patch.y != null ? patch.y : w.segmentLookAt.y });
