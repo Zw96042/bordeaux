@@ -178,10 +178,10 @@
       h('div', { className: 'rt-scroll' },
         routine.nodes.length === 0
           ? h(EmptyState, { acq })
+          : h('div', { className: 'rt-list' },
+              h(AddStep, { variant: 'gap', onPick: (t, c) => acq.prepend(t, c) }),
+              routine.nodes.map((n) => h(React.Fragment, { key: n.id },
                 h(StepCard, { node: n, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction: n.type === 'function' }),
                 h(AddStep, { variant: 'gap', onPick: (t, c) => acq.addAfter(n.id, t, c) }))),
               h(AddStep, { variant: 'end', onPick: (t, c) => acq.addEnd(t, c) }))));
   }
-
-  window.RoutinePanel = RoutinePanel;
-})();
