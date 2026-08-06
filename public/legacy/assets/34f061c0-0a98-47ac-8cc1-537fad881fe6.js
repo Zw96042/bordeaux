@@ -713,3 +713,93 @@
     const setSegmentLookAt = useCallback((i, patch) => commit((d) => {
       const w = d.waypoints[i]; if (!w) return d;
       w.segmentLookAt = clampWorld({ x: patch.x != null ? patch.x : w.segmentLookAt.x, y: patch.y != null ? patch.y : w.segmentLookAt.y });
+      return d;
+    }), [commit]);
+    const moveSegmentLookAt = useCallback((i, point) => mutate((d) => {
+      const w = d.waypoints[i]; if (w) w.segmentLookAt = clampWorld(point); return d;
+    }), [mutate]);
+    const setStop = useCallback((i, on) => commit((d) => { const w = d.waypoints[i]; w.stop = on; if (on) { w.linked = false; } else { alignWaypointHandles(w); delete w.wait; delete w.turnInPlace; } return d; }), [commit]);
+    const setWait = useCallback((i, sec) => commit((d) => { d.waypoints[i].wait = Math.max(0, sec); return d; }), [commit]);
+    const setTurnInPlace = useCallback((i, on) => commit((d) => {
+      const w = d.waypoints[i]; if (!w) return d;
+      if (!on) delete w.turnInPlace;
+      else {
+        const sampleIndex = Math.max(0, ((derived.wpIdx && derived.wpIdx[i]) || 0) - (i > 0 ? 1 : 0));
+        const arrival = derived.metrics && derived.metrics.head ? derived.metrics.head[sampleIndex] * 180 / Math.PI : (w.theta || 0);
+        const headingDeg = Math.round(arrival + 90);
+        w.turnInPlace = { headingDeg, direction: 'shortest' };
+        w.stop = true; w.linked = false;
+        if (i < d.waypoints.length - 1) { w.theta = headingDeg; w.thetaOn = true; w.segmentHeadingMode = 'manual'; }
+      }
+      return d;
+    }), [commit, derived]);
+    const setTurnInPlaceMeta = useCallback((i, patch) => commit((d) => {
+      const w = d.waypoints[i]; if (!w || !w.turnInPlace) return d;
+      Object.assign(w.turnInPlace, patch);
+      if (patch.headingDeg != null && i < d.waypoints.length - 1) { w.theta = patch.headingDeg; w.thetaOn = true; w.segmentHeadingMode = 'manual'; }
+      return d;
+    }), [commit]);
+    const setHeadingMode = useCallback((m) => commit((d) => { d.headingMode = m; return d; }), [commit]);
+    const toggleDriveBackward = useCallback(() => commit((d) => { d.driveBackward = !d.driveBackward; return d; }), [commit]);
+    const nudgeWp = useCallback((i, dx, dy) => commit((d) => { const w = d.waypoints[i]; if (!w) return d; const nx = Math.max(0, Math.min(FIELD_W, w.x + dx)), ny = Math.max(0, Math.min(FIELD_H, w.y + dy)); const ddx = nx - w.x, ddy = ny - w.y; w.x = nx; w.y = ny; if (w.prevC) { w.prevC.x += ddx; w.prevC.y += ddy; } if (w.nextC) { w.nextC.x += ddx; w.nextC.y += ddy; } return d; }), [commit]);
+    const nudgeFrac = useCallback((kind, i, df) => commit((d) => {
+      const arr = kind === 'rt' ? d.targets : d.markers; const item = arr[i]; if (!item) return d;
+      const f = Math.max(0, Math.min(1, window.PM.featureFraction(item, derived.sample) + df));
+      item.f = f; if (item.anchor === 'dist') item.d = +(f * (derived.sample.length || 0)).toFixed(3);
+      return d;
+    }), [commit, derived]);
+    const setWaypointHeading = useCallback((i, deg) => mutate((d) => { const w = d.waypoints[i]; w.theta = deg; w.thetaOn = true; return d; }), [mutate]);
+    const faceWaypoint = useCallback((i, mode) => commit((d) => {
+      const w = d.waypoints[i]; let deg = w.theta || 0;
+      if (mode === 'next' && d.waypoints[i + 1]) { const t = d.waypoints[i + 1]; deg = Math.atan2(t.y - w.y, t.x - w.x) * 180 / Math.PI; }
+      else if (mode === 'prev' && d.waypoints[i - 1]) { const t = d.waypoints[i - 1]; deg = Math.atan2(t.y - w.y, t.x - w.x) * 180 / Math.PI; }
+      else if (mode === 'tangent') { const idx = (derived.wpIdx && derived.wpIdx[i]) || 0; const p = derived.sample.pts[idx]; if (p) deg = (p.heading || 0) * 180 / Math.PI; }
+      w.theta = deg; w.thetaOn = true; return d;
+    }), [commit, derived]);
+    const headingMenu = useCallback((i, x, y) => {
+      setHeadMenu({ x, y, items: [
+        { label: 'Face next waypoint', icon: 'compass', onClick: () => faceWaypoint(i, 'next') },
+        { label: 'Face previous waypoint', icon: 'compass', onClick: () => faceWaypoint(i, 'prev') },
+        { label: 'Align to path tangent', icon: 'route', onClick: () => faceWaypoint(i, 'tangent') },
+        { sep: true },
+        { label: 'Type exact angle\u2026', icon: 'compass', onClick: () => select('wp', i) },
+      ] });
+    }, [faceWaypoint, select]);
+    const duplicateWp = useCallback((i) => commit((d) => {
+      const oldCount = d.waypoints.length;
+      const src = JSON.parse(JSON.stringify(d.waypoints[i]));
+      delete src.headingTransition;
+      if (i === oldCount - 1) delete d.waypoints[i].jiggle;
+      else delete src.jiggle;
+      const next = clampWorld({ x: src.x + 0.4, y: src.y + 0.4 }); src.x = next.x; src.y = next.y;
+      d.waypoints.splice(i + 1, 0, src);
+      remapWaypointRanges(d, Array.from({ length: oldCount }, (_, index) => index <= i ? index : index + 1));
+      const hd = window.PM.autoHandles(d.waypoints, i + 1); src.prevC = hd.prevC; src.nextC = hd.nextC;
+      d.waypoints[0].thetaOn = true; d.waypoints[d.waypoints.length - 1].thetaOn = true;
+      d._selAfter = i + 1; return d;
+    }), [commit]);
+    const reversePath = useCallback(() => commit((d) => {
+      const endpointJiggle = d.waypoints[d.waypoints.length - 1].jiggle ? { ...d.waypoints[d.waypoints.length - 1].jiggle } : null;
+      const oldSeg = d.waypoints.map((w) => w.segType);
+      const oldHeading = d.waypoints.map((w) => w.segmentHeadingMode);
+      const oldLookAt = d.waypoints.map((w) => w.segmentLookAt && { ...w.segmentLookAt });
+      const oldLaws = d.waypoints.slice(0, -1).map((waypoint) => {
+        const mode = waypoint.segmentHeadingMode || d.headingMode || 'targets';
+        return mode === 'lookAt' ? 'lookAt:' + (waypoint.segmentLookAt ? waypoint.segmentLookAt.x + ':' + waypoint.segmentLookAt.y : '') : mode;
+      });
+      const oldTransitions = d.waypoints.map((waypoint, index) => index > 0 && index < d.waypoints.length - 1
+        && oldLaws[index] !== oldLaws[index - 1] && !waypoint.turnInPlace
+        ? { placement: 'after', rotationPriority: 'heading', distanceM: 0.75, ...(waypoint.headingTransition || {}) }
+        : null);
+      const w = d.waypoints.slice().reverse(); const n = w.length;
+      w.forEach((x) => {
+        const p = x.prevC; x.prevC = x.nextC; x.nextC = p;
+        if (x.turnInPlace && x.turnInPlace.direction === 'clockwise') x.turnInPlace.direction = 'counterclockwise';
+        else if (x.turnInPlace && x.turnInPlace.direction === 'counterclockwise') x.turnInPlace.direction = 'clockwise';
+      });
+      for (let j = 0; j < n; j++) {
+        if (j < n - 1) {
+          w[j].segType = oldSeg[n - 2 - j];
+          if (oldHeading[n - 2 - j]) w[j].segmentHeadingMode = oldHeading[n - 2 - j];
+          else delete w[j].segmentHeadingMode;
+          if (oldLookAt[n - 2 - j]) w[j].segmentLookAt = { ...oldLookAt[n - 2 - j] };
