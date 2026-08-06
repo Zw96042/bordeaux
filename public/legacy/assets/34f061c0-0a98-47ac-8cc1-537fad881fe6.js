@@ -268,51 +268,51 @@
       const value = typeof update === 'function' ? update(current.routine || { name: 'Autonomous Routine', nodes: [] }) : update;
       return { ...current, routine: value };
     }), []);
-      else if (id === 'insert') { const p = window.PM.pointAtFraction(wn.f, derived.sample.pts); addWaypoint(p); }
-    }, [setSegMeta, commit, addRange, addWaypoint, setConstraint, doc, derived]);
+    const [routineOutcomes, setRoutineOutcomes] = useState({});
+    const [routineTime, setRoutineTime] = useState(0);
+    const [routinePlaying, setRoutinePlaying] = useState(false);
+    const [routineSel, setRoutineSel] = useState(null);
 
-    const inspActions = { setWp, toggleStop, toggleTheta, setHandleLen, delWp, setTarget, delTarget, setMarker, delMarker, setRange, delRange, setConstraint, setDoc, rename, select, setTool,
-      addWaypointEnd, addTargetMid, addMarkerMid, addRangeMid,
-      setSegMeta, faceWaypoint, duplicateWp, reversePath, reorderWp, insertWp,
-      setStop, setWait, toggleCorner, setHeadingMode, toggleDriveBackward };
-    const fieldActions = { addWaypoint, moveWaypoint, moveHandle, addTargetAt, addMarkerAt, moveTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginHistory,
-      setWaypointHeading, headingMenu, faceWaypoint, delWp,
-      select: (k, i) => { if (k) beginHistory(); select(k, i); } };
+    const robot = project.robot;
+    const accent = ACCENT;
 
-    // ---- project ops ----
-    const addPath = () => { setProject((pr) => ({ ...pr, paths: [...pr.paths, blankPath('NewPath')] })); setActiveIdx(project.paths.length); setSel({ kind: null, idx: -1 }); hist.current = { past: [], future: [] }; setPage('plan'); };
-    const dupPath = (i) => { setProject((pr) => { const cp = clone(pr.paths[i]); cp.name = cp.name + '_copy'; const paths = pr.paths.slice(); paths.splice(i + 1, 0, cp); return { ...pr, paths }; }); };
-    const delPath = (i) => { if (project.paths.length <= 1) return; setProject((pr) => { const paths = pr.paths.filter((_, k) => k !== i); return { ...pr, paths }; }); setActiveIdx((a) => Math.max(0, a > i ? a - 1 : a === i ? Math.min(a, project.paths.length - 2) : a)); };
-    const renamePath = (i, name) => { const clean = (name || '').trim() || 'NewPath'; setProject((pr) => { const paths = pr.paths.slice(); paths[i] = { ...paths[i], name: clean }; return { ...pr, paths }; }); };
-    const setActive = (i) => { setActiveIdx(i); setSel({ kind: null, idx: -1 }); setPlayTime(0); setPlaying(false); hist.current = { past: [], future: [] }; };
+    const doc = project.paths[activeIdx];
+    const docRef = useRef(doc); docRef.current = doc;
+    const hist = useRef({ past: [], future: [] });
+    const projectHist = useRef({ past: [], future: [] });
+    const [, force] = useState(0);
 
-    // ---- playback loop ----
-    const total = derived.prof.totalTime || 0;
-    const totalRef = useRef(0); totalRef.current = total;
-    const playRef = useRef(0); playRef.current = playTime;
     useEffect(() => {
-      if (!playing) return; let raf, last = performance.now();
-      const tick = (now) => { const dt = (now - last) / 1000; last = now; setPlayTime((t) => { let nt = t + dt; if (nt >= total) { nt = total; setPlaying(false); } return nt; }); raf = requestAnimationFrame(tick); };
-      raf = requestAnimationFrame(tick); return () => cancelAnimationFrame(raf);
-    }, [playing, total]);
-    useEffect(() => { if (playTime > total) setPlayTime(total); }, [total]);
-    const restart = () => { setPlayTime(0); setPlaying(true); };
-    const seek = (t) => { setPlaying(false); setPlayTime(Math.max(0, Math.min(total, t))); };
-
-    // ---- routine run engine ----
-    const run = useMemo(() => window.AUTO.buildRun(routine, project.paths, robot, routineOutcomes), [routine, project.paths, robot, routineOutcomes]);
+      if (skipDirty.current) skipDirty.current = false;
+      else setDirty(true);
+    }, [project, plannerId]);
+    useEffect(() => { if (window.bordeauxAPI) window.bordeauxAPI.setDirty(dirty); }, [dirty]);
     useEffect(() => {
-      if (page !== 'auto' || !routinePlaying) return;
-      let raf, last = performance.now();
-      const tick = (now) => { const dt = (now - last) / 1000; last = now; setRoutineTime((t) => { let nt = t + dt; if (nt >= run.total) { nt = run.total; setRoutinePlaying(false); } return nt; }); raf = requestAnimationFrame(tick); };
-      raf = requestAnimationFrame(tick); return () => cancelAnimationFrame(raf);
-    }, [page, routinePlaying, run.total]);
-    useEffect(() => { if (routineTime > run.total) setRoutineTime(run.total); }, [run.total]);
-
-    const acq = useMemo(() => ({
-      outcomes: routineOutcomes,
-      set: (id, patch) => setRoutine((r) => window.AUTO.update(r, id, patch)),
-      del: (id) => { setRoutine((r) => window.AUTO.remove(r, id)); setRoutineSel(null); },
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.publishAgentSession !== 'function') return;
+      agentRevision.current += 1;
+      const revision = agentRevision.current;
+      window.bordeauxAPI.publishAgentSession({
+        sessionId: agentSessionId,
+        revision,
+        project: clone(project),
+        plannerId,
+        activePathId: doc.id,
+        allianceView: alliance,
+        fieldPack: { id: '2026-rebuilt', revision: '2026-manual-tu19-welded-4' },
+      });
+      setAgentProposal((current) => {
+        if (!current || current.status !== 'ready' || current.baseRevision === revision) return current;
+        window.bordeauxAPI.updateAgentProposalStatus(current.id, 'stale');
+        return { ...current, status: 'stale' };
+      });
+    }, [project, plannerId, alliance, activeIdx, agentSessionId, doc.id]);
+    useEffect(() => {
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.onAgentProposal !== 'function') return;
+      let active = true;
+      let lastProposalKey = '';
+      const receiveProposal = (proposal) => {
+        if (!active || !proposal) return;
+        const proposalKey = proposal.id + ':' + proposal.status;
       move: (id, dir) => setRoutine((r) => window.AUTO.move(r, id, dir)),
       reorder: (id, targetId, before) => setRoutine((r) => window.AUTO.reorderRelative(r, id, targetId, before)),
       select: (id) => setRoutineSel(id),
