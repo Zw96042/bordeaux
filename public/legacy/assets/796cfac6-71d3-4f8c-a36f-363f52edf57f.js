@@ -397,3 +397,93 @@
         label: marker.name || 'Event marker ' + (index + 1),
         left: percentAt(window.PM.featureFraction(marker, derived.sample)),
       }));
+      const targets = ((doc && doc.targets) || []).map((target, index) => ({
+        key: 'target-' + index,
+        label: 'Rotation target ' + (index + 1) + ' · ' + Number(target.deg || 0).toFixed(0) + '°',
+        left: percentAt(window.PM.featureFraction(target, derived.sample)),
+      }));
+      const ranges = (derived.effRanges || []).map((range, index) => {
+        const start = percentAt(range.f0), end = percentAt(range.f1);
+        return { key: 'range-' + index, label: range.name || 'Constraint range ' + (index + 1), left: Math.min(start, end), width: Math.abs(end - start) };
+      });
+      const waypoints = (derived.wpFrac || []).slice(1, -1).map((fraction, index) => ({
+        key: 'waypoint-' + index,
+        label: 'Waypoint ' + (index + 2) + (((doc && doc.waypoints && doc.waypoints[index + 1] || {}).stop) ? ' · stop' : ''),
+        left: percentAt(fraction),
+        stop: !!(doc && doc.waypoints && doc.waypoints[index + 1] && doc.waypoints[index + 1].stop),
+      }));
+      return { markers, targets, ranges, waypoints };
+    }, [derived, doc, prof, pts, total]);
+    const featureCount = timeline.markers.length + timeline.targets.length + timeline.ranges.length;
+    const featureSummary = [
+      timeline.markers.length ? timeline.markers.length + (timeline.markers.length === 1 ? ' event' : ' events') : '',
+      timeline.targets.length ? timeline.targets.length + (timeline.targets.length === 1 ? ' target' : ' targets') : '',
+      timeline.ranges.length ? timeline.ranges.length + (timeline.ranges.length === 1 ? ' range' : ' ranges') : '',
+    ].filter(Boolean).join(' · ');
+    const timelineTicks = [0, 0.25, 0.5, 0.75, 1].map((fraction) => ({
+      fraction,
+      label: (total * fraction).toFixed(total < 10 ? 2 : 1) + 's',
+    }));
+
+    let arr = M.v, vmin = 0, vmax = M.vMax || 1, signed = false, unit = 'm/s', title = 'Velocity';
+    if (metric === 'accel') { arr = M.accel; vmax = M.aMax || 1; vmin = -vmax; signed = true; unit = 'm/s\u00b2'; title = 'Acceleration'; }
+    else if (metric === 'angvel') { arr = (M.omega || []).map((o) => o * R2D); vmax = (M.wMax || 0.01) * R2D; vmin = -vmax; signed = true; unit = '\u00b0/s'; title = 'Angular velocity'; }
+    else if (metric === 'curvature') { arr = M.curv; vmin = 0; vmax = M.kMax || 0.01; unit = '1/m'; title = 'Curvature'; }
+
+    const jigglePeak = metric === 'velocity' && prof.jiggles
+      ? prof.jiggles.reduce((value, action) => Math.max(value, 4 * action.config.distanceM / action.strokeDuration), 0)
+      : 0;
+    const peak = Math.max(vmax, jigglePeak);
+    vmax = Math.max(0.01, peak * 1.1);
+    if (signed) vmin = -vmax;
+    const GW = 1000, GH = 132, padL = 4, padR = 4, padT = 10, padB = 20;
+    const span = Math.max(1e-6, vmax - vmin);
+    const yOf = (val) => padT + (1 - (val - vmin) / span) * (GH - padT - padB);
+    const zeroY = yOf(0);
+    const valueAtTime = (tt) => {
+      if (!arr || !arr.length || !prof.t.length) return 0;
+      if (tt <= 0) return arr[0] || 0;
+      if (tt >= total) return arr[arr.length - 1] || 0;
+      const geometryEnd = prof.t[prof.t.length - 1];
+      if (tt > geometryEnd + 1e-9) {
+        if (metric !== 'velocity') return 0;
+        const pose = window.PM.poseAtTime(tt, pts, prof, derived.anchors, derived.mode, derived.rev);
+        return pose ? pose.speed : 0;
+      }
+      let lo = 1, hi = prof.t.length - 1;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (prof.t[mid] < tt) lo = mid + 1; else hi = mid; }
+      const t0 = prof.t[lo - 1], t1 = prof.t[lo], u = t1 - t0 > 1e-6 ? (tt - t0) / (t1 - t0) : 0;
+      return arr[lo - 1] + (arr[lo] - arr[lo - 1]) * u;
+    };
+    let poly = '';
+    if (pts.length > 1 && arr && arr.length) {
+      const N = 170;
+      for (let k = 0; k <= N; k++) {
+        const tt = (k / N) * total;
+        const val = valueAtTime(tt);
+        const x = padL + (k / N) * (GW - padL - padR);
+        poly += (k === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + yOf(val).toFixed(1) + ' ';
+      }
+    }
+    const baseY = signed ? zeroY : (GH - padB);
+    const playX = padL + pct * (GW - padL - padR);
+    const currentValue = valueAtTime(playTime), playY = yOf(currentValue);
+    const onGraphDown = (e) => {
+      const seekTo = (cx) => { const r = graphRef.current.getBoundingClientRect(); const f = Math.max(0, Math.min(1, (cx - r.left) / r.width)); seek(f * total); };
+      seekTo(e.clientX);
+      const mv = (ev) => seekTo(ev.clientX);
+      const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); };
+      window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+    };
+
+    return h(React.Fragment, null,
+      graphOpen && h('div', { className: 'velgraph' },
+        h('div', { className: 'velgraph-top' },
+          h('span', { className: 'velgraph-ttl' }, title + ' profile'),
+          h('span', { className: 'velgraph-readout' },
+            h('b', null, currentValue.toFixed(metric === 'angvel' ? 0 : metric === 'curvature' ? 2 : 1) + ' ' + unit),
+            h('span', null, 'Peak ' + peak.toFixed(metric === 'angvel' ? 0 : metric === 'curvature' ? 2 : 1) + ' ' + unit))),
+        h('div', { className: 'velgraph-plot' },
+          h('svg', { ref: graphRef, className: 'velgraph-svg', viewBox: `0 0 ${GW} ${GH}`, preserveAspectRatio: 'none', onPointerDown: onGraphDown, tabIndex: 0, role: 'slider', 'aria-label': title + ' graph playback position', 'aria-valuemin': 0, 'aria-valuemax': Math.round(total * 1000), 'aria-valuenow': Math.round(playTime * 1000), onKeyDown: (e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); seek(Math.max(0, Math.min(total, playTime + (e.key === 'ArrowRight' ? 1 : -1) * Math.max(0.02, total / 100)))); } else if (e.key === 'Home') { e.preventDefault(); seek(0); } else if (e.key === 'End') { e.preventDefault(); seek(total); } } },
+            h('defs', null,
+              h('linearGradient', { id: 'telemetry-fill', x1: '0', y1: '0', x2: '0', y2: '1' },
