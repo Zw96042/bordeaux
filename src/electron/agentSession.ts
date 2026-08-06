@@ -268,3 +268,60 @@ export class AgentSessionService {
     if (candidates.length === 0) throw new Error("Bordeaux could not generate route candidates for that request.");
     if (request.params.endAction) {
       const catalog = this.getJavaCatalog();
+      if (!catalog?.authoritative) throw new Error("Link and build an authoritative Java command catalog before binding an end action.");
+      const endAction = request.params.endAction;
+      const tagged = catalog.commands.filter((item) => item.runtimeReady === true && item.semanticTags?.includes(endAction.semanticTag));
+      const binding = snapshot.project.strategy?.actionBindings?.find((item) => item.semanticTag === endAction.semanticTag);
+      if (!binding && tagged.length !== 1) throw new Error(`Semantic action ${endAction.semanticTag} must match exactly one runtime-ready command or have one explicit project strategy binding; found ${tagged.length}.`);
+      const selectedCommandId = binding?.commandId ?? tagged[0].id;
+      if (endAction.commandId !== selectedCommandId) throw new Error(`Semantic action ${endAction.semanticTag} is explicitly bound to ${selectedCommandId}, not ${endAction.commandId}.`);
+      const command = catalog.commands.find((item) => item.id === selectedCommandId && item.runtimeReady === true);
+      if (!command) throw new Error("The requested end action is not a runtime-ready command in the linked catalog.");
+      if (!command.semanticTags?.includes(endAction.semanticTag)) throw new Error(`Command ${command.id} does not explicitly advertise ${endAction.semanticTag}.`);
+      const invocation = {
+        commandId: command.id,
+        arguments: endAction.arguments ?? defaultJavaCommandArguments(command),
+        cancelOnPathEnd: endAction.cancelOnPathEnd,
+      };
+      const invocationErrors = javaInvocationErrors(invocation, command);
+      if (invocationErrors.length) throw new Error(`End action is invalid: ${invocationErrors.join("; ")}`);
+      candidates.forEach((candidate) => {
+        candidate.path.markers.push({ id: `event_${randomUUID()}`, f: 1, name: command.label, invocation });
+        candidate.analysis.authoredPath = candidate.path;
+      });
+    }
+    if (request.params.endActionIntent) {
+      const actionIntent = request.params.endActionIntent;
+      candidates.forEach((candidate) => {
+        candidate.path.markers.push({
+          id: `event_${randomUUID()}`,
+          f: 1,
+          name: actionIntent.description,
+          cmd: "none",
+          group: "sequential",
+          actionIntent: { ...actionIntent },
+        });
+        candidate.analysis.authoredPath = candidate.path;
+      });
+    }
+    const valid = candidates.filter((candidate) => candidate.valid);
+    const recommendedCandidateId = (valid[0] ?? candidates[0]).id;
+    const advisories = request.params.endActionIntent ? [
+      `Action pending: “${request.params.endActionIntent.description}” (${request.params.endActionIntent.semanticTag}) is preserved at the path endpoint but has no robot command yet. Link an authoritative Java command before export.`,
+    ] : [];
+    const proposal: PathProposal = {
+      id: `proposal_${randomUUID()}`,
+      baseSessionId: snapshot.sessionId,
+      baseRevision: snapshot.revision,
+      intent: request.params.intent,
+      operation: "add",
+      candidates,
+      recommendedCandidateId,
+      recommendationReason: routeRecommendationReason(candidates, recommendedCandidateId),
+      ...(advisories.length ? { advisories } : {}),
+      status: "ready",
+      createdAt: new Date().toISOString(),
+    };
+    return this.stage(proposal);
+  }
+}
