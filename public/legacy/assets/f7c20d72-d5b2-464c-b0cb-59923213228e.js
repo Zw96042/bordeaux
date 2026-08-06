@@ -504,3 +504,93 @@
         let dCase = `M ${W2P(pts[0]).x} ${W2P(pts[0]).y}`;
         for (let i = 1; i < pts.length; i++) { const q = W2P(pts[i]); dCase += ` L ${q.x} ${q.y}`; }
         els.push(h('path', { key: 'case', d: dCase, fill: 'none', stroke: '#05060a', strokeOpacity: 0.75, strokeWidth: P(5), strokeLinecap: 'round', strokeLinejoin: 'round' }));
+        const segEls = [];
+        const stride = Math.max(1, Math.floor(pts.length / 200));
+        for (let i = 0; i + stride < pts.length; i += stride) {
+          const a = W2P(pts[i]), b = W2P(pts[i + stride]);
+          segEls.push(h('line', { key: 's' + i, x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: colAt(i), strokeWidth: P(2.6), strokeLinecap: 'butt' }));
+        }
+        els.push(h('g', { key: 'pathbody' }, segEls));
+        // selected-segment highlight (memo §3)
+        if (sel.kind === 'seg' && derived.wpFrac && derived.wpFrac.length > sel.idx + 1) {
+          const lo = derived.wpFrac[sel.idx], hi = derived.wpFrac[sel.idx + 1];
+          let sd = '', st = false;
+          for (let k = 0; k < pts.length; k++) { const f = pts[k].s / totalS; if (f >= lo - 1e-4 && f <= hi + 1e-4) { const q = W2P(pts[k]); sd += (st ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); st = true; } }
+          if (sd) els.push(h('path', { key: 'segsel', d: sd, fill: 'none', stroke: accent, strokeWidth: P(5.5), strokeOpacity: 0.92, strokeLinecap: 'round', strokeLinejoin: 'round', style: { pointerEvents: 'none' } }));
+        }
+        // per-segment hit paths — click selects the segment; alt-click / waypoint-tool inserts (memo §3)
+        if (derived.wpFrac) {
+          for (let si = 0; si < doc.waypoints.length - 1; si++) {
+            const lo = derived.wpFrac[si], hi = derived.wpFrac[si + 1];
+            let sd = '', st = false;
+            for (let k = 0; k < pts.length; k++) { const f = pts[k].s / totalS; if (f >= lo - 1e-4 && f <= hi + 1e-4) { const q = W2P(pts[k]); sd += (st ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); st = true; } }
+            if (sd) els.push(h('path', { key: 'seghit' + si, d: sd, fill: 'none', stroke: 'transparent', strokeWidth: P(18), strokeLinecap: 'round', 'data-role': 'seg', 'data-idx': si, style: { cursor: tool === 'range' ? 'crosshair' : tool === 'waypoint' ? 'copy' : 'pointer' } }));
+          }
+        }
+        // Range labels share the canvas with handles, waypoints, targets, and warnings.
+        // Treat those as occupied rectangles, then pick the clearest nearby label slot.
+        const labelObstacles = [];
+        const reserveLabelSpace = (x, y, w, h) => labelObstacles.push({ x: x - w / 2, y: y - h / 2, w, h });
+        const reserveSegmentSpace = (a, b, pad) => labelObstacles.push({
+          x: Math.min(a.x, b.x) - pad, y: Math.min(a.y, b.y) - pad,
+          w: Math.abs(a.x - b.x) + pad * 2, h: Math.abs(a.y - b.y) + pad * 2,
+        });
+        const reserveRotatedSpace = (x, y, w, h, deg) => {
+          const rad = deg * Math.PI / 180;
+          reserveLabelSpace(x, y, Math.abs(Math.cos(rad)) * w + Math.abs(Math.sin(rad)) * h, Math.abs(Math.sin(rad)) * w + Math.abs(Math.cos(rad)) * h);
+        };
+        doc.waypoints.forEach((wp, i) => {
+          const c = W2P(wp); reserveLabelSpace(c.x, c.y, P(30), P(30));
+          const isStart = i === 0, isEnd = i === doc.waypoints.length - 1;
+          const wpTangent = waypointTangent(i);
+          if (!isTank && (wpTangent || isStart || isEnd || wp.thetaOn || (sel.kind === 'wp' && sel.idx === i))) {
+            const heading = waypointHeadingDeg(i);
+            const deg = (flip ? heading + 180 : heading) * Math.PI / 180;
+            const end = { x: c.x + Math.cos(-deg) * P(35), y: c.y + Math.sin(-deg) * P(35) };
+            reserveSegmentSpace(c, end, P(8));
+          }
+          if (showHandles && sel.kind === 'wp' && sel.idx === i) {
+            [['prevC', isStart], ['nextC', isEnd]].forEach(([key, hidden]) => {
+              if (hidden) return;
+              const handle = W2P(wp[key]);
+              reserveSegmentSpace(c, handle, P(7));
+              reserveLabelSpace(handle.x, handle.y, P(18), P(18));
+            });
+          }
+        });
+        if (doc.waypoints.length) {
+          const first = doc.waypoints[0], last = doc.waypoints[doc.waypoints.length - 1];
+          const startHeading = waypointHeadingDeg(0);
+          const endHeading = waypointHeadingDeg(doc.waypoints.length - 1);
+          const start = W2P(first), end = W2P(last);
+          reserveRotatedSpace(start.x, start.y, robot.l * SX + P(12), robot.w * SY + P(12), flip ? startHeading + 180 : startHeading);
+          reserveRotatedSpace(end.x, end.y, robot.l * SX + P(12), robot.w * SY + P(12), flip ? endHeading + 180 : endHeading);
+        }
+        doc.markers.forEach((marker) => { const c = W2P(window.PM.pointAtFraction(window.PM.featureFraction(marker, derived.sample), pts)); reserveLabelSpace(c.x, c.y - P(12), P(30), P(42)); });
+        if (!isTank) doc.targets.filter(targetActive).forEach((target) => {
+          const c = W2P(window.PM.pointAtFraction(window.PM.featureFraction(target, derived.sample), pts));
+          const deg = flip ? target.deg + 180 : target.deg;
+          const rad = -deg * Math.PI / 180;
+          const arrowOffset = P(8.5);
+          reserveRotatedSpace(c.x + Math.cos(rad) * arrowOffset, c.y + Math.sin(rad) * arrowOffset,
+            robot.l * SX + P(29), robot.w * SY + P(20), deg);
+        });
+        (derived.checks || []).filter((check) => check.level !== 'note').forEach((check) => {
+          const c = W2P(window.PM.pointAtFraction(check.f, pts));
+          reserveLabelSpace(c.x, c.y - P(28), P(28), P(28));
+        });
+        ranges.forEach((range) => {
+          ['f0', 'f1'].forEach((key) => {
+            const c = W2P(window.PM.pointAtFraction(range[key], pts));
+            reserveLabelSpace(c.x, c.y, P(24), P(24));
+          });
+        });
+        if (derived.wpFrac) {
+          const chipTypes = { line: true, arc: true, clothoid: true };
+          for (let i = 0; i < doc.waypoints.length - 1; i++) {
+            if (!chipTypes[doc.waypoints[i].segType]) continue;
+            const fraction = ((derived.wpFrac[i] || 0) + (derived.wpFrac[i + 1] || 0)) / 2;
+            const c = W2P(window.PM.pointAtFraction(fraction, pts));
+            reserveLabelSpace(c.x, c.y + P(17), P(40), P(25));
+          }
+        }
