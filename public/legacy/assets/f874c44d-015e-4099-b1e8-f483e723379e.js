@@ -29,7 +29,7 @@
 
   // ---- display title for any node ----
   function nodeTitle(node, paths) {
-    if (node.type === 'path') { const p = paths && paths[node.ref]; return p ? p.name : '(unbound path)'; }
+    if (node.type === 'path') { const p = paths && paths.find((path) => path.id === node.ref); return p ? p.name : '(unbound path)'; }
     if (node.type === 'decision') return node.cond;
     if (node.cat === 'generate') return node.funcRef || 'GeneratePath';
     if (node.cat === 'sequence') { const o = seqOp(node.op); return o.verb + (node.target ? ' · ' + node.target : ''); }
