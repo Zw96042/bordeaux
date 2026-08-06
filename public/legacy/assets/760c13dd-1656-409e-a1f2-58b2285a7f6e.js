@@ -88,51 +88,51 @@
           onKeyDown: (e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setEdit(null); e.target.blur(); } },
         }),
         unit && h('span', { id: id + '-unit', className: 'numunit' }, unit)),
-        h('span', { className: 'secchev' }, h(Icon, { name: 'chevron', size: 15 })),
-        icon && h('span', { className: 'secicon' }, h(Icon, { name: icon, size: 16 })),
-        h('span', { className: 'sectitle' }, title),
-        sub && h('span', { className: 'secsub' }, sub),
-        count != null && h('span', { className: 'seccount' }, count),
+    );
+  }
+
+  function Section({ icon, title, count, right, children, open, onToggle, sub }) {
+    return h('div', { className: 'section' + (open ? ' open' : '') },
+      h('div', { className: 'sechead' },
+        h('button', { className: 'sechead-toggle', type: 'button', onClick: onToggle, 'aria-expanded': open },
+          h('span', { className: 'secchev' }, h(Icon, { name: 'chevron', size: 15 })),
+          icon && h('span', { className: 'secicon' }, h(Icon, { name: icon, size: 16 })),
+          h('span', { className: 'sectitle' }, title),
+          sub && h('span', { className: 'secsub' }, sub),
+          count != null && h('span', { className: 'seccount' }, count)),
         right),
       open && h('div', { className: 'secbody' }, children));
   }
 
-  function Toggle({ on, onChange, label }) {
-    return h('button', { className: 'toggle' + (on ? ' on' : ''), onClick: () => onChange(!on), type: 'button' },
+  function Toggle({ on, onChange, label, ariaLabel }) {
+    return h('button', { className: 'toggle' + (on ? ' on' : ''), onClick: () => onChange(!on), type: 'button', 'aria-label': ariaLabel || label || 'Toggle setting', 'aria-pressed': on },
       h('span', { className: 'toggle-track' }, h('span', { className: 'toggle-thumb' })),
       label && h('span', { className: 'toggle-lbl' }, label));
   }
 
-  function Seg({ value, options, onChange }) {
-    return h('div', { className: 'seg' }, options.map(o =>
-      h('button', { key: o.v, type: 'button', className: 'seg-i' + (value === o.v ? ' on' : ''), onClick: () => onChange(o.v) }, o.label)));
+  function Seg({ value, options, onChange, ariaLabel, className }) {
+    const count = Math.max(1, options.length);
+    const activeIndex = Math.max(0, options.findIndex((option) => option.v === value));
+    const style = {
+      '--seg-count': count,
+      '--seg-clip-left': (activeIndex / count * 100) + '%',
+      '--seg-clip-right': ((count - activeIndex - 1) / count * 100) + '%',
+    };
+    return h('div', { className: 'seg' + (className ? ' ' + className : ''), role: 'group', 'aria-label': ariaLabel, style },
+      h('span', { className: 'seg-indicator', 'aria-hidden': true }),
+      options.map(o => h('button', { key: o.v, type: 'button', className: 'seg-i' + (value === o.v ? ' on' : ''), title: o.title, 'aria-label': o.ariaLabel, 'aria-pressed': value === o.v, onClick: () => onChange(o.v) }, o.label)));
   }
 
-  // grouped <select> — items: [{id,label}] with .group buckets rendered as <optgroup>
-  function GroupSelect({ value, items, onChange, className }) {
-    const groups = [];
-    items.forEach((it) => { const g = it.group || ''; let b = groups.find((x) => x.label === g); if (!b) { b = { label: g, items: [] }; groups.push(b); } b.items.push(it); });
-    return h('select', { className: (className || 'selectinput'), value, onChange: (e) => onChange(e.target.value) },
-      groups.map((g) => g.label
-        ? h('optgroup', { key: g.label, label: g.label }, g.items.map((it) => h('option', { key: it.id, value: it.id }, it.label)))
-        : g.items.map((it) => h('option', { key: it.id, value: it.id }, it.label))));
-  }
-
-  // floating context menu — items: [{label,icon,onClick,danger,sep}]
-  function ContextMenu({ x, y, items, onClose }) {
-    const ref = useRef(null);
-    const [pos, setPos] = useState({ x, y });
-    useEffect(() => {
-      const el = ref.current; if (!el) return;
-      const r = el.getBoundingClientRect();
-      const nx = Math.min(x, window.innerWidth - r.width - 8);
-      const ny = Math.min(y, window.innerHeight - r.height - 8);
-      setPos({ x: nx, y: ny });
-    }, [x, y]);
-    useEffect(() => {
-      const away = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
-      const esc = (e) => { if (e.key === 'Escape') onClose(); };
-      window.addEventListener('pointerdown', away, true); window.addEventListener('keydown', esc);
+  function constraintRangeSummary(range, constraints, robot) {
+    const c = constraints || {};
+    const velocityBase = Math.min(c.maxVel || Infinity, robot && robot.maxSpeed > 0 ? robot.maxSpeed : Infinity);
+    const candidates = [
+      { key: 'maxVel', base: velocityBase, order: 0, text: (v) => 'v \u2264 ' + v.toFixed(1) + ' m/s', aria: (v) => 'maximum velocity ' + v.toFixed(1) + ' meters per second' },
+      { key: 'maxAccel', base: c.maxAccel, order: 1, text: (v) => 'a \u2264 ' + v.toFixed(1) + ' m/s\u00b2', aria: (v) => 'maximum acceleration ' + v.toFixed(1) + ' meters per second squared' },
+      { key: 'maxDecel', base: c.maxDecel != null ? c.maxDecel : c.maxAccel, order: 2, text: (v) => 'decel \u2264 ' + v.toFixed(1) + ' m/s\u00b2', aria: (v) => 'maximum deceleration ' + v.toFixed(1) + ' meters per second squared' },
+      { key: 'maxAngVel', base: c.maxAngVel, order: 3, text: (v) => '\u03c9 \u2264 ' + v.toFixed(0) + '\u00b0/s', aria: (v) => 'maximum angular velocity ' + v.toFixed(0) + ' degrees per second' },
+      { key: 'maxAngAccel', base: c.maxAngAccel, order: 4, text: (v) => '\u03b1 \u2264 ' + v.toFixed(0) + '\u00b0/s\u00b2', aria: (v) => 'maximum angular acceleration ' + v.toFixed(0) + ' degrees per second squared' },
+    ].filter((candidate) => {
       return () => { window.removeEventListener('pointerdown', away, true); window.removeEventListener('keydown', esc); };
     }, [onClose]);
     return h('div', { ref, className: 'ctxmenu', style: { left: pos.x + 'px', top: pos.y + 'px' } },
