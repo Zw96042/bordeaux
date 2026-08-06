@@ -4,10 +4,10 @@
 // Exports window.ContextInspector
 (function () {
   const h = React.createElement;
-  const { Num, Toggle, Seg, Icon, GroupSelect } = window.UI;
+  const { Num, Toggle, Seg, Icon, constraintRangeSummary } = window.UI;
+  const { FIELD_W, FIELD_H } = window.FIELD_DIMS;
   const R2D = 180 / Math.PI;
 
-  const COMMANDS = ['none', 'intake', 'scoreL4', 'scoreL3', 'shoot', 'raiseElevator', 'stow', 'climb'];
   const ANCHOR_HINT = {
     param: 'Holds a fixed percent of the path as its length changes.',
     dist: 'Pinned to physical travel distance from the path start.',
@@ -18,31 +18,31 @@
     manual: 'Heading comes only from waypoints you pin. Rotation targets are ignored.',
     tangent: 'Robot points along the path tangent everywhere. Rotation targets are ignored.',
     targets: 'Heading interpolates between pinned waypoints and rotation targets.',
+    lookAt: 'Robot continuously faces one draggable point on the field.',
   };
 
   const handleLen = (w, key) => Math.hypot(w[key].x - w.x, w[key].y - w.y);
   const segNorm = (t) => (t === 'line' || t === 'arc' || t === 'clothoid') ? t : 'bezier';
   const wpName = (i, n) => i === 0 ? 'Start' : i === n - 1 ? 'End' : 'Waypoint ' + i;
 
-  function ConstraintsBody({ c, robot, setC }) {
-    return h(React.Fragment, null,
-      h('div', { className: 'cgroup-h' }, 'Translation'),
+  function ConstraintsBody({ c, robot, setC, labview, setLabview, plannerId, moreLimits, setMoreLimits, moreBdx, setMoreBdx }) {
+    const labviewPlanner = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid';
+    const rotation = moreLimits ? h('div', { className: 'grid2 compact-fields' },
+      h(Num, { label: 'Max \u03c9', value: c.maxAngVel, unit: '\u00b0/s', step: 1, precision: 0, onChange: (v) => setC({ maxAngVel: v }) }),
+      h(Num, { label: 'Max \u03b1', value: c.maxAngAccel, unit: '\u00b0/s\u00b2', step: 1, precision: 0, onChange: (v) => setC({ maxAngAccel: v }) })) : null;
+    const flags = moreBdx ? h(React.Fragment, null,
+      h(Num, { label: 'Current limit', value: labview.currentLimit || 0, unit: 'A', min: 0, onChange: (v) => setLabview({ currentLimit: v }) }),
+      [['Reverse path', 'reversePath'], ['Zero velocity', 'zeroVelocity'], ['Zero translation', 'zeroTranslationalVelocity'], ['Correct at start', 'correctAtBeginningOfPath'], ['Pickup balls', 'pickupBalls']].map(([label, key]) =>
+        h('div', { className: 'inrow', key }, h('span', { className: 'inrow-l' }, label), h(Toggle, { on: !!labview[key], ariaLabel: label, onChange: (v) => setLabview({ [key]: v }) })))) : null;
+    const compatibility = labviewPlanner ? h(React.Fragment, null,
+      h('div', { className: 'cgroup-h' }, 'LabVIEW'),
       h('div', { className: 'grid2' },
-        h(Num, { label: 'Max vel', value: c.maxVel, unit: 'm/s', min: 0.1, max: robot.maxSpeed, onChange: (v) => setC({ maxVel: v }) }),
-        h(Num, { label: 'Max accel', value: c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxAccel: v }) })),
-      h('div', { className: 'grid2' },
-        h(Num, { label: 'Max decel', value: c.maxDecel != null ? c.maxDecel : c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxDecel: v }) }),
-        h('div', null)),
-      h('div', { className: 'cgroup-h' }, 'Rotation \u00b7 enforced'),
-      h('div', { className: 'grid2' },
-        h(Num, { label: 'Max \u03c9', value: c.maxAngVel, unit: '\u00b0/s', step: 1, precision: 0, onChange: (v) => setC({ maxAngVel: v }) }),
-        h(Num, { label: 'Max \u03b1', value: c.maxAngAccel, unit: '\u00b0/s\u00b2', step: 1, precision: 0, onChange: (v) => setC({ maxAngAccel: v }) })),
-      h('div', { className: 'chint' }, 'Rotation limits shape timing: where the commanded heading can\u2019t keep up, the trajectory slows down and the diagnostics flag it.'));
-  }
-
-  function Stat3(items) {
-    return h('div', { className: 'rt-stat' }, items.map((it, i) =>
-      h('div', { key: i, className: 'rt-stat-i' }, h('span', { className: 'rt-stat-v', style: it.color ? { color: it.color } : null }, it.v), h('span', { className: 'rt-stat-k' }, it.k))));
+        h(Num, { label: 'Sample period', value: (labview.samplePeriodS || 0.02) * 1000, unit: 'ms', min: 1, max: 100, step: 1, precision: 0, onChange: (v) => setLabview({ samplePeriodS: v / 1000 }) }),
+        plannerId === 'labviewClothoid'
+          ? h(Num, { label: 'Min radius', value: labview.minTurnRadiusM || 0.5, unit: 'm', min: 0.05, step: 0.05, precision: 2, onChange: (v) => setLabview({ minTurnRadiusM: v }) })
+          : h('div', null)),
+      plannerId === 'labviewBezier' ? h(React.Fragment, null,
+        h('div', { className: 'fieldlabel' }, 'Tangents'),
   }
 
   function FaceRow({ i, actions, n }) {
