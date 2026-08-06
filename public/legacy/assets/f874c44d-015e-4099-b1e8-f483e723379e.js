@@ -133,12 +133,13 @@
           flat.push({ node: n, kind: 'event' });
         }
       });
+    };
     collect(routine.nodes);
 
     let t = 0, pIdx = 0; const steps = []; const segs = []; let lastPose = null;
     flat.forEach((it) => {
       if (it.kind === 'path' || it.kind === 'gen') {
-        const dp = derivePathNode(it.node, paths, robot);
+        const dp = derivePathNode(it.node, paths, robot, plannerId);
         if (!dp || dp.pts.length < 2) { steps.push({ ...it, t0: t, t1: t, dur: 0 }); return; }
         const t0 = t, dur = dp.total, t1 = t + dur;
         pIdx += 1;
@@ -177,7 +178,6 @@
   function stepAt(run, time) {
     for (let i = 0; i < run.steps.length; i++) { const s = run.steps[i]; if (time >= s.t0 && time < s.t1 + 1e-6) return i; }
     return run.steps.length - 1;
-  }
 
   // ---- field overlay descriptor for FieldView ----
   function fieldOverlay(run, opts) {
