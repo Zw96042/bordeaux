@@ -223,51 +223,51 @@
 
   // ---- arc primitive: circle tangent to the start handle, through the endpoint ----
   function arcSetup(p0, p1, c0) {
-      const w = new Array(n);
-      for (let i = 0; i < n; i++) w[i] = Math.min(Wmax, rangeAngV[i]);
-      stopSet.forEach(idx => { if (idx >= 0 && idx < n) w[idx] = 0; });
-      if (Aang > 1e-4) {
-        for (let i = 1; i < n; i++) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i - 1] * w[i - 1] + 2 * Aang * dth[i])));
-        for (let i = n - 2; i >= 0; i--) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i + 1] * w[i + 1] + 2 * Aang * dth[i + 1])));
-      }
-      for (let i = 0; i < n; i++) { const gi = Math.abs(g[i]); if (gi > 1e-4) { const vr = w[i] / gi; if (vr < v[i] - 0.05) rotLimited[i] = 1; v[i] = Math.min(v[i], vr); } }
-    }
-    // forward
-    for (let i = 1; i < n; i++) {
-      const ds = pts[i].s - pts[i - 1].s;
-      v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * aFwd[i] * ds)));
-    }
-    // backward (dedicated deceleration limit, tightened by ranges)
-    for (let i = n - 2; i >= 0; i--) {
-      const ds = pts[i + 1].s - pts[i].s;
-      v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i + 1] * v[i + 1] + 2 * aBack[i] * ds)));
-    }
-    // time
-    const t = new Array(n).fill(0);
-    for (let i = 1; i < n; i++) {
-      const ds = pts[i].s - pts[i - 1].s;
-      const vm = (v[i] + v[i - 1]) / 2;
-      t[i] = t[i - 1] + (vm > 1e-4 ? ds / vm : 0);
-    }
-    // dwell / wait-at-waypoint holds (memo §15) — only meaningful at stop points
-    const holds = [];
-    const dwell = (opts.dwell || []).slice().sort((a, b) => a.idx - b.idx);
-    for (let d = 0; d < dwell.length; d++) {
-      const dw = dwell[d]; if (!(dw.wait > 0) || dw.idx < 0 || dw.idx >= n) continue;
-      const t0 = t[dw.idx]; holds.push({ idx: dw.idx, t0, t1: t0 + dw.wait });
-      for (let j = dw.idx + 1; j < n; j++) t[j] += dw.wait;
-    }
-    return { v, t, totalTime: t[n - 1], holds, rotLimited };
+    let tx = c0.x - p0.x, ty = c0.y - p0.y; let tl = Math.hypot(tx, ty);
+    if (tl < 1e-6) { tx = p1.x - p0.x; ty = p1.y - p0.y; tl = Math.hypot(tx, ty); }
+    if (tl < 1e-6) return null;
+    tx /= tl; ty /= tl; const nx = -ty, ny = tx;
+    const dx = p1.x - p0.x, dy = p1.y - p0.y; const denom = 2 * (dx * nx + dy * ny);
+    if (Math.abs(denom) < 1e-3) return null; // effectively straight
+    const R = (dx * dx + dy * dy) / denom;
+    const Cx = p0.x + R * nx, Cy = p0.y + R * ny, rad = Math.abs(R);
+    const a0 = Math.atan2(p0.y - Cy, p0.x - Cx), a1 = Math.atan2(p1.y - Cy, p1.x - Cx);
+    let sweep = a1 - a0;
+    if (R > 0) { while (sweep <= 1e-6) sweep += 2 * Math.PI; while (sweep > 2 * Math.PI) sweep -= 2 * Math.PI; }
+    else { while (sweep >= -1e-6) sweep -= 2 * Math.PI; while (sweep < -2 * Math.PI) sweep += 2 * Math.PI; }
+    if (rad > 1e4) return null;
+    return { Cx, Cy, rad, a0, sweep };
   }
 
-  // heading anchors -> continuous heading along arclength fraction f in [0,1]
-  // anchors: [{f, rad}] must include f=0 and f=1, sorted
-  function headingAt(f, anchors) {
-    if (!anchors.length) return 0;
-    if (f <= anchors[0].f) return anchors[0].rad;
-    for (let i = 0; i < anchors.length - 1; i++) {
-      const a = anchors[i], b = anchors[i + 1];
-      if (f >= a.f && f <= b.f) {
+  // ---- clothoid (Euler spiral): G1 Hermite fit, linearly-varying curvature ----
+  // single-clothoid from pose (p0,th0) to (p1,th1); returns dense table or null
+  function clothoidTable(p0, p1, th0, th1, M) {
+    const dx = p1.x - p0.x, dy = p1.y - p0.y; const r = Math.hypot(dx, dy);
+    if (r < 1e-6) return null;
+    const tau = Math.atan2(dy, dx);
+    const ph0 = angWrap(th0 - tau), ph1 = angWrap(th1 - tau);
+    const dphi = ph1 - ph0;
+    const Hsin = (b) => { let s = 0; const N = 24; for (let k = 0; k <= N; k++) { const t = k / N; const th = ph0 + (dphi - b) * t + b * t * t; const w = (k === 0 || k === N) ? 1 : (k % 2 ? 4 : 2); s += w * Math.sin(th); } return s / (3 * N); };
+    const Hcos = (b) => { let s = 0; const N = 24; for (let k = 0; k <= N; k++) { const t = k / N; const th = ph0 + (dphi - b) * t + b * t * t; const w = (k === 0 || k === N) ? 1 : (k % 2 ? 4 : 2); s += w * Math.cos(th); } return s / (3 * N); };
+    // root of Hsin(b)=0 with the smallest |b| (closest to a gentle spiral)
+    let best = null; const lo = -6 * Math.PI, hi = 6 * Math.PI, STEPS = 240; let pb = lo, pf = Hsin(lo);
+    for (let k = 1; k <= STEPS; k++) {
+      const b = lo + (hi - lo) * k / STEPS, f = Hsin(b);
+      if (pf * f < 0) { let a = pb, bb = b, fa = pf; for (let it = 0; it < 44; it++) { const m = (a + bb) / 2, fm = Hsin(m); if (fa * fm <= 0) bb = m; else { a = m; fa = fm; } } const root = (a + bb) / 2; if (best === null || Math.abs(root) < Math.abs(best)) best = root; }
+      pb = b; pf = f;
+    }
+    if (best === null) return null;
+    const b = best, denom = Hcos(b); if (denom <= 1e-3) return null; // path would double back
+    const L = r / denom; if (!isFinite(L) || L <= 0 || L > r * 30) return null;
+    const thAbs = (t) => tau + ph0 + (dphi - b) * t + b * t * t;
+    const xs = new Array(M + 1), ys = new Array(M + 1), hs = new Array(M + 1), ks = new Array(M + 1);
+    xs[0] = p0.x; ys[0] = p0.y; hs[0] = thAbs(0); ks[0] = (dphi - b) / L;
+    let cx = 0, cy = 0; const dt = 1 / M;
+    for (let m = 1; m <= M; m++) { const tm = (m - 0.5) / M; const a = thAbs(tm); cx += Math.cos(a) * L * dt; cy += Math.sin(a) * L * dt; const t = m / M; xs[m] = p0.x + cx; ys[m] = p0.y + cy; hs[m] = thAbs(t); ks[m] = ((dphi - b) + 2 * b * t) / L; }
+    return { xs, ys, hs, ks };
+  }
+
+  // ---- sample the whole path into dense points with arclength + curvature ----
         const tt = (b.f - a.f) < 1e-6 ? 0 : (f - a.f) / (b.f - a.f);
         // smoothstep for nicer rotation
         const ss = tt * tt * (3 - 2 * tt);
