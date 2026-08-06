@@ -268,51 +268,51 @@
     const typeName = (id) => (window.PM.SEGTYPES.find((s) => s.id === id) || window.PM.SEGTYPES[2]).label;
     return h(React.Fragment, null, wps.slice(0, -1).map((w, i) =>
       h('div', { key: i, className: 'featrow segfeatrow' + (sel.kind === 'seg' && sel.idx === i ? ' sel' : '') },
-  // ---------------- diagnostics drawer (memo §9) ----------------
-  function Diagnostics({ derived, doc, onClose, onPick, onFix }) {
-    const warns = derived.warnings || [];
-    const n = doc.waypoints.length;
-    const segName = (s) => (s === 0 ? 'Start' : 'WP' + s) + ' \u2192 ' + (s + 1 === n - 1 ? 'End' : 'WP' + (s + 1));
-    return h('div', { className: 'diag' },
-      h('div', { className: 'diag-hd' },
-        h('span', { className: 'diag-t' }, 'Diagnostics'),
-        h('span', { className: 'diag-c' }, warns.length),
-        h('button', { className: 'ctxinsp-x', type: 'button', title: 'Close', onClick: onClose }, h(Icon, { name: 'x', size: 14 }))),
-      h('div', { className: 'diag-scroll' },
-        warns.length === 0
-          ? h('div', { className: 'diag-empty' }, h(Icon, { name: 'check', size: 16 }), 'No curvature or velocity issues detected on this path.')
-          : warns.map((w, i) => h('div', { key: i, className: 'diag-row' },
-              h('button', { className: 'diag-main', type: 'button', onClick: () => onPick(w) },
-                h('span', { className: 'diag-sev ' + (w.sev === 'high' ? 'high' : 'med') }),
-                h('div', { className: 'diag-body' },
-                  h('div', { className: 'diag-txt' }, w.text),
-                  h('div', { className: 'diag-loc' }, segName(w.seg))),
-                h('span', { className: 'diag-pin' }, h(Icon, { name: 'pin', size: 13 }))),
-              h('div', { className: 'diag-fixes' }, (w.fixes || []).map((f, k) =>
-                h('button', { key: k, className: 'diag-fix', type: 'button', onClick: () => onFix(w, f.id) }, f.label)))))));
+        h('span', { className: 'featindent', 'aria-hidden': true }),
+        h('button', { type: 'button', className: 'featselect', 'aria-pressed': sel.kind === 'seg' && sel.idx === i, onClick: () => actions.select('seg', i), onDoubleClick: (e) => inspectItem(actions, 'seg', i, e) },
+          h('span', { className: 'featdot b' }),
+          h('span', { className: 'featnm', title: name(i) + ' \u2192 ' + name(i + 1) }, name(i) + ' \u2192 ' + name(i + 1)),
+          h('span', { className: 'featmeta' }, typeName(w.segType))))));
   }
 
-  // ---------------- telemetry graph + transport ----------------
-  function Transport({ derived, metric, playTime, playing, setPlaying, seek, restart, graphOpen, setGraphOpen }) {
-    const total = derived.prof.totalTime || 0.001;
-    const pct = Math.max(0, Math.min(1, playTime / total));
-    const graphRef = useRef(null);
-    const prof = derived.prof, pts = derived.sample.pts, M = derived.metrics;
+  function Outline({ open, setOpen, doc, derived, sel, actions, secOpen, setSecOpen, robot }) {
+    const tog = (k) => setSecOpen((o) => ({ ...o, [k]: !o[k] }));
+    const wps = doc.waypoints;
+    if (!open) {
+      return h('button', { className: 'outline-tab', type: 'button', title: 'Show outline', onClick: () => setOpen(true) },
+        h(Icon, { name: 'zones', size: 16 }), h('span', null, 'Outline'));
+    }
+    return h('div', { className: 'outline' },
+      h('div', { className: 'outline-hd' },
+        h('span', { className: 'outline-t' }, 'Outline'),
+        h('button', { className: 'mini', type: 'button', title: 'Hide outline', 'aria-label': 'Hide outline', onClick: () => setOpen(false) }, h('span', { className: 'rot90' }, h(Icon, { name: 'chevron', size: 15 })))),
+      h('div', { className: 'outline-scroll' },
+        h(Section, { icon: 'waypoint', title: 'Waypoints', count: wps.length, open: secOpen.wp, onToggle: () => tog('wp'),
+          right: h('button', { className: 'mini', type: 'button', title: 'Place waypoint', 'aria-label': 'Place waypoint', onClick: (e) => { e.stopPropagation(); actions.select(null, -1); actions.setTool('waypoint'); } }, h(Icon, { name: 'plus', size: 13 })) },
+          h(WaypointList, { wps, sel, actions })),
+        h(Section, { icon: 'route', title: 'Segments', count: Math.max(0, wps.length - 1), open: !!secOpen.sg, onToggle: () => tog('sg') },
+          h(SegmentList, { wps, sel, actions })),
+        h(Section, { icon: 'rotation', title: 'Rotation Targets', count: doc.targets.length, open: secOpen.rt, onToggle: () => tog('rt'),
+          right: h('button', { className: 'mini', type: 'button', title: 'Add rotation target', 'aria-label': 'Add rotation target', onClick: (e) => { e.stopPropagation(); actions.addTargetMid(); } }, h(Icon, { name: 'plus', size: 13 })) },
+          doc.targets.length === 0 ? h('div', { className: 'featempty' }, 'Press R, then click the path') :
+            doc.targets.map((t, i) => h('div', { key: i, className: 'featrow' + (sel.kind === 'rt' && sel.idx === i ? ' sel' : '') },
+              h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'rt' && sel.idx === i, onClick: () => actions.select('rt', i), onDoubleClick: (e) => inspectItem(actions, 'rt', i, e) }, h('span', { className: 'featdot n' }), h('span', { className: 'featnm' }, t.deg.toFixed(0) + '\u00b0'), h('span', { className: 'featmeta' }, t.anchor === 'dist' ? (t.d != null ? t.d : window.PM.featureFraction(t, derived.sample) * derived.sample.length).toFixed(1) + ' m' : (window.PM.featureFraction(t, derived.sample) * 100).toFixed(0) + '%')),
+              h('button', { className: 'featdel', 'aria-label': 'Delete rotation target', title: 'Delete', onClick: () => actions.delTarget(i) }, h(Icon, { name: 'trash', size: 12 }))))),
+        h(Section, { icon: 'flag2', title: 'Event Markers', count: doc.markers.length, open: secOpen.em, onToggle: () => tog('em'),
+          right: h('button', { className: 'mini', type: 'button', title: 'Add event marker', 'aria-label': 'Add event marker', onClick: (e) => { e.stopPropagation(); actions.addMarkerMid(); } }, h(Icon, { name: 'plus', size: 13 })) },
+          doc.markers.length === 0 ? h('div', { className: 'featempty' }, 'Press M, then click the path') :
+            doc.markers.map((m, i) => h('div', { key: i, className: 'featrow' + (sel.kind === 'em' && sel.idx === i ? ' sel' : '') },
+              h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'em' && sel.idx === i, onClick: () => actions.select('em', i), onDoubleClick: (e) => inspectItem(actions, 'em', i, e) }, h('span', { className: 'featdot n' }), h('span', { className: 'featnm', title: m.name }, m.name), h('span', { className: 'featmeta' }, m.anchor === 'dist' ? (m.d != null ? m.d : window.PM.featureFraction(m, derived.sample) * derived.sample.length).toFixed(1) + ' m' : (window.PM.featureFraction(m, derived.sample) * 100).toFixed(0) + '%')),
+              h('button', { className: 'featdel', 'aria-label': 'Delete event marker ' + m.name, title: 'Delete', onClick: () => actions.delMarker(i) }, h(Icon, { name: 'trash', size: 12 }))))),
+        h(Section, { icon: 'gauge', title: 'Constraint Ranges', count: (doc.ranges || []).length, open: secOpen.cr !== false, onToggle: () => tog('cr'),
+          right: h('button', { className: 'mini', type: 'button', title: 'Add constraint range', 'aria-label': 'Add constraint range', onClick: (e) => { e.stopPropagation(); actions.addRangeMid(); } }, h(Icon, { name: 'plus', size: 13 })) },
+          (doc.ranges || []).length === 0 ? h('div', { className: 'featempty' }, 'Press C, then drag the path') :
+            doc.ranges.map((rg, i) => { const effective = (derived.effRanges && derived.effRanges[i]) || rg; const summary = constraintRangeSummary(rg, doc.constraints, robot); const rangeLabel = summary ? summary.text : (rg.name || 'Constraint range'); const rangeMeta = rg.anchor === 'dist' ? (Math.min(effective.f0, effective.f1) * derived.sample.length).toFixed(1) + '\u2013' + (Math.max(effective.f0, effective.f1) * derived.sample.length).toFixed(1) + ' m' : rg.anchor === 'wp' && rg.t0 != null && rg.t1 != null ? 'S' + ((rg.w0 || 0) + 1) + ' ' + Math.round(rg.t0 * 100) + '% \u2013 S' + ((rg.w1 || 0) + 1) + ' ' + Math.round(rg.t1 * 100) + '%' : rg.anchor === 'wp' ? 'Waypoint ' + Math.min(rg.w0 || 0, rg.w1 || 0) + '\u2013' + Math.max(rg.w0 || 0, rg.w1 || 0) : (Math.min(effective.f0, effective.f1) * 100).toFixed(0) + '\u2013' + (Math.max(effective.f0, effective.f1) * 100).toFixed(0) + '%'; return h('div', { key: i, className: 'featrow' + (sel.kind === 'cr' && sel.idx === i ? ' sel' : '') },
+              h('button', { className: 'featselect', type: 'button', 'aria-label': 'Constraint range, ' + (summary ? summary.ariaLabel : rangeLabel) + ', ' + rangeMeta, 'aria-pressed': sel.kind === 'cr' && sel.idx === i, onClick: () => actions.select('cr', i), onDoubleClick: (e) => inspectItem(actions, 'cr', i, e) }, h('span', { className: 'featdot w' }), h('span', { className: 'featnm' }, rangeLabel), h('span', { className: 'featmeta' }, rangeMeta)),
+              h('button', { className: 'featdel', 'aria-label': 'Delete constraint range', title: 'Delete', onClick: () => actions.delRange(i) }, h(Icon, { name: 'trash', size: 12 }))); }))));
+  }
 
-    let arr = M.v, vmin = 0, vmax = M.vMax || 1, signed = false, unit = 'm/s', title = 'Velocity';
-    if (metric === 'accel') { arr = M.accel; vmax = M.aMax || 1; vmin = -vmax; signed = true; unit = 'm/s\u00b2'; title = 'Acceleration'; }
-    else if (metric === 'angvel') { arr = (M.omega || []).map((o) => o * R2D); vmax = (M.wMax || 0.01) * R2D; vmin = -vmax; signed = true; unit = '\u00b0/s'; title = 'Angular velocity'; }
-    else if (metric === 'curvature') { arr = M.curv; vmin = 0; vmax = M.kMax || 0.01; unit = '1/m'; title = 'Curvature'; }
-
-    const GW = 1000, GH = 132, padL = 4, padR = 4, padT = 10, padB = 16;
-    const span = Math.max(1e-6, vmax - vmin);
-    const yOf = (val) => padT + (1 - (val - vmin) / span) * (GH - padT - padB);
-    const zeroY = yOf(0);
-    let poly = '';
-    if (pts.length > 1 && arr && arr.length) {
-      const N = 170;
-      for (let k = 0; k <= N; k++) {
-        const tt = (k / N) * total;
+  // ---------------- metric overlay + legend (bottom-left) ----------------
         let lo = 1, hi = prof.t.length - 1;
         while (lo < hi) { const mid = (lo + hi) >> 1; if (prof.t[mid] < tt) lo = mid + 1; else hi = mid; }
         const t0 = prof.t[lo - 1], t1 = prof.t[lo]; const u = t1 - t0 > 1e-6 ? (tt - t0) / (t1 - t0) : 0;
