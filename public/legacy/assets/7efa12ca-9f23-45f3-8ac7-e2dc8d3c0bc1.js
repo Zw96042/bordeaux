@@ -527,3 +527,93 @@
         value: draft,
         rows: 4,
         spellCheck: false,
+        autoComplete: 'off',
+        'data-lpignore': 'true',
+        'data-1p-ignore': true,
+        'aria-invalid': !!error,
+        'aria-describedby': error ? id + '-error' : id + '-type',
+        onChange: (event) => { setDraft(event.target.value); if (error) validate(event.target.value, false); },
+        onBlur: () => validate(draft, true),
+        onKeyDown: (event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); validate(draft, true); } },
+      }),
+      h('span', { id: id + '-type', className: 'cmd-param-type' }, javaType + ' · JSON' + (schema && schema.kind === 'opaque' ? ' · opaque custom values remain editable as JSON' : '')),
+      error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
+  }
+
+  function CommandParameterEditor({ id, label, schema, parameter, value, onChange, depth }) {
+    const level = depth || 0;
+    const current = value === undefined ? (parameter ? parameterDefaultValue(parameter) : defaultSchemaValue(schema, level)) : value;
+    if (!schema || level > 16) return h(JsonValueEditor, { id, label, value: current, schema: schema || { kind: 'opaque', javaType: 'unknown' }, onChange });
+    if (schema.kind === 'boolean') {
+      return h('label', { className: 'cmd-check-row', htmlFor: id },
+        h('span', null, h('strong', null, label), h('small', null, parameterMetadata(parameter, schema.javaType))),
+        h('input', { id, type: 'checkbox', checked: !!current, onChange: (event) => onChange(event.target.checked) }));
+    }
+    if (schema.kind === 'integer' || schema.kind === 'number') {
+      return h(NumberValueEditor, { id, label, value: current, integer: schema.kind === 'integer', javaType: schema.javaType, parameter, onChange });
+    }
+    if (schema.kind === 'integerString') {
+      return h(IntegerStringValueEditor, { id, label, value: current, javaType: schema.javaType, parameter, onChange });
+    }
+    if (schema.kind === 'decimalString') {
+      return h(DecimalStringValueEditor, { id, label, value: current, javaType: schema.javaType, parameter, onChange });
+    }
+    if (schema.kind === 'string') {
+      return h('div', { className: 'cmd-param' },
+        h('label', { className: 'fieldlabel', htmlFor: id }, label),
+        h('input', { id, className: 'textinput cmd-param-input', type: 'text', value: typeof current === 'string' ? current : '', spellCheck: false, autoComplete: 'off', 'data-lpignore': 'true', 'data-1p-ignore': true, onChange: (event) => onChange(event.target.value) }),
+        h('span', { className: 'cmd-param-type' }, parameterMetadata(parameter, schema.javaType)));
+    }
+    if (schema.kind === 'enum') {
+      const options = schema.enumValues || [];
+      if (options.length > 0 && options.length <= 4) {
+        return h('fieldset', { className: 'cmd-choice-group', title: schema.javaType },
+          h('legend', { className: 'fieldlabel' }, label),
+          h('div', { className: 'cmd-choice-grid', style: { '--choice-count': options.length } },
+            options.map((option) => h('label', { className: 'cmd-choice', key: option },
+              h('input', { type: 'radio', name: id, value: option, checked: current === option, onChange: () => onChange(option) }),
+              h('span', { title: option }, option)))));
+      }
+      return h(InlinePicker, {
+        id,
+        label,
+        value: current == null ? '' : current,
+        items: options.map((option) => ({ value: option, label: option })),
+        placeholder: 'Choose ' + label.toLowerCase(),
+        searchThreshold: 7,
+        onChange,
+      });
+    }
+    if (schema.kind === 'optional') {
+      const enabled = current !== null && current !== undefined;
+      return h('fieldset', { className: 'cmd-param-group' },
+        h('legend', null, label),
+        h('label', { className: 'cmd-check-row', htmlFor: id + '-enabled' },
+          h('span', null, h('strong', null, 'Set value'), h('small', null, schema.javaType)),
+          h('input', { id: id + '-enabled', type: 'checkbox', checked: enabled, onChange: (event) => onChange(event.target.checked ? defaultSchemaValue(schema.element, level + 1) : null) })),
+        enabled && h(CommandParameterEditor, { id: id + '-value', label: 'Value', schema: schema.element, value: current, onChange, depth: level + 1 }));
+    }
+    if (schema.kind === 'object') {
+      const objectValue = current && typeof current === 'object' && !Array.isArray(current) ? current : {};
+      return h('fieldset', { className: 'cmd-param-group' },
+        h('legend', null, label),
+        h('div', { className: 'cmd-param-type' }, schema.javaType),
+        (schema.fields || []).map((field) => h(CommandParameterEditor, {
+          key: field.name,
+          id: id + '-' + safeControlId(field.name),
+          label: field.name,
+          schema: field.schema,
+          value: objectValue[field.name],
+          onChange: (next) => onChange({ ...objectValue, [field.name]: next }),
+          depth: level + 1,
+        })));
+    }
+    return h(JsonValueEditor, { id, label, value: current, schema, onChange });
+  }
+
+  function ContextInspector(props) {
+    const { doc, sel, derived, actions, drive, robot, plannerId, javaProject, onClose } = props;
+    const [moreLimits, setMoreLimits] = React.useState(false);
+    const [moreBdx, setMoreBdx] = React.useState(false);
+    const [jiggleDistance, setJiggleDistance] = React.useState(0.18);
+    const [jiggleStrokes, setJiggleStrokes] = React.useState(4);
