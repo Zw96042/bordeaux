@@ -628,3 +628,80 @@ export function generateRouteCandidates(project: BordeauxProject, request: PlanP
           if (previous && previous.endWaypointIndex === startWaypointIndex && sameCollectionIntent(previous.intent, step.collectFuel)) previous.endWaypointIndex = points.length - 1;
           else collectionSpans.push({ startWaypointIndex, endWaypointIndex: points.length - 1, intent: step.collectFuel });
         }
+      }
+    } else {
+      goals.forEach((goal) => appendLeg(points, goal, traversal as RouteTraversal, false, portalRunM));
+      if (request.collectFuel) collectionSpans.push({ startWaypointIndex: 0, endWaypointIndex: points.length - 1, intent: request.collectFuel });
+    }
+    let finishTarget: FieldPointInput | null = null;
+    let finishHeadingDeg: number | undefined;
+    if (request.finishFacing) {
+      const shooter = project.robot.planning?.shooter;
+      if (!shooter) throw new Error("Configure the robot's shooter direction before requesting a target-facing finish.");
+      const endpoint = points[points.length - 1];
+      finishTarget = resolveLocation(project, request.finishFacing.target, request, { x: endpoint.x, y: endpoint.y, physicalHeadingRad }, true);
+      finishHeadingDeg = Math.atan2(finishTarget.y - endpoint.y, finishTarget.x - endpoint.x) * 180 / Math.PI - shooter.directionDeg;
+      if (collectionSpans.some((span) => span.endWaypointIndex === points.length - 1)) {
+        throw new Error("Use a separate non-collecting final travel step for a target-facing shooting approach.");
+      }
+    }
+    const usesTrench = traversal.startsWith("trench-") || requiredPortalIds.some((id) => id.includes("-trench-"));
+    const trenchIssue = usesTrench && effectiveRobotHeightM !== undefined && effectiveRobotHeightM > REBUILT_2026_TRENCH_CLEARANCE_M
+      ? `Robot height ${effectiveRobotHeightM.toFixed(3)} m exceeds the 0.565 m TRENCH clearance.`
+      : null;
+    const route = routePath(project, base, name, points, collectionSpans, finishHeadingDeg, hasSteps);
+    const path = route.path;
+    const activeCollection = route.collectionSpans;
+    const analysisProject = { ...clone(project), plannerId: selectedPlanner, paths: [path] };
+    const analysisOptions = {
+      plannerId: selectedPlanner,
+      minimumClearanceM,
+      robotHeightM: effectiveRobotHeightM,
+      ...(traversal === "ordered" ? { requiredPortalIds } : { requiredTraversal: traversal as RouteTraversal }),
+    };
+    const analyze = () => analyzePath(analysisProject, path.id, analysisOptions);
+    let analysis = analyze();
+    const bumpRanges = bumpCrossingRanges(analysisProject, path, analysis.rawSamples);
+    bumpRanges.forEach((range, bumpIndex) => {
+      const containingIndex = path.ranges.findIndex((existing) => rangeContains(existing, range));
+      if (containingIndex >= 0) splitContainingRangeForBump(path, containingIndex, range, bumpIndex);
+      else addBumpRange(path, range, bumpIndex);
+    });
+    if (bumpRanges.length > 0) analysis = analyze();
+    const errors = analysis.findings.filter((finding) => finding.severity === "error");
+    const headingIssue = activeCollection.length && project.robot.planning?.intake
+      ? collectionHeadingIssue(analysis.rawSamples, activeCollection, project.robot.planning.intake.directionDeg)
+      : null;
+    const shootingHeadingIssue = finishTarget && project.robot.planning?.shooter
+      ? finishHeadingIssue(analysis.rawSamples, finishTarget, project.robot.planning.shooter.directionDeg, request.finishFacing?.maxHeadingErrorDeg ?? 5)
+      : null;
+    const clearance = minimumPathClearance(analysisProject, analysis.rawSamples);
+    const collectionAreaM2 = estimatedCollectionArea(project, analysis.rawSamples, activeCollection);
+    const shootingRangeM = finishTarget && analysis.rawSamples.length ? Math.hypot(finishTarget.x - analysis.rawSamples.at(-1)!.x, finishTarget.y - analysis.rawSamples.at(-1)!.y) : undefined;
+    const preferredRangeM = project.robot.planning?.shooter?.preferredRangeM;
+    const valid = !trenchIssue && !headingIssue && !shootingHeadingIssue && errors.length === 0 && analysis.totalTimeS !== null;
+    return {
+      id: `route_${index + 1}_${path.id}`,
+      label: traversal === "ordered" ? "Ordered route with typed swoosh" : traversal === "direct" ? "Direct candidate" : `Via ${traversal.replace("-", " ")}`,
+      traversal,
+      ...(requiredPortalIds.length ? { requiredPortalIds } : {}),
+      path,
+      metrics: {
+        totalTimeS: analysis.totalTimeS ?? 0,
+        totalDistanceM: analysis.totalDistanceM ?? 0,
+        minimumClearanceM: clearance,
+        waypointCount: path.waypoints.length,
+        peakCurvatureInvM: peak(analysis, "curvature"),
+        peakAngularVelocityRadps: peak(analysis, "angularVelocity"),
+        ...(collectionAreaM2 === undefined ? {} : { estimatedCollectionAreaM2: collectionAreaM2 }),
+        ...(shootingRangeM === undefined ? {} : { shootingRangeM }),
+        ...(shootingRangeM === undefined || preferredRangeM === undefined ? {} : { preferredShootingRangeErrorM: Math.abs(shootingRangeM - preferredRangeM) }),
+      },
+      analysis,
+      diagnostics: analysis.plannerDiagnostics,
+      valid,
+      ...(valid ? {} : { rejectionReason: trenchIssue ?? headingIssue ?? shootingHeadingIssue ?? errors[0]?.message ?? "The planner could not generate this candidate." }),
+    };
+  });
+  return rankCandidates(candidates, Math.max(0, Math.min(2, request.nearTieWindowS ?? 0.1))).slice(0, Math.max(1, Math.min(MAX_CANDIDATES, request.maximumCandidates ?? 3)));
+}
