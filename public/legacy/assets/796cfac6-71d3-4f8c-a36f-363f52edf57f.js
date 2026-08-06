@@ -1,48 +1,48 @@
 // Bordeaux — chrome: top bar, path switcher, tool rail, outline, constraint chip bar,
-// metric overlay, diagnostics drawer, telemetry/transport, view controls.
+// metric overlay, path-check drawer, telemetry/transport, view controls.
 // Needs React + window.UI + window.PM. Exports window.Panels
 (function () {
-  const { useRef, useState, useEffect } = React;
+  const { useRef, useState, useEffect, useMemo } = React;
   const h = React.createElement;
-  const { Icon, IconBtn, Section, Num } = window.UI;
+  const { Icon, IconBtn, Section, Num, Seg, constraintRangeSummary } = window.UI;
   const R2D = 180 / Math.PI;
 
-  const THEMES = [
-    { id: 'slate', c: '#3f6fd0' }, { id: 'forest', c: '#2fa36b' }, { id: 'amber', c: '#cf962f' },
-    { id: 'cyan', c: '#2bb3c4' }, { id: 'violet', c: '#8a7bf0' },
-  ];
-
-  // ---------------- theme popover ----------------
-  function ThemePicker({ theme, setTheme }) {
-    const [open, setOpen] = useState(false);
-    const ref = useRef(null);
-    useEffect(() => {
-      if (!open) return;
-      const away = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-      window.addEventListener('pointerdown', away); return () => window.removeEventListener('pointerdown', away);
-    }, [open]);
-    return h('div', { className: 'themewrap', ref },
-      h('button', { className: 'themebtn', type: 'button', title: 'Accent', onClick: () => setOpen((o) => !o) }, h(Icon, { name: 'palette', size: 18 })),
-      open && h('div', { className: 'themepop' },
-        h('div', { className: 'themepop-h' }, 'Accent'),
-        h('div', { className: 'swatchrow' }, THEMES.map((t) =>
-          h('button', { key: t.id, className: 'swatch' + (theme === t.id ? ' on' : ''), style: { background: t.c }, title: t.id, onClick: () => { setTheme(t.id); setOpen(false); } })))));
-  }
-
   // ---------------- path manager ----------------
-  function PathSwitcher({ project, activeIdx, setActive, addPath, dupPath, delPath, renamePath, times }) {
+  function PathLibrary({ project, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times }) {
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState('');
-    const [focus, setFocus] = useState(activeIdx);
-    const ref = useRef(null);
+    const [collapsed, setCollapsed] = useState({});
+    const [editing, setEditing] = useState(null);
+    const [menu, setMenu] = useState(null);
+    const [draft, setDraft] = useState('');
+    const [error, setError] = useState('');
+    const triggerRef = useRef(null), panelRef = useRef(null), searchRef = useRef(null), editRef = useRef(null), editOriginRef = useRef(null);
+    const cur = project.paths[activeIdx], folders = project.pathFolders || [];
+    const close = () => {
+      setOpen(false); setMenu(null); setEditing(null); setError('');
+      editOriginRef.current = null;
+      requestAnimationFrame(() => triggerRef.current && triggerRef.current.focus());
+    };
+    const finishEdit = () => {
+      setEditing(null); setError('');
+    };
+    useEffect(() => {
+      if (open) requestAnimationFrame(() => searchRef.current && searchRef.current.focus());
+    }, [open]);
     useEffect(() => {
       if (!open) return;
-      const away = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-      window.addEventListener('pointerdown', away); return () => window.removeEventListener('pointerdown', away);
-    }, [open]);
-    useEffect(() => { if (open) setFocus(activeIdx); }, [open, activeIdx]);
-    const cur = project.paths[activeIdx];
-    const statsFor = (p, i) => {
+      const onKey = (e) => {
+        if (e.key === '/' && !editing) { e.preventDefault(); searchRef.current && searchRef.current.focus(); }
+        if (e.key !== 'Escape') return;
+        e.preventDefault();
+        if (editing) finishEdit();
+        else if (menu) setMenu(null);
+        else if (query) setQuery('');
+        else close();
+      };
+      window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
+    }, [open, editing, menu, query]);
+    useEffect(() => {
       try {
         const d = window.PM.derivePath(p, project.robot, 24);
         return { time: times[i] != null ? times[i] : d.prof.totalTime || 0, len: d.sample.length || 0, warnings: (d.warnings || []).length };
