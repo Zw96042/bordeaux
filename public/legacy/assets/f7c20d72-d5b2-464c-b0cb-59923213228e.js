@@ -684,3 +684,93 @@
           interactive && h('line', { x1: P(5), y1: 0, x2: len + P(8), y2: 0, stroke: 'transparent', strokeWidth: P(15), strokeLinecap: 'round', 'data-role': 'head', 'data-idx': idx }),
           interactive && h('circle', { cx: len + P(2), cy: 0, r: P(8.5), fill: 'transparent', 'data-role': 'head', 'data-idx': idx }));
       };
+
+      // facing comb: neutral, thin heading ticks along the trajectory
+      if (pts.length > 1 && !isTank) {
+        const totalLen = derived.sample.length || 1;
+        const step = 0.78;
+        const comb = [];
+        for (let dl = step * 0.55; dl < totalLen - 0.04; dl += step) {
+          const f = dl / totalLen;
+          const pf = window.PM.pointAtFraction(f, pts);
+          let segment = 0;
+          if (derived.wpFrac) for (let i = 0; i < derived.wpFrac.length - 1; i++) if (f >= derived.wpFrac[i] - 1e-6) segment = i;
+          const rad = segmentMode(segment) === 'tangent' ? pf.heading : window.PM.headingAt(f, derived.anchors);
+          const c = W2P(pf);
+          const rot = flip ? (rad * 180 / Math.PI) + 180 : (rad * 180 / Math.PI);
+          comb.push(h('g', { key: 'cb' + dl.toFixed(2), transform: `translate(${c.x} ${c.y}) rotate(${-rot})` },
+            h('line', { x1: 0, y1: 0, x2: P(12), y2: 0, stroke: '#aeb6c2', strokeWidth: P(1.1), strokeLinecap: 'round' }),
+            h('path', { d: `M ${P(12)} ${-P(2.6)} L ${P(16.5)} 0 L ${P(12)} ${P(2.6)} Z`, fill: '#aeb6c2' })));
+        }
+        els.push(h('g', { key: 'comb', opacity: 0.32, style: { pointerEvents: 'none' } }, comb));
+      }
+
+      // ghost robot footprint (dashed outline) at a pose
+      const ghost = (cx, cy, deg, col, key, op) => {
+        const rot = flip ? deg + 180 : deg;
+        return h('g', { key, transform: `translate(${cx} ${cy}) rotate(${-rot})`, opacity: op, style: { pointerEvents: 'none' } },
+          h('polygon', { points: footprintPoints(robot, 1), fill: 'none', stroke: col, strokeWidth: P(1.6), strokeLinejoin: 'round', strokeDasharray: `${P(7)} ${P(5)}` }));
+      };
+      const wps = doc.waypoints;
+      const startHead = waypointHeadingDeg(0);
+      const endHead = waypointHeadingDeg(wps.length - 1);
+      if (wps[0]) { const c = W2P(wps[0]); els.push(ghost(c.x, c.y, startHead, C_START, 'gs', 0.28)); }
+      if (wps[wps.length - 1]) { const c = W2P(wps[wps.length - 1]); els.push(ghost(c.x, c.y, endHead, C_END, 'ge', 0.28)); }
+
+      // Endpoint jiggle is one compact action. Preview its strokes without adding waypoint nodes.
+      const endpoint = wps[wps.length - 1];
+      if (endpoint && endpoint.jiggle) {
+        const baseRad = (endpoint.turnInPlace ? endpoint.turnInPlace.headingDeg : endHead) * Math.PI / 180;
+        const physicalBase = baseRad + (derived.rev ? Math.PI : 0);
+        const positions = window.PM.jigglePositions(endpoint, physicalBase, endpoint.jiggle, { w: FIELD_W, h: FIELD_H });
+        if (positions) {
+          const anchor = W2P(endpoint);
+          const strokes = [];
+          for (let i = 0; i < positions.length; i += 2) {
+            const tip = W2P(positions[i]);
+            strokes.push(h('line', { key: 'jiggle-stroke-' + i, x1: anchor.x, y1: anchor.y, x2: tip.x, y2: tip.y, stroke: accent, strokeWidth: P(1.6), strokeOpacity: 0.62, strokeDasharray: `${P(5)} ${P(4)}`, strokeLinecap: 'round' }));
+            strokes.push(h('circle', { key: 'jiggle-tip-' + i, cx: tip.x, cy: tip.y, r: P(2.8), fill: '#111318', stroke: accent, strokeWidth: P(1.3) }));
+          }
+          els.push(h('g', { key: 'endpoint-jiggle', style: { pointerEvents: 'none' } }, strokes));
+        }
+      }
+
+      // event markers — neutral diamond node + flag
+      const markerOrder = doc.markers.map((mk, i) => ({ mk, i }));
+      markerOrder.sort((a, b) => Number(sel.kind === 'em' && sel.idx === a.i) - Number(sel.kind === 'em' && sel.idx === b.i));
+      markerOrder.forEach(({ mk, i }) => {
+        const pf = window.PM.pointAtFraction(window.PM.featureFraction(mk, derived.sample), pts); const c = W2P(pf);
+        const isSel = sel.kind === 'em' && sel.idx === i;
+        const col = isSel ? accent : C_NEUTRAL;
+        els.push(h('g', { key: 'em' + i, transform: `translate(${c.x} ${c.y})`, style: { cursor: 'pointer' } },
+          h('line', { x1: 0, y1: 0, x2: 0, y2: -P(22), stroke: col, strokeWidth: P(1.4) }),
+          h('path', { d: `M 0 ${-P(22)} L ${P(11)} ${-P(17.5)} L 0 ${-P(13)} Z`, fill: col, 'data-role': 'em', 'data-idx': i }),
+          h('rect', { x: -P(4), y: -P(4), width: P(8), height: P(8), transform: 'rotate(45)', fill: '#14161a', stroke: col, strokeWidth: P(1.6), 'data-role': 'em', 'data-idx': i })));
+      });
+
+      // rotation targets — ghost robot oriented at the target heading + heading vector
+      const targetOrder = doc.targets.map((rtg, i) => ({ rtg, i }));
+      targetOrder.sort((a, b) => Number(sel.kind === 'rt' && sel.idx === a.i) - Number(sel.kind === 'rt' && sel.idx === b.i));
+      if (!isTank) targetOrder.forEach(({ rtg, i }) => {
+        if (!targetActive(rtg)) return;
+        const pf = window.PM.pointAtFraction(window.PM.featureFraction(rtg, derived.sample), pts); const c = W2P(pf);
+        const isSel = sel.kind === 'rt' && sel.idx === i;
+        const deg = flip ? rtg.deg + 180 : rtg.deg;
+        const col = isSel ? accent : C_NEUTRAL;
+        const front = forwardExtent(robot);
+        els.push(h('g', { key: 'rt' + i, style: { cursor: 'pointer' } },
+          h('g', { transform: `translate(${c.x} ${c.y}) rotate(${-deg})`, opacity: isSel ? 0.95 : 0.6 },
+            h('polygon', { points: footprintPoints(robot, 1), fill: isSel ? 'rgba(63,111,208,0.10)' : 'rgba(0,0,0,0.18)', stroke: col, strokeWidth: P(1.6), strokeLinejoin: 'round', 'data-role': 'rt', 'data-idx': i }),
+            h('line', { x1: 0, y1: 0, x2: front + P(9), y2: 0, stroke: col, strokeWidth: P(2) }),
+            h('path', { d: `M ${front + P(6)} ${-P(5)} L ${front + P(17)} 0 L ${front + P(6)} ${P(5)} Z`, fill: col }),
+            h('line', { x1: P(5), y1: 0, x2: front + P(18), y2: 0, stroke: 'transparent', strokeWidth: P(15), strokeLinecap: 'round', 'data-role': 'rth', 'data-idx': i, style: { cursor: 'grab' } })),
+          h('circle', { cx: c.x, cy: c.y, r: P(3), fill: col, 'data-role': 'rt', 'data-idx': i })));
+      });
+
+      // Selected look-at segment — one draggable field target with sparse guide rays.
+      if (!isTank && sel.kind === 'seg') {
+        const segment = sel.idx, source = doc.waypoints[segment];
+        if (source && source.segmentHeadingMode === 'lookAt' && source.segmentLookAt && derived.wpFrac) {
+          const tc = W2P(source.segmentLookAt), lo = derived.wpFrac[segment] || 0, hi = derived.wpFrac[segment + 1] || lo;
+          [0.18, 0.5, 0.82].forEach((part, guide) => {
+            const point = window.PM.pointAtFraction(lo + (hi - lo) * part, pts), pc = W2P(point);
