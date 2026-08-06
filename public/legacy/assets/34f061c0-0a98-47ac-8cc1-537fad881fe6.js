@@ -133,51 +133,51 @@
       const appRoot = document.getElementById('root');
       const reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       const runner = splash.querySelector('.boot-splash-inner');
-    }), [commit]);
-    const toggleStop = useCallback((i, on) => commit((d) => { const w = d.waypoints[i]; w.stop = on; if (on) w.linked = false; return d; }), [commit]);
-    const toggleTheta = useCallback((i, on) => commit((d) => { d.waypoints[i].thetaOn = on; return d; }), [commit]);
-    const setHandleLen = useCallback((i, key, len) => commit((d) => { const w = d.waypoints[i]; const a = Math.atan2(w[key].y - w.y, w[key].x - w.x); w[key] = { x: w.x + Math.cos(a) * len, y: w.y + Math.sin(a) * len }; return d; }), [commit]);
-    const delWp = useCallback((i) => { commit((d) => { if (i <= 0 || i >= d.waypoints.length - 1) return d; d.waypoints.splice(i, 1); if (d.waypoints.length) { d.waypoints[0].thetaOn = true; d.waypoints[d.waypoints.length - 1].thetaOn = true; } return d; }); select(null, -1); }, [commit, select]);
+      const runnerWidth = runner ? runner.getBoundingClientRect().width : 360;
+      const travelPx = window.innerWidth / 2 + runnerWidth / 2;
+      const strideMs = 460;
+      const strideDistancePx = Math.max(1, runnerWidth * 1.7);
+      const strideCount = Math.max(1, Math.min(3, Math.ceil(travelPx / strideDistancePx)));
+      const runMs = strideCount * strideMs;
+      const curtainMs = 280;
+      splash.style.setProperty('--boot-run', runMs + 'ms');
+      splash.style.setProperty('--boot-curtain', curtainMs + 'ms');
+      let removeTimer;
+      const revealApp = () => {
+        splash.remove();
+        if (appRoot) { appRoot.inert = false; appRoot.removeAttribute('inert'); }
+      };
+      const fadeTimer = window.setTimeout(() => {
+        splash.classList.add('boot-splash-ready');
+        removeTimer = window.setTimeout(revealApp, reducedMotion ? 0 : runMs + curtainMs + 40);
+      }, reducedMotion ? 0 : strideMs / 2);
+      return () => { window.clearTimeout(fadeTimer); if (removeTimer) window.clearTimeout(removeTimer); if (appRoot) { appRoot.inert = false; appRoot.removeAttribute('inert'); } };
+    }, []);
 
-    const addTargetAt = useCallback((p) => commit((d) => { const pts = derived.sample.pts; const f = pts.length > 1 ? window.PM.nearestFraction(p.x, p.y, pts) : 0.5; const deg = pts.length > 1 ? window.PM.pointAtFraction(f, pts).heading * 180 / Math.PI : 0; d.targets.push({ f, deg }); if ((d.headingMode || 'targets') !== 'targets') d.headingMode = 'targets'; d._selT = d.targets.length - 1; return d; }), [commit, derived]);
-    const addMarkerAt = useCallback((p) => commit((d) => { const f = derived.sample.pts.length > 1 ? window.PM.nearestFraction(p.x, p.y, derived.sample.pts) : 0.5; d.markers.push({ f, name: 'event' + (d.markers.length + 1), cmd: 'none', group: 'sequential' }); d._selM = d.markers.length - 1; return d; }), [commit, derived]);
-    useEffect(() => { if (doc._selT != null) { select('rt', doc._selT); mutate((d) => { delete d._selT; return d; }); } }, [doc._selT]);
-    useEffect(() => { if (doc._selM != null) { select('em', doc._selM); mutate((d) => { delete d._selM; return d; }); } }, [doc._selM]);
+    useEffect(() => {
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.listRecentJavaProjects !== 'function') return;
+      let active = true;
+      window.bordeauxAPI.listRecentJavaProjects().then((recentProjects) => {
+        if (active) setJavaProjectState((current) => ({ ...current, recentProjects: Array.isArray(recentProjects) ? recentProjects : [] }));
+      }).catch((error) => {
+        if (active) setJavaProjectState((current) => ({ ...current, error: error && error.message ? error.message : String(error) }));
+      });
+      return () => { active = false; };
+    }, []);
 
-    const moveTargetTo = useCallback((i, p) => mutate((d) => { d.targets[i].f = window.PM.nearestFraction(p.x, p.y, derived.sample.pts); return d; }), [mutate, derived]);
-    const moveMarkerTo = useCallback((i, p) => mutate((d) => { d.markers[i].f = window.PM.nearestFraction(p.x, p.y, derived.sample.pts); return d; }), [mutate, derived]);
-    const setTarget = useCallback((i, patch) => commit((d) => { Object.assign(d.targets[i], patch); return d; }), [commit]);
-    const delTarget = useCallback((i) => { commit((d) => { d.targets.splice(i, 1); return d; }); select(null, -1); }, [commit, select]);
-    const setMarker = useCallback((i, patch) => commit((d) => { Object.assign(d.markers[i], patch); return d; }), [commit]);
-    const delMarker = useCallback((i) => { commit((d) => { d.markers.splice(i, 1); return d; }); select(null, -1); }, [commit, select]);
+    useEffect(() => {
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.getMcpStatus !== 'function') return;
+      let active = true;
+      window.bordeauxAPI.getMcpStatus().then((status) => { if (active) setMcpEnabled(Boolean(status && status.enabled)); }).catch(() => undefined);
+      const unsubscribe = typeof window.bordeauxAPI.onMcpStatus === 'function'
+        ? window.bordeauxAPI.onMcpStatus((status) => { if (active) setMcpEnabled(Boolean(status && status.enabled)); })
+        : null;
+      return () => { active = false; if (unsubscribe) unsubscribe(); };
+    }, []);
 
-    const addRange = useCallback((f0, f1) => commit((d) => {
-      if (!d.ranges) d.ranges = [];
-      const a = Math.max(0, Math.min(f0, f1)), b = Math.min(1, Math.max(f0, f1));
-      const c = d.constraints;
-      // purely where it was drawn (percent of path), inheriting the global limits
-      d.ranges.push({ f0: a, f1: b, anchor: 'param', maxVel: c.maxVel, maxAccel: c.maxAccel, maxDecel: (c.maxDecel != null ? c.maxDecel : c.maxAccel), maxAngVel: c.maxAngVel, maxAngAccel: c.maxAngAccel });
-      d._selR = d.ranges.length - 1; return d;
-    }), [commit]);
-    const setRange = useCallback((i, patch) => commit((d) => { Object.assign(d.ranges[i], patch); return d; }), [commit]);
-    const delRange = useCallback((i) => { commit((d) => { d.ranges.splice(i, 1); return d; }); select(null, -1); }, [commit, select]);
-    const moveRangeHandle = useCallback((i, which, f) => mutate((d) => {
-      const rg = d.ranges[i]; const key = which ? 'f1' : 'f0'; const cf = Math.max(0, Math.min(1, f));
-      const len = derived.sample.length || 1;
-      if (rg.anchor === 'dist') { rg[which ? 'd1' : 'd0'] = +(cf * len).toFixed(2); }
-      else if (rg.anchor === 'wp') { const wf = window.PM.waypointFracs(d, derived.sample); let best = 0, bd = Infinity; wf.forEach((wfr, k) => { const dd = Math.abs(wfr - cf); if (dd < bd) { bd = dd; best = k; } }); rg[which ? 'w1' : 'w0'] = best; }
-      else { rg[key] = cf; }
-      return d;
-    }), [mutate, derived]);
-    useEffect(() => { if (doc._selR != null) { select('cr', doc._selR); mutate((d) => { delete d._selR; return d; }); } }, [doc._selR]);
-
-    const setConstraint = useCallback((patch) => commit((d) => { Object.assign(d.constraints, patch); return d; }), [commit]);
-    const setDoc = useCallback((patch) => commit((d) => Object.assign(d, patch)), [commit]);
-    const rename = useCallback((nm) => mutate((d) => { d.name = nm; return d; }), [mutate]);
-    const setRobot = useCallback((patch) => setProject((pr) => ({ ...pr, robot: { ...pr.robot, ...patch } })), []);
-
-    // ---- modeless “add” actions (no tool modes): create + select, then edit on canvas / inspector ----
-    const addWaypointEnd = useCallback(() => commit((d) => {
+    const applyJavaProjectConnection = useCallback((result) => {
+      setJavaProjectState({
+        status: 'ready',
       const wps = d.waypoints; const n = wps.length;
       const last = wps[n - 1], prev = wps[n - 2] || last;
       let dx = last.x - prev.x, dy = last.y - prev.y; const L = Math.hypot(dx, dy) || 1; dx /= L; dy /= L;
