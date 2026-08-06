@@ -313,51 +313,51 @@
       const receiveProposal = (proposal) => {
         if (!active || !proposal) return;
         const proposalKey = proposal.id + ':' + proposal.status;
-      move: (id, dir) => setRoutine((r) => window.AUTO.move(r, id, dir)),
-      reorder: (id, targetId, before) => setRoutine((r) => window.AUTO.reorderRelative(r, id, targetId, before)),
-      select: (id) => setRoutineSel(id),
-      addAfter: (id, type, cat) => setRoutine((r) => { const nn = window.AUTO.newNode(type, cat); setRoutineSel(nn.id); return window.AUTO.insertAfter(r, id, nn); }),
-      addBranch: (decId, br, type, cat) => setRoutine((r) => { const nn = window.AUTO.newNode(type, cat); setRoutineSel(nn.id); return window.AUTO.appendBranch(r, decId, br, nn); }),
-      addEnd: (type, cat) => setRoutine((r) => { const nn = window.AUTO.newNode(type, cat); setRoutineSel(nn.id); return window.AUTO.append(r, nn); }),
-      prepend: (type, cat) => setRoutine((r) => { const nn = window.AUTO.newNode(type, cat); setRoutineSel(nn.id); return window.AUTO.prepend(r, nn); }),
-      setOutcome: (id, br) => setRoutineOutcomes((o) => ({ ...o, [id]: br })),
-      rename: (nm) => setRoutine((r) => ({ ...r, name: nm })),
-      openInEditor: (idx) => { setActive(idx); setPage('plan'); },
-    }), [routineOutcomes]);
-    const routineControls = useMemo(() => ({
-      toggle: () => { if (routineTime >= run.total - 1e-6) setRoutineTime(0); setRoutinePlaying((p) => !p); },
-      play: () => { if (routineTime >= run.total - 1e-6) setRoutineTime(0); setRoutinePlaying(true); },
-      reset: () => { setRoutinePlaying(false); setRoutineTime(0); },
-      seek: (t) => { setRoutinePlaying(false); setRoutineTime(Math.max(0, Math.min(run.total, t))); },
-      step: (dir) => { setRoutinePlaying(false); const idx = window.AUTO.stepAt(run, routineTime); const ni = Math.max(0, Math.min(run.steps.length - 1, idx + dir)); const s = run.steps[ni]; if (s) setRoutineTime(s.t0 + (s.dur > 0 ? Math.min(0.05, s.dur / 2) : 0)); },
-    }), [run, routineTime]);
-    const routineRunning = routinePlaying || routineTime > 0.001;
-    const routineOverlay = useMemo(() => page === 'auto' ? window.AUTO.fieldOverlay(run, { time: routineTime, running: routineRunning, selectedId: routineSel }) : null, [page, run, routineTime, routineRunning, routineSel]);
-    const routinePose = page === 'auto' ? window.AUTO.poseAt(run, routineTime, robot) : null;
-    const autoFieldActions = useMemo(() => ({ selectNode: (id) => setRoutineSel((s) => s === id ? null : id), select: () => setRoutineSel(null) }), []);
-
-    // ---- view ----
-    const onFit = useCallback(() => setView(FIT), []);
-    const zoomBy = useCallback((factor) => setView((v) => {
-      const cx = v.x + v.w / 2, cy = v.y + v.h / 2;
-      const nw = Math.max(IMG_W * 0.12, Math.min(IMG_W * 1.6, v.w * factor));
-      const nh = nw * (IMG_H / IMG_W);
-      return { x: cx - nw / 2, y: cy - nh / 2, w: nw, h: nh };
-    }), []);
-    const zoomPct = Math.round(FIT.w / view.w * 100);
-
-    // ---- export ----
-    const onExport = () => {
-      if (window.bordeauxAPI && typeof window.bordeauxAPI.exportBdx === 'function') {
-        window.bordeauxAPI.exportBdx({ schemaVersion: '1.0', ...project, plannerId }).catch((err) => {
-          console.error('BDX export failed:', err);
-          alert('BDX export failed: ' + (err && err.message ? err.message : err));
-        });
-        return;
+        if (proposalKey === lastProposalKey) return;
+        lastProposalKey = proposalKey;
+        if (window.bordeauxAPI.acknowledgeAgentProposal) window.bordeauxAPI.acknowledgeAgentProposal(proposal.id);
+        const stale = proposal.baseSessionId !== agentSessionId || proposal.baseRevision !== agentRevision.current;
+        const received = stale && proposal.status === 'ready' ? { ...proposal, status: 'stale' } : proposal;
+        if (stale && proposal.status === 'ready' && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(proposal.id, 'stale');
+        setAgentProposal(received);
+        setAgentCandidateId(proposal.recommendedCandidateId || null);
+        setPage(proposal.operation === 'configureRobot' ? 'robot' : 'plan');
+      };
+      const unsubscribe = window.bordeauxAPI.onAgentProposal(receiveProposal);
+      if (typeof window.bordeauxAPI.getActiveAgentProposal === 'function') {
+        const restoreProposal = () => Promise.resolve(window.bordeauxAPI.getActiveAgentProposal()).then(receiveProposal).catch(() => undefined);
+        restoreProposal();
+        const restoreTimer = window.setInterval(restoreProposal, 1000);
+        return () => { active = false; window.clearInterval(restoreTimer); unsubscribe(); };
       }
-      const out = { version: '2.0', name: doc.name, robot: project.robot, ...doc };
-      const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
-      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = doc.name + '.path'; a.click();
+      return () => { active = false; unsubscribe(); };
+    }, [agentSessionId]);
+    useEffect(() => {
+      const onPointerDown = () => { keyboardNavigation.current = false; };
+      window.addEventListener('pointerdown', onPointerDown, true);
+      return () => window.removeEventListener('pointerdown', onPointerDown, true);
+    }, []);
+    useEffect(() => {
+      const pauseHiddenPlayback = () => {
+        if (document.hidden) { setPlaying(false); setRoutinePlaying(false); }
+      };
+      document.addEventListener('visibilitychange', pauseHiddenPlayback);
+      return () => document.removeEventListener('visibilitychange', pauseHiddenPlayback);
+    }, []);
+
+    // ---- derived path data ----
+    const derived = useMemo(() => window.PM.derivePath(doc, robot, PERSEG, plannerId), [doc, robot, plannerId]);
+
+    useEffect(() => { setTimes((t) => (t[doc.id] === derived.prof.totalTime ? t : { ...t, [doc.id]: derived.prof.totalTime })); }, [derived, doc.id]);
+
+    // ---- doc mutation ----
+    const writeDoc = useCallback((nd) => { setProject((pr) => { const paths = pr.paths.slice(); paths[activeIdx] = nd; return { ...pr, paths }; }); }, [activeIdx]);
+    const beginHistory = useCallback(() => { hist.current.past.push(clone(docRef.current)); if (hist.current.past.length > 80) hist.current.past.shift(); hist.current.future = []; projectHist.current.future = []; force((x) => x + 1); }, []);
+    const commit = useCallback((fn) => { beginHistory(); writeDoc(fn(clone(docRef.current))); }, [beginHistory, writeDoc]);
+    const mutate = useCallback((fn) => { writeDoc(fn(clone(docRef.current))); }, [writeDoc]);
+
+    const undo = useCallback(() => {
+      const H = hist.current;
     };
 
     // ---- keyboard ----
