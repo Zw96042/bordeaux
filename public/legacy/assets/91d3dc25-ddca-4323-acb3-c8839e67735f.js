@@ -12,37 +12,37 @@
     const a = 3 * u * u, b = 6 * u * t, c = 3 * t * t;
     return { x: a * (c0.x - p0.x) + b * (c1.x - c0.x) + c * (p1.x - c1.x), y: a * (c0.y - p0.y) + b * (c1.y - c0.y) + c * (p1.y - c1.y) };
   }
+  function splitBezier(p0, c0, c1, p1, t) {
+    t = Math.max(0, Math.min(1, t));
+    const mix = (a, b) => ({ x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) });
+    const q0 = mix(p0, c0), q1 = mix(c0, c1), q2 = mix(c1, p1);
+    const r0 = mix(q0, q1), r1 = mix(q1, q2), point = mix(r0, r1);
+    return { point, left: [p0, q0, r0, point], right: [point, r1, q2, p1] };
+  }
+  function nearestPointOnSegment(point, pts, segment) {
+    let best = null, bestDistance = Infinity;
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i];
+      if (b.seg !== segment || (a.seg !== segment && a.seg !== segment - 1)) continue;
+      const dx = b.x - a.x, dy = b.y - a.y, length2 = dx * dx + dy * dy;
+      const u = length2 > 1e-12 ? Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / length2)) : 0;
+      const x = lerp(a.x, b.x, u), y = lerp(a.y, b.y, u);
+      const distance = (point.x - x) ** 2 + (point.y - y) ** 2;
+      if (distance >= bestDistance) continue;
+      const aT = a.seg === segment && Number.isFinite(a.t) ? a.t : 0;
+      const bT = Number.isFinite(b.t) ? b.t : 1;
+      bestDistance = distance;
+      best = { x, y, t: lerp(aT, bT, u), heading: angLerp(a.heading || 0, b.heading || 0, u), seg: segment };
+    }
+    if (best) return best;
+    pts.forEach((sample) => {
+      if (sample.seg !== segment) return;
+      const distance = (point.x - sample.x) ** 2 + (point.y - sample.y) ** 2;
+      if (distance < bestDistance) { bestDistance = distance; best = { ...sample }; }
+    });
+    return best;
+  }
   function bezDD(p0, c0, c1, p1, t) {
-    const u = 1 - t;
-    return { x: 6 * u * (c1.x - 2 * c0.x + p0.x) + 6 * t * (p1.x - 2 * c1.x + c0.x), y: 6 * u * (c1.y - 2 * c0.y + p0.y) + 6 * t * (p1.y - 2 * c1.y + c0.y) };
-  }
-
-  // shortest signed angle difference (radians)
-  function angWrap(a) { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; }
-  function angLerp(a, b, t) { return a + angWrap(b - a) * t; }
-  const D2R = Math.PI / 180, R2D = 180 / Math.PI;
-
-  // ---- arc primitive: circle tangent to the start handle, through the endpoint ----
-  function arcSetup(p0, p1, c0) {
-    let tx = c0.x - p0.x, ty = c0.y - p0.y; let tl = Math.hypot(tx, ty);
-    if (tl < 1e-6) { tx = p1.x - p0.x; ty = p1.y - p0.y; tl = Math.hypot(tx, ty); }
-    if (tl < 1e-6) return null;
-    tx /= tl; ty /= tl; const nx = -ty, ny = tx;
-    const dx = p1.x - p0.x, dy = p1.y - p0.y; const denom = 2 * (dx * nx + dy * ny);
-    if (Math.abs(denom) < 1e-3) return null; // effectively straight
-    const R = (dx * dx + dy * dy) / denom;
-    const Cx = p0.x + R * nx, Cy = p0.y + R * ny, rad = Math.abs(R);
-    const a0 = Math.atan2(p0.y - Cy, p0.x - Cx), a1 = Math.atan2(p1.y - Cy, p1.x - Cx);
-    let sweep = a1 - a0;
-    if (R > 0) { while (sweep <= 1e-6) sweep += 2 * Math.PI; while (sweep > 2 * Math.PI) sweep -= 2 * Math.PI; }
-    else { while (sweep >= -1e-6) sweep -= 2 * Math.PI; while (sweep < -2 * Math.PI) sweep += 2 * Math.PI; }
-    if (rad > 1e4) return null;
-    return { Cx, Cy, rad, a0, sweep };
-  }
-
-  // ---- clothoid (Euler spiral): G1 Hermite fit, linearly-varying curvature ----
-  // single-clothoid from pose (p0,th0) to (p1,th1); returns dense table or null
-  function clothoidTable(p0, p1, th0, th1, M) {
     const dx = p1.x - p0.x, dy = p1.y - p0.y; const r = Math.hypot(dx, dy);
     if (r < 1e-6) return null;
     const tau = Math.atan2(dy, dx);
