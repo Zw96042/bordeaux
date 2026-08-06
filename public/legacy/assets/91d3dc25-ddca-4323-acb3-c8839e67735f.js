@@ -268,51 +268,51 @@
   }
 
   // ---- sample the whole path into dense points with arclength + curvature ----
-        const tt = (b.f - a.f) < 1e-6 ? 0 : (f - a.f) / (b.f - a.f);
-        // smoothstep for nicer rotation
-        const ss = tt * tt * (3 - 2 * tt);
-        return angLerp(a.rad, b.rad, ss);
-      }
-    }
-    return anchors[anchors.length - 1].rad;
-  }
+  // waypoints: [{x,y, prevC, nextC, segType?}]  segType: bezier | line | arc | clothoid
+  function sample(waypoints, perSeg = 60) {
+    const pts = [];
+    const segs = waypoints.length - 1;
+    if (segs < 1) return { pts: [], length: 0, segs: 0 };
+    const steps = perSeg;
 
-  // pose at time given sampled pts, profile times, and heading anchors / mode
-  function poseAtTime(time, pts, prof, anchors, mode, rev) {
-    const n = pts.length;
-    if (n < 2) return null;
-    const T = prof.t;
-    // wait/dwell hold: robot is stationary at the stop point for the dwell window (memo §15)
-    if (prof.holds && prof.holds.length) {
-      for (let k = 0; k < prof.holds.length; k++) {
-        const hd = prof.holds[k];
-        if (time >= hd.t0 - 1e-9 && time <= hd.t1 + 1e-9) {
-          const p = pts[hd.idx]; const f = pts[n - 1].s > 1e-6 ? p.s / pts[n - 1].s : 0;
-          let heading = mode === 'tank' ? p.heading : headingAt(f, anchors); if (rev) heading += Math.PI;
-          return { x: p.x, y: p.y, heading, speed: 0, s: p.s, f, hold: true };
-        }
+    const segTypeAt = (i) => (waypoints[i] && waypoints[i].segType) || 'bezier';
+    const pointOf = (w) => ({ x: w.x, y: w.y });
+    const chordHeading = (a, b) => Math.atan2(b.y - a.y, b.x - a.x);
+    const outHeading = (i) => {
+      const w0 = waypoints[i], w1 = waypoints[i + 1];
+      const p0 = pointOf(w0), p1 = pointOf(w1), c0 = w0.nextC || p1;
+      return Math.hypot(c0.x - p0.x, c0.y - p0.y) > 1e-6 ? Math.atan2(c0.y - p0.y, c0.x - p0.x) : chordHeading(p0, p1);
+    };
+    const inHeading = (i) => {
+      const w0 = waypoints[i - 1], w1 = waypoints[i];
+      const p0 = pointOf(w0), p1 = pointOf(w1), c1 = w1.prevC || p0;
+      return Math.hypot(p1.x - c1.x, p1.y - c1.y) > 1e-6 ? Math.atan2(p1.y - c1.y, p1.x - c1.x) : chordHeading(p0, p1);
+    };
+    const blendedJointHeading = (i) => {
+      const prevIsClothoid = i > 0 && segTypeAt(i - 1) === 'clothoid';
+      const nextIsClothoid = i < segs && segTypeAt(i) === 'clothoid';
+      if (prevIsClothoid && nextIsClothoid) {
+        const a = inHeading(i), b = outHeading(i);
+        return a + 0.5 * angWrap(b - a);
       }
-    }
-    let i = 1;
-    if (time <= 0) i = 1; else if (time >= T[n - 1]) i = n - 1;
-    else { // binary search
-      let lo = 1, hi = n - 1;
-      while (lo < hi) { const mid = (lo + hi) >> 1; if (T[mid] < time) lo = mid + 1; else hi = mid; }
-      i = lo;
-    }
-    const t0 = T[i - 1], t1 = T[i];
-    const u = t1 - t0 > 1e-6 ? Math.max(0, Math.min(1, (time - t0) / (t1 - t0))) : 0;
-    const a = pts[i - 1], b = pts[i];
-    const x = lerp(a.x, b.x, u), y = lerp(a.y, b.y, u);
-    const s = lerp(a.s, b.s, u);
-    const f = pts[n - 1].s > 1e-6 ? s / pts[n - 1].s : 0;
-    let heading;
-    if (mode === 'tank') heading = Math.atan2(b.y - a.y, b.x - a.x);
-    else heading = headingAt(f, anchors);
-    if (rev) heading += Math.PI;
-    const speed = lerp(prof.v[i - 1], prof.v[i], u);
-    return { x, y, heading, speed, s, f };
-  }
+      if (prevIsClothoid) return inHeading(i);
+      if (nextIsClothoid) return outHeading(i);
+      return 0;
+    };
+    const jointHeading = waypoints.map((_, i) => blendedJointHeading(i));
+    const clothoidSegments = new Set();
+
+    for (let i = 0; i < segs; i++) {
+      const w0 = waypoints[i], w1 = waypoints[i + 1];
+      const p0 = { x: w0.x, y: w0.y }, p1 = { x: w1.x, y: w1.y };
+      const c0 = w0.nextC, c1 = w1.prevC;
+      let type = w0.segType || 'bezier';
+      let arc = null, cloth = null, effType = type;
+      if (type === 'arc') { arc = arcSetup(p0, p1, c0); if (!arc) effType = 'line'; }
+      else if (type === 'clothoid') {
+        const th0 = (i > 0 && segTypeAt(i - 1) === 'clothoid') ? jointHeading[i] : outHeading(i);
+        const th1 = (i + 1 < segs && segTypeAt(i + 1) === 'clothoid') ? jointHeading[i + 1] : inHeading(i + 1);
+        cloth = clothoidTable(p0, p1, th0, th1, steps); if (!cloth) effType = 'bezier';
 
   // build heading anchors from a flat list of {f, rad} entries (waypoint thetas + rotation targets)
   // ensures coverage of f=0 and f=1 so heading is defined across the whole path
