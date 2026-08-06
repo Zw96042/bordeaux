@@ -133,6 +133,9 @@
     const out = acq.outcomes[node.id] || 'then';
     return h('div', { className: 'rt-step-wrap' }, card,
       h('div', { className: 'rt-branches' },
+        ['then', 'else'].map((br) => {
+          const cnt = A.branchCount(node[br]);
+          return h('div', { key: br, className: 'rt-branch' + (out === br ? ' live' : '') },
             h('button', { className: 'rt-brlbl', type: 'button', onClick: () => acq.setOutcome(node.id, br), title: 'Make this branch the simulated outcome' },
               h('span', { className: 'rt-brdot' }),
               h('span', { className: 'rt-brkey' }, br === 'then' ? 'if true' : 'if false'),
@@ -169,15 +172,12 @@
       h('div', { className: 'rt-hd' },
         h('span', { className: 'rt-mark' }),
         h('div', { className: 'rt-titlecol' },
-          h('input', { className: 'rt-name', value: routine.name, spellCheck: false, onChange: (e) => acq.rename(e.target.value) }),
+          h('input', { className: 'rt-name', 'aria-label': 'Routine name', value: routine.name, spellCheck: false, onChange: (e) => acq.rename(e.target.value) }),
           h('div', { className: 'rt-sub' }, 'Autonomous Routine · ', nSteps, nSteps === 1 ? ' step' : ' steps', ' · ', fmt(run.total)))),
 
       h('div', { className: 'rt-scroll' },
         routine.nodes.length === 0
           ? h(EmptyState, { acq })
-          : h('div', { className: 'rt-list' },
-              h(AddStep, { variant: 'gap', onPick: (t, c) => acq.prepend(t, c) }),
-              routine.nodes.map((n) => h(React.Fragment, { key: n.id },
                 h(StepCard, { node: n, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction: n.type === 'function' }),
                 h(AddStep, { variant: 'gap', onPick: (t, c) => acq.addAfter(n.id, t, c) }))),
               h(AddStep, { variant: 'end', onPick: (t, c) => acq.addEnd(t, c) }))));
