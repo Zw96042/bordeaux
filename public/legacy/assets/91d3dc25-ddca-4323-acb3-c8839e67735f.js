@@ -88,51 +88,51 @@
     const out = [cubics[0].start];
     for (let i = 1; i < wps.length - 1; i++) {
       const lw = 1 / Math.max(chords[i - 1], LV_EPS), rw = 1 / Math.max(chords[i], LV_EPS);
-    };
-    const blendedJointHeading = (i) => {
-      const prevIsClothoid = i > 0 && segTypeAt(i - 1) === 'clothoid';
-      const nextIsClothoid = i < segs && segTypeAt(i) === 'clothoid';
-      if (prevIsClothoid && nextIsClothoid) {
-        const a = inHeading(i), b = outHeading(i);
-        return a + 0.5 * angWrap(b - a);
-      }
-      if (prevIsClothoid) return inHeading(i);
-      if (nextIsClothoid) return outHeading(i);
-      return 0;
-    };
-    const jointHeading = waypoints.map((_, i) => blendedJointHeading(i));
-    const clothoidSegments = new Set();
-
-    for (let i = 0; i < segs; i++) {
-      const w0 = waypoints[i], w1 = waypoints[i + 1];
-      const p0 = { x: w0.x, y: w0.y }, p1 = { x: w1.x, y: w1.y };
-      const c0 = w0.nextC, c1 = w1.prevC;
-      let type = w0.segType || 'bezier';
-      let arc = null, cloth = null, effType = type;
-      if (type === 'arc') { arc = arcSetup(p0, p1, c0); if (!arc) effType = 'line'; }
-      else if (type === 'clothoid') {
-        const th0 = (i > 0 && segTypeAt(i - 1) === 'clothoid') ? jointHeading[i] : outHeading(i);
-        const th1 = (i + 1 < segs && segTypeAt(i + 1) === 'clothoid') ? jointHeading[i + 1] : inHeading(i + 1);
-        cloth = clothoidTable(p0, p1, th0, th1, steps); if (!cloth) effType = 'bezier';
-      }
-      if (effType === 'clothoid') clothoidSegments.add(i);
+      out.push(lvScale(lvAdd(lvScale(cubics[i - 1].end, lw), lvScale(cubics[i].start, rw)), 1 / (lw + rw)));
+    }
+    out.push(cubics[cubics.length - 1].end); return out;
+  }
+  function lvQuinticControls(a, b, ta, tb, aa, ab) {
+    const p1 = lvAdd(a, lvScale(ta, 1 / 5)), p4 = lvSub(b, lvScale(tb, 1 / 5));
+    return [a, p1, lvAdd(lvAdd(lvScale(aa, 1 / 20), lvScale(p1, 2)), lvScale(a, -1)), lvAdd(lvAdd(lvScale(ab, 1 / 20), lvScale(p4, 2)), lvScale(b, -1)), p4, b];
+  }
+  function lvEval(cp, t) {
+    const p = cp.map((v) => ({ ...v }));
+    for (let level = p.length - 1; level > 0; level--) for (let i = 0; i < level; i++) p[i] = { x: lerp(p[i].x, p[i + 1].x, t), y: lerp(p[i].y, p[i + 1].y, t) };
+    return p[0];
+  }
+  function lvDerivativeControls(cp) { const n = cp.length - 1; return cp.slice(0, -1).map((p, i) => lvScale(lvSub(cp[i + 1], p), n)); }
+  function lvBezierPiece(raw, mode, segmentOffset) {
+    const wps = raw.map((w) => ({ x: w.x, y: w.y, prevC: w.prevC, nextC: w.nextC }));
+    if (mode === 'automatic') {
+      wps.forEach((w) => { delete w.prevC; delete w.nextC; });
+      const firstChord = lvMag(lvSub(wps[1], wps[0])), last = wps.length - 1, lastChord = lvMag(lvSub(wps[last], wps[last - 1]));
+      const a0 = (raw[0].theta || 0) * D2R, a1 = (raw[last].theta || 0) * D2R;
+      wps[0].nextC = { x: wps[0].x + Math.cos(a0) * firstChord / 5, y: wps[0].y + Math.sin(a0) * firstChord / 5 };
+      wps[last].prevC = { x: wps[last].x - Math.cos(a1) * lastChord / 5, y: wps[last].y - Math.sin(a1) * lastChord / 5 };
+    }
+    const tangents = lvTangents(wps), seconds = lvSecondDerivatives(wps, tangents), pts = [], steps = 240;
+    for (let seg = 0; seg < wps.length - 1; seg++) {
+      const cp = lvQuinticControls(wps[seg], wps[seg + 1], tangents[seg], tangents[seg + 1], seconds[seg], seconds[seg + 1]);
+      const dcp = lvDerivativeControls(cp), ddcp = lvDerivativeControls(dcp);
       for (let k = 0; k <= steps; k++) {
-        if (i > 0 && k === 0) continue; // avoid dup at seg joints
-        const t = k / steps;
-        let pos, head, curv;
-        if (effType === 'line') {
-          pos = { x: lerp(p0.x, p1.x, t), y: lerp(p0.y, p1.y, t) };
-          head = Math.atan2(p1.y - p0.y, p1.x - p0.x); curv = 0;
-        } else if (effType === 'arc') {
-          const ang = arc.a0 + arc.sweep * t;
-          pos = { x: arc.Cx + arc.rad * Math.cos(ang), y: arc.Cy + arc.rad * Math.sin(ang) };
-          head = ang + (arc.sweep >= 0 ? Math.PI / 2 : -Math.PI / 2);
-          curv = arc.rad > 1e-6 ? 1 / arc.rad : 0;
-        } else if (effType === 'clothoid') {
-          pos = { x: cloth.xs[k], y: cloth.ys[k] }; head = cloth.hs[k]; curv = Math.abs(cloth.ks[k]);
-        } else {
-          pos = bez(p0, c0, c1, p1, t);
-          const d = bezD(p0, c0, c1, p1, t), dd = bezDD(p0, c0, c1, p1, t);
+        if (seg && k === 0) continue;
+        const t = k / steps, pos = lvEval(cp, t), d = lvEval(dcp, t), dd = lvEval(ddcp, t), speed2 = d.x * d.x + d.y * d.y;
+        pts.push({ x: pos.x, y: pos.y, seg: segmentOffset + seg, t, heading: Math.atan2(d.y, d.x), curv: speed2 > LV_EPS ? Math.abs(d.x * dd.y - d.y * dd.x) / Math.pow(speed2, 1.5) : 0, s: 0 });
+      }
+    }
+    return pts;
+  }
+  function labviewBezierSample(raw, mode) {
+    const pts = []; let start = 0;
+    for (let end = 1; end < raw.length; end++) {
+      if (!(raw[end].stop || end === raw.length - 1)) continue;
+      const piece = lvBezierPiece(raw.slice(start, end + 1), mode, start);
+      piece.forEach((p, i) => { if (pts.length && i === 0) return; pts.push(p); });
+      start = end;
+    }
+    const sample = lvFinishSample(lvDensify(pts), raw.length - 1);
+    sample.wpIdx = lvNearestWaypointIndices(raw, sample.pts); return sample;
           const speed2 = d.x * d.x + d.y * d.y, cross = d.x * dd.y - d.y * dd.x;
           head = Math.atan2(d.y, d.x); curv = speed2 > 1e-9 ? Math.abs(cross) / Math.pow(speed2, 1.5) : 0;
         }
