@@ -93,7 +93,7 @@
     const seg = run.segs.find((s) => s.nodeId === node.id);
     let icon, color, meta, tag, kindCls;
     if (node.type === 'path') {
-      const doc = paths[node.ref]; icon = 'route'; color = 'var(--accent)'; kindCls = 'path';
+      const doc = paths.find((path) => path.id === node.ref); icon = 'route'; color = 'var(--accent)'; kindCls = 'path';
       meta = seg ? (fmt(seg.t1 - seg.t0) + '  ·  ' + seg.deriv.sample.length.toFixed(2) + ' m') : (doc ? 'not in run path' : 'unbound');
     } else if (node.type === 'decision') {
       icon = 'branch'; color = '#9aa3b0'; kindCls = 'decision'; meta = 'routes the run';
@@ -109,18 +109,21 @@
     const cls = 'rt-step ' + kindCls + (sel ? ' sel' : '') + (active ? ' active' : '') + (fired ? ' fired' : '')
       + (dragging ? ' dragging' : '') + (dropB ? ' drop-before' : '') + (dropA ? ' drop-after' : '');
 
-    const card = h('div', { className: cls, 'data-id': node.id, style: { '--fc': color }, onClick: () => onSelect(sel ? null : node.id) },
+    const card = h('div', { className: cls, 'data-id': node.id, style: { '--fc': color } },
       h(Grip, { onPointerDown: (e) => dnd.start(node.id, e) }),
       isDecision
-        ? h('button', { className: 'rt-collapse' + (isCollapsed ? ' on' : ''), type: 'button', title: isCollapsed ? 'Expand branches' : 'Collapse branches', onClick: (e) => { e.stopPropagation(); toggleCollapse(node.id); } }, h(Icon, { name: 'chevron', size: 14 }))
+        ? h('button', { className: 'rt-collapse' + (isCollapsed ? ' on' : ''), type: 'button', 'aria-expanded': !isCollapsed, 'aria-label': isCollapsed ? 'Expand decision branches' : 'Collapse decision branches', title: isCollapsed ? 'Expand branches' : 'Collapse branches', onClick: (e) => { e.stopPropagation(); toggleCollapse(node.id); } }, h(Icon, { name: 'chevron', size: 14 }))
         : seg ? h('span', { className: 'rt-step-idx' }, seg.idxLabel) : null,
       h('span', { className: 'rt-step-ic', style: { color } }, h(Icon, { name: icon, size: 15 })),
-      h('div', { className: 'rt-step-body' },
+      h('button', { className: 'rt-step-body', type: 'button', 'aria-pressed': sel, onClick: () => onSelect(sel ? null : node.id) },
         h('div', { className: 'rt-step-title' }, A.nodeTitle(node, paths)),
         h('div', { className: 'rt-step-meta' }, isCollapsed ? (A.branchCount(node.then) + A.branchCount(node.else)) + ' steps in 2 branches' : meta)),
       tag && h('span', { className: 'rt-step-tag', style: { color, borderColor: color } }, tag),
       active && h('span', { className: 'rt-step-live' }, node.type === 'path' || node.cat === 'generate' ? 'running' : 'firing'),
-      h('button', { className: 'rt-tool danger', type: 'button', title: 'Delete step', onClick: (e) => { e.stopPropagation(); acq.del(node.id); } }, h(Icon, { name: 'trash', size: 13 })));
+      h('span', { className: 'rt-step-tools' },
+        h('button', { className: 'rt-tool', type: 'button', title: 'Move step up', 'aria-label': 'Move step up', onClick: () => acq.move(node.id, -1) }, '\u2191'),
+        h('button', { className: 'rt-tool', type: 'button', title: 'Move step down', 'aria-label': 'Move step down', onClick: () => acq.move(node.id, 1) }, '\u2193'),
+        h('button', { className: 'rt-tool danger', type: 'button', title: 'Delete step', 'aria-label': 'Delete step', onClick: (e) => { e.stopPropagation(); acq.del(node.id); } }, h(Icon, { name: 'trash', size: 13 }))));
 
     if (!isDecision) {
       return h('div', { className: 'rt-step-wrap' + (isFunction && !nested ? ' fnwrap' : '') }, card);
@@ -130,9 +133,6 @@
     const out = acq.outcomes[node.id] || 'then';
     return h('div', { className: 'rt-step-wrap' }, card,
       h('div', { className: 'rt-branches' },
-        ['then', 'else'].map((br) => {
-          const cnt = A.branchCount(node[br]);
-          return h('div', { key: br, className: 'rt-branch' + (out === br ? ' live' : '') },
             h('button', { className: 'rt-brlbl', type: 'button', onClick: () => acq.setOutcome(node.id, br), title: 'Make this branch the simulated outcome' },
               h('span', { className: 'rt-brdot' }),
               h('span', { className: 'rt-brkey' }, br === 'then' ? 'if true' : 'if false'),
