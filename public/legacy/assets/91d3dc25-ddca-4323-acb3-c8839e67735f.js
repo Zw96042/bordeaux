@@ -1172,3 +1172,93 @@
     perSeg = perSeg || 56;
     const labview = doc.labview || {};
     const smp = plannerId === 'labviewBezier'
+      ? labviewBezierSample(doc.waypoints, labview.bezierTangentMode || 'handles')
+      : plannerId === 'labviewClothoid'
+      ? labviewClothoidSample(doc.waypoints, labview.minTurnRadiusM || 0.5)
+      : sample(doc.waypoints, perSeg);
+    const pts = smp.pts;
+    const nWp = doc.waypoints.length;
+    const lastI = Math.max(0, pts.length - 1);
+    const wpIdx = smp.wpIdx || doc.waypoints.map((_, k) => Math.min(lastI, k * perSeg));
+    if (plannerId === 'labviewClothoid') {
+      // Vertex-blend generation does not naturally emit authored segment IDs.
+      // Rebuild them from the monotonic waypoint boundaries used by the field UI.
+      for (let segment = 0; segment < wpIdx.length - 1; segment++) {
+        const lo = Math.max(0, wpIdx[segment]), hi = Math.max(lo, wpIdx[segment + 1]);
+        const startS = pts[lo] ? pts[lo].s : 0, endS = pts[hi] ? pts[hi].s : startS;
+        for (let i = segment ? lo + 1 : lo; i <= hi && i < pts.length; i++) {
+          pts[i].seg = segment;
+          pts[i].t = endS > startS ? (pts[i].s - startS) / (endS - startS) : 0;
+        }
+      }
+    }
+    const total = smp.length || 1;
+    const wpFrac = wpIdx.map((i) => (pts.length ? pts[i].s / total : 0));
+    const stopIdx = [];
+    doc.waypoints.forEach((w, k) => { if (w.stop) stopIdx.push(wpIdx[k]); });
+    const cap = (robot && robot.maxSpeed) || doc.constraints.maxVel;
+    const vmax = Math.min(doc.constraints.maxVel, cap);
+    const sv = doc.waypoints[0] && doc.waypoints[0].stop ? 0 : doc.startVel;
+    const gv = doc.waypoints[nWp - 1] && doc.waypoints[nWp - 1].stop ? 0 : doc.goalVel;
+    const effRanges = effectiveRanges(doc, smp);
+    // Heading mode is owned by the outgoing segment; omitted overrides inherit the path default.
+    const headingMode = (robot && robot.drive === 'tank') ? 'tangent' : (doc.headingMode || 'targets');
+    const effectiveHeadingMode = (segment) => (robot && robot.drive === 'tank')
+      ? 'tangent'
+      : ((doc.waypoints[segment] && doc.waypoints[segment].segmentHeadingMode) || headingMode);
+    const manualEntries = [], targetEntries = [];
+    doc.waypoints.forEach((w, k) => {
+      const isEnd = k === 0 || k === nWp - 1;
+      if (isEnd || w.thetaOn) {
+        const entry = { f: wpFrac[k], rad: (w.theta || 0) * D2R };
+        manualEntries.push(entry); targetEntries.push({ ...entry });
+      }
+    });
+    (doc.targets || []).forEach((t) => targetEntries.push({ f: featureFraction(t, smp), rad: t.deg * D2R }));
+    const manualAnchors = buildAnchors(manualEntries), targetAnchors = buildAnchors(targetEntries);
+    const rawHead = [];
+    const segmentModes = doc.waypoints.slice(0, -1).map((_, segment) => effectiveHeadingMode(segment));
+    pts.forEach((p, pointIndex) => {
+      const f = total > 1e-6 ? p.s / total : 0;
+      let segment = 0;
+      while (segment < nWp - 2 && pointIndex >= wpIdx[segment + 1]) segment++;
+      const segmentMode = effectiveHeadingMode(segment);
+      if (segmentMode === 'lookAt') {
+        const target = doc.waypoints[segment] && doc.waypoints[segment].segmentLookAt;
+        const dx = target ? target.x - p.x : 0, dy = target ? target.y - p.y : 0;
+        rawHead.push(Math.hypot(dx, dy) > 1e-6 ? Math.atan2(dy, dx) : (rawHead.length ? rawHead[rawHead.length - 1] : p.heading));
+      } else {
+        rawHead.push(segmentMode === 'tangent' ? p.heading : headingAt(f, segmentMode === 'targets' ? targetAnchors : manualAnchors));
+      }
+    });
+    const segmentLaws = doc.waypoints.slice(0, -1).map((w, segment) => segmentModes[segment] === 'lookAt' ? 'lookAt:' + (w.segmentLookAt ? w.segmentLookAt.x : '') + ':' + (w.segmentLookAt ? w.segmentLookAt.y : '') : segmentModes[segment]);
+    const transitionBreaks = doc.waypoints.slice(0, -1).map((w) => !!w.turnInPlace);
+    const headingTransitions = headingTransitionWindows(doc.waypoints, segmentLaws, transitionBreaks, wpFrac, total);
+    const transitionGoals = headingTransitionGoals(segmentLaws, transitionBreaks, wpIdx, pts, {
+      manual: manualAnchors,
+      targets: targetAnchors,
+    });
+    const head = smoothHeadingTransitions(rawHead, segmentLaws, transitionBreaks, wpIdx, pts, doc.waypoints, transitionGoals);
+    const allTangent = doc.waypoints.slice(0, -1).every((_, segment) => effectiveHeadingMode(segment) === 'tangent');
+    const mode = allTangent ? 'tank' : 'swerve';
+    const dwell = [], turns = [], jiggles = [];
+    doc.waypoints.forEach((w, k) => { if (w.stop && w.wait > 0) dwell.push({ idx: wpIdx[k], wait: w.wait }); });
+    const compatibilityPlanner = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid';
+    doc.waypoints.forEach((w, k) => { if (w.stop && w.turnInPlace) turns.push({ idx: wpIdx[k], start: k > 0 ? head[Math.max(0, wpIdx[k] - 1)] : head[0], end: w.turnInPlace.headingDeg * D2R, direction: w.turnInPlace.direction, maxAngVel: doc.constraints.maxAngVel, maxAngAccel: Math.min(doc.constraints.maxAngAccel, doc.constraints.maxAngDecel || doc.constraints.maxAngAccel), maxAngJerk: doc.constraints.maxAngJerk }); });
+    const endpoint = doc.waypoints[nWp - 1];
+    let invalidJiggle = false, unsupportedJiggle = false;
+    if (endpoint && endpoint.jiggle) {
+      const baseRad = endpoint.turnInPlace ? endpoint.turnInPlace.headingDeg * D2R : head[lastI];
+      const physicalBaseRad = baseRad + (doc.driveBackward ? Math.PI : 0);
+      if (robot && robot.drive === 'tank') unsupportedJiggle = true;
+      else if (jigglePositions(endpoint, physicalBaseRad, endpoint.jiggle)) {
+        jiggles.push({ idx: wpIdx[nWp - 1], baseRad, config: endpoint.jiggle });
+      } else invalidJiggle = true;
+    }
+    const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns, jiggles, freeSpeed: cap, motorMaxSpeed: compatibilityPlanner ? cap : 0 });
+    const trackedHead = headingWithTranslationPriority(doc, robot, pts, prof, head, effRanges, headingTransitions);
+    appendTerminalHeadingCatchup(doc, prof, trackedHead, head, effRanges);
+    const anchors = mode === 'tank' ? [] : buildAnchors(pts.map((p, i) => ({ f: total > 1e-6 ? p.s / total : 0, rad: trackedHead[i] })));
+    const mtr = metrics(pts, prof, anchors, mode);
+    const checks = analyze(pts, prof, mtr, robot || {}, {
+      constraints: doc.constraints,
