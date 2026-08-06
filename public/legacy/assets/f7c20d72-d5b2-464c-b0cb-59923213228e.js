@@ -774,3 +774,93 @@
           const tc = W2P(source.segmentLookAt), lo = derived.wpFrac[segment] || 0, hi = derived.wpFrac[segment + 1] || lo;
           [0.18, 0.5, 0.82].forEach((part, guide) => {
             const point = window.PM.pointAtFraction(lo + (hi - lo) * part, pts), pc = W2P(point);
+            els.push(h('line', { key: 'look-guide-' + guide, x1: pc.x, y1: pc.y, x2: tc.x, y2: tc.y, stroke: accent, strokeWidth: P(1), strokeOpacity: 0.18, strokeDasharray: `${P(4)} ${P(5)}`, style: { pointerEvents: 'none' } }));
+          });
+          els.push(h('g', { key: 'look-target', transform: `translate(${tc.x} ${tc.y})`, style: { cursor: 'grab' } },
+            h('circle', { r: P(15), fill: 'transparent', 'data-role': 'look', 'data-idx': segment }),
+            h('circle', { r: P(7), fill: 'rgba(14,16,20,0.88)', stroke: accent, strokeWidth: P(1.7), 'data-role': 'look', 'data-idx': segment }),
+            h('circle', { r: P(2.2), fill: accent, 'data-role': 'look', 'data-idx': segment }),
+            h('line', { x1: -P(11), y1: 0, x2: P(11), y2: 0, stroke: accent, strokeWidth: P(1.2), 'data-role': 'look', 'data-idx': segment }),
+            h('line', { x1: 0, y1: -P(11), x2: 0, y2: P(11), stroke: accent, strokeWidth: P(1.2), 'data-role': 'look', 'data-idx': segment })));
+        }
+      }
+
+      // waypoints — square CAD nodes + heading + control handles
+      const waypointOrder = doc.waypoints.map((w, i) => ({ w, i }));
+      waypointOrder.sort((a, b) => Number(sel.kind === 'wp' && sel.idx === a.i) - Number(sel.kind === 'wp' && sel.idx === b.i));
+      waypointOrder.forEach(({ w, i }) => {
+        const c = W2P(w);
+        const isSel = sel.kind === 'wp' && sel.idx === i;
+        const isStart = i === 0, isEnd = i === doc.waypoints.length - 1;
+        const baseCol = isStart ? C_START : isEnd ? C_END : C_NODE;
+        const col = isSel ? accent : baseCol;
+        const group = [];
+        const wpTangent = waypointTangent(i);
+        const wpTracksPoint = waypointTracksPoint(i);
+        if (!isTank && (wpTangent || isStart || isEnd || w.thetaOn || isSel)) {
+          group.push(h('g', { key: 'th' }, headArrow(c.x, c.y, waypointHeadingDeg(i), col, P(26), wpTangent || wpTracksPoint ? null : i)));
+        }
+        if (isSel && showHandles) {
+          [['prevC', 0], ['nextC', 1]].forEach(([key, b]) => {
+            if ((isStart && key === 'prevC') || (isEnd && key === 'nextC')) return;
+            const cc = W2P(w[key]);
+            group.push(h('line', { key: 'hl' + b, x1: c.x, y1: c.y, x2: cc.x, y2: cc.y, stroke: accent, strokeWidth: P(1.2), strokeOpacity: 0.65 }));
+            group.push(h('circle', { key: 'hc' + b, cx: cc.x, cy: cc.y, r: P(5), fill: '#0c0d10', stroke: accent, strokeWidth: P(1.8), 'data-role': 'ct', 'data-idx': i * 2 + b, style: { cursor: 'grab' } }));
+          });
+          group.push(h('rect', { key: 'selring', x: c.x - P(11), y: c.y - P(11), width: P(22), height: P(22), rx: P(2), fill: 'none', stroke: accent, strokeWidth: P(1.4), strokeOpacity: 0.55 }));
+        } else if (isSel) {
+          group.push(h('rect', { key: 'selring', x: c.x - P(11), y: c.y - P(11), width: P(22), height: P(22), rx: P(2), fill: 'none', stroke: accent, strokeWidth: P(1.4), strokeOpacity: 0.55 }));
+        }
+        const s = P(6.5);
+        if (w.stop) group.push(h('rect', { key: 'stopo', x: c.x - s - P(3), y: c.y - s - P(3), width: (s + P(3)) * 2, height: (s + P(3)) * 2, rx: P(1.5), fill: 'none', stroke: '#d2655f', strokeWidth: P(1.4) }));
+        if (w.turnInPlace) group.push(h('g', { key: 'turn', transform: `translate(${c.x + P(13)} ${c.y - P(13)})`, style: { pointerEvents: 'none' } },
+          h('path', { d: `M ${-P(4)} ${P(2)} A ${P(6)} ${P(6)} 0 1 1 ${P(4)} ${P(2)}`, fill: 'none', stroke: '#8eafff', strokeWidth: P(1.5), strokeLinecap: 'round' }),
+          h('path', { d: `M ${P(3)} ${-P(1)} L ${P(6)} ${P(2)} L ${P(2)} ${P(3)} Z`, fill: '#8eafff' })));
+        group.push(h('rect', { key: 'node', x: c.x - s, y: c.y - s, width: s * 2, height: s * 2, rx: P(1.5), fill: '#14161a', stroke: col, strokeWidth: P(2), 'data-role': 'wp', 'data-idx': i, style: { cursor: 'grab' } }));
+        els.push(h('g', { key: 'w' + i }, group));
+      });
+
+      // segment-type chips at each non-Bézier segment midpoint (legible hybrid paths)
+      if (pts.length > 1 && derived.wpFrac) {
+        const ABBR = { line: 'LIN', arc: 'ARC', clothoid: 'CLO' };
+        for (let i = 0; i < doc.waypoints.length - 1; i++) {
+          const st = doc.waypoints[i].segType;
+          if (!ABBR[st]) continue;
+          const fmid = ((derived.wpFrac[i] || 0) + (derived.wpFrac[i + 1] || 0)) / 2;
+          const pf = window.PM.pointAtFraction(fmid, pts); const c = W2P(pf);
+          const tw = P(30), th = P(15);
+          els.push(h('g', { key: 'sc' + i, transform: `translate(${c.x} ${c.y + P(17)})`, style: { pointerEvents: 'none' } },
+            h('rect', { x: -tw / 2, y: -th / 2, width: tw, height: th, rx: P(2.5), fill: 'rgba(14,16,20,0.9)', stroke: '#3a4250', strokeWidth: P(1) }),
+            h('text', { x: 0, y: P(3.6), fill: '#aeb6c2', fontSize: P(9.5), fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, letterSpacing: P(0.5), textAnchor: 'middle' }, ABBR[st])));
+        }
+      }
+
+      // Only actual errors and measured constraint violations get field badges.
+      const fieldIssues = (derived.checks || []).filter((check) => check.level !== 'note');
+      if (fieldIssues.length) {
+        fieldIssues.forEach((check, i) => {
+          const pf = window.PM.pointAtFraction(check.f, pts); const c = W2P(pf);
+          const col = check.level === 'error' ? '#d2655f' : '#d9a441';
+          els.push(h('g', { key: 'wn' + i, transform: `translate(${c.x} ${c.y - P(28)})`, style: { pointerEvents: 'none' } },
+            h('path', { d: `M 0 ${-P(8)} L ${P(8)} ${P(6)} L ${-P(8)} ${P(6)} Z`, fill: 'rgba(14,16,20,0.92)', stroke: col, strokeWidth: P(1.4), strokeLinejoin: 'round' }),
+            h('rect', { x: -P(0.8), y: -P(3.5), width: P(1.6), height: P(5.5), rx: P(0.8), fill: col }),
+            h('circle', { cx: 0, cy: P(4), r: P(1), fill: col })));
+        });
+      }
+      return els;
+    }, [doc, derived, sel, showGrid, alliance, accent, metric, robot, drive, tool, view.w, cw]);
+
+    const visitFocusEl = useMemo(() => {
+      if (!visitFocus || visitFocus.candidates.length < 2 || pts.length < 2) return null;
+      const candidate = visitFocus.candidates[visitFocus.index];
+      if (!candidate) return null;
+      const total = derived.sample.length || 1;
+      const halfSpan = Math.min(0.06, Math.max(0.012, 0.34 / total));
+      let path = '';
+      for (let index = 0; index <= 20; index++) {
+        const f = Math.max(0, Math.min(1, candidate.f - halfSpan + halfSpan * 2 * index / 20));
+        const point = W2P(window.PM.pointAtFraction(f, pts));
+        path += (index ? ' L ' : 'M ') + point.x.toFixed(1) + ' ' + point.y.toFixed(1);
+      }
+      const center = W2P(candidate), labelX = Math.max(X0 + P(48), Math.min(X1 - P(48), center.x + P(13)));
+      const labelY = Math.max(Y0 + P(18), center.y - P(19));
