@@ -133,51 +133,51 @@
     const location = path || 'Value';
     const level = depth || 0;
     if (!schema) return location + ' has no discovered schema.';
-        isAnchor && h('div', { className: 'fieldlabel' }, isStart ? 'Start velocity' : 'End velocity'),
-        isAnchor && h(Num, { label: null, value: isStart ? (doc.startVel || 0) : (doc.goalVel || 0), unit: 'm/s', min: 0, onChange: (v) => actions.setDoc(isStart ? { startVel: v } : { goalVel: v }) }),
-
-        // Tangent handles — always editable, auto-continuous unless corner/stop
-        h('div', { className: 'fieldlabel' }, 'Tangent handles'),
-        h('div', { className: 'grid2' },
-          !isStart && h(Num, { label: 'In', value: handleLen(w, 'prevC'), unit: 'm', min: 0.1, onChange: (v) => actions.setHandleLen(i, 'prevC', v) }),
-          !isEnd && h(Num, { label: 'Out', value: handleLen(w, 'nextC'), unit: 'm', min: 0.1, onChange: (v) => actions.setHandleLen(i, 'nextC', v) })),
-        !isAnchor && h('div', { className: 'inrow' },
-          h('span', { className: 'inrow-l' }, 'Corner', h('small', null, 'break tangent continuity')),
-          h(Toggle, { on: !!w.corner, onChange: (v) => actions.toggleCorner(i, v) })),
-        h('div', { className: 'seg-hint' }, w.stop ? 'Stopped \u2014 leave in any direction.' : w.corner ? 'Corner \u2014 in/out handles move independently.' : 'Handles stay mirrored (180\u00b0) automatically; drag either to reshape.'),
-
-        !isAnchor && h('div', { className: 'qrow', style: { marginTop: '14px' } },
-          h('button', { className: 'qbtn', type: 'button', onClick: () => actions.duplicateWp(i) }, h(Icon, { name: 'copy', size: 14 }), 'Duplicate'),
-          h('button', { className: 'qbtn danger', type: 'button', onClick: () => actions.delWp(i) }, h(Icon, { name: 'trash', size: 14 }), 'Delete')));
+    if (level > 24) return location + ' exceeds the supported nesting depth.';
+    if (value === undefined) return location + ' is required.';
+    if (schema.kind === 'opaque') return '';
+    if (schema.kind === 'optional') return value === null ? '' : schemaValueError(value, schema.element, location, level + 1);
+    if (schema.kind === 'boolean') return typeof value === 'boolean' ? '' : location + ' must be true or false.';
+    if (schema.kind === 'integer') {
+      if (!Number.isSafeInteger(value)) return location + ' must be a safe whole number.';
+      const range = javaIntegerRange(schema.javaType);
+      return !range || (value >= range[0] && value <= range[1]) ? '' : location + ' is outside the range for ' + schema.javaType + '.';
     }
-
-    // ---------------- SEGMENT (true segment properties only) ----------------
-    else if (sel.kind === 'seg' && wps[sel.idx] && wps[sel.idx + 1]) {
-      const i = sel.idx;
-      const st = segNorm(wps[i].segType);
-      const segHint = (window.PM.SEGTYPES.find((s) => s.id === st) || {}).hint || '';
-      icon = 'route'; title = 'Segment'; tag = (i === 0 ? 'Start' : 'WP' + i) + ' \u2192 ' + (i + 1 === n - 1 ? 'End' : 'WP' + (i + 1));
-      let segLen = 0, minR = Infinity, dur = 0;
-      if (derived.wpFrac && derived.sample.pts.length > 1) {
-        const total = derived.sample.length || 1;
-        const lo = derived.wpFrac[i], hi = derived.wpFrac[i + 1];
-        segLen = (hi - lo) * total;
-        const pts = derived.sample.pts;
-        for (let k = 0; k < pts.length; k++) { const f = pts[k].s / total; if (f >= lo && f <= hi && pts[k].curv > 1e-4) minR = Math.min(minR, 1 / pts[k].curv); }
-        if (derived.prof.t && derived.wpIdx) dur = (derived.prof.t[derived.wpIdx[i + 1]] || 0) - (derived.prof.t[derived.wpIdx[i]] || 0);
+    if (schema.kind === 'integerString') {
+      const error = exactIntegerStringError(value, schema.javaType);
+      return error ? location + ' ' + error : '';
+    }
+    if (schema.kind === 'decimalString') {
+      const error = exactDecimalStringError(value);
+      return error ? location + ' ' + error : '';
+    }
+    if (schema.kind === 'number') return typeof value === 'number' && Number.isFinite(value) ? '' : location + ' must be a finite number.';
+    if (schema.kind === 'string') return typeof value === 'string' ? '' : location + ' must be text.';
+    if (schema.kind === 'enum') return typeof value === 'string' && (schema.enumValues || []).includes(value) ? '' : location + ' must be one of the discovered enum values.';
+    if (schema.kind === 'array') {
+      if (!Array.isArray(value)) return location + ' must be a JSON array.';
+      if (value.length > 1024) return location + ' cannot contain more than 1024 items.';
+      for (let index = 0; index < value.length; index++) {
+        const error = schemaValueError(value[index], schema.element, location + '[' + index + ']', level + 1);
+        if (error) return error;
       }
-      const segLo = derived.wpFrac ? derived.wpFrac[i] : 0, segHi = derived.wpFrac ? derived.wpFrac[i + 1] : 1;
-      const affecting = (doc.ranges || []).map((rg, ri) => ({ rg, ri, ef: (derived.effRanges && derived.effRanges[ri]) || rg }))
-        .filter((x) => { const lo = Math.min(x.ef.f0, x.ef.f1), hi = Math.max(x.ef.f0, x.ef.f1); return hi >= segLo && lo <= segHi; });
-      body = h(React.Fragment, null,
-        h('div', { className: 'fieldlabel first' }, wpName(i, n) + ' \u2192 ' + wpName(i + 1, n)),
-        Stat3([
-          { v: segLen.toFixed(2) + 'm', k: 'Length' },
-          { v: isFinite(minR) ? minR.toFixed(2) + 'm' : '\u221e', k: 'Min radius', color: isFinite(minR) && minR < 0.7 ? 'var(--bad)' : null },
-          { v: dur.toFixed(2) + 's', k: 'Duration' },
-        ]),
-        h('div', { className: 'fieldlabel' }, 'Path type'),
-        h(GroupSelect, { value: st, items: window.PM.SEGTYPES, onChange: (v) => actions.setSegMeta(i, { segType: v }) }),
+      return '';
+    }
+    if (schema.kind === 'map') {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return location + ' must be a JSON object with string keys.';
+      if (Object.keys(value).length > 256) return location + ' cannot contain more than 256 entries.';
+      for (const [key, item] of Object.entries(value)) {
+        const error = schemaValueError(item, schema.value, location + '.' + key, level + 1);
+        if (error) return error;
+      }
+      return '';
+    }
+    if (schema.kind === 'object') {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return location + ' must be a JSON object.';
+      const fields = schema.fields || [];
+      const names = new Set(fields.map((field) => field.name));
+      const extra = Object.keys(value).find((key) => !names.has(key));
+      if (extra) return location + '.' + extra + ' is not part of the discovered type.';
         h('div', { className: 'seg-hint' }, segHint),
         h('div', { className: 'fieldlabel' }, 'Constraint ranges here'),
         affecting.length === 0
