@@ -977,3 +977,93 @@
           selectedCommand && h('div', {
             className: 'cmd-command-summary',
             title: selectedCommand.source ? selectedCommand.source.file + ':' + selectedCommand.source.line : undefined,
+          },
+            selectedCommand.description && h('p', { className: 'cmd-command-description' }, selectedCommand.description),
+            h('span', { className: 'cmd-command-meta' }, (selectedCommand.kind === 'constructor' ? 'Command class' : 'Factory') + ' · ' + simpleJavaName(selectedCommand.ownerType) + (selectedCommand.confidence === 'inferred' ? ' · inferred' : ''))),
+          selectedCommand && dependencyParameters.length > 0 && h('div', { className: 'seg-hint' }, simpleJavaName(dependencyParameters[0].javaType) + (dependencyParameters.length > 1 ? ' and ' + (dependencyParameters.length - 1) + ' more dependencies are supplied by robot code.' : ' is supplied by robot code.')),
+          argumentSchemaMismatch && h('div', { className: 'cmd-schema-warning', role: 'status' },
+            h('span', null, 'Saved arguments no longer match this command.'),
+            h('button', { className: 'qbtn', type: 'button', onClick: () => actions.setMarker(sel.idx, { invocation: { ...m.invocation, commandId: selectedCommand.id, arguments: reconciledArguments } }) }, 'Use current defaults')),
+          selectedCommand && h('form', { className: 'cmd-parameters', onSubmit: (event) => event.preventDefault() },
+            argumentParameters.length === 0
+              ? h('div', { className: 'cmd-empty-params' }, 'No parameters')
+              : argumentParameters.map((parameter) => h(CommandParameterEditor, {
+                  key: parameter.name,
+                  id: 'event-command-param-' + safeControlId(parameter.name),
+                  label: parameter.label || parameter.name,
+                  schema: parameter.schema,
+                  parameter,
+                  value: reconciledArguments[parameter.name],
+                  onChange: (value) => actions.setMarker(sel.idx, { invocation: { ...m.invocation, commandId: selectedCommand.id, arguments: { ...reconciledArguments, [parameter.name]: value } } }),
+                  depth: 0,
+                })),
+            h('label', { className: 'cmd-toggle-row', htmlFor: 'event-command-cancel' },
+              h('span', { className: 'cmd-toggle-copy' },
+                h('strong', null, 'Stop when path ends'),
+                h('small', null, 'Cancel this command if it is still running.')),
+              h('input', {
+                id: 'event-command-cancel',
+                className: 'cmd-toggle-input',
+                type: 'checkbox',
+                checked: m.invocation && m.invocation.cancelOnPathEnd === true,
+                onChange: (event) => actions.setMarker(sel.idx, { invocation: { ...m.invocation, commandId: selectedCommand.id, arguments: reconciledArguments, cancelOnPathEnd: event.target.checked } }),
+              }),
+              h('span', { className: 'cmd-toggle-track', 'aria-hidden': true }, h('span', null))))),
+        h('div', { className: 'fieldlabel' }, 'Group type'),
+        h(Seg, { value: m.group || 'sequential', ariaLabel: 'Group type', options: [{ v: 'sequential', label: 'Seq' }, { v: 'parallel', label: 'Parallel' }, { v: 'deadline', label: 'Deadline' }], onChange: (v) => actions.setMarker(sel.idx, { group: v }) }),
+        h('div', { className: 'fieldlabel' }, 'Position lock'),
+        h(Seg, { value: markerAnchor, ariaLabel: 'Position lock', options: [{ v: 'param', label: 'Path %' }, { v: 'dist', label: 'Distance' }], onChange: (v) => actions.setMarker(sel.idx, { anchor: v }) }),
+        markerAnchor === 'dist'
+          ? h(Num, { label: 'Distance from start', value: markerDistance, unit: 'm', step: 0.1, precision: 2, min: 0, max: derived.sample.length || 0, onChange: (v) => actions.setMarker(sel.idx, { d: v }) })
+          : h(Num, { label: 'Position along path', value: markerFraction * 100, unit: '%', step: 1, precision: 0, min: 0, max: 100, onChange: (v) => actions.setMarker(sel.idx, { f: v / 100 }) }),
+        h('div', { className: 'seg-hint' }, markerAnchor === 'dist' ? 'Stays at this traveled distance when the path grows.' : 'Scales with the path when its length changes.'),
+        h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delMarker(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete marker'));
+    }
+
+    // ---------------- CONSTRAINT RANGE ----------------
+    else if (sel.kind === 'cr' && doc.ranges && doc.ranges[sel.idx]) {
+      const rg = doc.ranges[sel.idx];
+      const len = derived.sample.length || 1;
+      const effR = (derived.effRanges && derived.effRanges[sel.idx]) || { f0: rg.f0 || 0, f1: rg.f1 || 0 };
+      const loF = Math.min(effR.f0, effR.f1), hiF = Math.max(effR.f0, effR.f1);
+      const clampFraction = (value) => Math.max(0, Math.min(1, value / 100));
+      const rangeAnchor = rg.anchor === 'dist' ? 'dist' : rg.anchor === 'wp' ? 'wp' : 'param';
+      const anchorOptions = [{ v: 'param', label: 'Proportional' }, { v: 'wp', label: 'Local' }].concat(rangeAnchor === 'dist' ? [{ v: 'dist', label: 'Distance (legacy)' }] : []);
+      icon = 'gauge'; title = 'Constraint Range';
+      tag = (loF * len).toFixed(1) + '\u2013' + (hiF * len).toFixed(1) + ' m';
+      body = h(React.Fragment, null,
+        h(Num, { label: 'Max velocity', value: rg.maxVel, unit: 'm/s', min: 0, onChange: (v) => actions.setRange(sel.idx, { maxVel: v }) }),
+        h('div', { className: 'fieldlabel' }, 'Position lock'),
+        h(Seg, { value: rangeAnchor, ariaLabel: 'Position lock', options: anchorOptions, onChange: (v) => actions.setRangeAnchor(sel.idx, v) }),
+        rangeAnchor === 'dist'
+          ? h('div', { className: 'grid2' },
+              h(Num, { label: 'Start distance', value: loF * len, unit: 'm', min: 0, max: len, step: 0.1, precision: 2, onChange: (v) => actions.setRange(sel.idx, { d0: Math.min(v, hiF * len) }) }),
+              h(Num, { label: 'End distance', value: hiF * len, unit: 'm', min: 0, max: len, step: 0.1, precision: 2, onChange: (v) => actions.setRange(sel.idx, { d1: Math.max(v, loF * len) }) }))
+          : rangeAnchor === 'wp'
+            ? h('div', { className: 'range-local' },
+                h('div', null, h('b', null, 'From'), h('span', null, wpName(Math.max(0, Math.min(n - 2, rg.w0 || 0)), n) + ' \u00b7 ' + Math.round((rg.t0 || 0) * 100) + '%')),
+                h('div', null, h('b', null, 'To'), h('span', null, wpName(Math.max(0, Math.min(n - 2, rg.w1 || 0)), n) + ' \u00b7 ' + Math.round((rg.t1 || 0) * 100) + '%')))
+            : h('div', { className: 'grid2' },
+                h(Num, { label: 'Start position', value: loF * 100, unit: '%', min: 0, max: 100, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { f0: Math.min(clampFraction(v), hiF), f1: hiF }) }),
+                h(Num, { label: 'End position', value: hiF * 100, unit: '%', min: 0, max: 100, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { f0: loF, f1: Math.max(clampFraction(v), loF) }) })),
+        h('div', { className: 'seg-hint' }, rangeAnchor === 'dist' ? 'Legacy absolute distance from the path start; earlier geometry can move it. Choose Local to keep this range attached here.' : rangeAnchor === 'wp' ? 'Stays at the same positions on these segments when other parts of the path change.' : 'Stays at the same percentages as the whole path changes.'),
+        h('div', { className: 'fieldlabel' }, 'Timing priority'),
+        h(Seg, { value: drive === 'tank' ? 'heading' : (rg.rotationPriority || 'heading'), ariaLabel: 'Timing priority', options: drive === 'tank'
+          ? [{ v: 'heading', label: 'Heading', ariaLabel: 'Heading priority, required for tank drive' }]
+          : [
+              { v: 'heading', label: 'Heading', ariaLabel: 'Heading priority, adjust translation so rotation stays on schedule' },
+              { v: 'translation', label: 'Translation', ariaLabel: 'Translation priority, preserve translational timing while rotation catches up' },
+            ], onChange: (v) => actions.setRange(sel.idx, { rotationPriority: v }) }),
+        h('div', { className: 'seg-hint' }, drive === 'tank' ? 'Tank drive must follow the path heading.' : rg.rotationPriority === 'translation' ? 'Keeps this stretch moving. Heading may finish settling afterward.' : 'Adjusts translation so rotation stays on schedule.'),
+        h('button', { className: 'morebtn' + (moreLimits ? ' on' : ''), type: 'button', onClick: () => setMoreLimits(!moreLimits) }, h(Icon, { name: 'chevron', size: 14 }), moreLimits ? 'Fewer limits' : 'More limits \u00b7 accel & rotation'),
+        moreLimits && h(React.Fragment, null,
+          h('div', { className: 'cgroup-h' }, 'Translation'),
+          h('div', { className: 'grid2' },
+            h(Num, { label: 'Max accel', value: rg.maxAccel, unit: 'm/s\u00b2', min: 0, onChange: (v) => actions.setRange(sel.idx, { maxAccel: v }) }),
+            h(Num, { label: 'Max decel', value: rg.maxDecel, unit: 'm/s\u00b2', min: 0, onChange: (v) => actions.setRange(sel.idx, { maxDecel: v }) })),
+          h('div', { className: 'cgroup-h' }, 'Rotation'),
+          h('div', { className: 'grid2' },
+            h(Num, { label: 'Max \u03c9', value: rg.maxAngVel, unit: '\u00b0/s', step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { maxAngVel: v }) }),
+            h(Num, { label: 'Max \u03b1', value: rg.maxAngAccel, unit: '\u00b0/s\u00b2', step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { maxAngAccel: v }) }))),
+        h('label', { className: 'fieldlabel', htmlFor: 'constraint-range-label' }, 'Label'),
+        h('input', { id: 'constraint-range-label', className: 'textinput', value: rg.name || '', placeholder: 'e.g. Reef approach', autoComplete: 'off', spellCheck: false, 'data-lpignore': 'true', 'data-1p-ignore': true, onChange: (e) => actions.setRange(sel.idx, { name: e.target.value }) }),
