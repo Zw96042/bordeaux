@@ -88,7 +88,7 @@
               h('div', { className: 'rp-note' }, h(Icon, { name: 'info', size: 14 }), 'The hard ceiling. A path\u2019s own max velocity is clamped to this, so you can\u2019t accidentally plan faster than the robot can drive.'))),
 
             mcpEnabled && h('div', { className: 'rp-sec rp-agent' },
-  }
-
-  window.RobotPage = RobotPage;
-})();
+              h('div', { className: 'rp-sech' }, 'Agent planning profile'),
+              h('div', { className: 'rp-note rp-agent-note' }, h(Icon, { name: 'info', size: 14 }), 'Used by MCP agents to plan physical heading, FUEL collection, and shooting poses. Agent changes still require your approval.'),
+              agentProposal && h('div', { className: 'rp-proposal', role: 'region', 'aria-label': 'Agent robot profile proposal' },
+                h('b', null, 'Agent robot profile proposal'),
