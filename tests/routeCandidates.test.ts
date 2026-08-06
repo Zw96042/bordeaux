@@ -178,3 +178,93 @@ describe("agent route candidates", () => {
     expect(candidate.path.waypoints.at(-1)?.turnInPlace).toBeUndefined();
     expect(candidate.path.waypoints.slice(6, -1).every((waypoint) => waypoint.segmentHeadingMode === "targets")).toBe(true);
   });
+
+  it("refuses to guess intake geometry for a collection route", () => {
+    expect(() => generateRouteCandidates(createDemoProject(), {
+      intent: "Collect FUEL",
+      alliance: "red",
+      start: { x: 6, y: 2.5 },
+      goals: [{ x: 11, y: 2.5 }],
+      collectFuel: {},
+      maximumCandidates: 1,
+    })).toThrow(/Configure the robot's intake/);
+  });
+
+  it("aligns an arbitrary intake direction and honors an explicit crosswise exception", () => {
+    const project = createDemoProject();
+    project.robot.planning = { intake: { name: "Left intake", centerM: { x: 0, y: 0.42 }, directionDeg: 90, captureWidthM: 0.7, maxCollectSpeedMps: 2 } };
+    const request = { intent: "Collect with a side intake", alliance: "red" as const, start: { x: 6, y: 2.5 }, goals: [{ x: 11, y: 2.5 }], maximumCandidates: 1 };
+    const aligned = generateRouteCandidates(project, { ...request, collectFuel: {} })[0];
+    expect(aligned.valid, aligned.rejectionReason).toBe(true);
+    expect(Math.abs(aligned.analysis.rawSamples[Math.floor(aligned.analysis.rawSamples.length / 2)].headingRad + Math.PI / 2)).toBeLessThan(0.02);
+    expect(generateRouteCandidates(project, { ...request, collectFuel: { allowCrosswiseHeading: true } })[0].analysis.sampleCount).toBeGreaterThan(0);
+  });
+
+  it("derives and verifies the final chassis heading from shooter geometry", () => {
+    const project = createDemoProject();
+    project.robot.planning = { shooter: { directionDeg: 0, requiresTargetFacing: true, preferredRangeM: 2 } };
+    const candidate = generateRouteCandidates(project, {
+      intent: "Finish facing the red HUB",
+      alliance: "red",
+      start: { x: 2, y: 2 },
+      goals: [{ x: 3, y: 2.5 }],
+      finishFacing: { mechanism: "shooter", target: { term: "red HUB" }, maxHeadingErrorDeg: 2 },
+      maximumCandidates: 1,
+    })[0];
+    expect(candidate.valid, candidate.rejectionReason).toBe(true);
+    expect(candidate.path.waypoints.at(-1)?.turnInPlace).toBeUndefined();
+    const final = candidate.analysis.rawSamples.at(-1)!;
+    const hub = { x: (11.31876 + 12.51256) / 2, y: (3.4376 + 4.6314) / 2 };
+    const hubAppX = (16.541 - hub.x) * 17.548 / 16.541;
+    const hubAppY = hub.y * 8.052 / 8.069;
+    const targetHeading = Math.atan2(hubAppY - final.y, hubAppX - final.x);
+    expect(Math.abs(Math.atan2(Math.sin(final.headingRad - targetHeading), Math.cos(final.headingRad - targetHeading)))).toBeLessThan(0.01);
+  });
+
+  it("uses solid HUB landmarks as aiming references but never as drive coordinates", () => {
+    const project = createDemoProject();
+    project.robot.planning = { shooter: { directionDeg: 0, requiresTargetFacing: true } };
+    expect(() => generateRouteCandidates(project, {
+      intent: "Drive into the red HUB",
+      alliance: "red",
+      start: { x: 2, y: 2 },
+      goals: [{ term: "red HUB" }],
+      maximumCandidates: 1,
+    })).toThrow(/not a collision-free robot drive coordinate/);
+    const candidate = generateRouteCandidates(project, {
+      intent: "Stop outside and aim at the red HUB neutral face",
+      alliance: "red",
+      start: { x: 2, y: 2 },
+      goals: [{ x: 3, y: 2.5 }],
+      finishFacing: { mechanism: "shooter", target: { term: "red HUB neutral face" } },
+      maximumCandidates: 1,
+    })[0];
+    expect(candidate.valid, candidate.rejectionReason).toBe(true);
+  });
+
+  it("supports starting under a named TRENCH and departing toward the far neutral zone", () => {
+    const candidates = generateRouteCandidates(createDemoProject(), {
+      intent: "Start under the trench, go to the far side of the neutral zone",
+      alliance: "blue",
+      start: { term: "under the scoring-table-side trench" },
+      goals: [{ term: "far side of the neutral zone" }],
+      traversal: "trench",
+      robotHeightM: 0.5,
+      maximumCandidates: 2,
+    });
+    expect(candidates.some((candidate) => candidate.valid)).toBe(true);
+  });
+
+  it("keeps missing TRENCH height as an uncertified warning rather than an invalid route", () => {
+    const project = createDemoProject();
+    delete project.robot.heightM;
+    const candidate = generateRouteCandidates(project, {
+      intent: "Start under the red left TRENCH and collect initial FUEL",
+      alliance: "red",
+      start: { term: "red left trench" },
+      steps: [
+        { kind: "swoosh", at: { term: "far side of the initial neutral FUEL band" }, traversal: "trench-table", turn: "counterclockwise", radiusM: 0.55 },
+        { kind: "travel", to: { x: 3.35, y: 2.3 }, traversal: "bump-table" },
+      ],
+      minimumClearanceM: 0,
+    })[0];
