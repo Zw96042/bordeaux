@@ -178,51 +178,51 @@
       if (current && !Number.isInteger(current.wp) && Math.abs(current.f - fraction) <= 0.015) return;
       const point = window.PM.pointAtFraction(fraction, pts);
       resolveVisit(point, { nearFraction: fraction, preserve: false });
+    }, [sel, doc, derived, pts, visitTolerance, resolveVisit, resolveWaypointVisit, updateVisitFocus]);
 
-    const onDbl = (e) => {
-      if (routine) return;
-      const t = e.target; const role = t.getAttribute && t.getAttribute('data-role');
-      if (role === 'seg') actions.addWaypoint(clientToWorld(e.clientX, e.clientY));
-      else if (role === 'head') actions.select('wp', parseInt(t.getAttribute('data-idx'), 10));
-    };
-    const onCtx = (e) => {
-      e.preventDefault();
-      if (routine) return;
-      const t = e.target; const role = t.getAttribute && t.getAttribute('data-role');
-      if (role === 'head' && actions.headingMenu) actions.headingMenu(parseInt(t.getAttribute('data-idx'), 10), e.clientX, e.clientY);
-    };
-
-    const pts = derived.sample.pts;
-
-    // ---------- STATIC LAYERS ----------
-    const staticLayers = useMemo(() => {
-      const els = [];
-      const M = derived.metrics;
-      const headingMode = derived.headingMode;
-      const tangentMode = headingMode === 'tangent';
-      const tanDeg = (i) => { const idx = derived.wpIdx ? derived.wpIdx[i] : 0; const p = pts[idx]; return p ? p.heading * 180 / Math.PI : 0; };
-      const colAt = (i) => {
-        if (metric === 'accel') return window.PM.metricColor('accel', 0.5 + 0.5 * (M.accel[i] / (M.aMax || 1)));
-        if (metric === 'angvel') return window.PM.metricColor('angvel', 0.5 + 0.5 * (M.omega[i] / (M.wMax || 1)));
-        if (metric === 'curvature') return window.PM.metricColor('curvature', M.curv[i] / (M.kMax || 1));
-        return window.PM.metricColor('velocity', M.v[i] / (M.vMax || 1));
+    useEffect(() => {
+      const onVisitKey = (event) => {
+        const target = event.target;
+        if (target && ((target.matches && target.matches('input, textarea, select')) || target.isContentEditable)) return;
+        if (event.key === 'Escape' && visitFocusRef.current) { updateVisitFocus(null); return; }
+        const direction = event.key === ']' || event.code === 'BracketRight' ? 1
+          : (event.key === '[' || event.code === 'BracketLeft' ? -1 : 0);
+        if (!direction) return;
+        const current = visitFocusRef.current;
+        if (!current || current.candidates.length < 2) return;
+        event.preventDefault();
+        const index = (current.index + direction + current.candidates.length) % current.candidates.length;
+        const next = { ...current, index };
+        updateVisitFocus(next);
+        const candidate = next.candidates[index];
+        if (actionsRef.current.select) actionsRef.current.select(Number.isInteger(candidate.wp) ? 'wp' : 'seg', Number.isInteger(candidate.wp) ? candidate.wp : candidate.seg);
       };
+      window.addEventListener('keydown', onVisitKey, true);
+      return () => window.removeEventListener('keydown', onVisitKey, true);
+    }, [updateVisitFocus]);
 
-      if (showGrid) {
-        const g = [];
-        for (let m = 0; m <= Math.round(FIELD_W); m++) { const x = X0 + m * SX; g.push(h('line', { key: 'gx' + m, x1: x, y1: Y0, x2: x, y2: Y1, stroke: '#ffffff', strokeOpacity: 0.045, strokeWidth: P(1) })); }
-        for (let m = 0; m <= Math.round(FIELD_H); m++) { const y = Y1 - m * SY; g.push(h('line', { key: 'gy' + m, x1: X0, y1: y, x2: X1, y2: y, stroke: '#ffffff', strokeOpacity: 0.045, strokeWidth: P(1) })); }
-        els.push(h('g', { key: 'grid' }, g));
-      }
+    // ---- pointer handling ----
+    const startRangeDrag = (world, initialVisit) => {
+      const visit = initialVisit || resolveVisit(world);
+      const f0 = visit ? visit.f : window.PM.nearestFraction(world.x, world.y, pts);
+      drag.current = { role: 'newrange', f0, f1: f0, lastF: f0, moved: false };
+      setPreview({ f0, f1: f0 });
+    };
 
-      // thin CAD centerline: subtle casing + metric-colored body + invisible insert hit-line
-      if (pts.length > 1) {
-        const totalS = derived.sample.length || 1;
-        const ranges = derived.effRanges || doc.ranges || [];
-        // constraint range bands (under the centerline)
-        ranges.forEach((rg, ri) => {
-          const lo = Math.min(rg.f0, rg.f1), hi = Math.max(rg.f0, rg.f1);
-          const isSel = sel.kind === 'cr' && sel.idx === ri;
+    const inspectIdentity = (eventTarget) => {
+      const target = eventTarget.closest ? eventTarget.closest('[data-role]') : eventTarget;
+      const role = target && target.getAttribute && target.getAttribute('data-role');
+      const index = parseInt(target && target.getAttribute && target.getAttribute('data-idx'), 10);
+      let kind = null;
+      if (role === 'wp' || role === 'head' || role === 'ct') kind = 'wp';
+      else if (role === 'rt' || role === 'rth') kind = 'rt';
+      else if (role === 'em') kind = 'em';
+      else if (role === 'cr' || role === 'rs' || role === 're') kind = 'cr';
+      else if (role === 'seg' || role === 'look') kind = 'seg';
+      if (!kind || !Number.isInteger(index)) return null;
+      let selectedIndex = role === 'ct' ? index >> 1 : index;
+      if (kind === 'seg' && visitFocusRef.current) {
+        const focused = visitFocusRef.current.candidates[visitFocusRef.current.index];
           let dd = ''; let started = false;
           for (let k = 0; k < pts.length; k++) { const f = pts[k].s / totalS; if (f >= lo && f <= hi) { const q = W2P(pts[k]); dd += (started ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); started = true; } }
           if (dd) els.push(h('path', { key: 'rb' + ri, d: dd, fill: 'none', stroke: isSel ? accent : '#caa23a', strokeOpacity: isSel ? 0.5 : 0.32, strokeWidth: P(12), strokeLinecap: 'round', strokeLinejoin: 'round', style: { pointerEvents: 'none' } }));
