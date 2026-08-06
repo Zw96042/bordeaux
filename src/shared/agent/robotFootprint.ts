@@ -88,3 +88,59 @@ function pointSegmentDistance(point: ControlPoint, first: ControlPoint, second: 
 
 function axes(vertices: readonly ControlPoint[]): ControlPoint[] {
   return vertices.flatMap((first, index) => {
+    const second = vertices[(index + 1) % vertices.length];
+    const dx = second.x - first.x;
+    const dy = second.y - first.y;
+    const length = Math.hypot(dx, dy);
+    return length <= EPSILON ? [] : [{ x: -dy / length, y: dx / length }];
+  });
+}
+
+function projection(vertices: readonly ControlPoint[], axis: ControlPoint): { min: number; max: number } {
+  return vertices.reduce((range, point) => {
+    const value = point.x * axis.x + point.y * axis.y;
+    return { min: Math.min(range.min, value), max: Math.max(range.max, value) };
+  }, { min: Number.POSITIVE_INFINITY, max: Number.NEGATIVE_INFINITY });
+}
+
+/** Signed convex-polygon clearance: positive when separate, negative when overlapping. */
+export function convexPolygonClearance(first: readonly ControlPoint[], second: readonly ControlPoint[]): number {
+  const separatingAxes = [...axes(first), ...axes(second)];
+  let minimumOverlap = Number.POSITIVE_INFINITY;
+  let separated = false;
+  separatingAxes.forEach((axis) => {
+    const a = projection(first, axis);
+    const b = projection(second, axis);
+    const overlap = Math.min(a.max, b.max) - Math.max(a.min, b.min);
+    if (overlap < -EPSILON) separated = true;
+    else minimumOverlap = Math.min(minimumOverlap, Math.max(0, overlap));
+  });
+  if (!separated) return -minimumOverlap;
+
+  let minimumDistance = Number.POSITIVE_INFINITY;
+  first.forEach((point) => second.forEach((edge, index) => {
+    minimumDistance = Math.min(minimumDistance, pointSegmentDistance(point, edge, second[(index + 1) % second.length]));
+  }));
+  second.forEach((point) => first.forEach((edge, index) => {
+    minimumDistance = Math.min(minimumDistance, pointSegmentDistance(point, edge, first[(index + 1) % first.length]));
+  }));
+  return minimumDistance;
+}
+
+export function boundsPolygon(bounds: Bounds2d): ControlPoint[] {
+  return [
+    { x: bounds.min.x, y: bounds.min.y },
+    { x: bounds.max.x, y: bounds.min.y },
+    { x: bounds.max.x, y: bounds.max.y },
+    { x: bounds.min.x, y: bounds.max.y },
+  ];
+}
+
+export function footprintBoundsClearance(vertices: readonly ControlPoint[], width: number, height: number): number {
+  return vertices.reduce((clearance, point) => Math.min(clearance, point.x, width - point.x, point.y, height - point.y), Number.POSITIVE_INFINITY);
+}
+
+export function interpolateHeading(first: number, second: number, ratio: number): number {
+  const delta = Math.atan2(Math.sin(second - first), Math.cos(second - first));
+  return first + delta * ratio;
+}
