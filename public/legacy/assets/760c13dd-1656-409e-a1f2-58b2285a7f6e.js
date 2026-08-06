@@ -146,3 +146,26 @@
     const ref = useRef(null);
     const [pos, setPos] = useState({ x, y });
     useEffect(() => {
+      const el = ref.current; if (!el) return;
+      const r = el.getBoundingClientRect();
+      const nx = Math.min(x, window.innerWidth - r.width - 8);
+      const ny = Math.min(y, window.innerHeight - r.height - 8);
+      setPos({ x: nx, y: ny });
+    }, [x, y]);
+    useEffect(() => {
+      const away = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
+      const esc = (e) => { if (e.key === 'Escape') onClose(); };
+      window.addEventListener('pointerdown', away, true); window.addEventListener('keydown', esc);
+      return () => { window.removeEventListener('pointerdown', away, true); window.removeEventListener('keydown', esc); };
+    }, [onClose]);
+    return h('div', { ref, className: 'ctxmenu', style: { left: pos.x + 'px', top: pos.y + 'px' } },
+      items.map((it, i) => it.sep
+        ? h('div', { key: 'sep' + i, className: 'ctxmenu-sep' })
+        : h('button', { key: i, type: 'button', className: 'ctxmenu-i' + (it.danger ? ' danger' : ''), onClick: () => { onClose(); it.onClick(); } },
+            it.icon && h('span', { className: 'ctxmenu-ic' }, h(Icon, { name: it.icon, size: 14 })),
+            h('span', null, it.label),
+            it.hint && h('span', { className: 'ctxmenu-k' }, it.hint))));
+  }
+
+  window.UI = { Icon, IconBtn, Num, Section, Toggle, Seg, ContextMenu, constraintRangeSummary };
+})();
