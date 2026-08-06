@@ -178,3 +178,93 @@ describe("legacy compatibility preview", () => {
     path.headingMode = "manual";
     path.constraints.maxVel = 4;
     path.constraints.maxAccel = 5;
+    path.constraints.maxDecel = 5;
+    path.constraints.maxAngVel = 180;
+    path.constraints.maxAngAccel = 360;
+    path.constraints.maxAngDecel = 360;
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: -90, thetaOn: true, segType: "line", segmentHeadingMode: "manual" },
+      { x: 3, y: 2, theta: -90, thetaOn: true, segType: "line", segmentHeadingMode: "tangent" },
+      { x: 8, y: 2, theta: 0, thetaOn: true },
+    ]);
+    path.ranges = [{
+      anchor: "param", f0: 0.2, f1: 1,
+      maxVel: 4, maxAccel: 5, maxDecel: 5, maxAngVel: 180, maxAngAccel: 360,
+      rotationPriority: "translation",
+    }];
+
+    const result = legacyMath().derivePath(path, project.robot, 80, "profiledSpline");
+    const tangentStart = result.sample.pts.findIndex((point) => point.seg === 1);
+    const settledHeading = result.metrics.head.slice(Math.max(0, tangentStart));
+
+    expect(Math.max(...settledHeading)).toBeLessThanOrEqual(0.5 * Math.PI / 180);
+    expect(Math.abs(settledHeading.at(-1)!)).toBeLessThan(0.1 * Math.PI / 180);
+  });
+
+  it("splits cubic segments without changing their geometry", () => {
+    const math = legacyMath();
+    const curve: [Point, Point, Point, Point] = [
+      { x: 0, y: 0 }, { x: 1, y: 3 }, { x: 4, y: -1 }, { x: 6, y: 2 },
+    ];
+    const splitAt = 0.37;
+    const split = math.splitBezier(...curve, splitAt);
+
+    for (let index = 0; index <= 100; index++) {
+      const t = index / 100;
+      const expected = math.bez(...curve, t);
+      const actual = t <= splitAt
+        ? math.bez(...split.left, t / splitAt)
+        : math.bez(...split.right, (t - splitAt) / (1 - splitAt));
+      expect(actual.x).toBeCloseTo(expected.x, 10);
+      expect(actual.y).toBeCloseTo(expected.y, 10);
+    }
+  });
+
+  it("projects insertion onto the selected segment when paths pass near each other", () => {
+    const math = legacyMath();
+    const samples = [
+      { x: 0, y: 0, seg: 0, t: 0, heading: 0 },
+      { x: 2, y: 0, seg: 0, t: 1, heading: 0 },
+      { x: 2, y: 0.2, seg: 1, t: 1, heading: Math.PI / 2 },
+      { x: 1, y: 0.2, seg: 2, t: 0.5, heading: Math.PI },
+      { x: 0, y: 0.2, seg: 2, t: 1, heading: Math.PI },
+    ];
+
+    const projected = math.nearestPointOnSegment({ x: 1, y: 0.01 }, samples, 2);
+
+    expect(projected.seg).toBe(2);
+    expect(projected.x).toBeCloseTo(1, 10);
+    expect(projected.y).toBeCloseTo(0.2, 10);
+    expect(projected.t).toBeCloseTo(0.5, 10);
+  });
+
+  it("derives an endpoint jiggle without crashing the renderer", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints.at(-1)!.jiggle = { distanceM: 0.18, strokes: 4, startDeg: 90, stepDeg: -90, strokeTimeS: 0.4 };
+
+    const derived = legacyMath().derivePath(path, project.robot, 56, "profiledSpline");
+
+    expect(derived.prof.jiggles).toHaveLength(1);
+    expect(derived.prof.jiggles![0].strokeDuration).toBeGreaterThanOrEqual(0.4);
+    expect(derived.totalDistance - derived.sample.length).toBeCloseTo(1.44, 8);
+  });
+
+  it("keeps exact retraces as separate ordered visits", () => {
+    const math = legacyMath();
+    const samples = [
+      { x: 0, y: 0, s: 0, seg: 0, t: 0, heading: 0 },
+      { x: 2, y: 0, s: 2, seg: 0, t: 1, heading: 0 },
+      { x: 3, y: 1, s: 3.5, seg: 1, t: 1, heading: Math.PI / 4 },
+      { x: 2, y: 0, s: 5, seg: 2, t: 0, heading: Math.PI },
+      { x: 0, y: 0, s: 7, seg: 2, t: 1, heading: Math.PI },
+    ];
+
+    const visits = math.nearestVisits(1, 0, samples, { tolerance: 0.04 });
+
+    expect(visits).toHaveLength(2);
+    expect(visits.map((visit) => visit.seg)).toEqual([0, 2]);
+    expect(visits[0].f).toBeCloseTo(1 / 7, 10);
+    expect(visits[1].f).toBeCloseTo(6 / 7, 10);
+  });
+
