@@ -493,51 +493,51 @@
         const ds = pts[index].s - pts[index - 1].s;
         const before = candidateIndex === index - 1 ? candidate : v[index - 1];
         const after = candidateIndex === index ? candidate : v[index];
-    const wpIdx = doc.waypoints.map((_, k) => Math.min(lastI, k * perSeg));
-    const total = smp.length || 1;
-    const wpFrac = wpIdx.map((i) => (pts.length ? pts[i].s / total : 0));
-    const stopIdx = [];
-    doc.waypoints.forEach((w, k) => { if (w.stop) stopIdx.push(wpIdx[k]); });
-    const cap = (robot && robot.maxSpeed) || doc.constraints.maxVel;
-    const vmax = Math.min(doc.constraints.maxVel, cap);
-    const sv = doc.waypoints[0] && doc.waypoints[0].stop ? 0 : doc.startVel;
-    const gv = doc.waypoints[nWp - 1] && doc.waypoints[nWp - 1].stop ? 0 : doc.goalVel;
-    const effRanges = effectiveRanges(doc, smp);
-    // heading-generation mode (memo §3/§5): tank always follows tangent; swerve uses the path mode
-    const headingMode = (robot && robot.drive === 'tank') ? 'tangent' : (doc.headingMode || 'targets');
-    const mode = headingMode === 'tangent' ? 'tank' : 'swerve';
-    const entries = [];
-    if (headingMode !== 'tangent') {
-      doc.waypoints.forEach((w, k) => { const isEnd = k === 0 || k === nWp - 1; if (isEnd || w.thetaOn) entries.push({ f: wpFrac[k], rad: (w.theta || 0) * D2R }); });
-      if (headingMode === 'targets') (doc.targets || []).forEach((t) => entries.push({ f: t.f, rad: t.deg * D2R }));
+        return 2 * ds / Math.max(1e-6, before + after);
+      };
+      const intervalOmega = (index, candidate, candidateIndex) => {
+        if (index <= 0 || index >= n) return 0;
+        const dt = intervalDt(index, candidate, candidateIndex);
+        return dt > 1e-9 ? Math.abs(angWrap(head[index] - head[index - 1])) / dt : 0;
+      };
+      const capInterval = (interval, referenceInterval, variableIndex, referenceDtInterval) => {
+        const referenceOmega = intervalOmega(referenceInterval, v[variableIndex], -1);
+        const allowed = (candidate) => intervalOmega(interval, candidate, variableIndex) <= referenceOmega + angularBudget * intervalDt(referenceDtInterval, candidate, variableIndex) + 1e-9;
+        if (allowed(v[variableIndex])) return false;
+        let low = 0, high = v[variableIndex];
+        for (let iteration = 0; iteration < 28; iteration++) {
+          const candidate = (low + high) / 2;
+          if (allowed(candidate)) low = candidate; else high = candidate;
+        }
+        v[variableIndex] = low;
+        return true;
+      };
+      const stopped = new Set(opts.stopIdx || []);
+      const translationInterval = (interval) => interval > 0 && interval < n && translationPriority[interval];
+      for (let pass = 0; pass < 20; pass++) {
+        let changed = false;
+        for (let interval = 2; interval < n; interval++) {
+          if (!stopped.has(interval - 1) && !translationInterval(interval)) changed = capInterval(interval, interval - 1, interval, interval) || changed;
+        }
+        for (let interval = n - 2; interval >= 1; interval--) {
+          if (!stopped.has(interval) && !translationInterval(interval)) changed = capInterval(interval, interval + 1, interval - 1, interval + 1) || changed;
+        }
+        for (let i = 1; i < n; i++) {
+          const ds = pts[i].s - pts[i - 1].s;
+          v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * aFwd[i] * ds)));
+        }
+        for (let i = n - 2; i >= 0; i--) {
+          const ds = pts[i + 1].s - pts[i].s;
+          v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i + 1] * v[i + 1] + 2 * aBack[i] * ds)));
+        }
+        if (!changed) break;
+      }
     }
-    const anchors = buildAnchors(entries);
-    const head = pts.map((p) => { const f = total > 1e-6 ? p.s / total : 0; return mode === 'tank' ? p.heading : headingAt(f, anchors); });
-    const dwell = [];
-    doc.waypoints.forEach((w, k) => { if (w.stop && w.wait > 0) dwell.push({ idx: wpIdx[k], wait: w.wait }); });
-    const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, heading: head, dwell });
-    const mtr = metrics(pts, prof, anchors, mode);
-    const warnings = analyze(pts, prof, mtr, robot || {});
-    // rotational diagnostics: flag contiguous rotation-limited stretches (memo §16)
-    if (prof.rotLimited) {
-      const rl = prof.rotLimited;
-      const pushRun = (a, b) => { const mid = Math.floor((a + b) / 2); warnings.push({ f: pts[mid].s / total, kind: 'rot', sev: 'med', text: 'Rotation-limited \u00b7 heading can\u2019t keep up at speed' }); };
-      let run = -1;
-      for (let i = 0; i < rl.length; i++) { if (rl[i]) { if (run < 0) run = i; } else if (run >= 0) { if (i - run > 3) pushRun(run, i - 1); run = -1; } }
-      if (run >= 0 && rl.length - run > 3) pushRun(run, rl.length - 1);
-    }
-    // locate each warning to a segment + attach suggested fixes
-    warnings.forEach((wn) => {
-      let seg = 0;
-      for (let i = 0; i < wpFrac.length - 1; i++) { if (wn.f >= wpFrac[i] - 1e-4) seg = i; }
-      wn.seg = Math.max(0, Math.min(doc.waypoints.length - 2, seg));
-      wn.fixes = wn.kind === 'curv'
-        ? [{ id: 'clothoid', label: 'Convert segment to clothoid' }, { id: 'handles', label: 'Increase handle length' }, { id: 'cap', label: 'Cap velocity on this stretch' }, { id: 'insert', label: 'Insert a waypoint here' }]
-        : wn.kind === 'rot'
-        ? [{ id: 'cap', label: 'Cap speed on this stretch' }, { id: 'angvel', label: 'Raise max angular velocity' }]
-        : [{ id: 'cap', label: 'Lower the speed cap around here' }, { id: 'handles', label: 'Lengthen handles to ease the curve' }, { id: 'insert', label: 'Insert a waypoint here' }];
-    });
-    return { sample: smp, prof, anchors, metrics: mtr, warnings, wpFrac, wpIdx, mode, effRanges, headingMode, rev: !!doc.driveBackward };
+    // time
+    const t = new Array(n).fill(0);
+    for (let i = 1; i < n; i++) {
+      const ds = pts[i].s - pts[i - 1].s;
+      const vm = (v[i] + v[i - 1]) / 2;
   }
 
   window.PM = { bez, bezD, sample, profile, poseAtTime, headingAt, metrics, analyze, metricColor, metricGradient, METRICS, SEGTYPES, buildAnchors, pointAtFraction, nearestFraction, autoHandles, angWrap, angLerp, D2R, R2D, lerp, derivePath, effectiveRanges, waypointFracs };
