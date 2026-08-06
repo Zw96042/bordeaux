@@ -628,3 +628,93 @@ describe("legacy compatibility preview", () => {
     expect(app).toContain("const strideDistancePx = Math.max(1, runnerWidth * 1.7)");
     expect(app).toContain("const runMs = strideCount * strideMs");
     expect(app).toContain("const curtainMs = 280");
+    expect(app).toContain("reducedMotion ? 0 : strideMs / 2");
+    expect(app).toContain("splash.style.setProperty('--boot-run', runMs + 'ms')");
+    expect(app).toContain("splash.style.setProperty('--boot-curtain', curtainMs + 'ms')");
+    expect(app).not.toContain("splash.setAttribute('aria-hidden', 'true')");
+    expect(app).toContain("if (document.getElementById('boot-splash')) return");
+    expect(app).toContain("appRoot.removeAttribute('inert')");
+    expect(app).toContain("splash.remove()");
+    expect(loader).toContain("Right_Leg_Upper");
+    expect(loader).toContain("Left_Leg_Claw");
+    expect(loader).toContain("rotate(-120");
+    expect(loader).toContain("boot-chap-head");
+    expect(loader).toContain("element('use'");
+    expect(loader).toContain("wrlp-chap-bird-original.svg#");
+    expect(loader).toContain("appRoot.inert = true");
+    expect(loader).not.toContain("fetch(");
+    expect(bird).toContain('id="Tail"');
+    expect(bird).toContain('id="Body"');
+    expect(bird).toContain('id="Head"');
+  });
+
+  it("splits stopped Bezier geometry and exposes segment-local heading modes", () => {
+    const math = fs.readFileSync(new URL("../public/legacy/assets/91d3dc25-ddca-4323-acb3-c8839e67735f.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
+
+    expect(math).toContain("function lvBezierPiece");
+    expect(math).toContain("raw[end].stop || end === raw.length - 1");
+    expect(math).toContain("segmentHeadingMode");
+    expect(math).toContain("pointIndex >= wpIdx[segment + 1]");
+    expect(inspector).toContain("Heading on this segment");
+    expect(inspector).toContain("const waypointHeadingMode");
+    expect(inspector).toContain("actions.setSegmentHeadingMode(headingSegment, 'manual')");
+    expect(inspector).toContain("Use path default (");
+    expect(app).toContain("const setSegmentHeadingMode");
+    expect(app).toContain("end.segmentHeadingMode = before.segmentHeadingMode");
+    expect(app).toContain("const enableTargetsAtFraction");
+    expect(app).toContain("segmentHeadingMode = 'targets'");
+    expect(app).not.toContain("d.headingMode = 'targets'");
+    expect(app).toContain("delete d.waypoints[last].segmentHeadingMode");
+    expect(app).toContain("oldHeading[n - 2 - j]");
+    expect(field).toContain("const rad = segmentMode(segment) === 'tangent'");
+    expect(field).toContain("wpTangent || wpTracksPoint ? null : i");
+  });
+
+  it("mirrors authored heading-transition controls in the browser planner and inspector", () => {
+    const math = fs.readFileSync(new URL("../public/legacy/assets/91d3dc25-ddca-4323-acb3-c8839e67735f.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+
+    expect(math).toContain("function headingTransitionWindows");
+    expect(math).toContain("opts.headingTransitions || []");
+    expect(math).toContain("function headingTransitionGoals");
+    expect(math).toContain("smoothHeadingTransitions(rawHead, segmentLaws, transitionBreaks, wpIdx, pts, doc.waypoints, transitionGoals)");
+    expect(inspector).toContain("Transition into this segment");
+    expect(inspector).toContain("Heading transition timing priority");
+    expect(inspector).toContain("Blend distance");
+    expect(app).toContain("const setHeadingTransition");
+    expect(app).toContain("transition.placement === 'before' ? 'after'");
+    expect(app).toContain("oldLaws[index] !== oldLaws[index - 1]");
+    expect(app).toContain("{ placement: 'after', rotationPriority: 'heading', distanceM: 0.75, ...(waypoint.headingTransition || {}) }");
+  });
+
+  it("uses segmented controls instead of native dropdowns for planner and segment choices", () => {
+    const html = fs.readFileSync(new URL("../public/legacy/index.html", import.meta.url), "utf8");
+    const ui = fs.readFileSync(new URL("../public/legacy/assets/760c13dd-1656-409e-a1f2-58b2285a7f6e.js", import.meta.url), "utf8");
+    const panels = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
+
+    expect(ui).toContain("function Seg({ value, options, onChange, ariaLabel, className })");
+    expect(ui).toContain("'--seg-clip-left'");
+    expect(ui).toContain("className: 'seg-indicator'");
+    expect(ui).not.toContain("className: 'seg-active-ink'");
+    expect(html).not.toContain(".seg-active-ink");
+    expect(ui).not.toContain("function GroupSelect");
+    expect(panels).toContain("function PlannerControl");
+    expect(panels).toContain("className: 'planner-family'");
+    expect(panels).toContain("className: 'planner-method'");
+    expect(panels).not.toContain("'aria-label': 'Trajectory planner', value: plannerId, onChange: (e)");
+    expect(inspector).toContain("ariaLabel: 'Path type'");
+    expect(inspector).toContain("ariaLabel: 'Heading on this segment'");
+    expect(inspector).toContain("className: 'seg-heading'");
+    expect(inspector).toContain("tag = wpName(i, n) + ' \\u2192 ' + wpName(i + 1, n)");
+    expect(inspector).toContain("{ v: 'param', label: 'Proportional' }");
+    expect(inspector).toContain("{ v: 'wp', label: 'Local' }");
+    expect(inspector).toContain("Distance (legacy)");
+    expect(inspector).not.toContain("h(GroupSelect");
+    expect(panels).toContain(": 'Waypoint ' + k");
+  });
+
