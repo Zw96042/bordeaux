@@ -268,3 +268,15 @@ export function resolveFieldTerm(rawPhrase: string, options: ResolveFieldTermOpt
     : { phrase: rawPhrase, status: "unresolved", matches: [], message: `Bordeaux does not recognize “${rawPhrase}” in the active field pack.` };
 }
 
+export function resolveProjectFieldTerm(rawPhrase: string, strategy: ProjectStrategyOverlay | undefined, options: ResolveFieldTermOptions = {}): ResolvedFieldTerm {
+  const team = resolveStrategyTerm(rawPhrase, strategy);
+  const official = resolveFieldTerm(rawPhrase, options);
+  if (!team) return official;
+  if (official.status === "unresolved") return team;
+  return {
+    phrase: rawPhrase,
+    status: "ambiguous",
+    matches: [...team.matches, ...official.matches],
+    message: `“${rawPhrase}” matches both team strategy vocabulary and the official field pack; rename the team term to keep authoritative game-manual vocabulary unambiguous.`,
+  };
+}
