@@ -525,3 +525,93 @@ handle("project:save", async (_event, project, rawSaveAs) => {
 
 handle("project:exportBdx", async (_event, project, rawPathId) => {
   const exportData = buildLabviewBdx(project as BordeauxProject, typeof rawPathId === "string" ? rawPathId : undefined);
+  if (smokeDirectory) {
+    const target = path.join(smokeDirectory, "export.bdx");
+    await writeBufferAtomically(target, exportData.buffer);
+    return { exported: true };
+  }
+  const result = await dialog.showSaveDialog(mainWindow!, { title: "Export Bordeaux Path", defaultPath: `${exportData.pathName || "trajectory"}.bdx`, filters: [{ name: "Bordeaux Trajectory Export", extensions: ["bdx"] }] });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  await writeBufferAtomically(result.filePath, exportData.buffer);
+  return { exported: true };
+});
+
+handle("project:exportJava", async (_event, rawProject, rawDestination) => {
+  if (!linkedJavaProjectPath || !linkedJavaCatalog || !linkedJavaIntegration) throw new Error("Link a Java robot project before exporting robot JSON");
+  if (!linkedJavaIntegration.installed) throw new Error("Install Bordeaux Java support in the linked robot project before exporting");
+  if (linkedJavaIntegration.supportVersion !== linkedJavaCatalog.supportVersion) throw new Error("Installed Java support and the generated catalog do not match; reinstall support and rebuild the catalog");
+  const destination = rawDestination === "saveAs" ? "saveAs" : "linked";
+  const built = buildJavaTrajectory(rawProject as BordeauxProject, linkedJavaCatalog);
+  let target: string;
+  let relativePath: string;
+  if (destination === "saveAs") {
+    if (smokeDirectory) {
+      target = path.join(smokeDirectory, "java-export.bordeaux.json");
+    } else {
+      const result = await dialog.showSaveDialog(mainWindow!, {
+        title: "Save Bordeaux Java Trajectory",
+        defaultPath: javaTrajectoryFileName((rawProject as BordeauxProject).name),
+        filters: [{ name: "Bordeaux Java Trajectory", extensions: ["json"] }],
+      });
+      if (result.canceled || !result.filePath) return { canceled: true };
+      target = result.filePath;
+    }
+    relativePath = path.basename(target);
+  } else {
+    target = await assertSafeJavaExportTarget(linkedJavaProjectPath, javaTrajectoryFileName((rawProject as BordeauxProject).name));
+    relativePath = path.relative(linkedJavaProjectPath, target);
+    const targetSnapshot = await javaExportTargetSnapshot(target);
+    if (!smokeDirectory) {
+      const result = await dialog.showMessageBox(mainWindow!, {
+        type: "question",
+        title: "Export Java trajectory",
+        message: `Export ${built.pathCount} path${built.pathCount === 1 ? "" : "s"} and ${built.eventCount} event${built.eventCount === 1 ? "" : "s"}?`,
+        detail: `${relativePath}\n${Buffer.byteLength(built.contents, "utf8").toLocaleString()} bytes · SHA-256 ${built.sha256.slice(0, 12)}…\n\nGradleRIO deploys files under src/main/deploy with robot code. Bordeaux will not deploy the robot.`,
+        buttons: ["Cancel", "Export"],
+        defaultId: 1,
+        cancelId: 0,
+      });
+      if (result.response !== 1) return { canceled: true };
+      target = await assertSafeJavaExportTarget(linkedJavaProjectPath, path.basename(target));
+      if (await javaExportTargetSnapshot(target) !== targetSnapshot) throw new Error("Java export target changed while the preview was open; review and export again");
+    }
+  }
+  await writeBufferAtomically(target, Buffer.from(built.contents, "utf8"));
+  return { exported: true, relativePath, pathCount: built.pathCount, eventCount: built.eventCount, sha256: built.sha256 };
+});
+
+handle("project:validate", (_event, project) => validateProject(project));
+handle("javaProject:listRecent", () => summarizeJavaProjectBookmarks(javaProjectBookmarks));
+handle("javaProject:link", async () => {
+  let selectedPath: string | undefined;
+  if (smokeDirectory) {
+    selectedPath = path.join(smokeDirectory, "java-project");
+  } else {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: "Link Java Robot Project",
+      buttonLabel: "Link Project",
+      properties: ["openDirectory"],
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+    selectedPath = result.filePaths[0];
+  }
+  try {
+    return await connectJavaProject(selectedPath);
+  } catch (error) {
+    throw readableJavaProjectError(error, "Selected Java project");
+  }
+});
+handle("javaProject:openRecent", async (_event, rawId) => {
+  if (typeof rawId !== "string" || rawId.length > 64) throw new Error("Recent Java project selection is invalid");
+  const bookmark = javaProjectBookmarks.find((item) => item.id === rawId);
+  if (!bookmark) throw new Error("Recent Java project is no longer available");
+  try {
+    return await connectJavaProject(bookmark.projectPath);
+  } catch (error) {
+    throw readableJavaProjectError(error, bookmark.projectName);
+  }
+});
+handle("javaProject:refresh", async () => {
+  if (!linkedJavaProjectPath) throw new Error("Link a Java robot project before refreshing commands");
+  try {
+    return await connectJavaProject(linkedJavaProjectPath);
