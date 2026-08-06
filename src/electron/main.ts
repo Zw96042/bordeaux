@@ -1,48 +1,48 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
-import fs from "node:fs/promises";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu } from "electron";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
-import { buildBdxExport } from "../shared/export/bdx";
-import type { BordeauxProject } from "../shared/types";
+import { buildLabviewBdx } from "../shared/export/labviewBdx";
+import { buildJavaTrajectory, javaTrajectoryFileName } from "../shared/export/javaTrajectory";
+import type { BordeauxProject, JavaCommandCatalog, JavaIntegrationStatus } from "../shared/types";
+import type { AgentSessionSnapshot } from "../shared/agent/types";
 import { validateProject } from "../shared/validation";
+import { discoverJavaProject, readableJavaProjectError } from "./javaProject";
+import {
+  type JavaProjectBookmark,
+  readJavaProjectBookmarks,
+  rememberJavaProject,
+  summarizeJavaProjectBookmarks,
+  writeJavaProjectBookmarks,
+} from "./javaProjectBookmarks";
+import { readProject, saveTargetForOpenedProject, writeBufferAtomically, writeProject } from "./projectFiles";
+import {
+  applyJavaSupportInstall,
+  cancelJavaCatalogBuild,
+  inspectJavaSupport,
+  installPreviewSummary,
+  prepareJavaSupportInstall,
+  runJavaCatalogBuild,
+} from "./javaSupport";
+import { AgentBridgeClient, AgentBridgeServer } from "./agentBridge";
+import { AgentSessionService } from "./agentSession";
+import { serveBordeauxMcp } from "../mcp/server";
 
 let mainWindow: BrowserWindow | null = null;
 let recentFiles: string[] = [];
-
-app.setName("Bordeaux");
-
-function rememberFile(filePath: string) {
-  recentFiles = [filePath, ...recentFiles.filter((item) => item !== filePath)].slice(0, 8);
-  app.addRecentDocument(filePath);
-  buildMenu();
-}
-
-function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 920,
-    minWidth: 1100,
-    minHeight: 720,
-    title: "Bordeaux",
-    backgroundColor: "#12151b",
-    show: false,
-    webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
-  });
-
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
-
-  mainWindow.loadFile(path.join(__dirname, "../../public/legacy/index.html"));
-}
-
-function sendCommand(command: string, payload?: unknown) {
-  mainWindow?.webContents.send("menu-command", { command, payload });
-}
-
-function buildMenu() {
+let currentProjectPath: string | null = null;
+let dirty = false;
+let allowClose = false;
+let smokeCloseGuardTriggered = false;
+let linkedJavaProjectPath: string | null = null;
+let linkedJavaProjectBookmarkId: string | null = null;
+let linkedJavaCatalog: JavaCommandCatalog | null = null;
+let linkedJavaIntegration: JavaIntegrationStatus | null = null;
+let javaProjectBookmarks: JavaProjectBookmark[] = [];
+const smokeDirectory = process.env.BORDEAUX_SMOKE_DIRECTORY;
+const mcpStdioMode = process.argv.includes("--mcp-stdio");
+const enableMcpAccessOnLaunch = process.argv.includes("--enable-mcp-access");
+let agentBridge: AgentBridgeServer | null = null;
   const recentSubmenu =
     recentFiles.length > 0
       ? recentFiles.map((filePath) => ({
