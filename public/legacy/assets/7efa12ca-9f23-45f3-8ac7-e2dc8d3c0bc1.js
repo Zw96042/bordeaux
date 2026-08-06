@@ -707,3 +707,93 @@
             ? h(React.Fragment, null,
                 h('div', { className: 'hint' }, h(Icon, { name: 'compass', size: 14 }), 'This segment follows the path tangent. Set a manual heading to override only this segment.'),
                 h('button', { className: 'qbtn wide', type: 'button', style: { marginTop: '4px' }, onClick: () => { actions.setSegmentHeadingMode(headingSegment, 'manual'); actions.faceWaypoint(i, 'tangent'); } }, h(Icon, { name: 'compass', size: 14 }), 'Set manual heading on segment'))
+            : isAnchor
+              ? h(React.Fragment, null,
+                  h(Num, { label: 'Angle', value: w.theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v }) }),
+                  h(FaceRow, { i, actions, n }))
+              : h(React.Fragment, null,
+                  h('div', { className: 'inrow first' },
+                    h('span', { className: 'inrow-l' }, 'Pin heading here', h('small', null, 'otherwise it interpolates')),
+                    h(Toggle, { on: !!w.thetaOn, ariaLabel: 'Pin heading at waypoint', onChange: (v) => actions.toggleTheta(i, v) })),
+                  w.thetaOn && h(Num, { label: 'Angle', value: w.theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v }) }),
+                  h(FaceRow, { i, actions, n })),
+
+        // Stop & wait
+        !isAnchor && h('div', { className: 'inrow' },
+          h('span', { className: 'inrow-l' }, 'Stop here', h('small', null, 'decelerate to a full stop')),
+          h(Toggle, { on: !!w.stop, ariaLabel: 'Stop at waypoint', onChange: (v) => actions.setStop(i, v) })),
+        !isAnchor && w.stop && h(Num, { label: 'Wait at waypoint', value: w.wait || 0, unit: 's', step: 0.1, precision: 1, min: 0, onChange: (v) => actions.setWait(i, v) }),
+        !isStart && h('div', { className: 'inrow' },
+          h('span', { className: 'inrow-l' }, 'Turn in place', h('small', null, 'rotate without translating')),
+          h(Toggle, { on: !!w.turnInPlace, ariaLabel: 'Turn in place at waypoint', onChange: (v) => actions.setTurnInPlace(i, v) })),
+        !isStart && w.turnInPlace && h(React.Fragment, null,
+          h(Num, { label: 'Turn to heading', value: w.turnInPlace.headingDeg, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setTurnInPlaceMeta(i, { headingDeg: v }) }),
+          h('div', { className: 'fieldlabel' }, 'Turn direction'),
+          h(Seg, { value: w.turnInPlace.direction || 'shortest', ariaLabel: 'Turn direction', options: [{ v: 'shortest', label: 'Shortest' }, { v: 'counterclockwise', label: 'CCW' }, { v: 'clockwise', label: 'CW' }], onChange: (v) => actions.setTurnInPlaceMeta(i, { direction: v }) }),
+          h('div', { className: 'seg-hint' }, 'Uses the angular velocity, acceleration, and jerk limits. At an interior stop, set the next segment heading to match the turn target.')),
+        isAnchor && h(Num, { label: isStart ? 'Start velocity' : 'End velocity', value: isStart ? (doc.startVel || 0) : (doc.goalVel || 0), unit: 'm/s', min: 0, onChange: (v) => actions.setDoc(isStart ? { startVel: v } : { goalVel: v }) }),
+
+        // Tangent handles only appear when the selected planner consumes them.
+        handlesEffective && h(React.Fragment, null,
+          h('div', { className: 'fieldlabel' }, 'Tangent handles'),
+          h('div', { className: 'grid2' },
+            !isStart && h(Num, { label: 'In', value: handleLen(w, 'prevC'), unit: 'm', min: 0.1, onChange: (v) => actions.setHandleLen(i, 'prevC', v) }),
+            !isEnd && h(Num, { label: 'Out', value: handleLen(w, 'nextC'), unit: 'm', min: 0.1, onChange: (v) => actions.setHandleLen(i, 'nextC', v) }))),
+
+        isEnd && !isTank && h(React.Fragment, null,
+          h('div', { className: 'cgroup-h' }, 'Jiggle from endpoint'),
+          h('div', { className: 'grid2 compact-fields' },
+            h(Num, { label: 'Distance', value: jiggleDistance, unit: 'm', min: 0.03, max: 1.5, step: 0.01, precision: 2, onChange: (v) => { setJiggleDistance(v); setJiggleError(false); } }),
+            h(Num, { label: 'Stroke time', value: jiggleStrokeTime, unit: 's', min: 0.08, max: 5, step: 0.05, precision: 2, onChange: (v) => { setJiggleStrokeTime(v); setJiggleError(false); } }),
+            h(Num, { label: 'Strokes', value: jiggleStrokes, min: 2, max: 12, step: 1, precision: 0, onChange: (v) => { setJiggleStrokes(v); setJiggleError(false); } }),
+            h(Num, { label: 'First direction', value: jiggleStart, unit: '\u00b0 rel', step: 15, precision: 0, onChange: (v) => { setJiggleStart(v); setJiggleError(false); } }),
+            h(Num, { label: 'Direction step', value: jiggleStep, unit: '\u00b0', step: 15, precision: 0, onChange: (v) => { setJiggleStep(v); setJiggleError(false); } })),
+          h('div', { className: 'qrow' },
+            h('button', { className: 'qbtn wide', type: 'button', onClick: () => setJiggleError(!actions.setJiggle({ distanceM: jiggleDistance, strokes: jiggleStrokes, startDeg: jiggleStart, stepDeg: jiggleStep, strokeTimeS: jiggleStrokeTime })) }, h(Icon, { name: 'route', size: 14 }), endpointJiggle ? 'Update jiggle' : 'Add jiggle'),
+            endpointJiggle && h('button', { className: 'qbtn', type: 'button', title: 'Remove jiggle', 'aria-label': 'Remove jiggle', onClick: () => actions.setJiggle(null) }, h(Icon, { name: 'x', size: 14 }))),
+          h('div', { className: 'seg-hint' }, jiggleError ? 'Use unique directions and keep every stroke on the field.' : 'Adds one rapid endpoint action without creating waypoints. Stroke time is a minimum; path limits may lengthen it.')),
+        isEnd && isTank && endpointJiggle && h(React.Fragment, null,
+          h('div', { className: 'cgroup-h' }, 'Jiggle unavailable'),
+          h('div', { className: 'seg-hint' }, 'Arbitrary-direction jiggle requires a swerve drivetrain.'),
+          h('button', { className: 'qbtn', type: 'button', onClick: () => actions.setJiggle(null) }, h(Icon, { name: 'x', size: 14 }), 'Remove jiggle')),
+
+        (!isAnchor || n > 2) && h('div', { className: 'qrow', style: { marginTop: '14px' } },
+          !isAnchor && h('button', { className: 'qbtn', type: 'button', onClick: () => actions.duplicateWp(i) }, h(Icon, { name: 'copy', size: 14 }), 'Duplicate'),
+          n > 2 && h('button', { className: 'qbtn danger', type: 'button', onClick: () => actions.delWp(i) }, h(Icon, { name: 'trash', size: 14 }), 'Delete')));
+    }
+
+    // ---------------- SEGMENT (true segment properties only) ----------------
+    else if (sel.kind === 'seg' && wps[sel.idx] && wps[sel.idx + 1]) {
+      const i = sel.idx;
+      const st = segNorm(wps[i].segType);
+      const segHint = (window.PM.SEGTYPES.find((s) => s.id === st) || {}).hint || '';
+      const segmentLaw = (index) => {
+        const mode = wps[index].segmentHeadingMode || headingMode;
+        return mode === 'lookAt' ? 'lookAt:' + (wps[index].segmentLookAt ? wps[index].segmentLookAt.x + ':' + wps[index].segmentLookAt.y : '') : mode;
+      };
+      const hasHeadingTransition = !isTank && i > 0 && !wps[i].turnInPlace && segmentLaw(i) !== segmentLaw(i - 1);
+      const transition = Object.assign({ placement: 'after', rotationPriority: 'heading', distanceM: 0.75 }, wps[i].headingTransition || {});
+      icon = 'route'; title = 'Segment'; tag = wpName(i, n) + ' \u2192 ' + wpName(i + 1, n);
+      let segLen = 0, minR = Infinity, dur = 0;
+      if (derived.wpFrac && derived.sample.pts.length > 1) {
+        const total = derived.sample.length || 1;
+        const lo = derived.wpFrac[i], hi = derived.wpFrac[i + 1];
+        segLen = (hi - lo) * total;
+        const pts = derived.sample.pts;
+        for (let k = 0; k < pts.length; k++) { const f = pts[k].s / total; if (f >= lo && f <= hi && pts[k].curv > 1e-4) minR = Math.min(minR, 1 / pts[k].curv); }
+        if (derived.prof.t && derived.wpIdx) dur = (derived.prof.t[derived.wpIdx[i + 1]] || 0) - (derived.prof.t[derived.wpIdx[i]] || 0);
+      }
+      const segLo = derived.wpFrac ? derived.wpFrac[i] : 0, segHi = derived.wpFrac ? derived.wpFrac[i + 1] : 1;
+      const affecting = (doc.ranges || []).map((rg, ri) => ({ rg, ri, ef: (derived.effRanges && derived.effRanges[ri]) || rg }))
+        .filter((x) => { const lo = Math.min(x.ef.f0, x.ef.f1), hi = Math.max(x.ef.f0, x.ef.f1); return hi >= segLo && lo <= segHi; });
+      body = h(React.Fragment, null,
+        h('div', { className: 'fieldlabel first' }, wpName(i, n) + ' \u2192 ' + wpName(i + 1, n)),
+        Stat3([
+          { v: segLen.toFixed(2) + 'm', k: 'Length' },
+          { v: isFinite(minR) ? minR.toFixed(2) + 'm' : '\u221e', k: 'Min radius', color: isFinite(minR) && minR < 0.7 ? 'var(--bad)' : null },
+          { v: dur.toFixed(2) + 's', k: 'Duration' },
+        ]),
+        h('div', { className: 'fieldlabel' }, 'Path type'),
+        h(Seg, { value: st, options: window.PM.SEGTYPES.map((type) => ({ v: type.id, label: type.label, title: type.hint })), ariaLabel: 'Path type', onChange: (v) => actions.setSegMeta(i, { segType: v }) }),
+        h('div', { className: 'seg-hint' }, segHint),
+        !isTank && h(React.Fragment, null,
