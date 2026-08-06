@@ -88,3 +88,93 @@ describe("legacy compatibility preview", () => {
   });
 
   it("previews translation timing priority with bounded continuous rotation", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxVel = 4;
+    path.constraints.maxAccel = 5;
+    path.constraints.maxDecel = 5;
+    path.constraints.maxAngVel = 60;
+    path.constraints.maxAngAccel = 120;
+    path.constraints.maxAngDecel = 120;
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 8, y: 2, theta: 180, thetaOn: true },
+    ]);
+    path.ranges = [{ anchor: "param", f0: 0.05, f1: 0.95, maxVel: 4, maxAccel: 5, maxDecel: 5, maxAngVel: 60, maxAngAccel: 120 }];
+    const math = legacyMath();
+    const heading = math.derivePath(structuredClone(path), project.robot, 56, "profiledSpline");
+    path.ranges[0].rotationPriority = "translation";
+    const translation = math.derivePath(path, project.robot, 56, "profiledSpline");
+
+    expect(translation.prof.totalTime).toBeLessThan(heading.prof.totalTime);
+    expect(Math.max(...translation.metrics.v)).toBeGreaterThan(Math.max(...heading.metrics.v) + 0.2);
+    expect(Math.max(...translation.metrics.omega.map(Math.abs))).toBeLessThanOrEqual(Math.PI / 3 * 1.02);
+    expect(translation.checks.some((check) => check.text.includes("Rotation limits speed"))).toBe(false);
+    const finalPose = math.poseAtTime(translation.prof.totalTime, translation.sample.pts, translation.prof, translation.anchors, "swerve", false);
+    expect(Math.abs(finalPose.heading - Math.PI)).toBeLessThan(0.1 * Math.PI / 180);
+    translation.metrics.head.slice(1).forEach((value, index) => {
+      expect(value - translation.metrics.head[index]).toBeCloseTo(
+        translation.metrics.omega[index + 1] * (translation.prof.t[index + 1] - translation.prof.t[index]), 4,
+      );
+    });
+  });
+
+  it("previews before, split, and after heading-law boundaries", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "manual" },
+      { x: 4, y: 2, theta: 90, thetaOn: true, segType: "line", segmentHeadingMode: "tangent" },
+      { x: 7, y: 5, theta: 45, thetaOn: true },
+    ]);
+    const math = legacyMath();
+    const boundaryHeading = (placement: "before" | "split" | "after") => {
+      path.waypoints[1].headingTransition = { placement, rotationPriority: "heading", distanceM: 1 };
+      const result = math.derivePath(structuredClone(path), project.robot, 80, "profiledSpline");
+      let boundary = 0;
+      result.sample.pts.forEach((point, index) => {
+        if (Math.hypot(point.x - 4, point.y - 2) < Math.hypot(result.sample.pts[boundary].x - 4, result.sample.pts[boundary].y - 2)) boundary = index;
+      });
+      return result.metrics.head[boundary];
+    };
+
+    expect(boundaryHeading("before")).toBeCloseTo(Math.PI / 4, 2);
+    expect(boundaryHeading("split")).toBeCloseTo(Math.PI * 3 / 8, 2);
+    expect(boundaryHeading("after")).toBeCloseTo(Math.PI / 2, 2);
+  });
+
+  it("preserves translation through a minimum-distance heading transition", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxVel = 4;
+    path.constraints.maxAccel = 5;
+    path.constraints.maxDecel = 5;
+    path.constraints.maxAngVel = 90;
+    path.constraints.maxAngAccel = 180;
+    path.constraints.maxAngDecel = 180;
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: -90, thetaOn: true, segType: "line", segmentHeadingMode: "manual" },
+      { x: 4, y: 2, theta: -90, thetaOn: true, segType: "line", segmentHeadingMode: "tangent" },
+      { x: 9, y: 2, theta: 0, thetaOn: true },
+    ]);
+    path.waypoints[1].headingTransition = { placement: "after", rotationPriority: "heading", distanceM: 0.05 };
+    const math = legacyMath();
+    const heading = math.derivePath(structuredClone(path), project.robot, 56, "profiledSpline");
+    path.waypoints[1].headingTransition.rotationPriority = "translation";
+    const translation = math.derivePath(path, project.robot, 56, "profiledSpline");
+
+    expect(translation.prof.totalTime).toBeLessThan(heading.prof.totalTime);
+    const settledHeadings = translation.metrics.head.filter((_, index) => translation.sample.pts[index].x >= 4);
+    expect(Math.max(...settledHeadings)).toBeLessThanOrEqual(Math.PI / 180);
+    expect(Math.abs(translation.metrics.head.at(-1)!)).toBeLessThan(0.1 * Math.PI / 180);
+  });
+
+  it("previews heading catch-up without overshooting a settled tangent", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxVel = 4;
+    path.constraints.maxAccel = 5;
