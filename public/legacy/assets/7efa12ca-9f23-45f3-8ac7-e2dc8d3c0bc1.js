@@ -257,3 +257,93 @@
       if (!open) return;
       const closeFromOutside = (event) => {
         if (rootRef.current && !rootRef.current.contains(event.target)) setOpen(false);
+      };
+      document.addEventListener('pointerdown', closeFromOutside);
+      return () => document.removeEventListener('pointerdown', closeFromOutside);
+    }, [open]);
+
+    React.useEffect(() => {
+      if (!open) { setQuery(''); return; }
+      const selectedIndex = Math.max(0, visibleItems.findIndex((item) => item.value === value));
+      setActiveIndex(selectedIndex);
+      requestAnimationFrame(() => {
+        if (showSearch) searchRef.current && searchRef.current.focus();
+        else optionRefs.current[selectedIndex] && optionRefs.current[selectedIndex].focus();
+      });
+    }, [open]);
+
+    React.useEffect(() => {
+      if (!open) return;
+      setActiveIndex(0);
+    }, [query]);
+
+    const choose = (nextValue) => {
+      onChange(nextValue);
+      setOpen(false);
+      requestAnimationFrame(() => triggerRef.current && triggerRef.current.focus());
+    };
+    const focusOption = (nextIndex) => {
+      if (!visibleItems.length) return;
+      const wrapped = (nextIndex + visibleItems.length) % visibleItems.length;
+      setActiveIndex(wrapped);
+      requestAnimationFrame(() => optionRefs.current[wrapped] && optionRefs.current[wrapped].focus());
+    };
+    const handleKeyDown = (event) => {
+      if (!open) {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          setOpen(true);
+        }
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setOpen(false);
+        triggerRef.current && triggerRef.current.focus();
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        focusOption(activeIndex + 1);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        focusOption(activeIndex - 1);
+      } else if (event.key === 'Enter' && visibleItems[activeIndex]) {
+        event.preventDefault();
+        choose(visibleItems[activeIndex].value);
+      }
+    };
+
+    return h('div', {
+      className: 'cmd-picker',
+      ref: rootRef,
+      onKeyDown: handleKeyDown,
+      onBlur: (event) => {
+        if (open && !event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      },
+    },
+      h('span', { id: labelId, className: 'fieldlabel' }, label),
+      h('button', {
+        id,
+        ref: triggerRef,
+        className: 'cmd-picker-trigger',
+        type: 'button',
+        role: 'combobox',
+        'aria-labelledby': labelId + ' ' + id + '-value',
+        'aria-controls': listboxId,
+        'aria-expanded': open,
+        'aria-haspopup': 'listbox',
+        disabled,
+        onClick: () => setOpen((current) => !current),
+      },
+        icon && h(Icon, { name: icon, size: 14 }),
+        h('span', { id: id + '-value', title: selected ? selected.label : placeholder }, selected ? selected.label : placeholder),
+        selected && selected.badge && h('small', null, selected.badge),
+        h(Icon, { name: 'chevron', size: 13 })),
+      open && h('div', { className: 'cmd-picker-panel' },
+        showSearch && h('div', { className: 'cmd-picker-search' },
+          h(Icon, { name: 'search', size: 14 }),
+          h('label', { className: 'sr-only', htmlFor: id + '-search' }, 'Filter ' + label.toLowerCase()),
+          h('input', {
+            id: id + '-search',
+            ref: searchRef,
+            type: 'search',
+            value: query,
