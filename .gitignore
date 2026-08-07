@@ -2,8 +2,10 @@ node_modules/
 dist/
 dist-electron/
 release/
+release-*/
 java/.gradle/
 java/**/build/
 java/dist/
 .DS_Store
 npm-debug.log*
+**/Bordeaux-relaunch-backup-*.bordeaux.json
