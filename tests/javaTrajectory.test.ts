@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildJavaTrajectory, javaTrajectoryFileName } from "../src/shared/export/javaTrajectory";
-import { createDemoProject } from "../src/shared/project/defaults";
+import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
 import type { JavaCommandCatalog } from "../src/shared/types";
 
 function generatedCatalog(): JavaCommandCatalog {
@@ -67,6 +67,23 @@ describe("Java trajectory export", () => {
     expect(built.eventCount).toBe(1);
     expect(built.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(javaTrajectoryFileName(project.name)).toBe("Two-Piece-Auto.bordeaux.json");
+  });
+
+  it("exports mixed time and position following by authored segment", () => {
+    const project = createDemoProject();
+    project.paths[0].followMode = "position";
+    project.paths[0].waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, segmentFollowMode: "time" },
+      { x: 4, y: 2, theta: 0 },
+      { x: 7, y: 2, theta: 0 },
+    ]);
+
+    const sections = buildJavaTrajectory(project, generatedCatalog()).document.paths[0].followSections;
+
+    expect(sections.map((section) => section.mode)).toEqual(["time", "position"]);
+    expect(sections[0].startSample).toBe(0);
+    expect(sections[0].endSample).toBe(sections[1].startSample);
+    expect(sections[1].endSample).toBeGreaterThan(sections[1].startSample);
   });
 
   it("blocks source-only, unresolved legacy, and schema-invalid commands", () => {

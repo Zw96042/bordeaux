@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { buildBdxExport } from "./bdx";
 import { validateProjectJavaInvocations } from "../javaCommands";
-import type { BordeauxProject, CommandInvocation, JavaCommandCatalog, TrajectorySample } from "../types";
+import type { BordeauxProject, CommandInvocation, FollowMode, JavaCommandCatalog, PathDoc, TrajectorySample } from "../types";
 
 const MAX_SAMPLE_COUNT = 1_000_000;
 const MAX_EVENT_COUNT = 10_000;
@@ -24,7 +24,15 @@ export interface JavaTrajectoryPath {
   totalTimeS: number;
   totalDistanceM: number;
   samples: TrajectorySample[];
+  followSections: JavaFollowSection[];
   events: JavaTrajectoryEvent[];
+}
+
+export interface JavaFollowSection {
+  segmentIndex: number;
+  mode: FollowMode;
+  startSample: number;
+  endSample: number;
 }
 
 export interface JavaTrajectoryDocument {
@@ -57,6 +65,41 @@ export interface BuiltJavaTrajectory {
   sampleCount: number;
 }
 
+function followSections(path: PathDoc, samples: readonly TrajectorySample[]): JavaFollowSection[] {
+  const boundaries: number[] = [];
+  path.waypoints.forEach((waypoint, waypointIndex) => {
+    const start = waypointIndex === 0 ? 0 : boundaries[waypointIndex - 1];
+    let nearest = start;
+    for (let index = start; index < samples.length; index += 1) {
+      if (Math.hypot(samples[index].x - waypoint.x, samples[index].y - waypoint.y)
+        < Math.hypot(samples[nearest].x - waypoint.x, samples[nearest].y - waypoint.y)) nearest = index;
+    }
+    boundaries.push(nearest);
+  });
+  const sections: JavaFollowSection[] = [];
+  path.waypoints.slice(0, -1).forEach((waypoint, segmentIndex) => {
+    const start = boundaries[segmentIndex];
+    const end = boundaries[segmentIndex + 1];
+    let departure = start;
+    while (departure + 1 < end && Math.abs(samples[departure + 1].s - samples[start].s) < 1e-7) departure += 1;
+    if (departure > start) sections.push({ segmentIndex, mode: "time", startSample: start, endSample: departure });
+    sections.push({
+      segmentIndex,
+      mode: waypoint.segmentFollowMode ?? path.followMode ?? "time",
+      startSample: departure,
+      endSample: end,
+    });
+  });
+  const arrival = boundaries.at(-1)!;
+  if (arrival < samples.length - 1) sections.push({
+    segmentIndex: Math.max(0, path.waypoints.length - 2),
+    mode: "time",
+    startSample: arrival,
+    endSample: samples.length - 1,
+  });
+  return sections;
+}
+
 export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaCommandCatalog): BuiltJavaTrajectory {
   if (!catalog.authoritative || catalog.generatedSchemaVersion !== "1.0" || !catalog.catalogId || !catalog.supportVersion || !catalog.catalogHash) {
     throw new Error("Build the annotated Java command catalog before exporting robot JSON");
@@ -66,7 +109,8 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
   const native = buildBdxExport(project);
   let sampleCount = 0;
   let eventCount = 0;
-  const paths: JavaTrajectoryPath[] = native.paths.map((path) => {
+  const sourcePaths = project.paths.filter((path) => path.exportable !== false);
+  const paths: JavaTrajectoryPath[] = native.paths.map((path, pathIndex) => {
     sampleCount += path.samples.length;
     const events = path.markers.flatMap((marker) => marker.invocation ? [{
       eventId: marker.id,
@@ -85,6 +129,7 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
       totalTimeS: path.totalTimeS,
       totalDistanceM: path.totalDistanceM,
       samples: path.samples,
+      followSections: followSections(sourcePaths[pathIndex], path.samples),
       events,
     };
   });
