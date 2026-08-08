@@ -1122,4 +1122,5 @@
   }
 
   window.ContextInspector = ContextInspector;
+  window.BordeauxCommandEditor = { CommandParameterEditor, commandArguments, parameterValueError, safeControlId };
 })();

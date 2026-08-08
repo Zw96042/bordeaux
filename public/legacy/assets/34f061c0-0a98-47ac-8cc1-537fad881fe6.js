@@ -1206,7 +1206,7 @@
               h(window.RoutineTransport, { run, time: routineTime, playing: routinePlaying, controls: routineControls, running: routineRunning, outcomes: routineOutcomes }),
               h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
             h('aside', { className: 'rail rail-r' + (selNode ? '' : ' collapsed'), 'aria-label': 'Routine step inspector' },
-              selNode && h(window.StepInspector, { node: selNode, paths: project.paths, acq, run })))
+              selNode && h(window.StepInspector, { node: selNode, paths: project.paths, acq, run, javaProject: { ...javaProjectState, link: linkJavaProject } })))
         : h('main', { className: 'stage stage-plan' },
             h('nav', { className: 'rail rail-l' + (outlineOpen ? '' : ' collapsed'), 'aria-label': 'Path outline' },
               h(window.Panels.Outline, { open: outlineOpen, setOpen: setOutlineOpen, doc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot })),
