@@ -4,7 +4,7 @@
 // Exports window.ContextInspector
 (function () {
   const h = React.createElement;
-  const { Num, Toggle, Seg, Icon, constraintRangeSummary } = window.UI;
+  const { Num, Toggle, Seg, Icon, Dropdown, constraintRangeSummary } = window.UI;
   const { FIELD_W, FIELD_H } = window.FIELD_DIMS;
   const R2D = 180 / Math.PI;
 
@@ -60,14 +60,6 @@
   function Stat3(items) {
     return h('div', { className: 'rt-stat' }, items.map((it, i) =>
       h('div', { key: i, className: 'rt-stat-i' }, h('span', { className: 'rt-stat-v', style: it.color ? { color: it.color } : null }, it.v), h('span', { className: 'rt-stat-k' }, it.k))));
-  }
-
-  function FaceRow({ i, actions, n }) {
-    if (n < 2) return null;
-    return h('div', { className: 'facerow' },
-      h('button', { className: 'facebtn', type: 'button', title: 'Face next waypoint', disabled: i >= n - 1, onClick: () => actions.faceWaypoint(i, 'next') }, 'Face next'),
-      h('button', { className: 'facebtn', type: 'button', title: 'Face previous waypoint', disabled: i <= 0, onClick: () => actions.faceWaypoint(i, 'prev') }, 'Face prev'),
-      h('button', { className: 'facebtn', type: 'button', title: 'Align to path tangent', onClick: () => actions.faceWaypoint(i, 'tangent') }, 'Tangent'));
   }
 
   function defaultSchemaValue(schema, depth) {
@@ -232,96 +224,6 @@
     return [javaType, parameter.unit, parameter.description].filter(Boolean).join(' · ');
   }
 
-  const MAX_RENDERED_PICKER_ITEMS = 80;
-
-  function InlinePicker({ id, label, value, items, onChange, disabled, placeholder, icon, searchThreshold = 7 }) {
-    const [open, setOpen] = React.useState(false);
-    const [query, setQuery] = React.useState('');
-    const [activeIndex, setActiveIndex] = React.useState(0);
-    const rootRef = React.useRef(null);
-    const triggerRef = React.useRef(null);
-    const searchRef = React.useRef(null);
-    const optionRefs = React.useRef([]);
-    const listboxId = id + '-listbox';
-    const labelId = id + '-label';
-    const selected = items.find((item) => item.value === value);
-    const normalizedQuery = query.trim().toLowerCase();
-    const filteredItems = normalizedQuery
-      ? items.filter((item) => [item.label, item.meta, item.searchText].some((part) => String(part || '').toLowerCase().includes(normalizedQuery)))
-      : items;
-    const visibleItems = filteredItems.slice(0, MAX_RENDERED_PICKER_ITEMS);
-    const hiddenMatchCount = filteredItems.length - visibleItems.length;
-    const showSearch = items.length > searchThreshold;
-
-    React.useEffect(() => {
-      if (!open) return;
-      const closeFromOutside = (event) => {
-        if (rootRef.current && !rootRef.current.contains(event.target)) setOpen(false);
-      };
-      document.addEventListener('pointerdown', closeFromOutside);
-      return () => document.removeEventListener('pointerdown', closeFromOutside);
-    }, [open]);
-
-    React.useEffect(() => {
-      if (!open) { setQuery(''); return; }
-      const selectedIndex = Math.max(0, visibleItems.findIndex((item) => item.value === value));
-      setActiveIndex(selectedIndex);
-      requestAnimationFrame(() => {
-        if (showSearch) searchRef.current && searchRef.current.focus();
-        else optionRefs.current[selectedIndex] && optionRefs.current[selectedIndex].focus();
-      });
-    }, [open]);
-
-    React.useEffect(() => {
-      if (!open) return;
-      setActiveIndex(0);
-    }, [query]);
-
-    const choose = (nextValue) => {
-      onChange(nextValue);
-      setOpen(false);
-      requestAnimationFrame(() => triggerRef.current && triggerRef.current.focus());
-    };
-    const focusOption = (nextIndex) => {
-      if (!visibleItems.length) return;
-      const wrapped = (nextIndex + visibleItems.length) % visibleItems.length;
-      setActiveIndex(wrapped);
-      requestAnimationFrame(() => optionRefs.current[wrapped] && optionRefs.current[wrapped].focus());
-    };
-    const handleKeyDown = (event) => {
-      if (!open) {
-        if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          setOpen(true);
-        }
-        return;
-      }
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        setOpen(false);
-        triggerRef.current && triggerRef.current.focus();
-      } else if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        focusOption(activeIndex + 1);
-      } else if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        focusOption(activeIndex - 1);
-      } else if (event.key === 'Enter' && visibleItems[activeIndex]) {
-        event.preventDefault();
-        choose(visibleItems[activeIndex].value);
-      }
-    };
-
-    return h('div', {
-      className: 'cmd-picker',
-      ref: rootRef,
-      onKeyDown: handleKeyDown,
-      onBlur: (event) => {
-        if (open && !event.currentTarget.contains(event.relatedTarget)) setOpen(false);
-      },
-    },
-      h('span', { id: labelId, className: 'fieldlabel' }, label),
-      h('button', {
         id,
         ref: triggerRef,
         className: 'cmd-picker-trigger',
