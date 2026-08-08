@@ -269,6 +269,11 @@
     // ---- Autonomous Routine ----
     const routine = project.routine || { name: 'Autonomous Routine', nodes: [] };
     const setRoutine = useCallback((update) => setProject((current) => {
+      routineHist.current.past.push(clone(current.routine || { name: 'Autonomous Routine', nodes: [] }));
+      if (routineHist.current.past.length > 80) routineHist.current.past.shift();
+      routineHist.current.future = [];
+      hist.current.past = []; hist.current.future = [];
+      projectHist.current.future = [];
       const value = typeof update === 'function' ? update(current.routine || { name: 'Autonomous Routine', nodes: [] }) : update;
       return { ...current, routine: value };
     }), []);
@@ -281,9 +286,12 @@
     const accent = ACCENT;
 
     const doc = project.paths[activeIdx];
+    const selectedPlannerId = isLabviewPlanner(plannerId) ? labviewPlannerForPath(doc, plannerId) : plannerId;
     const docRef = useRef(doc); docRef.current = doc;
     const hist = useRef({ past: [], future: [] });
+    const routineHist = useRef({ past: [], future: [] });
     const projectHist = useRef({ past: [], future: [] });
+    const autosaveRevision = useRef(0);
     const [, force] = useState(0);
 
     useEffect(() => {
@@ -291,6 +299,16 @@
       else setDirty(true);
     }, [project, plannerId]);
     useEffect(() => { if (window.bordeauxAPI) window.bordeauxAPI.setDirty(dirty); }, [dirty]);
+    useEffect(() => {
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.autosaveProject !== 'function') return undefined;
+      const revision = ++autosaveRevision.current;
+      const timer = window.setTimeout(() => {
+        window.bordeauxAPI.autosaveProject({ schemaVersion: '1.0', ...project, routine: project.routine, plannerId })
+          .then((result) => { if (revision === autosaveRevision.current && result && result.saved) setDirty(false); })
+          .catch((error) => console.warn('Could not autosave the Bordeaux project:', error));
+      }, 900);
+      return () => window.clearTimeout(timer);
+    }, [project, plannerId]);
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.publishAgentSession !== 'function') return;
       agentRevision.current += 1;
@@ -363,16 +381,30 @@
     const undo = useCallback(() => {
       const H = hist.current;
       if (H.past.length) { H.future.push(clone(docRef.current)); writeDoc(H.past.pop()); force((x) => x + 1); return; }
+      const R = routineHist.current;
+      if (R.past.length) {
+        R.future.push(clone(project.routine || { name: 'Autonomous Routine', nodes: [] }));
+        const previous = R.past.pop();
+        setProject((current) => ({ ...current, routine: previous }));
+        setRoutineSel(null); force((x) => x + 1); return;
+      }
       const P = projectHist.current; if (!P.past.length) return;
       P.future.push({ project: clone(project), activeIdx });
-      const previous = P.past.pop(); setProject(previous.project); setActiveIdx(previous.activeIdx); setSel({ kind: null, idx: -1 }); force((x) => x + 1);
+      const previous = P.past.pop(); routineHist.current = { past: [], future: [] }; setProject(previous.project); setActiveIdx(previous.activeIdx); setSel({ kind: null, idx: -1 }); force((x) => x + 1);
     }, [writeDoc, project, activeIdx]);
     const redo = useCallback(() => {
       const H = hist.current;
       if (H.future.length) { H.past.push(clone(docRef.current)); writeDoc(H.future.pop()); force((x) => x + 1); return; }
+      const R = routineHist.current;
+      if (R.future.length) {
+        R.past.push(clone(project.routine || { name: 'Autonomous Routine', nodes: [] }));
+        const nextRoutine = R.future.pop();
+        setProject((current) => ({ ...current, routine: nextRoutine }));
+        setRoutineSel(null); force((x) => x + 1); return;
+      }
       const P = projectHist.current; if (!P.future.length) return;
       P.past.push({ project: clone(project), activeIdx });
-      const next = P.future.pop(); setProject(next.project); setActiveIdx(next.activeIdx); setSel({ kind: null, idx: -1 }); force((x) => x + 1);
+      const next = P.future.pop(); routineHist.current = { past: [], future: [] }; setProject(next.project); setActiveIdx(next.activeIdx); setSel({ kind: null, idx: -1 }); force((x) => x + 1);
     }, [writeDoc, project, activeIdx]);
 
     const select = useCallback((kind, idx) => setSel(kind ? { kind, idx } : { kind: null, idx: -1 }), []);

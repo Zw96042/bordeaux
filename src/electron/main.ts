@@ -553,6 +553,20 @@ handle("project:save", async (_event, project, rawSaveAs) => {
   return { saved: true };
 });
 
+handle("project:autosave", async (_event, project) => {
+  if (!currentProjectPath) return { saved: false };
+  const validation = validateProject(project);
+  if (!validation.ok) return { saved: false };
+  try {
+    await writeProject(currentProjectPath, project);
+    return { saved: true };
+  } catch {
+    // Autosave is best-effort. Keep the renderer dirty so an explicit save or
+    // close prompt can recover without turning a background write into an IPC error.
+    return { saved: false };
+  }
+});
+
 handle("project:exportBdx", async (_event, project, rawPathId) => {
   const exportData = buildLabviewBdx(project as BordeauxProject, typeof rawPathId === "string" ? rawPathId : undefined);
   if (smokeDirectory) {
