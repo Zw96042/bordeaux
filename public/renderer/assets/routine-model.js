@@ -17,6 +17,33 @@
   };
   const CAT_LIST = ['command', 'terminate', 'sequence', 'generate', 'velocity'];
 
+  const CONDITIONS = [
+    { value: 'robot.ready', label: 'Robot ready', meta: 'Runtime condition ID' },
+    { value: 'vision.targetVisible', label: 'Vision target visible', meta: 'Runtime condition ID' },
+    { value: 'gamePiece.detected', label: 'Game piece detected', meta: 'Runtime condition ID' },
+    { value: 'path.clear', label: 'Path clear', meta: 'Runtime condition ID' },
+  ];
+  const FUNCTIONS = [
+    { value: 'GeneratePath', label: 'Generate path', meta: 'Runtime trajectory function' },
+    { value: 'GenerateNearestGamePiece', label: 'Nearest game piece', meta: 'Runtime trajectory function' },
+    { value: 'GenerateParkingPath', label: 'Parking path', meta: 'Runtime trajectory function' },
+  ];
+  const TRIGGERS = [
+    { value: 'On entry', label: 'On entry', meta: 'When this step becomes active' },
+    { value: 'On branch entry', label: 'On branch entry', meta: 'When its decision branch is chosen' },
+    { value: 'On path complete', label: 'On path complete', meta: 'After the current path settles' },
+    { value: 'Routine end', label: 'Routine end', meta: 'After the final authored step' },
+    { value: 'When condition is true', label: 'When condition is true', meta: 'Uses a registered condition' },
+  ];
+
+  function pickerItems(items, value, empty) {
+    const out = empty ? [{ value: '', label: empty, meta: 'No runtime reference' }, ...items] : [...items];
+    if (value && !out.some((item) => item.value === value)) {
+      out.unshift({ value, label: value, meta: 'Exact project reference', badge: 'custom' });
+    }
+    return out;
+  }
+
   // ---- Sequence is a CORE Autonomous Routine feature: orchestration ops, robot-independent ----
   const SEQ_OPS = [
     { id: 'skip',    label: 'Skip path',         verb: 'Skip',        blurb: 'Skip the next path in the routine' },
@@ -87,13 +114,13 @@
   // ---- node factory ----
   function newNode(type, cat, pathRef) {
     if (type === 'path') return { id: uid('p'), type: 'path', ref: pathRef || '' };
-    if (type === 'decision') return { id: uid('d'), type: 'decision', cond: 'robot.condition', thenLabel: 'Yes', elseLabel: 'No', then: [], else: [] };
+    if (type === 'decision') return { id: uid('d'), type: 'decision', cond: 'robot.ready', thenLabel: 'Yes', elseLabel: 'No', then: [], else: [] };
     const c = cat || 'terminate';
     if (c === 'command') return { id: uid('c'), type: 'function', cat: 'command', title: 'Robot command', invocation: null };
     if (c === 'generate') return { id: uid('g'), type: 'function', cat: 'generate', funcRef: 'GeneratePath', trigger: 'On entry', params: [], note: '', preview: null };
-    if (c === 'sequence') return { id: uid('s'), type: 'function', cat: 'sequence', op: 'skip', target: '', trigger: 'When\u2026', note: '' };
-    if (c === 'velocity') return { id: uid('v'), type: 'function', cat: 'velocity', title: 'Velocity rule', trigger: 'When\u2026', scale: 0.5, note: '' };
-    return { id: uid('f'), type: 'function', cat: 'terminate', title: 'Terminate', trigger: 'When\u2026', note: '' };
+    if (c === 'sequence') return { id: uid('s'), type: 'function', cat: 'sequence', op: 'skip', target: '', trigger: 'When condition is true', note: '' };
+    if (c === 'velocity') return { id: uid('v'), type: 'function', cat: 'velocity', title: 'Velocity rule', trigger: 'When condition is true', scale: 0.5, note: '' };
+    return { id: uid('f'), type: 'function', cat: 'terminate', title: 'Terminate', trigger: 'When condition is true', note: '' };
   }
 
   // ---- walk every node (incl. branch children) ----
@@ -112,7 +139,11 @@
     if (node.type === 'path') doc = paths.find((path) => path.id === node.ref);
     else if (node.type === 'function' && node.cat === 'generate' && node.preview) doc = node.preview;
     if (!doc) return null;
-    const d = window.PM.derivePath(doc, robot, 56, plannerId);
+    let effectivePlanner = plannerId;
+    if (plannerId === 'labviewBezier' || plannerId === 'labviewClothoid') {
+      effectivePlanner = window.PM.labviewPlannerForPath(doc, plannerId);
+    }
+    const d = window.PM.derivePath(doc, robot, 56, effectivePlanner);
     return { doc, deriv: d, pts: d.sample.pts, total: d.prof.totalTime || 0 };
   }
 
@@ -203,7 +234,7 @@
     });
   }
 
-  window.AUTO = { CATS, CAT_LIST, SEQ_OPS, seqOp, nodeTitle, demoRoutine, newNode, walk, findNode, countSteps, branchCount,
+  window.AUTO = { CATS, CAT_LIST, CONDITIONS, FUNCTIONS, TRIGGERS, pickerItems, SEQ_OPS, seqOp, nodeTitle, demoRoutine, newNode, walk, findNode, countSteps, branchCount,
     buildRun, poseAt, stepAt, fieldOverlay, genPath, D2R,
     update, remove, insertAfter, prepend, appendBranch, prependBranch, append, move, reorderRelative };
 

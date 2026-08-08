@@ -58,10 +58,10 @@
         h('span', { className: 'rt-ch-ic', style: { color: '#9aa3b0' } }, h(Icon, { name: 'branch', size: 16 })),
         h('span', { className: 'rt-ch-main' }, h('span', { className: 'rt-ch-t' }, 'Decision'), h('span', { className: 'rt-ch-d' }, 'Branch the routine on a condition'))),
       h('div', { className: 'rt-ch-sec' }, 'Behavior'),
-      h('button', { className: 'rt-ch-row', type: 'button', onClick: () => setSub('function') },
+      h('button', { className: 'rt-ch-row function', type: 'button', onClick: () => setSub('function') },
         h('span', { className: 'rt-ch-ic', style: { color: 'var(--txt-2)' } }, h(Icon, { name: 'bolt', size: 16 })),
-        h('span', { className: 'rt-ch-main' }, h('span', { className: 'rt-ch-t' }, 'Function'), h('span', { className: 'rt-ch-d' }, 'Command · Generate · Velocity · Sequence · Terminate')),
-        h('span', { className: 'rt-ch-more' }, h(Icon, { name: 'chevron', size: 14 }))));
+        h('span', { className: 'rt-ch-main' }, h('span', { className: 'rt-ch-t' }, 'Functions'), h('span', { className: 'rt-ch-d' }, 'Robot behavior and runtime actions')),
+        h('span', { className: 'rt-ch-more' }, h(Icon, { name: 'chevron', size: 18 }))));
   }
 
   function AddStep({ onPick, variant, label }) {
@@ -152,7 +152,7 @@
     return h('div', { className: 'rt-empty' },
       h('div', { className: 'rt-empty-ic' }, h(Icon, { name: 'layers', size: 22 })),
       h('div', { className: 'rt-empty-t' }, 'Build your routine'),
-      h('div', { className: 'rt-empty-d' }, 'Stack ', h('b', null, 'Path'), ' steps to drive, ', h('b', null, 'Decision'), ' steps to branch, and ', h('b', null, 'Function'), ' steps to change behavior at runtime.'),
+      h('div', { className: 'rt-empty-d' }, 'Add paths, decisions, and runtime functions in execution order.'),
       h(AddStep, { variant: 'end', label: 'Add first step', onPick: (t, c) => acq.addEnd(t, c) }));
   }
 
@@ -160,6 +160,13 @@
     const { routine, run, paths, selId, onSelect, acq, time, running } = props;
     const dnd = useDnd(acq);
     const [collapsed, setCollapsed] = useState(() => new Set());
+    const [renaming, setRenaming] = useState(false);
+    const [nameDraft, setNameDraft] = useState(routine.name);
+    const commitName = () => {
+      const next = nameDraft.trim();
+      if (next && next !== routine.name) acq.rename(next);
+      setRenaming(false);
+    };
     const toggleCollapse = (id) => setCollapsed((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
     const activeIdx = run.steps.length ? A.stepAt(run, time) : -1;
@@ -170,19 +177,22 @@
 
     return h('div', { className: 'rt-panel' + (dnd.drag ? ' dragging' : '') },
       h('div', { className: 'rt-hd' },
-        h('span', { className: 'rt-mark' }),
-        h('div', { className: 'rt-titlecol' },
-          h('input', { className: 'rt-name', 'aria-label': 'Routine name', value: routine.name, spellCheck: false, onChange: (e) => acq.rename(e.target.value) }),
-          h('div', { className: 'rt-sub' }, 'Autonomous Routine · ', nSteps, nSteps === 1 ? ' step' : ' steps', ' · ', fmt(run.total)))),
+        renaming
+          ? h('form', { className: 'rt-rename', onSubmit: (event) => { event.preventDefault(); commitName(); } },
+              h('input', { className: 'rt-name', autoFocus: true, 'aria-label': 'Routine name', value: nameDraft, spellCheck: false, onChange: (event) => setNameDraft(event.target.value), onBlur: commitName }))
+          : h('button', { className: 'rt-selector', type: 'button', title: 'Rename routine', onClick: () => { setNameDraft(routine.name); setRenaming(true); } },
+              h('span', { className: 'rt-selector-ic' }, h(Icon, { name: 'layers', size: 15 })),
+              h('span', { className: 'rt-titlecol' }, h('strong', null, routine.name), h('small', null, nSteps + (nSteps === 1 ? ' step' : ' steps') + ' · ' + fmt(run.total))),
+              h(Icon, { name: 'edit', size: 13 }))),
 
       h('div', { className: 'rt-scroll' },
         routine.nodes.length === 0
           ? h(EmptyState, { acq })
           : h('div', { className: 'rt-list' },
               h(AddStep, { variant: 'gap', onPick: (t, c) => acq.prepend(t, c) }),
-              routine.nodes.map((n) => h(React.Fragment, { key: n.id },
+              routine.nodes.map((n, index) => h(React.Fragment, { key: n.id },
                 h(StepCard, { node: n, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction: n.type === 'function' }),
-                h(AddStep, { variant: 'gap', onPick: (t, c) => acq.addAfter(n.id, t, c) }))),
+                index < routine.nodes.length - 1 && h(AddStep, { variant: 'gap', onPick: (t, c) => acq.addAfter(n.id, t, c) }))),
               h(AddStep, { variant: 'end', onPick: (t, c) => acq.addEnd(t, c) }))));
   }
 
