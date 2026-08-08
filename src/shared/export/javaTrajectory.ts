@@ -15,6 +15,10 @@ export interface JavaTrajectoryEvent {
   commandId: string;
   arguments: CommandInvocation["arguments"];
   cancelOnPathEnd: boolean;
+  trigger: "time" | "position";
+  repeatEveryS?: number;
+  endTimeS?: number;
+  conditionId?: string;
 }
 
 export interface JavaTrajectoryPath {
@@ -112,15 +116,26 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
   const sourcePaths = project.paths.filter((path) => path.exportable !== false);
   const paths: JavaTrajectoryPath[] = native.paths.map((path, pathIndex) => {
     sampleCount += path.samples.length;
-    const events = path.markers.flatMap((marker) => marker.invocation ? [{
-      eventId: marker.id,
-      name: marker.name,
-      timeS: marker.timeS,
-      fraction: marker.fraction,
-      commandId: marker.invocation.commandId,
-      arguments: marker.invocation.arguments,
-      cancelOnPathEnd: marker.invocation.cancelOnPathEnd === true,
-    }] : []).sort((left, right) => left.timeS - right.timeS || left.eventId.localeCompare(right.eventId));
+    const events = path.markers.flatMap((marker) => {
+      if (!marker.invocation) return [];
+      const source = sourcePaths[pathIndex].markers.find((candidate) => candidate.id === marker.id);
+      if (source?.schedule?.endTimeS !== undefined && source.schedule.endTimeS < marker.timeS) {
+        throw new Error(`Event ${marker.name} ends before it starts`);
+      }
+      return [{
+        eventId: marker.id,
+        name: marker.name,
+        timeS: marker.timeS,
+        fraction: marker.fraction,
+        commandId: marker.invocation.commandId,
+        arguments: marker.invocation.arguments,
+        cancelOnPathEnd: marker.invocation.cancelOnPathEnd === true,
+        trigger: source?.schedule?.trigger ?? "time",
+        ...(source?.schedule?.repeatEveryS === undefined ? {} : { repeatEveryS: source.schedule.repeatEveryS }),
+        ...(source?.schedule?.endTimeS === undefined ? {} : { endTimeS: source.schedule.endTimeS }),
+        ...(source?.schedule?.conditionId ? { conditionId: source.schedule.conditionId } : {}),
+      }];
+    }).sort((left, right) => left.timeS - right.timeS || left.eventId.localeCompare(right.eventId));
     eventCount += events.length;
     return {
       id: path.id,

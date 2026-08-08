@@ -51,6 +51,7 @@ describe("Java trajectory export", () => {
         arguments: { sequence: "9007199254740993", target: { level: "L4" } },
         cancelOnPathEnd: true,
       },
+      schedule: { trigger: "position", repeatEveryS: 0.1, endTimeS: 2, conditionId: "frc.robot.Conditions#ready" },
     }];
 
     const built = buildJavaTrajectory(project, generatedCatalog());
@@ -63,6 +64,10 @@ describe("Java trajectory export", () => {
       commandId: "frc.robot.AutoCommands#score",
       arguments: { sequence: "9007199254740993", target: { level: "L4" } },
       cancelOnPathEnd: true,
+      trigger: "position",
+      repeatEveryS: 0.1,
+      endTimeS: 2,
+      conditionId: "frc.robot.Conditions#ready",
     })]);
     expect(built.eventCount).toBe(1);
     expect(built.sha256).toMatch(/^[0-9a-f]{64}$/);
