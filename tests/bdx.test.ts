@@ -492,8 +492,8 @@ describe("canonical shipped renderer", () => {
     const panels = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/panels.js"), "utf8");
     const inspector = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/context-inspector.js"), "utf8");
     expect(panels).toContain("'aria-label': 'Export .bdx'");
-    expect(panels).toContain("{ v: 'labviewBezier'");
-    expect(panels).toContain("{ v: 'labviewClothoid'");
+    expect(panels).not.toContain("ariaLabel: 'Planner family'");
+    expect(panels).not.toContain("ariaLabel: 'Trajectory planner'");
     expect(panels).toContain("exported samples remain authoritative");
     expect(inspector).toContain("Advanced .bdx flags");
     expect(inspector).not.toContain("StoopidFast");
@@ -520,12 +520,14 @@ describe("canonical shipped renderer", () => {
     expect(outline).toContain("wps.length > 2 && h('button', { className: 'featdel'");
   });
 
-  it("renders the field metric overlay as a compact legend", () => {
+  it("renders the field metric legend inside the timeline toolbar", () => {
     const styles = fs.readFileSync(path.join(process.cwd(), "public/renderer/styles.css"), "utf8");
     const panels = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/panels.js"), "utf8");
-    expect(styles).toContain(".overlayctl{position:absolute;left:16px;bottom:110px;width:236px;background:transparent");
-    expect(panels).not.toContain("className: 'ovlabel'");
-    expect(panels.indexOf("className: 'ovsafety '")).toBeLessThan(panels.indexOf("className: 'ovlegend'"));
+    expect(styles).toContain(".metricctl{height:100%;display:flex;align-items:center");
+    expect(styles).toContain(".metric-dropdown{width:82px}");
+    expect(panels).toContain("function MetricControl(");
+    expect(panels).toContain("h(MetricControl, { metric, setMetric, derived");
+    expect(panels).not.toContain("className: 'overlayctl'");
   });
 
   it("offers beginner robot-footprint presets and scales them with dimensions", () => {
@@ -534,6 +536,10 @@ describe("canonical shipped renderer", () => {
     expect(robotPage).toContain("const maxDim = Math.max(robot.w, robot.l, 0.4, ...footprint.flatMap");
     expect(robotPage).toContain("x: point.x * nextL / robot.l, y: point.y * nextW / robot.w");
     expect(robotPage).toContain("Custom convex vertices");
+    expect(robotPage).toContain("Round footprint curve detail");
+    expect(robotPage).toContain("Trapezoid front width");
+    expect(robotPage).toContain("onDoubleClick: addVertexFromPreview");
+    expect(robotPage).toContain("`Footprint vertex ${index + 1}`");
     expect(robotPage).toContain("disabled: footprint.length >= 16");
     expect(robotPage).toContain("disabled: footprint.length <= 3");
   });
@@ -557,9 +563,15 @@ describe("canonical shipped renderer", () => {
   it("authors deployable between-path commands and decisions", () => {
     const model = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/routine-model.js"), "utf8");
     const inspector = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/routine-inspector.js"), "utf8");
+    const panels = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/panels.js"), "utf8");
+    const app = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/app.js"), "utf8");
     expect(model).toContain("label: 'Command'");
-    expect(inspector).toContain("aria-label': 'Between-path command'");
-    expect(inspector).toContain("aria-label': 'Decision condition ID'");
+    expect(panels).toContain("'Acquatine'");
+    expect(app).not.toContain("h(window.Panels.RoutineLegend");
+    expect(inspector).toContain("id: 'routine-command'");
+    expect(inspector).toContain("id: 'routine-condition'");
+    expect(inspector).toContain("A.pickerItems(A.CONDITIONS");
+    expect(inspector).toContain("customLabel: 'Enter exact decision condition ID'");
     expect(inspector).toContain("Runs after the previous path and before the next path is selected.");
   });
 
