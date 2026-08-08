@@ -185,59 +185,39 @@
       h('div', { className: 'ctxinsp-body' }, body));
   }
 
-  // ---- run log ----
-  function buildLog(run, time, outcomes) {
-    const out = [];
-    run.steps.forEach((s) => {
-      if (s.t0 > time + 1e-6) return;
-      const n = s.node;
-      if (s.kind === 'decision') {
-        const br = (outcomes && outcomes[n.id]) || 'then';
-        out.push({ t: s.t0, color: '#9aa3b0', icon: 'branch', text: n.cond + '  →  ' + (br === 'then' ? n.thenLabel : n.elseLabel) });
-      } else if (s.kind === 'path') {
-        out.push({ t: s.t0, color: 'var(--accent)', icon: 'route', text: 'Follow ' + s.label });
-      } else if (s.kind === 'gen') {
-        out.push({ t: s.t0, color: A.CATS.generate.color, icon: 'compass', text: 'Invoke ' + n.funcRef + '()' });
-      } else {
-        const C = A.CATS[n.cat];
-        out.push({ t: s.t0, color: C.color, icon: C.icon, text: A.nodeTitle(n) });
-      }
-    });
-    return out.reverse();
-  }
-
-  // ---- bottom transport: a Run pill while authoring, full controls once simulating ----
+  // ---- bottom transport: the same persistent timeline model used by Plan ----
   function RoutineTransport(props) {
-    const { run, time, playing, controls, running, outcomes } = props;
+    const { run, time, playing, controls, running } = props;
     const nSteps = run.steps.length;
     const activeIdx = nSteps ? A.stepAt(run, time) : -1;
     const pct = run.total > 0 ? Math.max(0, Math.min(1, time / run.total)) : 0;
+    const spans = run.steps.filter((step) => step.t1 > step.t0).map((step) => ({
+      key: step.node.id,
+      left: run.total ? step.t0 / run.total * 100 : 0,
+      width: run.total ? (step.t1 - step.t0) / run.total * 100 : 0,
+      color: step.kind === 'path' ? 'var(--accent)' : step.kind === 'gen' ? A.CATS.generate.color : (step.node.cat && A.CATS[step.node.cat] ? A.CATS[step.node.cat].color : 'var(--txt-3)'),
+      label: A.nodeTitle(step.node),
+    }));
+    const instants = run.steps.filter((step) => step.t1 <= step.t0).map((step) => ({
+      key: step.node.id,
+      left: run.total ? step.t0 / run.total * 100 : 0,
+      label: A.nodeTitle(step.node),
+    }));
 
-    if (!running) {
-      return h('div', { className: 'rt-transport build' },
-        h('button', { className: 'rt-runpill', type: 'button', onClick: () => controls.play() },
-          h(Icon, { name: 'play', size: 14, fill: true }), 'Run routine'),
-        h('span', { className: 'rt-tp-meta' }, nSteps + (nSteps === 1 ? ' step' : ' steps'), h('span', { className: 'rt-tp-dim' }, ' · ' + fmt(run.total))));
-    }
-
-    const log = buildLog(run, time, outcomes);
-    return h('div', { className: 'rt-transport run' },
-      log.length > 0 && h('div', { className: 'rt-tp-log' },
-        log.slice(0, 4).map((l, i) => h('div', { className: 'rt-tp-logrow' + (i === 0 ? ' head' : ''), key: i },
-          h('span', { className: 'rt-tp-logt' }, l.t.toFixed(2)),
-          h('span', { className: 'rt-tp-logic', style: { color: l.color } }, h(Icon, { name: l.icon, size: 12 })),
-          h('span', { className: 'rt-tp-logtx' }, l.text)))),
-      h('div', { className: 'rt-tp-ctl' },
-        h('button', { className: 'rt-tp-btn', type: 'button', title: 'Reset & exit playback', 'aria-label': 'Reset and exit routine playback', onClick: controls.reset }, h(Icon, { name: 'rewind', size: 15 })),
-        h('button', { className: 'rt-tp-btn', type: 'button', title: 'Step back', 'aria-label': 'Step routine backward', onClick: () => controls.step(-1) }, h('span', { style: { transform: 'scaleX(-1)', display: 'flex' } }, h(Icon, { name: 'play', size: 12, fill: true }))),
-        h('button', { className: 'rt-tp-btn play', type: 'button', title: 'Play / pause', 'aria-label': playing ? 'Pause routine playback' : 'Play routine', onClick: controls.toggle }, h(Icon, { name: playing ? 'pause' : 'play', size: 15, fill: !playing })),
-        h('button', { className: 'rt-tp-btn', type: 'button', title: 'Step forward', 'aria-label': 'Step routine forward', onClick: () => controls.step(1) }, h(Icon, { name: 'play', size: 12, fill: true })),
-        h('div', { className: 'rt-tp-scrubwrap' },
-          h('input', { className: 'rt-tp-scrub', type: 'range', 'aria-label': 'Routine playback position', min: 0, max: 1000, value: Math.round(pct * 1000), onChange: (e) => controls.seek((e.target.value / 1000) * run.total) }),
-          run.segs.map((s) => h('span', { key: s.nodeId, className: 'rt-tp-tick', style: { left: (run.total ? (s.t1 / run.total) * 100 : 0) + '%' } }))),
-        h('div', { className: 'rt-tp-step' },
-          h('span', { className: 'rt-tp-n' }, activeIdx >= 0 ? String(activeIdx + 1).padStart(2, '0') : '–', h('span', { className: 'rt-tp-dim' }, '/' + String(nSteps).padStart(2, '0'))),
-          h('span', { className: 'rt-tp-t' }, fmt(time)))));
+    return h('div', { className: 'rt-transport timeline' + (running ? ' running' : '') },
+      h('div', { className: 'rt-timeline-toolbar' },
+        h('div', { className: 'rt-tp-ctl' },
+          h('button', { className: 'rt-tp-btn', type: 'button', title: 'Restart routine', 'aria-label': 'Restart routine', onClick: controls.reset }, h(Icon, { name: 'rewind', size: 14 })),
+          h('button', { className: 'rt-tp-btn play', type: 'button', disabled: nSteps === 0, title: 'Play / pause routine', 'aria-label': playing ? 'Pause routine playback' : 'Play routine', onClick: controls.toggle }, h(Icon, { name: playing ? 'pause' : 'play', size: 15, fill: !playing }))),
+        h('span', { className: 'rt-timeline-title' }, 'Routine'),
+        h('span', { className: 'rt-timeline-time' }, time.toFixed(2), h('small', null, ' / ' + run.total.toFixed(2) + 's')),
+        h('span', { className: 'rt-timeline-summary' }, nSteps + (nSteps === 1 ? ' step' : ' steps')),
+        h('div', { className: 'rt-timeline-step' }, activeIdx >= 0 ? String(activeIdx + 1).padStart(2, '0') : '–', h('small', null, '/' + String(nSteps).padStart(2, '0')))),
+      h('div', { className: 'rt-timeline-editor', style: { '--routine-progress': pct } },
+        h('span', { className: 'rt-timeline-track' }),
+        spans.map((span) => h('span', { key: span.key, className: 'rt-timeline-span', title: span.label, style: { left: span.left + '%', width: span.width + '%', '--step-color': span.color } })),
+        instants.map((instant) => h('span', { key: instant.key, className: 'rt-timeline-event', title: instant.label, style: { left: instant.left + '%' } })),
+        h('input', { className: 'rt-tp-scrub', type: 'range', 'aria-label': 'Routine playback position', min: 0, max: 1000, value: Math.round(pct * 1000), onChange: (event) => controls.seek((event.target.value / 1000) * run.total) })));
   }
 
   window.StepInspector = StepInspector;
