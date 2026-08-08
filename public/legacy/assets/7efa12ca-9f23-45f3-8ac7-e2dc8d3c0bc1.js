@@ -665,6 +665,15 @@
                 h('span', { className: 'inrow-l' }, 'Drive backward'),
                 h(Toggle, { on: !!doc.driveBackward, ariaLabel: 'Drive backward', onChange: () => actions.toggleDriveBackward() }))),
 
+        h('div', { className: 'cgroup-h' }, 'Follow path by'),
+        h(Seg, { value: doc.followMode || 'time', ariaLabel: 'Default path follow mode', options: [
+          { v: 'time', label: 'Time', title: 'Advance from the robot clock' },
+          { v: 'position', label: 'Position', title: 'Advance from measured field position' },
+        ], onChange: (v) => actions.setDoc({ followMode: v }) }),
+        h('div', { className: 'seg-hint' }, doc.followMode === 'position'
+          ? 'Uses measured field position so contact or delay does not skip the rest of the path. Java JSON only.'
+          : 'Uses the planned timeline. Individual segments can override this.'),
+
         h('div', { className: 'cgroup-h' }, 'Endpoints'),
         h('div', { className: 'grid2' },
           h(Num, { label: 'Start vel', value: doc.startVel || 0, unit: 'm/s', min: 0, onChange: (v) => actions.setDoc({ startVel: v }) }),
@@ -796,6 +805,15 @@
         h('div', { className: 'fieldlabel' }, 'Path type'),
         h(Seg, { value: st, options: window.PM.SEGTYPES.map((type) => ({ v: type.id, label: type.label, title: type.hint })), ariaLabel: 'Path type', onChange: (v) => actions.setSegMeta(i, { segType: v }) }),
         h('div', { className: 'seg-hint' }, segHint),
+        h('div', { className: 'fieldlabel' }, 'Follow segment by'),
+        h(Seg, { value: wps[i].segmentFollowMode || 'inherit', ariaLabel: 'Segment follow mode', options: [
+          { v: 'inherit', label: 'Default', title: 'Use the path default' },
+          { v: 'time', label: 'Time', title: 'Advance from the robot clock' },
+          { v: 'position', label: 'Position', title: 'Advance from measured field position' },
+        ], onChange: (v) => actions.setSegMeta(i, { segmentFollowMode: v === 'inherit' ? undefined : v }) }),
+        h('div', { className: 'seg-hint' }, (wps[i].segmentFollowMode || doc.followMode) === 'position'
+          ? 'Measured progress keeps this stretch active through bumps or delays.'
+          : 'Follows the planned timestamps on this stretch.'),
         !isTank && h(React.Fragment, null,
           h('div', { className: 'fieldlabel' }, 'Heading on this segment'),
           h(Seg, { value: wps[i].segmentHeadingMode || 'inherit', options: [{ v: 'inherit', label: 'Default', title: 'Use path default (' + HEAD_MODES.find((mode) => mode.v === headingMode).label + ')' }, ...HEAD_MODES, { v: 'lookAt', label: 'Track point' }], ariaLabel: 'Heading on this segment', className: 'seg-heading', onChange: (v) => actions.setSegmentHeadingMode(i, v) }),

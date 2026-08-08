@@ -509,6 +509,14 @@ describe("canonical shipped renderer", () => {
     expect(robotPage).toContain("disabled: footprint.length <= 3");
   });
 
+  it("authors time or position following at path and segment scope", () => {
+    const inspector = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js"), "utf8");
+    expect(inspector).toContain("ariaLabel: 'Default path follow mode'");
+    expect(inspector).toContain("ariaLabel: 'Segment follow mode'");
+    expect(inspector).toContain("segmentFollowMode: v === 'inherit' ? undefined : v");
+    expect(inspector).toContain("Java JSON only");
+  });
+
   it("keeps playback, direct target rotation, and shift-delete wired into the editor", () => {
     const app = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js"), "utf8");
     const field = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js"), "utf8");
