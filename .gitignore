@@ -1,5 +1,9 @@
 node_modules/
 dist/
 dist-electron/
+release/
+java/.gradle/
+java/**/build/
+java/dist/
 .DS_Store
 npm-debug.log*
