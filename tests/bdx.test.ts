@@ -425,6 +425,15 @@ describe("LabVIEW .bdx compatibility", () => {
     expect(() => buildLabviewBdx(mixed, mixed.paths[0].id)).toThrow(/entirely Bezier or entirely clothoid/);
   });
 
+  it("rejects position-followed segments in LabVIEW exports", () => {
+    const project = createDemoProject();
+    project.paths[0].followMode = "position";
+    expect(() => buildLabviewBdx(project, project.paths[0].id)).toThrow(/cannot encode position-based following/);
+
+    project.paths[0].waypoints[0].segmentFollowMode = "time";
+    expect(() => buildLabviewBdx(project, project.paths[0].id)).not.toThrow();
+  });
+
   it("atomically preserves binary bytes", async () => {
     const directory = await fsp.mkdtemp(path.join(os.tmpdir(), "bordeaux-bdx-test-"));
     const file = path.join(directory, "path.bdx");

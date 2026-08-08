@@ -239,6 +239,9 @@ export function buildLabviewBdx(project: BordeauxProject, pathId?: string): Labv
     ? project.paths.find((path) => path.id === pathId && path.exportable !== false)
     : project.paths.find((path) => path.exportable !== false);
   if (!source) throw new Error(pathId ? "The selected path is not exportable" : "The project has no exportable paths");
+  if (source.waypoints.slice(0, -1).some((waypoint) => (waypoint.segmentFollowMode ?? source.followMode ?? "time") === "position")) {
+    throw new Error("LabVIEW .bdx cannot encode position-based following; use Java JSON or change every segment to Time");
+  }
   if (source.waypoints.length > LABVIEW_BDX_MAX_WAYPOINTS) {
     throw new Error(`Path "${source.name}" has ${source.waypoints.length} waypoints, exceeding the LabVIEW .bdx limit of ${LABVIEW_BDX_MAX_WAYPOINTS}`);
   }
