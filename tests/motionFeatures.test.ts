@@ -228,7 +228,7 @@ describe("motion features", () => {
     expect(Math.abs(translationResult.samples.at(-1)!.headingRad)).toBeLessThan(0.1 * Math.PI / 180);
   });
 
-  it.each(["profiledSpline", "optimizedTrajectory"] as const)("keeps transition placement from stalling the outgoing segment in %s", (plannerId) => {
+  it.each(PLANNERS)("keeps transition placement from stalling the outgoing segment in %s", (plannerId) => {
     const project = createDemoProject();
     const path = project.paths[0];
     path.constraints.maxVel = 4;
