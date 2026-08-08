@@ -614,23 +614,26 @@
 
         // Tangent handles only appear when the selected planner consumes them.
         handlesEffective && h(React.Fragment, null,
-          h('div', { className: 'fieldlabel' }, 'Tangent handles'),
-          h('div', { className: 'grid2' },
-            !isStart && h(Num, { label: 'In', value: handleLen(w, 'prevC'), unit: 'm', min: 0.1, onChange: (v) => actions.setHandleLen(i, 'prevC', v) }),
-            !isEnd && h(Num, { label: 'Out', value: handleLen(w, 'nextC'), unit: 'm', min: 0.1, onChange: (v) => actions.setHandleLen(i, 'nextC', v) }))),
+          h('div', { className: !isStart && !isEnd ? 'grid2' : '' },
+            !isStart && h(Num, { label: 'Incoming tangent length', value: handleLen(w, 'prevC'), unit: 'm', min: 0.1, onChange: (v) => actions.setHandleLen(i, 'prevC', v) }),
+            !isEnd && h(Num, { label: 'Outgoing tangent length', value: handleLen(w, 'nextC'), unit: 'm', min: 0.1, onChange: (v) => actions.setHandleLen(i, 'nextC', v) }))),
 
         isEnd && !isTank && h(React.Fragment, null,
-          h('div', { className: 'cgroup-h' }, 'Jiggle from endpoint'),
-          h('div', { className: 'grid2 compact-fields' },
-            h(Num, { label: 'Distance', value: jiggleDistance, unit: 'm', min: 0.03, max: 1.5, step: 0.01, precision: 2, onChange: (v) => { setJiggleDistance(v); setJiggleError(false); } }),
-            h(Num, { label: 'Stroke time', value: jiggleStrokeTime, unit: 's', min: 0.08, max: 5, step: 0.05, precision: 2, onChange: (v) => { setJiggleStrokeTime(v); setJiggleError(false); } }),
-            h(Num, { label: 'Strokes', value: jiggleStrokes, min: 2, max: 12, step: 1, precision: 0, onChange: (v) => { setJiggleStrokes(v); setJiggleError(false); } }),
-            h(Num, { label: 'First direction', value: jiggleStart, unit: '\u00b0 rel', step: 15, precision: 0, onChange: (v) => { setJiggleStart(v); setJiggleError(false); } }),
-            h(Num, { label: 'Direction step', value: jiggleStep, unit: '\u00b0', step: 15, precision: 0, onChange: (v) => { setJiggleStep(v); setJiggleError(false); } })),
-          h('div', { className: 'qrow' },
-            h('button', { className: 'qbtn wide', type: 'button', onClick: () => setJiggleError(!actions.setJiggle({ distanceM: jiggleDistance, strokes: jiggleStrokes, startDeg: jiggleStart, stepDeg: jiggleStep, strokeTimeS: jiggleStrokeTime })) }, h(Icon, { name: 'route', size: 14 }), endpointJiggle ? 'Update jiggle' : 'Add jiggle'),
-            endpointJiggle && h('button', { className: 'qbtn', type: 'button', title: 'Remove jiggle', 'aria-label': 'Remove jiggle', onClick: () => actions.setJiggle(null) }, h(Icon, { name: 'x', size: 14 }))),
-          h('div', { className: 'seg-hint' }, jiggleError ? 'Use unique directions and keep every stroke on the field.' : 'Adds one rapid endpoint action without creating waypoints. Stroke time is a minimum; path limits may lengthen it.')),
+          h('div', { className: 'inrow' },
+            h('span', { className: 'inrow-l' }, 'Endpoint jiggle', h('small', null, 'rapid radial strokes')),
+            h(Toggle, { on: !!endpointJiggle, ariaLabel: 'Endpoint jiggle', onChange: (on) => {
+              if (!on) { actions.setJiggle(null); setJiggleError(false); return; }
+              setJiggleError(!actions.setJiggle({ ...JIGGLE_DEFAULTS }));
+            } })),
+          endpointJiggle && h(React.Fragment, null,
+            h('div', { className: 'grid2 compact-fields' },
+              h(Num, { label: 'Distance', value: jiggleDistance, unit: 'm', min: 0.03, max: 1.5, step: 0.01, precision: 2, onChange: (v) => { setJiggleDistance(v); setJiggleError(false); } }),
+              h(Num, { label: 'Stroke time', value: jiggleStrokeTime, unit: 's', min: 0.08, max: 5, step: 0.05, precision: 2, onChange: (v) => { setJiggleStrokeTime(v); setJiggleError(false); } }),
+              h(Num, { label: 'Strokes', value: jiggleStrokes, min: 2, max: 12, step: 1, precision: 0, onChange: (v) => { setJiggleStrokes(v); setJiggleError(false); } }),
+              h(Num, { label: 'First direction', value: jiggleStart, unit: '\u00b0 rel', step: 15, precision: 0, onChange: (v) => { setJiggleStart(v); setJiggleError(false); } }),
+              h(Num, { label: 'Direction step', value: jiggleStep, unit: '\u00b0', step: 15, precision: 0, onChange: (v) => { setJiggleStep(v); setJiggleError(false); } })),
+            h('button', { className: 'qbtn wide', type: 'button', onClick: () => setJiggleError(!actions.setJiggle({ distanceM: jiggleDistance, strokes: jiggleStrokes, startDeg: jiggleStart, stepDeg: jiggleStep, strokeTimeS: jiggleStrokeTime })) }, h(Icon, { name: 'route', size: 14 }), 'Update jiggle')),
+          endpointJiggle && h('div', { className: 'seg-hint' }, jiggleError ? 'Keep every unique stroke on the field.' : 'Requested time may lengthen to respect path limits.')),
         isEnd && isTank && endpointJiggle && h(React.Fragment, null,
           h('div', { className: 'cgroup-h' }, 'Jiggle unavailable'),
           h('div', { className: 'seg-hint' }, 'Arbitrary-direction jiggle requires a swerve drivetrain.'),
@@ -650,8 +653,21 @@
         const mode = wps[index].segmentHeadingMode || headingMode;
         return mode === 'lookAt' ? 'lookAt:' + (wps[index].segmentLookAt ? wps[index].segmentLookAt.x + ':' + wps[index].segmentLookAt.y : '') : mode;
       };
+      const incomingHeadingMode = i > 0 ? (wps[i - 1].segmentHeadingMode || headingMode) : (wps[i].segmentHeadingMode || headingMode);
+      const outgoingHeadingMode = wps[i].segmentHeadingMode || headingMode;
+      const continuityOwnedTransition = (incomingHeadingMode === 'tangent' || incomingHeadingMode === 'lookAt')
+        && (outgoingHeadingMode === 'manual' || outgoingHeadingMode === 'targets');
       const hasHeadingTransition = !isTank && i > 0 && !wps[i].turnInPlace && segmentLaw(i) !== segmentLaw(i - 1);
       const transition = Object.assign({ placement: 'after', rotationPriority: 'heading', distanceM: 0.75 }, wps[i].headingTransition || {});
+      const transitionPlacementOptions = continuityOwnedTransition ? [
+        { v: 'after', label: incomingHeadingMode === 'lookAt' ? 'Keep tracking' : 'Keep tangent', title: 'Keep the incoming heading law exact through the waypoint' },
+        { v: 'split', label: 'Blend', title: 'Share the heading change across both segments' },
+        { v: 'before', label: 'Meet heading', title: 'Reach the authored heading at the waypoint' },
+      ] : [
+        { v: 'before', label: 'Before', title: 'Use the previous segment' },
+        { v: 'split', label: 'Split', title: 'Share both adjacent segments' },
+        { v: 'after', label: 'After', title: 'Use this segment' },
+      ];
       icon = 'route'; title = 'Segment'; tag = wpName(i, n) + ' \u2192 ' + wpName(i + 1, n);
       let segLen = 0, minR = Infinity, dur = 0;
       if (derived.wpFrac && derived.sample.pts.length > 1) {
@@ -672,9 +688,11 @@
           { v: isFinite(minR) ? minR.toFixed(2) + 'm' : '\u221e', k: 'Min radius', color: isFinite(minR) && minR < 0.7 ? 'var(--bad)' : null },
           { v: dur.toFixed(2) + 's', k: 'Duration' },
         ]),
-        h('div', { className: 'fieldlabel' }, 'Path type'),
-        h(Seg, { value: st, options: window.PM.SEGTYPES.map((type) => ({ v: type.id, label: type.label, title: type.hint })), ariaLabel: 'Path type', onChange: (v) => actions.setSegMeta(i, { segType: v }) }),
-        h('div', { className: 'seg-hint' }, segHint),
+        h('div', { className: 'fieldlabel' }, isLabviewPlanner ? 'LabVIEW trajectory' : 'Path type'),
+        isLabviewPlanner
+          ? h(Seg, { value: plannerId === 'labviewClothoid' ? 'clothoid' : 'bezier', options: [{ v: 'bezier', label: 'Bezier' }, { v: 'clothoid', label: 'Clothoid' }], ariaLabel: 'LabVIEW trajectory type', onChange: actions.setLabviewTrajectoryType })
+          : h(Seg, { value: st, options: window.PM.SEGTYPES.map((type) => ({ v: type.id, label: type.label, title: type.hint })), ariaLabel: 'Path type', onChange: (v) => actions.setSegMeta(i, { segType: v }) }),
+        h('div', { className: 'seg-hint' }, isLabviewPlanner ? 'Applies to the entire selected path.' : segHint),
         h('div', { className: 'fieldlabel' }, 'Follow segment by'),
         h(Seg, { value: wps[i].segmentFollowMode || 'inherit', ariaLabel: 'Segment follow mode', options: [
           { v: 'inherit', label: 'Default', title: 'Use the path default' },
@@ -695,12 +713,15 @@
           h('div', { className: 'seg-hint' }, 'Drag the crosshair on the field. The rotation limits still control how quickly the robot may turn.')),
         hasHeadingTransition && h(React.Fragment, null,
           h('div', { className: 'fieldlabel' }, 'Transition into this segment'),
-          h(Seg, { value: transition.placement, ariaLabel: 'Heading transition side', options: [
-            { v: 'before', label: 'Before', title: 'Use the previous segment' },
-            { v: 'split', label: 'Split', title: 'Share both adjacent segments' },
-            { v: 'after', label: 'After', title: 'Use this segment' },
-          ], onChange: (v) => actions.setHeadingTransition(i, { placement: v }) }),
-          h('div', { className: 'seg-hint' }, transition.placement === 'before' ? 'The previous segment absorbs the heading change.' : transition.placement === 'split' ? 'Both adjacent segments share the heading change.' : 'This segment absorbs the heading change.'),
+          h(Seg, { value: transition.placement, ariaLabel: 'Heading transition side', options: transitionPlacementOptions, onChange: (v) => actions.setHeadingTransition(i, { placement: v }) }),
+          h('div', { className: 'seg-hint' }, continuityOwnedTransition
+            ? transition.placement === 'after'
+              ? 'Keeps the incoming ' + (incomingHeadingMode === 'tangent' ? 'tangent' : 'tracking law') + ' exact. The boundary heading is ignored.'
+              : transition.placement === 'split'
+                ? 'Uses the boundary heading as the goal and blends across both segments.'
+                : 'Leaves the incoming ' + (incomingHeadingMode === 'tangent' ? 'tangent' : 'tracking law') + ' near the end to meet the boundary heading exactly.'
+            : transition.placement === 'before' ? 'The previous segment absorbs the heading change.' : transition.placement === 'split' ? 'Both adjacent segments share the heading change.' : 'This segment absorbs the heading change.'),
+          continuityOwnedTransition && transition.placement !== 'after' && h(Num, { label: transition.placement === 'before' ? 'Heading to meet' : 'Heading goal', value: wps[i].theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v, thetaOn: true }) }),
           h('div', { className: 'fieldlabel' }, 'Timing priority'),
           h(Seg, { value: transition.rotationPriority, ariaLabel: 'Heading transition timing priority', options: [
             { v: 'heading', label: 'Heading', title: 'Keep heading positionally exact' },
@@ -825,7 +846,7 @@
           catalog && supportCompatible && !catalogReady && h('button', { className: 'cmd-primary-action', type: 'button', disabled: !!operation || !integration || !integration.wrapperAvailable, onClick: javaProject.build }, operation === 'build' ? 'Building catalog…' : 'Build command catalog'),
           operation === 'build' && h('button', { className: 'cmd-cancel-action', type: 'button', onClick: javaProject.cancelBuild }, 'Cancel build'),
           recentProjects.length > 1 && h('div', { className: 'cmd-project-switcher' },
-            h(InlinePicker, {
+            h(Dropdown, {
               id: 'event-marker-java-project',
               label: 'Switch project',
               value: javaProject.bookmarkId || '',
