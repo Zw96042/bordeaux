@@ -482,6 +482,13 @@ describe("canonical shipped renderer", () => {
     expect(panels.indexOf("className: 'ovsafety '")).toBeLessThan(panels.indexOf("className: 'ovlegend'"));
   });
 
+  it("offers beginner robot-footprint presets and scales them with dimensions", () => {
+    const robotPage = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/8ddc9855-091c-439c-b24a-f683fa800fb7.js"), "utf8");
+    expect(robotPage).toContain("['rectangle', 'Rectangle'], ['round', 'Round'], ['trapezoid', 'Trapezoid'], ['custom', 'Custom']");
+    expect(robotPage).toContain("const maxDim = Math.max(robot.w, robot.l, 0.4, ...footprint.flatMap");
+    expect(robotPage).toContain("x: point.x * nextL / robot.l, y: point.y * nextW / robot.w");
+  });
+
   it("keeps playback, direct target rotation, and shift-delete wired into the editor", () => {
     const app = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js"), "utf8");
     const field = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js"), "utf8");

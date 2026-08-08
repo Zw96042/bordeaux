@@ -4,6 +4,22 @@
   const h = React.createElement;
   const { Icon } = window.UI;
 
+  const footprintFor = (shape, w, l) => {
+    if (shape === 'rectangle') return undefined;
+    const verticesM = shape === 'round'
+      ? Array.from({ length: 12 }, (_, index) => {
+          const angle = index * Math.PI / 6;
+          return { x: Math.cos(angle) * l / 2, y: Math.sin(angle) * w / 2 };
+        })
+      : [{ x: -l / 2, y: -w / 2 }, { x: l / 2, y: -w * 0.32 }, { x: l / 2, y: w * 0.32 }, { x: -l / 2, y: w / 2 }];
+    return { kind: 'polygon', verticesM };
+  };
+  const sameFootprint = (value, expected) => value && expected && value.verticesM.length === expected.verticesM.length
+    && value.verticesM.every((point, index) => Math.hypot(point.x - expected.verticesM[index].x, point.y - expected.verticesM[index].y) < 1e-6);
+  const footprintShape = (robot) => !robot.footprint ? 'rectangle'
+    : sameFootprint(robot.footprint, footprintFor('round', robot.w, robot.l)) ? 'round'
+    : sameFootprint(robot.footprint, footprintFor('trapezoid', robot.w, robot.l)) ? 'trapezoid' : 'custom';
+
   // big numeric field with drag-to-scrub on the label
   function BigNum({ label, value, onChange, unit, step = 0.01, min, max, precision = 2 }) {
     const start = (down) => {
@@ -25,13 +41,13 @@
 
   function RobotPage({ robot, setRobot, mcpEnabled, agentProposal, onApplyProposal, onRejectProposal }) {
     const isSwerve = robot.drive === 'swerve';
-    // preview scale: fit the larger dimension to ~62% of the 1x1 stage
-    const maxDim = Math.max(robot.w, robot.l, 0.4);
-    const unit = 220 / maxDim; // px per meter inside the 260px stage region
-    const rw = robot.l * unit, rh = robot.w * unit;
+    const shape = footprintShape(robot);
     const footprint = robot.footprint && robot.footprint.kind === 'polygon' && Array.isArray(robot.footprint.verticesM)
       ? robot.footprint.verticesM
       : [{ x: -robot.l / 2, y: -robot.w / 2 }, { x: robot.l / 2, y: -robot.w / 2 }, { x: robot.l / 2, y: robot.w / 2 }, { x: -robot.l / 2, y: robot.w / 2 }];
+    const maxDim = Math.max(robot.w, robot.l, 0.4, ...footprint.flatMap((point) => [Math.abs(point.x) * 2, Math.abs(point.y) * 2]));
+    const unit = 220 / maxDim;
+    const rw = robot.l * unit, rh = robot.w * unit;
     const footprintPoints = footprint.map((point) => `${point.x * unit},${-point.y * unit}`).join(' ');
     const footprintArea = Math.abs(footprint.reduce((area, point, index) => {
       const next = footprint[(index + 1) % footprint.length];
@@ -46,6 +62,15 @@
     const setPlanning = (patch) => setRobot({ planning: { ...planning, ...patch } });
     const setIntake = (patch) => setPlanning({ intake: { ...intake, ...patch } });
     const setShooter = (patch) => setPlanning({ shooter: { ...shooter, ...patch } });
+    const resize = (key, value) => {
+      const nextW = key === 'w' ? value : robot.w, nextL = key === 'l' ? value : robot.l;
+      const footprint = shape === 'custom' ? {
+        kind: 'polygon', verticesM: robot.footprint.verticesM.map((point) => ({
+          x: point.x * nextL / robot.l, y: point.y * nextW / robot.w,
+        })),
+      } : footprintFor(shape, nextW, nextL);
+      setRobot({ [key]: value, footprint });
+    };
 
     return h('div', { className: 'robotpage' },
       h('div', { className: 'rp-wrap' },
@@ -71,10 +96,17 @@
               h('div', { className: 'rp-two' },
                 h('div', { className: 'rp-field' },
                   h('div', { className: 'rp-flabel' }, 'Width', h('small', null, m2ft(robot.w).toFixed(2) + ' ft')),
-                  h(BigNum, { label: 'Robot width', value: robot.w, unit: 'm', min: 0.3, max: 1.3, onChange: (v) => setRobot({ w: v }) })),
+                  h(BigNum, { label: 'Robot width', value: robot.w, unit: 'm', min: 0.3, max: 1.3, onChange: (v) => resize('w', v) })),
                 h('div', { className: 'rp-field' },
                   h('div', { className: 'rp-flabel' }, 'Length', h('small', null, m2ft(robot.l).toFixed(2) + ' ft')),
-                  h(BigNum, { label: 'Robot length', value: robot.l, unit: 'm', min: 0.3, max: 1.3, onChange: (v) => setRobot({ l: v }) }))),
+                  h(BigNum, { label: 'Robot length', value: robot.l, unit: 'm', min: 0.3, max: 1.3, onChange: (v) => resize('l', v) }))),
+              h('div', { className: 'rp-field' },
+                h('div', { className: 'rp-flabel' }, 'Bumper shape'),
+                h('div', { className: 'rp-shapes', role: 'group', 'aria-label': 'Robot bumper shape' },
+                  [['rectangle', 'Rectangle'], ['round', 'Round'], ['trapezoid', 'Trapezoid'], ['custom', 'Custom']].map(([id, label]) => h('button', {
+                    key: id, type: 'button', className: shape === id ? 'on' : '', 'aria-pressed': shape === id,
+                    onClick: () => setRobot({ footprint: id === 'custom' ? { kind: 'polygon', verticesM: footprint.map((point) => ({ ...point })) } : footprintFor(id, robot.w, robot.l) }),
+                  }, label)))),
               h('div', { className: 'rp-field' },
                 h('div', { className: 'rp-flabel' }, 'Height', h('small', null, typeof robot.heightM === 'number' ? m2ft(robot.heightM).toFixed(2) + ' ft' : 'required for TRENCH checks')),
                 h(BigNum, { label: 'Robot height', value: robot.heightM, unit: 'm', min: 0.1, max: 2.5, onChange: (v) => setRobot({ heightM: v }) })),

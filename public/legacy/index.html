@@ -860,6 +860,10 @@ input,select{font-family:inherit}
 .rp-big .u{font-family:var(--mono);font-size:12px;color:var(--txt-3)}
 .rp-two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .rp-two .rp-field{min-width:0}
+.rp-shapes{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}
+.rp-shapes button{min-height:34px;padding:0 6px;border:1px solid var(--line-2);border-radius:6px;background:var(--bg-1);color:var(--txt-2);font-size:10.5px}
+.rp-shapes button:hover{border-color:var(--line-3);color:var(--txt)}
+.rp-shapes button.on{border-color:var(--accent);background:var(--accent-soft);color:var(--txt)}
 .rp-preview{position:sticky;top:20px;border:1px solid var(--line);border-radius:10px;background:var(--bg-1);padding:24px;display:flex;flex-direction:column;align-items:center}
 .rp-stage{width:100%;aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;position:relative;background:
   linear-gradient(var(--line) 1px,transparent 1px) 0 0/100% 8.33%,
