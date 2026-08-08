@@ -25,6 +25,8 @@ The hash is `sha256:` plus lowercase SHA-256 of UTF-8 canonical JSON for the `co
 
 Load one selected path with `BordeauxTrajectoryReader.read(input, pathIdOrName)`, construct `BordeauxEventRunner`, then call `periodic(elapsedS)` from the normal robot loop. Each call schedules every unfired event with `timeS <= elapsedS`, in stable time order, so a delayed loop cannot skip an event. Event IDs are required and duplicate IDs are rejected. Generated bindings reject missing, unknown, malformed, or out-of-range arguments again on the robot before creating a command.
 
+For trajectory references, construct `BordeauxReferenceFollower` from that selected path and call `update(dtS, measuredXM, measuredYM)` each robot loop. Time sections advance on a section-local clock. Position sections advance monotonically from the measured field pose, use a short sample lookahead, and do not complete until the robot reaches the section endpoint. The returned `BordeauxSample` is a reference for the team's drivetrain controller; the runtime deliberately does not own drivetrain construction or odometry.
+
 `endPath()`, `stop()`, `close()`, and `reset()` cancel only commands from events that set `cancelOnPathEnd: true`; ordinary commands scheduled by an event are left alone. `reset()` also clears exactly-once state for another run. Elapsed time cannot move backward without a reset.
 
 ## Build and test
