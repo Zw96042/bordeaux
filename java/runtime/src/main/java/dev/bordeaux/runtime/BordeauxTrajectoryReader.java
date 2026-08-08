@@ -34,8 +34,17 @@ public final class BordeauxTrajectoryReader {
 
     private BordeauxTrajectoryReader() {}
 
-    /** Selects exactly one path by stable ID, or by name when no ID matches. */
+    /** Selects one path while tolerating legacy simulation-only routine nodes. */
     public static BordeauxPathEvents read(InputStream input, String pathSelector) {
+        return read(input, pathSelector, false);
+    }
+
+    /** Selects one path and strictly reads its deployable between-path routine. */
+    public static BordeauxPathEvents readWithRoutine(InputStream input, String pathSelector) {
+        return read(input, pathSelector, true);
+    }
+
+    private static BordeauxPathEvents read(InputStream input, String pathSelector, boolean includeRoutine) {
         if (input == null) throw new BordeauxRuntimeException("Trajectory input is required");
         if (pathSelector == null || pathSelector.isBlank()) {
             throw new BordeauxRuntimeException("A path ID or name is required");
@@ -105,7 +114,7 @@ public final class BordeauxTrajectoryReader {
         List<JsonNode> matches = idMatches.isEmpty() ? nameMatches : idMatches;
         if (matches.isEmpty()) throw new BordeauxRuntimeException("No path matches '" + pathSelector + "'");
         if (matches.size() != 1) throw new BordeauxRuntimeException("Path selector '" + pathSelector + "' is ambiguous");
-        BordeauxRoutine routine = parseRoutine(root.get("routine"), pathIds);
+        BordeauxRoutine routine = includeRoutine ? parseRoutine(root.get("routine"), pathIds) : BordeauxRoutine.empty();
         return parsePath(matches.get(0), catalogId, catalogHash, routine);
     }
 

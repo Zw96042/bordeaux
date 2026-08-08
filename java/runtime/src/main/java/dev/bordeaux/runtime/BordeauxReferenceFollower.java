@@ -11,6 +11,7 @@ public final class BordeauxReferenceFollower {
     private final List<BordeauxFollowSection> sections;
     private int sectionIndex;
     private int sampleIndex;
+    private int measuredSampleIndex;
     private double sectionElapsedS;
     private boolean finished;
 
@@ -39,16 +40,17 @@ public final class BordeauxReferenceFollower {
             double duration = samples.get(section.endSample()).timeS() - samples.get(section.startSample()).timeS();
             if (sampleIndex == section.endSample() && sectionElapsedS >= duration - 1e-9) advanceSection();
         } else {
-            int nearest = sampleIndex;
+            int nearest = measuredSampleIndex;
             double nearestDistance = distance(samples.get(nearest), measuredXM, measuredYM);
-            for (int index = sampleIndex + 1; index <= section.endSample(); index++) {
+            for (int index = measuredSampleIndex + 1; index <= section.endSample(); index++) {
                 double candidate = distance(samples.get(index), measuredXM, measuredYM);
                 if (candidate < nearestDistance) {
                     nearest = index;
                     nearestDistance = candidate;
                 }
             }
-            sampleIndex = Math.min(section.endSample(), Math.max(sampleIndex, nearest + POSITION_LOOKAHEAD_SAMPLES));
+            measuredSampleIndex = nearest;
+            sampleIndex = Math.min(section.endSample(), measuredSampleIndex + POSITION_LOOKAHEAD_SAMPLES);
             if (distance(samples.get(section.endSample()), measuredXM, measuredYM) <= END_TOLERANCE_M) {
                 sampleIndex = section.endSample();
                 advanceSection();
@@ -68,6 +70,7 @@ public final class BordeauxReferenceFollower {
     public void reset() {
         sectionIndex = 0;
         sampleIndex = sections.get(0).startSample();
+        measuredSampleIndex = sampleIndex;
         sectionElapsedS = 0;
         finished = false;
     }
@@ -79,6 +82,7 @@ public final class BordeauxReferenceFollower {
         }
         sectionIndex++;
         sampleIndex = sections.get(sectionIndex).startSample();
+        measuredSampleIndex = sampleIndex;
         sectionElapsedS = 0;
     }
 

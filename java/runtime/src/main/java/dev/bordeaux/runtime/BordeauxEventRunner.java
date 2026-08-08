@@ -87,7 +87,8 @@ public final class BordeauxEventRunner implements AutoCloseable {
             BordeauxEvent event = events.get(index);
             EventState state = states.get(index);
             if (state.complete) continue;
-            if (event.endTimeS() != null && elapsedS > event.endTimeS() + 1e-9 && !state.activated) { state.complete = true; continue; }
+            boolean expired = event.endTimeS() != null && elapsedS > event.endTimeS() + 1e-9;
+            if (expired && (!state.activated || event.repeatEveryS() == null)) { state.complete = true; continue; }
             boolean due = event.trigger() == BordeauxEvent.Trigger.TIME
                     ? elapsedS >= event.timeS() : maximumFraction >= event.fraction();
             if (!state.activated && due) {

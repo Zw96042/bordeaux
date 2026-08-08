@@ -119,6 +119,28 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void expiresConditionalOneShotEventsAtTheirEndTime() {
+        ObjectNode arguments = MAPPER.createObjectNode();
+        BordeauxEvent event = new BordeauxEvent(
+                "collect", "Collect", 0.2, 0.2, "collect", arguments, false,
+                BordeauxEvent.Trigger.TIME, null, 0.5, "has-note");
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "auto", "Auto", 1, CATALOG_ID, HASH, List.of(event));
+        boolean[] hasNote = {false};
+        List<String> created = new ArrayList<>();
+        BordeauxEventRunner runner = new BordeauxEventRunner(
+                path, registry(created, "collect"),
+                BordeauxConditionRegistry.builder().register("has-note", () -> hasNote[0]).build(),
+                new RecordingScheduler());
+
+        runner.periodic(0.2);
+        hasNote[0] = true;
+        runner.periodic(0.6);
+
+        assertTrue(created.isEmpty());
+    }
+
+    @Test
     void readsMixedFollowSectionsAndTrajectorySamples() {
         BordeauxPathEvents path = read("""
                 {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
@@ -142,7 +164,7 @@ class BordeauxRuntimeTest {
 
     @Test
     void readsStrictBetweenPathRoutineTree() {
-        BordeauxPathEvents path = read("""
+        BordeauxPathEvents path = readWithRoutine("""
                 {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
                  "catalog":{"schemaVersion":"1.0","catalogId":"test-robot","supportVersion":"0.1.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
                  "routine":{"name":"Choose note","nodes":[
@@ -157,6 +179,20 @@ class BordeauxRuntimeTest {
         assertEquals("has-note", decision.conditionId());
         assertTrue(decision.whenTrue().get(0) instanceof BordeauxRoutineNode.Command);
         assertTrue(decision.whenTrue().get(1) instanceof BordeauxRoutineNode.Path);
+    }
+
+    @Test
+    void toleratesLegacyRoutineNodesUnlessRoutineReadingIsRequested() {
+        String json = """
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
+                 "catalog":{"schemaVersion":"1.0","catalogId":"test-robot","supportVersion":"0.1.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "routine":{"name":"Legacy","nodes":[
+                   {"id":"stop","type":"function","cat":"terminate","title":"Stop"}]},
+                 "paths":[{"id":"auto","name":"Auto","totalTimeS":1,"samples":[],"events":[]}]}
+                """;
+
+        assertTrue(read(json).routine().nodes().isEmpty());
+        assertThrows(BordeauxRuntimeException.class, () -> readWithRoutine(json));
     }
 
     @Test
@@ -213,6 +249,21 @@ class BordeauxRuntimeTest {
         follower.reset();
         assertEquals(0, follower.update(0, 0, 0).index());
         assertThrows(BordeauxRuntimeException.class, () -> follower.update(-1, 0, 0));
+    }
+
+    @Test
+    void stationaryPositionUpdatesDoNotAdvanceTheLookahead() {
+        List<BordeauxSample> samples = List.of(
+                sample(0, 0, 0), sample(1, 0.2, 1), sample(2, 0.4, 2),
+                sample(3, 0.6, 3), sample(4, 0.8, 4), sample(5, 1, 5));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "position", "Position", 1, CATALOG_ID, HASH, List.of(), samples,
+                List.of(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 5)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(2, follower.update(0.02, 0, 0).index());
+        assertEquals(2, follower.update(0.02, 0, 0).index());
+        assertEquals(3, follower.update(0.02, 1, 0).index());
     }
 
     @Test
@@ -353,6 +404,11 @@ class BordeauxRuntimeTest {
 
     private static BordeauxPathEvents read(String json) {
         return BordeauxTrajectoryReader.read(
+                new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), "auto");
+    }
+
+    private static BordeauxPathEvents readWithRoutine(String json) {
+        return BordeauxTrajectoryReader.readWithRoutine(
                 new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), "auto");
     }
 
