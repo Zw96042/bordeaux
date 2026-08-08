@@ -224,63 +224,6 @@
     return [javaType, parameter.unit, parameter.description].filter(Boolean).join(' · ');
   }
 
-        id,
-        ref: triggerRef,
-        className: 'cmd-picker-trigger',
-        type: 'button',
-        role: 'combobox',
-        'aria-labelledby': labelId + ' ' + id + '-value',
-        'aria-controls': listboxId,
-        'aria-expanded': open,
-        'aria-haspopup': 'listbox',
-        disabled,
-        onClick: () => setOpen((current) => !current),
-      },
-        icon && h(Icon, { name: icon, size: 14 }),
-        h('span', { id: id + '-value', title: selected ? selected.label : placeholder }, selected ? selected.label : placeholder),
-        selected && selected.badge && h('small', null, selected.badge),
-        h(Icon, { name: 'chevron', size: 13 })),
-      open && h('div', { className: 'cmd-picker-panel' },
-        showSearch && h('div', { className: 'cmd-picker-search' },
-          h(Icon, { name: 'search', size: 14 }),
-          h('label', { className: 'sr-only', htmlFor: id + '-search' }, 'Filter ' + label.toLowerCase()),
-          h('input', {
-            id: id + '-search',
-            ref: searchRef,
-            type: 'search',
-            value: query,
-            placeholder: 'Filter ' + label.toLowerCase() + '…',
-            autoComplete: 'off',
-            spellCheck: false,
-            'data-lpignore': 'true',
-            'data-1p-ignore': true,
-            'aria-controls': listboxId,
-            onChange: (event) => setQuery(event.target.value),
-          })),
-        h('div', { id: listboxId, className: 'cmd-picker-list', role: 'listbox', 'aria-labelledby': labelId },
-          visibleItems.length === 0
-            ? h('div', { className: 'cmd-picker-empty' }, 'No matches')
-            : visibleItems.map((item, index) => h('button', {
-                key: item.value,
-                ref: (node) => { optionRefs.current[index] = node; },
-                className: 'cmd-picker-option' + (index === activeIndex ? ' active' : ''),
-                type: 'button',
-                role: 'option',
-                tabIndex: -1,
-                'aria-selected': item.value === value,
-                'data-value': item.value,
-                onMouseEnter: () => setActiveIndex(index),
-                onClick: () => choose(item.value),
-              },
-                h('span', { className: 'cmd-picker-check' }, item.value === value && h(Icon, { name: 'check', size: 13 })),
-                h('span', { className: 'cmd-picker-option-copy' },
-                  h('strong', { title: item.label }, item.label),
-                  item.meta && h('small', null, item.meta)),
-                item.badge && h('span', { className: 'cmd-picker-badge' }, item.badge))),
-          hiddenMatchCount > 0 && h('div', { className: 'cmd-picker-more', role: 'status' },
-            visibleItems.length + ' of ' + filteredItems.length + ' shown · Keep typing to narrow results'))));
-  }
-
   function NumberValueEditor({ id, label, value, integer, javaType, parameter, onChange }) {
     const formatted = Number.isFinite(value) ? String(value) : '';
     const [draft, setDraft] = React.useState(formatted);
