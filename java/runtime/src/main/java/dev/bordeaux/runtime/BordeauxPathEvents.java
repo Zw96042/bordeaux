@@ -9,8 +9,22 @@ public record BordeauxPathEvents(
         double totalTimeS,
         String catalogId,
         String catalogHash,
-        List<BordeauxEvent> events) {
+        List<BordeauxEvent> events,
+        List<BordeauxSample> samples,
+        List<BordeauxFollowSection> followSections) {
     public BordeauxPathEvents {
         events = List.copyOf(events);
+        samples = List.copyOf(samples);
+        followSections = List.copyOf(followSections);
+    }
+
+    public BordeauxPathEvents(
+            String id,
+            String name,
+            double totalTimeS,
+            String catalogId,
+            String catalogHash,
+            List<BordeauxEvent> events) {
+        this(id, name, totalTimeS, catalogId, catalogHash, events, List.of(), List.of());
     }
 }
