@@ -1267,7 +1267,7 @@
               h(window.Panels.Outline, { open: outlineOpen, setOpen: setOutlineOpen, doc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot })),
             h('div', { className: 'fieldcol' },
               h(window.Panels.ToolRail, { tool, setTool }),
-              h(window.FieldView, { doc, derived, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, playTime, playing, actions: fieldActions, onSelPos, showHandles: plannerId !== 'labviewClothoid' && !(plannerId === 'labviewBezier' && doc.labview && doc.labview.bezierTangentMode === 'automatic') }),
+              h(window.FieldView, { doc, derived, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, playTime, playing, actions: fieldActions, onSelPos, showHandles: selectedPlannerId !== 'labviewClothoid' && !(selectedPlannerId === 'labviewBezier' && doc.labview && doc.labview.bezierTangentMode === 'automatic') }),
               tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
               waypointPreview && h('div', { className: 'insert-preview', role: 'region', 'aria-label': 'Preview waypoint insertion' },
                 h('div', { className: 'insert-preview-copy' },
