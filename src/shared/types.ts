@@ -3,6 +3,7 @@ export type DriveType = "swerve" | "tank";
 export type SegmentType = "bezier" | "line" | "arc" | "clothoid";
 export type HeadingMode = "manual" | "tangent" | "targets";
 export type SegmentHeadingMode = HeadingMode | "lookAt";
+export type FollowMode = "time" | "position";
 
 export interface ControlPoint {
   x: number;
@@ -93,6 +94,8 @@ export interface Waypoint {
   segType?: SegmentType;
   /** Heading law for the outgoing segment. Omitted to inherit PathDoc.headingMode. */
   segmentHeadingMode?: SegmentHeadingMode;
+  /** Robot-side following policy for the outgoing segment. Omitted to inherit PathDoc.followMode. */
+  segmentFollowMode?: FollowMode;
   /** Field point continuously faced by the outgoing segment when segmentHeadingMode is lookAt. */
   segmentLookAt?: ControlPoint;
   /** Continuity policy at the boundary into this waypoint's outgoing segment. */
@@ -272,6 +275,8 @@ export interface PathDoc {
   ranges: ConstraintRange[];
   constraints: PathConstraints;
   headingMode?: HeadingMode;
+  /** Robot-side following policy. Omitted for backwards-compatible time following. */
+  followMode?: FollowMode;
   folderId?: string;
   driveBackward?: boolean;
   startVel: number;

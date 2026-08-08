@@ -131,16 +131,20 @@ describe("project defaults and validation", () => {
     expect(() => buildBdxExport(project as BordeauxProject)).toThrow(/Invalid Bordeaux project|finite/);
   });
 
-  it("round-trips path folders and per-segment heading modes", () => {
+  it("round-trips path folders and per-segment modes", () => {
     const project = createDemoProject();
     project.pathFolders = [{ id: "folder_scoring", name: "Scoring" }];
     project.paths[0].folderId = "folder_scoring";
     project.paths[0].waypoints[0].segmentHeadingMode = "tangent";
+    project.paths[0].followMode = "position";
+    project.paths[0].waypoints[0].segmentFollowMode = "time";
 
     const parsed = parseProject(JSON.stringify(project));
     expect(parsed.pathFolders).toEqual(project.pathFolders);
     expect(parsed.paths[0].folderId).toBe("folder_scoring");
     expect(parsed.paths[0].waypoints[0].segmentHeadingMode).toBe("tangent");
+    expect(parsed.paths[0].followMode).toBe("position");
+    expect(parsed.paths[0].waypoints[0].segmentFollowMode).toBe("time");
   });
 
   it("rejects orphan folders and invalid per-segment heading modes", () => {
@@ -148,12 +152,16 @@ describe("project defaults and validation", () => {
     project.pathFolders = [{ id: "folder_one", name: "One" }];
     project.paths[0].folderId = "folder_missing";
     project.paths[0].waypoints[0].segmentHeadingMode = "locked";
+    project.paths[0].followMode = "distance";
+    project.paths[0].waypoints[0].segmentFollowMode = "automatic";
 
     const validation = validateProject(project);
     expect(validation.ok).toBe(false);
     expect(validation.issues.map((item) => item.path)).toEqual(expect.arrayContaining([
       "$.paths[0].folderId",
       "$.paths[0].waypoints[0].segmentHeadingMode",
+      "$.paths[0].followMode",
+      "$.paths[0].waypoints[0].segmentFollowMode",
     ]));
   });
 

@@ -242,6 +242,7 @@ function validateProjectInner(project: unknown): ValidationResult {
       if (typeof path.name !== "string" || !path.name.trim()) issues.push(issue(`${base}.name`, "Path name is required"));
       if (path.folderId !== undefined && (typeof path.folderId !== "string" || !folderIds.has(path.folderId))) issues.push(issue(`${base}.folderId`, "Path folder does not exist"));
       if (path.headingMode !== undefined && !["manual", "tangent", "targets"].includes(String(path.headingMode))) issues.push(issue(`${base}.headingMode`, "Heading mode is invalid"));
+      if (path.followMode !== undefined && !["time", "position"].includes(String(path.followMode))) issues.push(issue(`${base}.followMode`, "Follow mode must be time or position"));
       validateFinite(issues, path.startVel, `${base}.startVel`, "Start velocity", { nonnegative: true });
       validateFinite(issues, path.goalVel, `${base}.goalVel`, "Goal velocity", { nonnegative: true });
 
@@ -281,6 +282,7 @@ function validateProjectInner(project: unknown): ValidationResult {
           }
           if (waypoint.segType !== undefined && !["bezier", "line", "arc", "clothoid"].includes(String(waypoint.segType))) issues.push(issue(`${wpBase}.segType`, "Segment type is invalid"));
           if (waypoint.segmentHeadingMode !== undefined && !["manual", "tangent", "targets", "lookAt"].includes(String(waypoint.segmentHeadingMode))) issues.push(issue(`${wpBase}.segmentHeadingMode`, "Segment heading mode is invalid"));
+          if (waypoint.segmentFollowMode !== undefined && !["time", "position"].includes(String(waypoint.segmentFollowMode))) issues.push(issue(`${wpBase}.segmentFollowMode`, "Segment follow mode must be time or position"));
           if (waypoint.segmentLookAt !== undefined) {
             validatePoint(issues, waypoint.segmentLookAt, `${wpBase}.segmentLookAt`, "Tracked field point");
             if (isRecord(waypoint.segmentLookAt) && finite(waypoint.segmentLookAt.x) && finite(waypoint.segmentLookAt.y)
