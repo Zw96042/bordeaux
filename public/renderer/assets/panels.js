@@ -4,7 +4,7 @@
 (function () {
   const { useRef, useState, useEffect, useMemo } = React;
   const h = React.createElement;
-  const { Icon, IconBtn, Section, Num, Seg, constraintRangeSummary } = window.UI;
+  const { Icon, IconBtn, Dropdown, Section, Num, Seg, constraintRangeSummary } = window.UI;
   const R2D = 180 / Math.PI;
 
   // ---------------- path manager ----------------
@@ -91,9 +91,11 @@
         h('button', { type: 'button', onClick: () => beginEdit('path', path.id, path.name) }, h(Icon, { name: 'edit', size: 13 }), h('span', null, 'Rename')),
         h('button', { type: 'button', onClick: () => { dupPath(index); setMenu(null); } }, h(Icon, { name: 'copy', size: 13 }), h('span', null, 'Duplicate')),
         h('button', { className: 'danger', type: 'button', disabled: project.paths.length <= 1, onClick: () => { if (delPath(index)) setMenu(null); } }, h(Icon, { name: 'trash', size: 13 }), h('span', null, 'Delete'))),
-      h('label', { className: 'pathlib-move' }, h(Icon, { name: 'folder', size: 14 }), h('span', null, 'Move to'),
-        h('select', { 'aria-label': 'Move ' + path.name + ' to folder', value: path.folderId || '', onChange: (e) => { movePathToFolder(index, e.target.value); setMenu(null); } },
-          h('option', { value: '' }, 'Unfiled'), folders.map((folder) => h('option', { key: folder.id, value: folder.id }, folder.name)))));
+      h('div', { className: 'pathlib-move' }, h(Icon, { name: 'folder', size: 14 }), h('span', null, 'Move to'),
+        h(Dropdown, { id: 'move-path-' + path.id, ariaLabel: 'Move ' + path.name + ' to folder', compact: true,
+          className: 'pathlib-folder-dropdown', value: path.folderId || '',
+          items: [{ value: '', label: 'Unfiled' }, ...folders.map((folder) => ({ value: folder.id, label: folder.name }))],
+          onChange: (value) => { movePathToFolder(index, value); setMenu(null); } })));
     const pathRow = (path, index, showFolder) => editing && editing.kind === 'path' && editing.id === path.id
       ? h('div', { key: path.id, className: 'pathlib-editrow' }, editForm())
       : h('div', { key: path.id, className: 'pathlib-item' },
@@ -138,53 +140,48 @@
           h('div', { className: 'pathlib-scroll' }, needle ? (results.length ? results.map((row) => pathRow(row.path, row.index, true)) : h('div', { className: 'pathlib-empty pathlib-emptysearch' }, h('strong', null, 'No matching paths'), h('span', null, 'Try a different name or folder.'))) : [folders.map(group), group(null)]))));
   }
 
-  function PlannerControl({ plannerId, setPlannerId }) {
-    const lastNative = useRef('profiledSpline'), lastLabview = useRef('labviewBezier');
-    const labview = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid';
-    useEffect(() => { if (labview) lastLabview.current = plannerId; else lastNative.current = plannerId; }, [labview, plannerId]);
-    const methods = labview
-      ? [
-          { v: 'labviewBezier', label: 'Bezier', title: 'LabVIEW Bezier compatibility planner' },
-          { v: 'labviewClothoid', label: 'Clothoid', title: 'LabVIEW clothoid compatibility planner' },
-        ]
-      : [
-          { v: 'profiledSpline', label: 'Profiled', title: 'Profiled spline planner' },
-          { v: 'optimizedTrajectory', label: 'Optimized', title: 'Optimized trajectory (experimental)' },
-        ];
-    return h('div', { className: 'plannercontrol', title: 'Geometry and timing planner' },
-      h(Seg, { className: 'planner-family', value: labview ? 'labview' : 'native', ariaLabel: 'Planner family', options: [{ v: 'native', label: 'Java' }, { v: 'labview', label: 'LabVIEW' }], onChange: (value) => setPlannerId(value === 'labview' ? lastLabview.current : lastNative.current) }),
-      h(Seg, { className: 'planner-method', value: plannerId, ariaLabel: 'Trajectory planner', options: methods, onChange: setPlannerId }));
+  // ---------------- top bar ----------------
+  function PlannerFamily({ plannerId, onChange }) {
+    const value = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid' ? 'labview' : 'java';
+    return h(Seg, { className: 'planner-family', value, ariaLabel: 'Trajectory format', options: [
+      { v: 'java', label: 'Java' },
+      { v: 'labview', label: 'LabVIEW' },
+    ], onChange });
   }
 
-  // ---------------- top bar ----------------
   function Toolbar(props) {
     const { project, page, setPage, alliance, setAlliance,
-      onUndo, onRedo, onExport, onExportJava, javaProject, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerId } = props;
+      onUndo, onRedo, onExport, onExportJava, javaProject, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily } = props;
     const plan = page === 'plan';
+    const labview = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid';
     const javaReady = !!(javaProject && javaProject.catalog && javaProject.catalog.authoritative && javaProject.integration && javaProject.integration.installed && javaProject.integration.supportVersion === javaProject.catalog.supportVersion);
     return h('header', { className: 'toolbar' },
       h('div', { className: 'tb-left' },
         h('div', { className: 'brand' }, h('img', { className: 'brand-mark', src: 'assets/wrlp-chap-bird-original.svg', alt: '' }), h('span', { className: 'brand-name' }, 'Bordeaux')),
         h('nav', { className: 'pageswitch', 'aria-label': 'Workspace' },
           h('button', { className: plan ? 'on' : '', type: 'button', 'aria-current': plan ? 'page' : undefined, onClick: () => setPage('plan') }, h(Icon, { name: 'route', size: 15 }), 'Plan'),
-          h('button', { className: page === 'auto' ? 'on' : '', type: 'button', 'aria-current': page === 'auto' ? 'page' : undefined, onClick: () => setPage('auto') }, h(Icon, { name: 'layers', size: 15 }), 'Auto'),
+          h('button', { className: page === 'auto' ? 'on' : '', type: 'button', 'aria-current': page === 'auto' ? 'page' : undefined, onClick: () => setPage('auto') }, h(Icon, { name: 'layers', size: 15 }), 'Acquatine'),
           h('button', { className: page === 'robot' ? 'on' : '', type: 'button', 'aria-current': page === 'robot' ? 'page' : undefined, onClick: () => setPage('robot') }, h(Icon, { name: 'car', size: 15 }), 'Robot')),
         plan && h(PathLibrary, { project, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times })),
 
       h('div', { className: 'tb-right' },
-        h('button', { className: 'qbtn tb-file', type: 'button', title: 'Open project', 'aria-label': 'Open project', onClick: props.onOpen }, 'Open'),
-        h('button', { className: 'qbtn tb-file', type: 'button', title: 'Save project (⌘S)', 'aria-label': 'Save project', onClick: () => props.onSave(false) }, 'Save'),
         plan && h(React.Fragment, null,
+          h('button', { className: 'qbtn tb-file', type: 'button', title: 'Open project', 'aria-label': 'Open project', onClick: props.onOpen }, 'Open'),
+          h('button', { className: 'qbtn tb-file', type: 'button', title: 'Save project (⌘S)', 'aria-label': 'Save project', onClick: () => props.onSave(false) }, 'Save')),
+        (plan || page === 'auto') && h(React.Fragment, null,
           h(IconBtn, { icon: 'undo', onClick: onUndo, title: 'Undo  (\u2318Z)' }),
-          h(IconBtn, { icon: 'redo', onClick: onRedo, title: 'Redo  (\u21e7\u2318Z)' }),
+          h(IconBtn, { icon: 'redo', onClick: onRedo, title: 'Redo  (\u21e7\u2318Z)' })),
+        plan && h(React.Fragment, null,
           h('div', { className: 'tbdiv' }),
-          h(PlannerControl, { plannerId, setPlannerId })),
+          h(PlannerFamily, { plannerId, onChange: setPlannerFamily })),
         (plan || page === 'auto') && h(React.Fragment, null,
-          h('button', { className: 'alliance ' + alliance, type: 'button', 'aria-pressed': alliance === 'red', onClick: () => setAlliance(alliance === 'blue' ? 'red' : 'blue'), title: 'Flip alliance' },
-            h('span', { className: 'alliance-dot' }), alliance === 'blue' ? 'Blue' : 'Red')),
-        (plan || page === 'auto') && h(React.Fragment, null,
-          h('button', { className: 'exportbtn exportjava' + (javaReady ? ' ready' : ''), type: 'button', disabled: !javaReady || !!(javaProject && javaProject.operation), title: javaReady ? 'Export native Java trajectory JSON to the linked robot project' : 'Link a Java project, install support, and build its annotated command catalog first', 'aria-label': javaReady ? 'Export Java trajectory' : 'Java trajectory export unavailable until Java support is ready', onClick: onExportJava }, h(Icon, { name: 'share', size: 15 }), javaProject && javaProject.operation === 'export' ? 'Exporting…' : 'Java JSON'),
-          h('button', { className: 'exportbtn', type: 'button', title: 'Export .bdx', 'aria-label': 'Export .bdx', onClick: onExport }, h(Icon, { name: 'share', size: 15 }), 'Export .bdx'))));
+          h('button', { className: 'alliance', type: 'button', onClick: () => setAlliance(alliance === 'blue' ? 'red' : 'blue'), title: 'Switch to ' + (alliance === 'blue' ? 'red' : 'blue') + ' alliance', 'aria-label': 'Alliance view: ' + alliance + '. Switch to ' + (alliance === 'blue' ? 'red' : 'blue') },
+            h('span', { className: 'alliance-side blue' + (alliance === 'blue' ? ' on' : '') }, 'B'),
+            h('span', { className: 'alliance-side red' + (alliance === 'red' ? ' on' : '') }, 'R'))),
+        plan && h(React.Fragment, null,
+          labview
+            ? h('button', { className: 'exportbtn', type: 'button', title: 'Export the selected path as .bdx', 'aria-label': 'Export .bdx', onClick: onExport }, h(Icon, { name: 'share', size: 15 }), 'Export .bdx')
+            : h('button', { className: 'exportbtn exportjava' + (javaReady ? ' ready' : ''), type: 'button', disabled: !javaReady || !!(javaProject && javaProject.operation), title: javaReady ? 'Export Java trajectory JSON to the linked robot project' : 'Link a Java project, install support, and build its command catalog first', 'aria-label': javaReady ? 'Export Java JSON' : 'Java JSON export unavailable until Java support is ready', onClick: onExportJava }, h(Icon, { name: 'share', size: 15 }), javaProject && javaProject.operation === 'export' ? 'Exporting…' : 'Export JSON'))));
   }
 
   // ---------------- canvas tool rail (left edge) — spatial creation (memo §2) ----------------
@@ -312,8 +309,8 @@
               h('button', { className: 'featdel', 'aria-label': 'Delete constraint range', title: 'Delete', onClick: () => actions.delRange(i) }, h(Icon, { name: 'trash', size: 12 }))); }))));
   }
 
-  // ---------------- metric overlay + legend (bottom-left) ----------------
-  function Overlay({ metric, setMetric, derived, diagOpen, onToggleDiag, plannerId }) {
+  // ---------------- compact metric control for the timeline toolbar ----------------
+  function MetricControl({ metric, setMetric, derived, diagOpen, onToggleDiag, plannerId }) {
     const M = derived.metrics || {};
     const checks = derived.checks || [];
     const issues = checks.filter((check) => check.level !== 'note');
@@ -326,22 +323,19 @@
     else if (metric === 'angvel') { const w = ((M.wMax || 0) * R2D).toFixed(0); lo = '-' + w; hi = '+' + w; }
     else { lo = '0'; hi = (M.kMax || 0).toFixed(2); }
     const errors = issues.filter((check) => check.level === 'error').length;
-    return h('div', { className: 'overlayctl' },
-      h('div', { className: 'ovrow' },
-        (plannerId === 'labviewBezier' || plannerId === 'labviewClothoid') && h('span', { className: 'ovapprox', title: 'The canvas mirrors the compatibility math; exported samples remain authoritative.' }, '\u2248 preview'),
-        h('div', { className: 'ovselwrap' },
-          h('select', { className: 'ovselect', 'aria-label': 'Field overlay metric', value: metric, onChange: (e) => setMetric(e.target.value) },
-            (window.PM.METRICS || []).map((m) => h('option', { key: m.id, value: m.id }, m.label))),
-          h('span', { className: 'ovchev' }, h(Icon, { name: 'chevron', size: 13 }))),
-        checks.length > 0 && h('button', { className: 'ovsafety ' + (issues.length ? (errors ? 'bad' : 'warn') : 'note') + (diagOpen ? ' open' : ''), type: 'button', onClick: onToggleDiag, title: 'Open path checks' },
+    return h('div', { className: 'metricctl' },
+      (plannerId === 'labviewBezier' || plannerId === 'labviewClothoid') && h('span', { className: 'ovapprox', title: 'The canvas mirrors the compatibility math; exported samples remain authoritative.' }, '\u2248'),
+      h(Dropdown, { id: 'field-overlay-metric', ariaLabel: 'Field overlay metric', compact: true,
+        className: 'metric-dropdown', value: metric,
+        items: (window.PM.METRICS || []).map((m) => ({ value: m.id, label: m.label, meta: m.unit || '' })),
+        onChange: setMetric }),
+      h('span', { className: 'metric-swatch', style: { background: grad }, 'aria-hidden': true }),
+      h('span', { className: 'metric-range', 'aria-hidden': true }, lo + '\u2013' + hi + ' ' + (def.unit || '')),
+      checks.length > 0 && h('button', { className: 'ovsafety ' + (issues.length ? (errors ? 'bad' : 'warn') : 'note') + (diagOpen ? ' open' : ''), type: 'button', onClick: onToggleDiag, title: 'Open path checks' },
           h('span', { className: 'ovsafety-dot' }),
           h('span', null, issues.length
             ? issues.length + (issues.length > 1 ? ' issues' : ' issue')
-            : notes.length + (notes.length > 1 ? ' notes' : ' note')))),
-      h('div', { className: 'ovlegend' },
-        h('div', { className: 'ovbar', style: { background: grad } }),
-        h('div', { className: 'ovscale' },
-          h('span', null, lo), h('span', { className: 'ovunit' }, def.unit || ''), h('span', null, hi))));
+            : notes.length + (notes.length > 1 ? ' notes' : ' note'))));
   }
 
   // ---------------- path checks drawer ----------------
@@ -368,7 +362,7 @@
   }
 
   // ---------------- telemetry graph + transport ----------------
-  function Transport({ derived, doc, metric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen }) {
+  function Transport({ derived, doc, metric, setMetric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen, diagOpen, onToggleDiag, plannerId }) {
     const total = derived.prof.totalTime || 0.001;
     const pct = Math.max(0, Math.min(1, playTime / total));
     const scrubStep = Math.min(0.02, total);
@@ -508,6 +502,7 @@
             h('span', { className: 'timecode-unit' }, 's')),
           featureCount > 0 && h('span', { className: 'timeline-summary', 'aria-hidden': true }, featureSummary),
           h('div', { className: 'transport-meta' },
+            h(MetricControl, { metric, setMetric, derived, diagOpen, onToggleDiag, plannerId }),
             h('div', { className: 'roi', title: 'Path length' }, h('span', { className: 'roi-v' }, (derived.totalDistance || derived.sample.length).toFixed(2)), h('span', { className: 'roi-u' }, 'm')),
             h(IconBtn, { icon: 'gauge', active: graphOpen, onClick: () => setGraphOpen(!graphOpen), title: 'Telemetry graph' }))),
         h('div', { className: 'timeline-editor' },
@@ -574,5 +569,5 @@
         running ? 'Executing' : 'Staged', h('span', { className: 'rlegend-nowt' }, fmt(time) + ' / ' + fmt(run.total))));
   }
 
-  window.Panels = { Toolbar, ToolRail, ConstraintBar, Outline, Overlay, PathChecks, Transport, ViewControls, RoutineLegend };
+  window.Panels = { Toolbar, ToolRail, ConstraintBar, Outline, PathChecks, Transport, ViewControls, RoutineLegend };
 })();
