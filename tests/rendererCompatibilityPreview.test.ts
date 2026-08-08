@@ -56,13 +56,13 @@ describe("renderer compatibility preview", () => {
   });
 
   it("shows the selected candidate's validation blocker in the proposal UI", () => {
-    const source = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const source = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
     expect(source).toContain("agentCandidate.rejectionReason");
     expect(source).toContain("'Blocked: ' + agentCandidate.rejectionReason");
   });
 
   it("restores a ready proposal when its one-time renderer event is missed", () => {
-    const source = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const source = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
     expect(source).toContain("getActiveAgentProposal");
     expect(source).toContain("window.setInterval(restoreProposal, 1000)");
     expect(source).toContain("proposal.id + ':' + proposal.status");
@@ -475,7 +475,7 @@ describe("renderer compatibility preview", () => {
   });
 
   it("labels the native planner family as Java", () => {
-    const panels = fs.readFileSync(new URL("../public/renderer/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
+    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
 
     expect(panels).toContain("{ v: 'native', label: 'Java' }");
     expect(panels).not.toContain("{ v: 'native', label: 'Native' }");
@@ -497,8 +497,8 @@ describe("renderer compatibility preview", () => {
   });
 
   it("keeps path checks informational until a repair can be validated", () => {
-    const panels = fs.readFileSync(new URL("../public/renderer/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
 
     expect(panels).toContain("Path checks");
     expect(panels).not.toContain("diag-fixes");
@@ -508,7 +508,7 @@ describe("renderer compatibility preview", () => {
 
   it("keeps Select mode non-destructive and previews compatibility insertions", () => {
     const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
 
     expect(field).not.toContain("if (d.onPath) actions.addWaypoint(d.world)");
     expect(field).not.toContain("if (role === 'seg') actions.addWaypoint");
@@ -520,9 +520,9 @@ describe("renderer compatibility preview", () => {
   });
 
   it("enters explicit waypoint placement and keeps shortcuts active after scrubbing", () => {
-    const panels = fs.readFileSync(new URL("../public/renderer/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
-    const inspector = fs.readFileSync(new URL("../public/renderer/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/renderer/assets/context-inspector.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
     const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
     const styles = fs.readFileSync(new URL("../public/renderer/styles.css", import.meta.url), "utf8");
 
@@ -564,8 +564,8 @@ describe("renderer compatibility preview", () => {
   });
 
   it("keeps the grid toggle with the field view controls", () => {
-    const panels = fs.readFileSync(new URL("../public/renderer/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
     const toolbar = panels.slice(panels.indexOf("function Toolbar"), panels.indexOf("// ---------------- canvas tool rail"));
     const viewControls = panels.slice(panels.indexOf("function ViewControls"), panels.indexOf("function fmt"));
 
@@ -576,8 +576,8 @@ describe("renderer compatibility preview", () => {
   });
 
   it("uses a flat folder-capable path library and stable multi-path metadata", () => {
-    const panels = fs.readFileSync(new URL("../public/renderer/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
 
     expect(panels).toContain("function PathLibrary");
     expect(panels).toContain("className: 'pathlib-panel'");
@@ -608,8 +608,8 @@ describe("renderer compatibility preview", () => {
   });
 
   it("uses one Bordeaux accent and does not expose theme customization", () => {
-    const panels = fs.readFileSync(new URL("../public/renderer/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
     const styles = fs.readFileSync(new URL("../public/renderer/styles.css", import.meta.url), "utf8");
 
     expect(panels).not.toContain("ThemePicker");
@@ -626,7 +626,7 @@ describe("renderer compatibility preview", () => {
   it("uses the full WRLP Chap for the app mark and startup animation", () => {
     const html = fs.readFileSync(new URL("../public/renderer/index.html", import.meta.url), "utf8");
     const styles = fs.readFileSync(new URL("../public/renderer/styles.css", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
     const bird = fs.readFileSync(new URL("../public/renderer/assets/wrlp-chap-bird-original.svg", import.meta.url), "utf8");
     const loader = fs.readFileSync(new URL("../public/renderer/assets/chap-loader-wrlp.js", import.meta.url), "utf8");
 
@@ -678,8 +678,8 @@ describe("renderer compatibility preview", () => {
 
   it("splits stopped Bezier geometry and exposes segment-local heading modes", () => {
     const math = fs.readFileSync(new URL("../public/renderer/assets/path-math.js", import.meta.url), "utf8");
-    const inspector = fs.readFileSync(new URL("../public/renderer/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/renderer/assets/context-inspector.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
     const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
 
     expect(math).toContain("function lvBezierPiece");
@@ -703,8 +703,8 @@ describe("renderer compatibility preview", () => {
 
   it("mirrors authored heading-transition controls in the browser planner and inspector", () => {
     const math = fs.readFileSync(new URL("../public/renderer/assets/path-math.js", import.meta.url), "utf8");
-    const inspector = fs.readFileSync(new URL("../public/renderer/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/renderer/assets/context-inspector.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
 
     expect(math).toContain("function headingTransitionWindows");
     expect(math).toContain("opts.headingTransitions || []");
@@ -722,8 +722,8 @@ describe("renderer compatibility preview", () => {
   it("uses segmented controls instead of native dropdowns for planner and segment choices", () => {
     const styles = fs.readFileSync(new URL("../public/renderer/styles.css", import.meta.url), "utf8");
     const ui = fs.readFileSync(new URL("../public/renderer/assets/ui-primitives.js", import.meta.url), "utf8");
-    const panels = fs.readFileSync(new URL("../public/renderer/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
-    const inspector = fs.readFileSync(new URL("../public/renderer/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
+    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/renderer/assets/context-inspector.js", import.meta.url), "utf8");
 
     expect(ui).toContain("function Seg({ value, options, onChange, ariaLabel, className })");
     expect(ui).toContain("'--seg-clip-left'");
@@ -749,7 +749,7 @@ describe("renderer compatibility preview", () => {
   it("routes overlapping field visits through a stable ordered candidate", () => {
     const math = fs.readFileSync(new URL("../public/renderer/assets/path-math.js", import.meta.url), "utf8");
     const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
 
     expect(math).toContain("function nearestVisits");
     expect(math).toContain("different distances along the path");
@@ -769,8 +769,8 @@ describe("renderer compatibility preview", () => {
   });
 
   it("keeps the inspector modeless and independently collapsible", () => {
-    const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
-    const inspector = fs.readFileSync(new URL("../public/renderer/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/renderer/assets/context-inspector.js", import.meta.url), "utf8");
     const ui = fs.readFileSync(new URL("../public/renderer/assets/ui-primitives.js", import.meta.url), "utf8");
     const styles = fs.readFileSync(new URL("../public/renderer/styles.css", import.meta.url), "utf8");
 
@@ -785,8 +785,8 @@ describe("renderer compatibility preview", () => {
   });
 
   it("opens the hidden inspector when editable path items are double-clicked", () => {
-    const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
-    const outline = fs.readFileSync(new URL("../public/renderer/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
+    const outline = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
     const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
 
     expect(app).toContain("openInspector: () => setInspectorOpen(true)");
@@ -809,8 +809,8 @@ describe("renderer compatibility preview", () => {
 
   it("wires stationary turns, endpoint jiggles, and draggable segment track points", () => {
     const math = fs.readFileSync(new URL("../public/renderer/assets/path-math.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
-    const inspector = fs.readFileSync(new URL("../public/renderer/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/renderer/assets/context-inspector.js", import.meta.url), "utf8");
     const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
 
     expect(math).toContain("function jigglePositions");
