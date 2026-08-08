@@ -1,0 +1,20 @@
+.gradle/
+build/
+bin/
+.classpath
+.factorypath
+.project
+.settings/
+.idea/
+*.iml
+networktables.json
+simgui.json
+*-window.json
+logs/
+
+# Bordeaux installs these generated support files locally.
+.bordeaux/
+
+# Keep the Gradle wrapper binary even though ordinary JARs are ignored.
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
