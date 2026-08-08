@@ -694,7 +694,9 @@ handle("agent:getMcpStatus", () => ({ enabled: agentBridge?.enabled === true }))
 ipcMain.on("project:setDirty", (event, value) => { assertTrustedSender(event); dirty = value === true; });
 ipcMain.on("agent:publishSession", (event, value) => {
   assertTrustedSender(event);
-  agentSessions.publishSnapshot(value as AgentSessionSnapshot);
+  if (!agentSessions.tryPublishSnapshot(value as AgentSessionSnapshot)) {
+    console.warn("Ignored an invalid transient agent session snapshot");
+  }
 });
 ipcMain.on("agent:proposalStatus", (event, rawId, rawStatus, rawRevision) => {
   assertTrustedSender(event);

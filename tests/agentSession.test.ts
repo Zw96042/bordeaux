@@ -20,6 +20,26 @@ function snapshot(revision = 0) {
 }
 
 describe("agent session and private bridge", () => {
+  it("ignores invalid transient snapshots without replacing the last valid session", async () => {
+    const service = new AgentSessionService(() => {}, () => null);
+    const initial = snapshot();
+    service.publishSnapshot(initial);
+
+    const invalid = structuredClone(initial);
+    invalid.revision = 1;
+    invalid.project.robot.drive = "tank";
+    invalid.project.paths[0].ranges.push({
+      anchor: "param", f0: 0, f1: 1, rotationPriority: "translation",
+      maxVel: 1, maxAccel: 1, maxAngVel: 90, maxAngAccel: 180,
+    });
+
+    expect(service.tryPublishSnapshot(invalid)).toBe(false);
+    expect(await service.request({ method: "inspect_session" })).toMatchObject({
+      sessionId: initial.sessionId,
+      revision: initial.revision,
+    });
+  });
+
   it("stages proposals without changing the renderer snapshot and marks them stale on edit", async () => {
     const staged: any[] = [];
     const service = new AgentSessionService((proposal) => { staged.push(proposal); }, () => null);

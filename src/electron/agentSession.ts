@@ -108,6 +108,15 @@ export class AgentSessionService {
     this.expireProposals();
   }
 
+  tryPublishSnapshot(value: AgentSessionSnapshot): boolean {
+    try {
+      this.publishSnapshot(value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   updateProposalStatus(proposalId: string, status: "applied" | "rejected" | "stale", appliedRevision?: number): void {
     const proposal = this.proposals.get(proposalId);
     if (!proposal) return;
