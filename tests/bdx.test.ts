@@ -147,6 +147,19 @@ describe("project defaults and validation", () => {
     expect(parsed.paths[0].waypoints[0].segmentFollowMode).toBe("time");
   });
 
+  it("round-trips conditional position event schedules", () => {
+    const project = createDemoProject();
+    project.paths[0].markers = [{
+      id: "event_intake", f: 0.4, name: "Intake", schedule: {
+        trigger: "position", repeatEveryS: 0.1, endTimeS: 2.5, conditionId: "frc.robot.Conditions#hasNote",
+      },
+    }];
+    expect(parseProject(JSON.stringify(project)).paths[0].markers[0].schedule).toEqual(project.paths[0].markers[0].schedule);
+
+    (project.paths[0].markers[0].schedule as any).trigger = "distance";
+    expect(validateProject(project).issues.some((issue) => issue.path.endsWith("schedule.trigger"))).toBe(true);
+  });
+
   it("rejects orphan folders and invalid per-segment heading modes", () => {
     const project = createDemoProject() as unknown as Record<string, any>;
     project.pathFolders = [{ id: "folder_one", name: "One" }];

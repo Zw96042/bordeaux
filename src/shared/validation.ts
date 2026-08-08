@@ -382,6 +382,15 @@ function validateProjectInner(project: unknown): ValidationResult {
         if (typeof marker.name !== "string" || !marker.name.trim()) issues.push(issue(`${markerBase}.name`, "Marker name is required"));
         if (marker.cmd !== undefined && typeof marker.cmd !== "string") issues.push(issue(`${markerBase}.cmd`, "Legacy marker command must be a string"));
         if (marker.group !== undefined && marker.group !== "sequential" && marker.group !== "parallel" && marker.group !== "deadline") issues.push(issue(`${markerBase}.group`, "Marker group is invalid"));
+        if (marker.schedule !== undefined) {
+          if (!isRecord(marker.schedule)) issues.push(issue(`${markerBase}.schedule`, "Event schedule must be an object"));
+          else {
+            if (marker.schedule.trigger !== undefined && marker.schedule.trigger !== "time" && marker.schedule.trigger !== "position") issues.push(issue(`${markerBase}.schedule.trigger`, "Event trigger must be time or position"));
+            validateOptionalFinite(issues, marker.schedule.repeatEveryS, `${markerBase}.schedule.repeatEveryS`, "Repeat period", { positive: true });
+            validateOptionalFinite(issues, marker.schedule.endTimeS, `${markerBase}.schedule.endTimeS`, "Event end time", { nonnegative: true });
+            if (typeof marker.schedule.conditionId !== "undefined" && (typeof marker.schedule.conditionId !== "string" || !/^[A-Za-z0-9_.:#()$,-]+$/.test(marker.schedule.conditionId))) issues.push(issue(`${markerBase}.schedule.conditionId`, "Condition ID is invalid"));
+          }
+        }
         if (marker.invocation !== undefined) {
           if (!isRecord(marker.invocation)) {
             issues.push(issue(`${markerBase}.invocation`, "Command invocation must be an object"));

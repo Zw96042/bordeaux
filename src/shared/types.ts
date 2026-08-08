@@ -127,8 +127,20 @@ export interface Marker {
     description: string;
   };
   group?: "sequential" | "parallel" | "deadline";
+  schedule?: EventSchedule;
   anchor?: "param" | "dist";
   d?: number;
+}
+
+export interface EventSchedule {
+  /** Time is backwards-compatible; position uses measured robot progress. */
+  trigger?: "time" | "position";
+  /** Omission executes once. Repetition starts when the marker becomes due. */
+  repeatEveryS?: number;
+  /** Absolute path time after which a pending or repeated event expires. */
+  endTimeS?: number;
+  /** Stable robot-side predicate ID. */
+  conditionId?: string;
 }
 
 export type CommandArgumentValue =
