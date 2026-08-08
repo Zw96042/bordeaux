@@ -1,4 +1,4 @@
-import { createMarkerId, createPathId, DEFAULT_LABVIEW_OPTIONS } from "./defaults";
+import { createMarkerId, createPathId, createRoutineId, DEFAULT_LABVIEW_OPTIONS } from "./defaults";
 import type { BordeauxProject, RoutineNode } from "../types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -82,10 +82,20 @@ export function normalizeProject(value: unknown): unknown {
     return path;
   });
 
-  const routineSource = source.routine;
-  const routine = routineSource && typeof routineSource === "object" && !Array.isArray(routineSource)
-    ? { ...(routineSource as Record<string, unknown>), nodes: normalizeNodes((routineSource as Record<string, unknown>).nodes, paths as Array<{ id: string }>) }
-    : routineSource;
+  const routineSources = Array.isArray(source.routines) && source.routines.length
+    ? source.routines
+    : isRecord(source.routine) ? [source.routine] : [];
+  const routineIds = new Set<string>();
+  const routines = routineSources.map((raw) => {
+    if (!isRecord(raw)) return raw;
+    let id = typeof raw.id === "string" && raw.id.trim() ? raw.id : createRoutineId();
+    while (routineIds.has(id)) id = createRoutineId();
+    routineIds.add(id);
+    return { ...raw, id, nodes: normalizeNodes(raw.nodes, paths as Array<{ id: string }>) };
+  });
+  const requestedRoutineId = typeof source.activeRoutineId === "string" ? source.activeRoutineId : undefined;
+  const activeRoutine = routines.find((item) => isRecord(item) && item.id === requestedRoutineId) ?? routines[0];
+  const activeRoutineId = isRecord(activeRoutine) && typeof activeRoutine.id === "string" ? activeRoutine.id : undefined;
 
-  return { ...source, paths, routine } as unknown as BordeauxProject;
+  return { ...source, paths, routines, activeRoutineId, routine: activeRoutine } as unknown as BordeauxProject;
 }

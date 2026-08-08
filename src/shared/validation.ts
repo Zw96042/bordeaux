@@ -512,13 +512,24 @@ function validateProjectInner(project: unknown): ValidationResult {
     });
   }
 
-  if (project.routine !== undefined) {
-    if (!isRecord(project.routine)) issues.push(issue("$.routine", "Routine must be an object"));
+  const validateRoutine = (routine: unknown, base: string) => {
+    if (!isRecord(routine)) { issues.push(issue(base, "Routine must be an object")); return; }
+    if (typeof routine.name !== "string" || !routine.name.trim()) issues.push(issue(`${base}.name`, "Routine name is required"));
+    validateRoutineNodes(issues, routine.nodes, `${base}.nodes`, pathIds, new Set());
+  };
+  if (project.routines !== undefined) {
+    if (!Array.isArray(project.routines) || project.routines.length === 0) issues.push(issue("$.routines", "Project routines must be a non-empty array"));
     else {
-      if (typeof project.routine.name !== "string" || !project.routine.name.trim()) issues.push(issue("$.routine.name", "Routine name is required"));
-      validateRoutineNodes(issues, project.routine.nodes, "$.routine.nodes", pathIds, new Set());
+      const routineIds = new Set<string>();
+      project.routines.forEach((routine, index) => {
+        const base = `$.routines[${index}]`; validateRoutine(routine, base);
+        if (!isRecord(routine) || typeof routine.id !== "string" || !routine.id.trim()) issues.push(issue(`${base}.id`, "Routine ID is required"));
+        else if (routineIds.has(routine.id)) issues.push(issue(`${base}.id`, "Routine IDs must be unique"));
+        else routineIds.add(routine.id);
+      });
+      if (typeof project.activeRoutineId !== "string" || !routineIds.has(project.activeRoutineId)) issues.push(issue("$.activeRoutineId", "Active routine must reference a project routine"));
     }
-  }
+  } else if (project.routine !== undefined) validateRoutine(project.routine, "$.routine");
 
   if (project.strategy !== undefined) {
     if (!isRecord(project.strategy)) issues.push(issue("$.strategy", "Project strategy must be an object"));

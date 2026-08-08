@@ -96,6 +96,19 @@ describe("project defaults and validation", () => {
     expect(validateProject(project).ok).toBe(true);
   });
 
+  it("validates stable multi-routine identity", () => {
+    const project = createDemoProject();
+    project.routines!.push({ ...clone(project.routines![0]), name: "Second routine" });
+    expect(validateProject(project).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "$.routines[1].id" }),
+    ]));
+    project.routines![1].id = "routine_second";
+    project.activeRoutineId = "missing";
+    expect(validateProject(project).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "$.activeRoutineId" }),
+    ]));
+  });
+
   it("rejects paths with fewer than two waypoints", () => {
     const project = createDemoProject();
     project.paths[0].waypoints = [project.paths[0].waypoints[0]];
@@ -660,6 +673,15 @@ describe("project file boundary", () => {
     const parsed = parseProject(JSON.stringify(project));
     expect(parsed.paths[0].id).toMatch(/^path_/);
     expect((parsed.routine!.nodes[0] as { ref: string }).ref).toBe(parsed.paths[0].id);
+  });
+
+  it("migrates a singular routine into the multi-routine library", () => {
+    const project = projectWithPaths([blankPath()]);
+    const parsed = parseProject(JSON.stringify(project));
+    expect(parsed.routines).toHaveLength(1);
+    expect(parsed.routines![0].id).toMatch(/^routine_/);
+    expect(parsed.activeRoutineId).toBe(parsed.routines![0].id);
+    expect(parsed.routine).toEqual(parsed.routines![0]);
   });
 
   it("opens unversioned project files through the legacy reader", () => {

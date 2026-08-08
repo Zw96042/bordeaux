@@ -42,6 +42,10 @@ export function createMarkerId(): string {
   return `event_${globalThis.crypto.randomUUID()}`;
 }
 
+export function createRoutineId(): string {
+  return `routine_${globalThis.crypto.randomUUID()}`;
+}
+
 type RawWaypoint = Partial<Waypoint> & {
   x: number;
   y: number;
@@ -98,14 +102,18 @@ export function blankPath(name = "NewPath"): PathDoc {
 }
 
 export function createDemoProject(): BordeauxProject {
+  const routine = {
+    id: createRoutineId(),
+    name: "Autonomous Routine",
+    nodes: [],
+  };
   return {
     schemaVersion: "1.0",
     name: "Untitled",
     robot: { drive: "swerve", w: 0.84, l: 0.84, heightM: 0.5, maxSpeed: 5.0 },
     paths: [blankPath("NewPath")],
-    routine: {
-      name: "Autonomous Routine",
-      nodes: [],
-    },
+    routines: [routine],
+    activeRoutineId: routine.id,
+    routine,
   };
 }

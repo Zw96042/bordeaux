@@ -375,6 +375,8 @@ export interface RoutineDecisionNode {
 export type RoutineNode = RoutineFunctionNode | RoutinePathNode | RoutineDecisionNode;
 
 export interface AutonomousRoutine {
+  /** Stable project-local identity. Legacy singular routines may omit it until normalization. */
+  id?: string;
   name: string;
   nodes: RoutineNode[];
 }
@@ -406,6 +408,9 @@ export interface BordeauxProject {
   robot: RobotConfig;
   paths: PathDoc[];
   pathFolders?: PathFolder[];
+  routines?: AutonomousRoutine[];
+  activeRoutineId?: string;
+  /** Active-routine compatibility view for older projects and exporters. */
   routine?: AutonomousRoutine;
   plannerId?: TrajectoryPlannerId;
   strategy?: ProjectStrategyOverlay;
