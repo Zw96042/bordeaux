@@ -261,7 +261,7 @@ function createWindow() {
   });
 
   void window.webContents.session.clearCache().finally(() => {
-    if (!window.isDestroyed()) void window.loadFile(path.join(__dirname, "../../public/legacy/index.html"));
+    if (!window.isDestroyed()) void window.loadFile(path.join(__dirname, "../../public/renderer/index.html"));
   });
 
   if (process.env.BORDEAUX_SMOKE_TEST === "1") {

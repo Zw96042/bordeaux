@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const root = process.cwd();
-const renderer = path.join(root, "public/legacy/index.html");
+const renderer = path.join(root, "public/renderer/index.html");
 const html = fs.readFileSync(renderer, "utf8");
 const sources = [...html.matchAll(/<script src="([^"]+)"/g)].map((match) => match[1]);
 
@@ -15,4 +15,4 @@ for (const source of sources) {
   if (!file.startsWith(path.dirname(renderer) + path.sep) || !fs.existsSync(file)) throw new Error(`Missing or unsafe renderer script: ${source}`);
 }
 
-console.log(`Verified canonical legacy renderer (${sources.length} scripts)`);
+console.log(`Verified canonical renderer (${sources.length} scripts)`);

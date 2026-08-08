@@ -462,10 +462,10 @@ describe("LabVIEW .bdx compatibility", () => {
 
 describe("canonical shipped renderer", () => {
   it("loads the maintained editor with persistence, security, and accessibility hooks", () => {
-    const html = fs.readFileSync(path.join(process.cwd(), "public/legacy/index.html"), "utf8");
-    const styles = fs.readFileSync(path.join(process.cwd(), "public/legacy/styles.css"), "utf8");
-    const app = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js"), "utf8");
-    const ui = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/760c13dd-1656-409e-a1f2-58b2285a7f6e.js"), "utf8");
+    const html = fs.readFileSync(path.join(process.cwd(), "public/renderer/index.html"), "utf8");
+    const styles = fs.readFileSync(path.join(process.cwd(), "public/renderer/styles.css"), "utf8");
+    const app = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js"), "utf8");
+    const ui = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/760c13dd-1656-409e-a1f2-58b2285a7f6e.js"), "utf8");
     expect(html).toContain("Content-Security-Policy");
     expect(styles).toContain(":focus-visible");
     expect(styles).toContain(".numbox .numinput:focus-visible");
@@ -477,8 +477,8 @@ describe("canonical shipped renderer", () => {
     expect(app).not.toContain("bordeaux-notice");
     expect(ui).toContain("'aria-expanded': open");
     expect(ui).toContain("htmlFor: id");
-    const panels = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js"), "utf8");
-    const inspector = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js"), "utf8");
+    const panels = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js"), "utf8");
+    const inspector = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js"), "utf8");
     expect(panels).toContain("'aria-label': 'Export .bdx'");
     expect(panels).toContain("{ v: 'labviewBezier'");
     expect(panels).toContain("{ v: 'labviewClothoid'");
@@ -490,15 +490,15 @@ describe("canonical shipped renderer", () => {
   });
 
   it("lets the active constraint-range tool claim segment hit lines", () => {
-    const field = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js"), "utf8");
+    const field = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js"), "utf8");
     expect(field).toContain("if (tool === 'range' && pts.length > 1) { startRangeDrag(world, visit); return; }");
     expect(field).toContain("tool === 'waypoint' || tool === 'rotation' || tool === 'marker'");
     expect(field).toContain("tool === 'range' ? 'crosshair'");
   });
 
   it("uses the shared outline selection style for waypoints and segments", () => {
-    const styles = fs.readFileSync(path.join(process.cwd(), "public/legacy/styles.css"), "utf8");
-    const outline = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js"), "utf8");
+    const styles = fs.readFileSync(path.join(process.cwd(), "public/renderer/styles.css"), "utf8");
+    const outline = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js"), "utf8");
     expect(styles).not.toContain(".wpfeatrow.sel,.segfeatrow.sel");
     expect(styles).toContain(".featrow.sel{background:var(--accent-soft);border-left-color:var(--accent)}");
     expect(outline).toContain("featrow wpfeatrow");
@@ -509,15 +509,15 @@ describe("canonical shipped renderer", () => {
   });
 
   it("renders the field metric overlay as a compact legend", () => {
-    const styles = fs.readFileSync(path.join(process.cwd(), "public/legacy/styles.css"), "utf8");
-    const panels = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js"), "utf8");
+    const styles = fs.readFileSync(path.join(process.cwd(), "public/renderer/styles.css"), "utf8");
+    const panels = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js"), "utf8");
     expect(styles).toContain(".overlayctl{position:absolute;left:16px;bottom:110px;width:236px;background:transparent");
     expect(panels).not.toContain("className: 'ovlabel'");
     expect(panels.indexOf("className: 'ovsafety '")).toBeLessThan(panels.indexOf("className: 'ovlegend'"));
   });
 
   it("offers beginner robot-footprint presets and scales them with dimensions", () => {
-    const robotPage = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/8ddc9855-091c-439c-b24a-f683fa800fb7.js"), "utf8");
+    const robotPage = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/8ddc9855-091c-439c-b24a-f683fa800fb7.js"), "utf8");
     expect(robotPage).toContain("['rectangle', 'Rectangle'], ['round', 'Round'], ['trapezoid', 'Trapezoid'], ['custom', 'Custom']");
     expect(robotPage).toContain("const maxDim = Math.max(robot.w, robot.l, 0.4, ...footprint.flatMap");
     expect(robotPage).toContain("x: point.x * nextL / robot.l, y: point.y * nextW / robot.w");
@@ -527,7 +527,7 @@ describe("canonical shipped renderer", () => {
   });
 
   it("authors time or position following at path and segment scope", () => {
-    const inspector = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js"), "utf8");
+    const inspector = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js"), "utf8");
     expect(inspector).toContain("ariaLabel: 'Default path follow mode'");
     expect(inspector).toContain("ariaLabel: 'Segment follow mode'");
     expect(inspector).toContain("segmentFollowMode: v === 'inherit' ? undefined : v");
@@ -535,7 +535,7 @@ describe("canonical shipped renderer", () => {
   });
 
   it("authors conditional repeated command schedules", () => {
-    const inspector = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js"), "utf8");
+    const inspector = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js"), "utf8");
     expect(inspector).toContain("ariaLabel: 'Event trigger'");
     expect(inspector).toContain("ariaLabel: 'Repeat event'");
     expect(inspector).toContain("ariaLabel: 'Limit event end time'");
@@ -543,8 +543,8 @@ describe("canonical shipped renderer", () => {
   });
 
   it("authors deployable between-path commands and decisions", () => {
-    const model = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/f874c44d-015e-4099-b1e8-f483e723379e.js"), "utf8");
-    const inspector = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/2e851ba2-8203-4a0a-9fc1-e769983238f6.js"), "utf8");
+    const model = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/f874c44d-015e-4099-b1e8-f483e723379e.js"), "utf8");
+    const inspector = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/2e851ba2-8203-4a0a-9fc1-e769983238f6.js"), "utf8");
     expect(model).toContain("label: 'Command'");
     expect(inspector).toContain("aria-label': 'Between-path command'");
     expect(inspector).toContain("aria-label': 'Decision condition ID'");
@@ -552,8 +552,8 @@ describe("canonical shipped renderer", () => {
   });
 
   it("keeps playback, direct target rotation, and shift-delete wired into the editor", () => {
-    const app = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js"), "utf8");
-    const field = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js"), "utf8");
+    const app = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js"), "utf8");
+    const field = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js"), "utf8");
     expect(app).toContain("const togglePlayback = useCallback");
     expect(app).toContain("playRef.current >= totalNow - 1e-3");
     expect(field).toContain("'data-role': 'rth'");
@@ -566,7 +566,7 @@ describe("canonical shipped renderer", () => {
   });
 
   it("supports distance-locked targets, markers, and range controls", () => {
-    const inspector = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js"), "utf8");
+    const inspector = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js"), "utf8");
     expect(PM.featureFraction({ f: 0.8, anchor: "dist", d: 2 }, { length: 10 })).toBeCloseTo(0.2);
     expect(inspector).toContain("'Position lock'");
     expect(inspector).toContain("label: 'Path %'");

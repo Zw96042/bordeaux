@@ -15,7 +15,7 @@
     "test:java": "node scripts/build-java.mjs test",
     "test:java-integration": "npm run build && node scripts/java-project-integration.mjs",
     "test:smoke": "npm run build && node scripts/electron-smoke.mjs",
-    "verify:renderer": "node scripts/verify-legacy-renderer.mjs",
+    "verify:renderer": "node scripts/verify-renderer.mjs",
     "typecheck": "tsc --noEmit && npm run build:electron -- --pretty false",
     "package:dir": "npm run build && electron-builder --dir",
     "package:mac": "npm run build && electron-builder --mac --arm64 --x64",
@@ -43,7 +43,7 @@
     },
     "files": [
       "dist-electron/**/*",
-      "public/legacy/**/*"
+      "public/renderer/**/*"
     ],
     "extraResources": [
       {
