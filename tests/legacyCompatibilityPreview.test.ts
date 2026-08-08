@@ -172,6 +172,33 @@ describe("legacy compatibility preview", () => {
     expect(Math.abs(translation.metrics.head.at(-1)!)).toBeLessThan(0.1 * Math.PI / 180);
   });
 
+  it("keeps transition placement from stalling the outgoing preview segment", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    Object.assign(path.constraints, {
+      maxVel: 4, maxAccel: 5, maxDecel: 5,
+      maxAngVel: 90, maxAngAccel: 180, maxAngDecel: 180,
+    });
+    path.waypoints = buildWaypoints([
+      { x: 5.1, y: 7.6, theta: 0, thetaOn: true, segmentHeadingMode: "tangent" },
+      { x: 9.3, y: 5.4, theta: -91, thetaOn: true, segmentHeadingMode: "targets" },
+      { x: 6, y: 5.5, theta: 0, thetaOn: true },
+    ]);
+    const math = legacyMath();
+    const durations = (["before", "split", "after"] as const).map((placement) => {
+      path.waypoints[1].headingTransition = { placement, rotationPriority: "translation", distanceM: 0.75 };
+      const result = math.derivePath(structuredClone(path), project.robot, 80, "profiledSpline");
+      const boundary = result.sample.pts.reduce((nearest, point, index) => (
+        Math.hypot(point.x - 9.3, point.y - 5.4) < Math.hypot(result.sample.pts[nearest].x - 9.3, result.sample.pts[nearest].y - 5.4)
+          ? index : nearest
+      ), 0);
+      expect(Math.min(...result.metrics.v.slice(boundary, -1))).toBeGreaterThan(0.05);
+      return result.prof.t.at(-1)! - result.prof.t[boundary];
+    });
+
+    expect(Math.max(...durations) - Math.min(...durations)).toBeLessThan(0.08);
+  });
+
   it("previews heading catch-up without overshooting a settled tangent", () => {
     const project = createDemoProject();
     const path = project.paths[0];

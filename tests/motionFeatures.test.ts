@@ -228,6 +228,36 @@ describe("motion features", () => {
     expect(Math.abs(translationResult.samples.at(-1)!.headingRad)).toBeLessThan(0.1 * Math.PI / 180);
   });
 
+  it.each(["profiledSpline", "optimizedTrajectory"] as const)("keeps transition placement from stalling the outgoing segment in %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.constraints.maxVel = 4;
+    path.constraints.maxAccel = 5;
+    path.constraints.maxDecel = 5;
+    path.constraints.maxAngVel = 90;
+    path.constraints.maxAngAccel = 180;
+    path.constraints.maxAngDecel = 180;
+    path.waypoints = buildWaypoints([
+      { x: 5.1, y: 7.6, theta: 0, thetaOn: true, segmentHeadingMode: "tangent" },
+      { x: 9.3, y: 5.4, theta: -91, thetaOn: true, segmentHeadingMode: "targets" },
+      { x: 6, y: 5.5, theta: 0, thetaOn: true },
+    ]);
+
+    const durations = (["before", "split", "after"] as const).map((placement) => {
+      path.waypoints[1].headingTransition = { placement, rotationPriority: "translation", distanceM: 0.75 };
+      const result = getPlanner(plannerId).generate({ path: structuredClone(path), robot: project.robot });
+      const boundary = result.samples.reduce((nearest, sample, index) => (
+        Math.hypot(sample.x - 9.3, sample.y - 5.4) < Math.hypot(result.samples[nearest].x - 9.3, result.samples[nearest].y - 5.4)
+          ? index : nearest
+      ), 0);
+      const arrival = result.samples.findIndex((sample) => sample.s >= result.totalDistanceM - 1e-6);
+      expect(Math.min(...result.samples.slice(boundary, arrival).map((sample) => sample.velocityMps))).toBeGreaterThan(0.05);
+      return result.samples[arrival].t - result.samples[boundary].t;
+    });
+
+    expect(Math.max(...durations) - Math.min(...durations)).toBeLessThan(0.08);
+  });
+
   it("validates and round-trips authored heading-transition controls", () => {
     const project = createDemoProject();
     project.paths[0].waypoints = buildWaypoints([

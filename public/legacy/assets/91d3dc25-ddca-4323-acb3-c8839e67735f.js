@@ -442,15 +442,18 @@
         if (rd < Infinity) aBack[i] = Math.min(decelG, rd);
         if (rw < Infinity) rangeAngV[i] = rw * Math.PI / 180;
       }
+      let translationFollowing = false;
       for (let i = 1; i < n; i++) {
         const start = pts[i - 1].s / totalS, end = pts[i].s / totalS;
         const overlaps = (lo, hi) => Math.min(end, hi) - Math.max(start, lo) >= -1e-9;
         const activeRanges = ranges.filter((R) => overlaps(Math.min(R.f0, R.f1), Math.max(R.f0, R.f1)));
         const activeTransitions = headingTransitions.filter((policy) => overlaps(policy.start, policy.end));
         const activePolicies = activeRanges.length + activeTransitions.length;
-        translationPriority[i] = activePolicies > 0
-          && activeRanges.every((R) => R.rotationPriority === 'translation')
-          && activeTransitions.every((policy) => policy.rotationPriority === 'translation');
+        if (activePolicies > 0) {
+          translationFollowing = activeRanges.every((R) => R.rotationPriority === 'translation')
+            && activeTransitions.every((policy) => policy.rotationPriority === 'translation');
+        }
+        translationPriority[i] = translationFollowing;
       }
     }
     // ---- rotational limit: cap v so the commanded heading can actually be tracked ----
@@ -520,7 +523,7 @@
           if (!stopped.has(interval - 1) && !translationInterval(interval)) changed = capInterval(interval, interval - 1, interval, interval) || changed;
         }
         for (let interval = n - 2; interval >= 1; interval--) {
-          if (!stopped.has(interval) && !translationInterval(interval)) changed = capInterval(interval, interval + 1, interval - 1, interval + 1) || changed;
+          if (!stopped.has(interval) && !translationInterval(interval) && !translationInterval(interval + 1)) changed = capInterval(interval, interval + 1, interval - 1, interval + 1) || changed;
         }
         for (let i = 1; i < n; i++) {
           const ds = pts[i].s - pts[i - 1].s;
