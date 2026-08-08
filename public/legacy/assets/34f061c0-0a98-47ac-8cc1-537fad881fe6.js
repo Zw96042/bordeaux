@@ -1043,6 +1043,12 @@
       hist.current = { past: [], future: [] };
       setDirty(false);
     }, []);
+    useEffect(() => {
+      let active = true;
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.restoreLastProject !== 'function') return undefined;
+      window.bordeauxAPI.restoreLastProject().then((result) => { if (active && result) loadProject(result.project); }).catch((error) => console.warn('Could not restore the last project:', error));
+      return () => { active = false; };
+    }, [loadProject]);
     const newProject = useCallback(async () => {
       if (!canReplaceProject()) return;
       if (window.bordeauxAPI) await window.bordeauxAPI.newProject();
