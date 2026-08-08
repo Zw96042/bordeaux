@@ -524,7 +524,7 @@ describe("legacy compatibility preview", () => {
     const inspector = fs.readFileSync(new URL("../public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
     const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
     const field = fs.readFileSync(new URL("../public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
-    const styles = fs.readFileSync(new URL("../public/legacy/index.html", import.meta.url), "utf8");
+    const styles = fs.readFileSync(new URL("../public/legacy/styles.css", import.meta.url), "utf8");
 
     expect(panels).toContain("actions.setTool('waypoint')");
     expect(inspector).toContain("actions.setTool('waypoint')");
@@ -610,7 +610,7 @@ describe("legacy compatibility preview", () => {
   it("uses one Bordeaux accent and does not expose theme customization", () => {
     const panels = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
     const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
-    const html = fs.readFileSync(new URL("../public/legacy/index.html", import.meta.url), "utf8");
+    const styles = fs.readFileSync(new URL("../public/legacy/styles.css", import.meta.url), "utf8");
 
     expect(panels).not.toContain("ThemePicker");
     expect(panels).not.toContain("Choose accent color");
@@ -618,13 +618,14 @@ describe("legacy compatibility preview", () => {
     expect(app).not.toContain("setTheme");
     expect(app).not.toContain("dataset.theme");
     expect(app).not.toContain("ACCENTS");
-    expect(html).not.toContain("[data-theme=");
-    expect(html).not.toContain(".themebtn");
-    expect(html).toContain("--accent:#7ea2ed");
+    expect(styles).not.toContain("[data-theme=");
+    expect(styles).not.toContain(".themebtn");
+    expect(styles).toContain("--accent:#7ea2ed");
   });
 
   it("uses the full WRLP Chap for the app mark and startup animation", () => {
     const html = fs.readFileSync(new URL("../public/legacy/index.html", import.meta.url), "utf8");
+    const styles = fs.readFileSync(new URL("../public/legacy/styles.css", import.meta.url), "utf8");
     const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
     const bird = fs.readFileSync(new URL("../public/legacy/assets/wrlp-chap-bird-original.svg", import.meta.url), "utf8");
     const loader = fs.readFileSync(new URL("../public/legacy/assets/chap-loader-wrlp.js", import.meta.url), "utf8");
@@ -632,24 +633,24 @@ describe("legacy compatibility preview", () => {
     expect(html).toContain('id="boot-splash"');
     expect(html).toContain('src="assets/wrlp-chap-bird-original.svg"');
     expect(html).toContain('src="assets/chap-loader-wrlp.js"');
-    expect(html).toContain("boot-chap-leg-l");
-    expect(html).toContain("boot-chap-leg-r");
-    expect(html).toContain("boot-chap-dust 920ms");
-    const splashRule = html.match(/\.boot-splash\{([^}]*)\}/)?.[1] || "";
+    expect(styles).toContain("boot-chap-leg-l");
+    expect(styles).toContain("boot-chap-leg-r");
+    expect(styles).toContain("boot-chap-dust 920ms");
+    const splashRule = styles.match(/\.boot-splash\{([^}]*)\}/)?.[1] || "";
     expect(splashRule).toContain("cursor:wait");
     expect(splashRule).not.toContain("pointer-events:none");
-    expect(html).not.toContain(".boot-splash.boot-splash-ready{pointer-events:none}");
+    expect(styles).not.toContain(".boot-splash.boot-splash-ready{pointer-events:none}");
     expect(html).toContain("class=\"boot-curtain\"");
-    expect(html).toContain(".boot-curtain{position:absolute;inset:-1px;z-index:0;background:var(--bg)");
-    expect(html).toContain("transition:transform var(--boot-curtain) cubic-bezier(.76,0,.24,1) var(--boot-run)");
-    expect(html).toContain(".boot-splash.boot-splash-ready .boot-curtain{transform:translate3d(-101%,0,0)}");
-    expect(html).toContain(".boot-splash-inner{position:absolute;z-index:1;top:50%;left:50%");
-    expect(html).toContain("@keyframes boot-chap-exit{0%{transform:translate3d(-50%,-50%,0);animation-timing-function:cubic-bezier(.3,0,.7,.45)}20%");
+    expect(styles).toContain(".boot-curtain{position:absolute;inset:-1px;z-index:0;background:var(--bg)");
+    expect(styles).toContain("transition:transform var(--boot-curtain) cubic-bezier(.76,0,.24,1) var(--boot-run)");
+    expect(styles).toContain(".boot-splash.boot-splash-ready .boot-curtain{transform:translate3d(-101%,0,0)}");
+    expect(styles).toContain(".boot-splash-inner{position:absolute;z-index:1;top:50%;left:50%");
+    expect(styles).toContain("@keyframes boot-chap-exit{0%{transform:translate3d(-50%,-50%,0);animation-timing-function:cubic-bezier(.3,0,.7,.45)}20%");
     expect(html).toContain('<div id="root"></div>');
     expect(bird).toContain(".st5{fill:#FF330D;stroke:#FFFFFF");
     expect(bird).toContain(".st3{fill:#422397;stroke:#FFFFFF");
-    expect(html).not.toContain("animation-play-state:paused");
-    expect(html).toContain("width:clamp(260px,26vw,370px)");
+    expect(styles).not.toContain("animation-play-state:paused");
+    expect(styles).toContain("width:clamp(260px,26vw,370px)");
     expect(app).toContain("boot-splash-ready");
     expect(app).toContain("const strideMs = 460");
     expect(app).toContain("const strideDistancePx = Math.max(1, runnerWidth * 1.7)");
@@ -719,7 +720,7 @@ describe("legacy compatibility preview", () => {
   });
 
   it("uses segmented controls instead of native dropdowns for planner and segment choices", () => {
-    const html = fs.readFileSync(new URL("../public/legacy/index.html", import.meta.url), "utf8");
+    const styles = fs.readFileSync(new URL("../public/legacy/styles.css", import.meta.url), "utf8");
     const ui = fs.readFileSync(new URL("../public/legacy/assets/760c13dd-1656-409e-a1f2-58b2285a7f6e.js", import.meta.url), "utf8");
     const panels = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
     const inspector = fs.readFileSync(new URL("../public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
@@ -728,7 +729,7 @@ describe("legacy compatibility preview", () => {
     expect(ui).toContain("'--seg-clip-left'");
     expect(ui).toContain("className: 'seg-indicator'");
     expect(ui).not.toContain("className: 'seg-active-ink'");
-    expect(html).not.toContain(".seg-active-ink");
+    expect(styles).not.toContain(".seg-active-ink");
     expect(ui).not.toContain("function GroupSelect");
     expect(panels).toContain("function PlannerControl");
     expect(panels).toContain("className: 'planner-family'");
@@ -771,7 +772,7 @@ describe("legacy compatibility preview", () => {
     const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
     const inspector = fs.readFileSync(new URL("../public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
     const ui = fs.readFileSync(new URL("../public/legacy/assets/760c13dd-1656-409e-a1f2-58b2285a7f6e.js", import.meta.url), "utf8");
-    const html = fs.readFileSync(new URL("../public/legacy/index.html", import.meta.url), "utf8");
+    const styles = fs.readFileSync(new URL("../public/legacy/styles.css", import.meta.url), "utf8");
 
     expect(app).toContain("const [inspectorOpen, setInspectorOpen] = useState(true)");
     expect(app).toContain("className: 'inspector-tab'");
@@ -779,8 +780,8 @@ describe("legacy compatibility preview", () => {
     expect(app).toContain("setInspectorOpen(true)");
     expect(inspector).toContain("title: 'Hide inspector'");
     expect(ui).toContain("sliders:");
-    expect(html).toContain(".seg-heading .seg-i{display:flex");
-    expect(html).toContain("white-space:normal");
+    expect(styles).toContain(".seg-heading .seg-i{display:flex");
+    expect(styles).toContain("white-space:normal");
   });
 
   it("opens the hidden inspector when editable path items are double-clicked", () => {

@@ -461,16 +461,17 @@ describe("LabVIEW .bdx compatibility", () => {
 });
 
 describe("canonical shipped renderer", () => {
-  it("loads the maintained legacy editor with persistence, security, and accessibility hooks", () => {
+  it("loads the maintained editor with persistence, security, and accessibility hooks", () => {
     const html = fs.readFileSync(path.join(process.cwd(), "public/legacy/index.html"), "utf8");
+    const styles = fs.readFileSync(path.join(process.cwd(), "public/legacy/styles.css"), "utf8");
     const app = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js"), "utf8");
     const ui = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/760c13dd-1656-409e-a1f2-58b2285a7f6e.js"), "utf8");
     expect(html).toContain("Content-Security-Policy");
-    expect(html).toContain(":focus-visible");
-    expect(html).toContain(".numbox .numinput:focus-visible");
-    expect(html).toContain("@container (max-width: 820px)");
-    expect(html).toContain(".tb-file { flex: 0 0 auto");
-    expect(html).toContain(".ctxinsp-t, .featnm");
+    expect(styles).toContain(":focus-visible");
+    expect(styles).toContain(".numbox .numinput:focus-visible");
+    expect(styles).toContain("@container (max-width: 820px)");
+    expect(styles).toContain(".tb-file { flex: 0 0 auto");
+    expect(styles).toContain(".ctxinsp-t, .featnm");
     expect(app).toContain("openRecentProject");
     expect(app).toContain("saveProject");
     expect(app).not.toContain("bordeaux-notice");
@@ -496,10 +497,10 @@ describe("canonical shipped renderer", () => {
   });
 
   it("uses the shared outline selection style for waypoints and segments", () => {
-    const html = fs.readFileSync(path.join(process.cwd(), "public/legacy/index.html"), "utf8");
+    const styles = fs.readFileSync(path.join(process.cwd(), "public/legacy/styles.css"), "utf8");
     const outline = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js"), "utf8");
-    expect(html).not.toContain(".wpfeatrow.sel,.segfeatrow.sel");
-    expect(html).toContain(".featrow.sel{background:var(--accent-soft);border-left-color:var(--accent)}");
+    expect(styles).not.toContain(".wpfeatrow.sel,.segfeatrow.sel");
+    expect(styles).toContain(".featrow.sel{background:var(--accent-soft);border-left-color:var(--accent)}");
     expect(outline).toContain("featrow wpfeatrow");
     expect(outline).toContain("featrow segfeatrow");
     expect(outline).toContain("className: 'featindent'");
@@ -508,9 +509,9 @@ describe("canonical shipped renderer", () => {
   });
 
   it("renders the field metric overlay as a compact legend", () => {
-    const html = fs.readFileSync(path.join(process.cwd(), "public/legacy/index.html"), "utf8");
+    const styles = fs.readFileSync(path.join(process.cwd(), "public/legacy/styles.css"), "utf8");
     const panels = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js"), "utf8");
-    expect(html).toContain(".overlayctl{position:absolute;left:16px;bottom:110px;width:236px;background:transparent");
+    expect(styles).toContain(".overlayctl{position:absolute;left:16px;bottom:110px;width:236px;background:transparent");
     expect(panels).not.toContain("className: 'ovlabel'");
     expect(panels.indexOf("className: 'ovsafety '")).toBeLessThan(panels.indexOf("className: 'ovlegend'"));
   });

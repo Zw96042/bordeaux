@@ -111,7 +111,7 @@ describe("Java command marker invocations", () => {
   });
 
   it("wires desktop discovery and accessible custom parameter controls into the canonical renderer", () => {
-    const html = fs.readFileSync(path.join(process.cwd(), "public/legacy/index.html"), "utf8");
+    const styles = fs.readFileSync(path.join(process.cwd(), "public/legacy/styles.css"), "utf8");
     const app = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js"), "utf8");
     const inspector = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js"), "utf8");
     expect(app).toContain("window.bordeauxAPI.linkJavaProject()");
@@ -155,14 +155,14 @@ describe("Java command marker invocations", () => {
     expect(inspector).not.toContain("Recent Java project");
     expect(inspector).not.toContain("Export JSON");
     expect(inspector).not.toContain("const COMMANDS =");
-    expect(html).toContain(".cmd-iconbtn{width:40px;height:40px;");
-    expect(html).toContain(".cmd-choice span{height:40px;");
-    expect(html).toContain(".cmd-iconbtn{width:44px;height:44px}.cmd-primary-action{min-height:44px}");
-    expect(html).toContain(".cmd-toggle-input:focus-visible+.cmd-toggle-track");
-    expect(html).toContain(".cmd-choice input:focus-visible+span");
-    expect(html).toContain(".cmd-picker-list{max-height:224px;overflow:auto");
-    expect(html).toContain(".cmd-picker-trigger[aria-expanded=\"true\"]");
-    expect(html).toContain(".cmd-picker-search>input:focus-visible");
-    expect(html).toContain(".cmd-schema-warning .qbtn,.cmd-picker-trigger,.cmd-picker-search,.cmd-picker-search>input,.cmd-picker-option{min-height:44px}");
+    expect(styles).toContain(".cmd-iconbtn{width:40px;height:40px;");
+    expect(styles).toContain(".cmd-choice span{height:40px;");
+    expect(styles).toContain(".cmd-iconbtn{width:44px;height:44px}.cmd-primary-action{min-height:44px}");
+    expect(styles).toContain(".cmd-toggle-input:focus-visible+.cmd-toggle-track");
+    expect(styles).toContain(".cmd-choice input:focus-visible+span");
+    expect(styles).toContain(".cmd-picker-list{max-height:224px;overflow:auto");
+    expect(styles).toContain(".cmd-picker-trigger[aria-expanded=\"true\"]");
+    expect(styles).toContain(".cmd-picker-search>input:focus-visible");
+    expect(styles).toContain(".cmd-schema-warning .qbtn,.cmd-picker-trigger,.cmd-picker-search,.cmd-picker-search>input,.cmd-picker-option{min-height:44px}");
   });
 });
