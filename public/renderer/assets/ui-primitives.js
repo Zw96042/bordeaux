@@ -63,6 +63,96 @@
     return h('button', { className: 'iconbtn' + (active ? ' active' : '') + (danger ? ' danger' : ''), onClick, title, 'aria-label': title, 'aria-pressed': active == null ? undefined : active, type: 'button' }, h(Icon, { name: icon, size, fill }));
   }
 
+  const MAX_RENDERED_PICKER_ITEMS = 80;
+
+  function Dropdown({ id, label, ariaLabel, value, items, onChange, disabled, placeholder, icon, searchThreshold = 7,
+    compact = false, className = '', allowCustom = false, customLabel = 'Enter exact value', customPlaceholder = 'Exact runtime value' }) {
+    const [open, setOpen] = useState(false);
+    const [query, setQuery] = useState('');
+    const [activeIndex, setActiveIndex] = useState(0);
+    const [customDraft, setCustomDraft] = useState('');
+    const rootRef = useRef(null);
+    const triggerRef = useRef(null);
+    const panelRef = useRef(null);
+    const searchRef = useRef(null);
+    const optionRefs = useRef([]);
+    const [panelStyle, setPanelStyle] = useState(null);
+    const listboxId = id + '-listbox';
+    const labelId = id + '-label';
+    const pickerName = label || ariaLabel || 'options';
+    const selected = items.find((item) => item.value === value);
+    const normalizedQuery = query.trim().toLowerCase();
+    const filteredItems = normalizedQuery
+      ? items.filter((item) => [item.label, item.meta, item.searchText].some((part) => String(part || '').toLowerCase().includes(normalizedQuery)))
+      : items;
+    const visibleItems = filteredItems.slice(0, MAX_RENDERED_PICKER_ITEMS);
+    const hiddenMatchCount = filteredItems.length - visibleItems.length;
+    const showSearch = items.length > searchThreshold;
+
+    useEffect(() => {
+      if (!open) return;
+      const closeFromOutside = (event) => {
+        if (rootRef.current && !rootRef.current.contains(event.target) && panelRef.current && !panelRef.current.contains(event.target)) setOpen(false);
+      };
+      const positionPanel = () => {
+        const trigger = triggerRef.current;
+        if (!trigger) return;
+        const rect = trigger.getBoundingClientRect();
+        const width = Math.min(window.innerWidth - 16, Math.max(rect.width, compact ? 180 : 240));
+        const below = window.innerHeight - rect.bottom - 8;
+        const above = rect.top - 8;
+        const openAbove = below < 230 && above > below;
+        const room = Math.max(140, openAbove ? above : below);
+        setPanelStyle({
+          position: 'fixed',
+          left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
+          top: openAbove ? 'auto' : rect.bottom + 4,
+          bottom: openAbove ? window.innerHeight - rect.top + 4 : 'auto',
+          width,
+          '--dropdown-room': room + 'px',
+        });
+      };
+      positionPanel();
+      document.addEventListener('pointerdown', closeFromOutside);
+      window.addEventListener('resize', positionPanel);
+      window.addEventListener('scroll', positionPanel, true);
+      return () => {
+        document.removeEventListener('pointerdown', closeFromOutside);
+        window.removeEventListener('resize', positionPanel);
+        window.removeEventListener('scroll', positionPanel, true);
+      };
+    }, [open]);
+
+    useEffect(() => {
+      if (!open) { setQuery(''); setCustomDraft(''); return; }
+      const selectedIndex = Math.max(0, visibleItems.findIndex((item) => item.value === value));
+      setActiveIndex(selectedIndex);
+      requestAnimationFrame(() => {
+        if (showSearch) searchRef.current && searchRef.current.focus();
+        else optionRefs.current[selectedIndex] && optionRefs.current[selectedIndex].focus();
+      });
+    }, [open]);
+
+    useEffect(() => {
+      if (open) setActiveIndex(0);
+    }, [query]);
+
+    const choose = (nextValue) => {
+      onChange(nextValue);
+      setOpen(false);
+      requestAnimationFrame(() => triggerRef.current && triggerRef.current.focus());
+    };
+    const focusOption = (nextIndex) => {
+      if (!visibleItems.length) return;
+      const wrapped = (nextIndex + visibleItems.length) % visibleItems.length;
+      setActiveIndex(wrapped);
+      requestAnimationFrame(() => optionRefs.current[wrapped] && optionRefs.current[wrapped].focus());
+    };
+    const focusAfterTrigger = (backward) => {
+      const focusable = Array.from(document.querySelectorAll('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'))
+        .filter((element) => element.getClientRects().length > 0 && !panelRef.current?.contains(element));
+      const index = focusable.indexOf(triggerRef.current);
+      const next = focusable[index + (backward ? -1 : 1)];
   // numeric field with drag-to-scrub
   function Num({ label, value, onChange, unit, step = 0.01, min, max, precision = 2, accentDrag }) {
     const id = useId();
