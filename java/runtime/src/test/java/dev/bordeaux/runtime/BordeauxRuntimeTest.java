@@ -91,6 +91,28 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void readsMixedFollowSectionsAndTrajectorySamples() {
+        BordeauxPathEvents path = read("""
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
+                 "catalog":{"schemaVersion":"1.0","catalogId":"test-robot","supportVersion":"0.1.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "paths":[{"id":"auto","name":"Auto","totalTimeS":2,
+                 "samples":[
+                   {"i":0,"t":0,"s":0,"f":0,"x":1,"y":2,"headingRad":0,"velocityMps":0},
+                   {"i":1,"t":1,"s":1,"f":0.5,"x":2,"y":2,"headingRad":0,"velocityMps":1},
+                   {"i":2,"t":2,"s":2,"f":1,"x":3,"y":2,"headingRad":0,"velocityMps":0}],
+                 "followSections":[
+                   {"segmentIndex":0,"mode":"time","startSample":0,"endSample":1},
+                   {"segmentIndex":1,"mode":"position","startSample":1,"endSample":2}],
+                 "events":[]}]}
+                """);
+
+        assertEquals(3, path.samples().size());
+        assertEquals(2, path.followSections().size());
+        assertEquals(BordeauxFollowSection.Mode.POSITION, path.followSections().get(1).mode());
+        assertEquals(3, path.samples().get(2).xM());
+    }
+
+    @Test
     void cancelsOnlyCommandsWhoseInvocationOptsIntoPathOwnership() {
         BordeauxPathEvents path = read("""
                 {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",

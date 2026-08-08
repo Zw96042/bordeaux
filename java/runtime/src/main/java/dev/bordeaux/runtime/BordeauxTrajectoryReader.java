@@ -108,7 +108,52 @@ public final class BordeauxTrajectoryReader {
         String id = text(path, "id", "path");
         String name = text(path, "name", "path '" + id + "'");
         double totalTimeS = nonnegativeFinite(path.get("totalTimeS"), "Path '" + id + "' totalTimeS");
+        JsonNode sampleNodes = path.get("samples");
         JsonNode events = path.get("events");
+
+        List<BordeauxSample> samples = new ArrayList<>();
+        for (int index = 0; index < sampleNodes.size(); index++) {
+            JsonNode sample = requireObject(sampleNodes.get(index), "Path '" + id + "' sample " + index + " must be an object");
+            if (!sample.path("i").canConvertToInt() || sample.path("i").intValue() != index) {
+                throw new BordeauxRuntimeException("Path '" + id + "' sample indexes must be contiguous from zero");
+            }
+            double timeS = nonnegativeFinite(sample.get("t"), "Path '" + id + "' sample " + index + " time");
+            if (!samples.isEmpty() && timeS < samples.get(samples.size() - 1).timeS() - 1e-9) {
+                throw new BordeauxRuntimeException("Path '" + id + "' sample times must be monotonic");
+            }
+            samples.add(new BordeauxSample(index, timeS,
+                    nonnegativeFinite(sample.get("s"), "Path '" + id + "' sample " + index + " distance"),
+                    finiteInRange(sample.get("f"), "Path '" + id + "' sample " + index + " fraction", 0, 1),
+                    finite(sample.get("x"), "Path '" + id + "' sample " + index + " X"),
+                    finite(sample.get("y"), "Path '" + id + "' sample " + index + " Y"),
+                    finite(sample.get("headingRad"), "Path '" + id + "' sample " + index + " heading"),
+                    finite(sample.get("velocityMps"), "Path '" + id + "' sample " + index + " velocity")));
+        }
+
+        List<BordeauxFollowSection> sections = new ArrayList<>();
+        JsonNode sectionNodes = path.get("followSections");
+        if (sectionNodes == null && !samples.isEmpty()) {
+            sections.add(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.TIME, 0, samples.size() - 1));
+        } else if (sectionNodes != null) {
+            if (!sectionNodes.isArray()) throw new BordeauxRuntimeException("Path '" + id + "' followSections must be an array");
+            for (int index = 0; index < sectionNodes.size(); index++) {
+                JsonNode section = requireObject(sectionNodes.get(index), "Path '" + id + "' follow section " + index + " must be an object");
+                int segment = requiredInt(section.get("segmentIndex"), "Follow section " + index + " segmentIndex");
+                int start = requiredInt(section.get("startSample"), "Follow section " + index + " startSample");
+                int end = requiredInt(section.get("endSample"), "Follow section " + index + " endSample");
+                String mode = text(section, "mode", "Follow section " + index);
+                if (start < 0 || end < start || end >= samples.size()) throw new BordeauxRuntimeException("Follow section " + index + " has invalid sample bounds");
+                if (index == 0 && start != 0 || index > 0 && start != sections.get(index - 1).endSample()) {
+                    throw new BordeauxRuntimeException("Path '" + id + "' follow sections must be contiguous");
+                }
+                sections.add(new BordeauxFollowSection(segment,
+                        switch (mode) { case "time" -> BordeauxFollowSection.Mode.TIME; case "position" -> BordeauxFollowSection.Mode.POSITION; default -> throw new BordeauxRuntimeException("Follow section mode must be time or position"); },
+                        start, end));
+            }
+            if (!samples.isEmpty() && (sections.isEmpty() || sections.get(sections.size() - 1).endSample() != samples.size() - 1)) {
+                throw new BordeauxRuntimeException("Path '" + id + "' follow sections must cover every sample");
+            }
+        }
 
         List<IndexedEvent> indexed = new ArrayList<>();
         Set<String> eventIds = new HashSet<>();
@@ -139,7 +184,7 @@ public final class BordeauxTrajectoryReader {
         indexed.sort(Comparator.comparingDouble((IndexedEvent value) -> value.event().timeS())
                 .thenComparingInt(IndexedEvent::index));
         return new BordeauxPathEvents(
-                id, name, totalTimeS, catalogId, catalogHash, indexed.stream().map(IndexedEvent::event).toList());
+                id, name, totalTimeS, catalogId, catalogHash, indexed.stream().map(IndexedEvent::event).toList(), samples, sections);
     }
 
     private static ObjectNode requireObject(JsonNode node, String message) {
@@ -162,6 +207,20 @@ public final class BordeauxTrajectoryReader {
             throw new BordeauxRuntimeException(context + " must be finite and nonnegative");
         }
         return result;
+    }
+
+    private static double finite(JsonNode value, String context) {
+        if (value == null || !value.isNumber() || !Double.isFinite(value.doubleValue())) {
+            throw new BordeauxRuntimeException(context + " must be a finite number");
+        }
+        return value.doubleValue();
+    }
+
+    private static int requiredInt(JsonNode value, String context) {
+        if (value == null || !value.isIntegralNumber() || !value.canConvertToInt() || value.intValue() < 0) {
+            throw new BordeauxRuntimeException(context + " must be a nonnegative integer");
+        }
+        return value.intValue();
     }
 
     private static double finiteInRange(JsonNode value, String context, double minimum, double maximum) {
