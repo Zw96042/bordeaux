@@ -291,6 +291,17 @@ function createWindow() {
           unnamed.push(...unnamedOnPage());
         }
         const project = { schemaVersion: '1.0', name: 'Smoke edited', robot: { drive: 'swerve', w: .8, l: .8, maxSpeed: 4 }, paths: [{ id: 'path_smoke', name: 'Smoke', waypoints: [{ x: 1, y: 1, theta: 0, thetaOn: true, linked: true, stop: false, prevC: { x: .8, y: 1 }, nextC: { x: 1.2, y: 1 } }, { x: 2, y: 1, theta: 0, thetaOn: true, linked: true, stop: false, prevC: { x: 1.8, y: 1 }, nextC: { x: 2.2, y: 1 } }], targets: [], markers: [{ id: 'event_smoke', f: .5, name: 'Smoke event', invocation: { commandId: 'frc.robot.SmokeCommand', arguments: { count: 2, sequence: '9007199254740993', tags: ['auto'] }, cancelOnPathEnd: true } }], ranges: [], constraints: { maxVel: 2, maxAccel: 2, maxDecel: 2, maxAngVel: 180, maxAngAccel: 360 }, startVel: 0, goalVel: 0 }], routine: { name: 'Smoke routine', nodes: [{ id: 'routine_smoke', type: 'path', ref: 'path_smoke' }] } };
+        await window.bordeauxAPI.saveProject(project, true);
+        document.getElementById('robot-drive-motor')?.click();
+        for (let attempt = 0; attempt < 50 && !document.querySelector('#robot-drive-motor-listbox [data-value="rev-neo"]'); attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        document.querySelector('#robot-drive-motor-listbox [data-value="rev-neo"]')?.click();
+        await new Promise((resolve) => setTimeout(resolve, 1_050));
+        const motorAutosave = await window.bordeauxAPI.restoreLastProject();
+        const motorPreset = motorAutosave.project.robot.driveModel?.motorId === 'rev-neo'
+          && motorAutosave.project.robot.driveModel?.motorFreeRpm === 5676
+          && motorAutosave.project.robot.maxSpeed > 4;
         const validation = await window.bordeauxAPI.validateProject(project);
         const javaConnection = await window.bordeauxAPI.linkJavaProject();
         const installedJavaConnection = await window.bordeauxAPI.installJavaSupport();
@@ -310,7 +321,9 @@ function createWindow() {
         const commandPicker = document.getElementById('event-marker-command');
         const setInputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
         commandPicker?.click();
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        for (let attempt = 0; attempt < 50 && !document.querySelector('#event-marker-command-listbox [role="option"]'); attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
         const commandOptions = [...document.querySelectorAll('#event-marker-command-listbox [role="option"]')];
         const commandSearch = document.getElementById('event-marker-command-search');
         const smokeCommandOption = commandOptions.find((option) => option.getAttribute('data-value') === 'frc.robot.SmokeCommand');
@@ -353,14 +366,18 @@ function createWindow() {
           await new Promise((resolve) => setTimeout(resolve, 0));
         }
         document.getElementById('event-marker-command')?.click();
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        for (let attempt = 0; attempt < 50 && !document.querySelector('#event-marker-command-listbox [role="option"]'); attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
         const largeEnumCommandOption = [...document.querySelectorAll('#event-marker-command-listbox [role="option"]')]
           .find((option) => option.getAttribute('data-value') === 'frc.robot.LargeEnumCommand');
         largeEnumCommandOption?.click();
         await new Promise((resolve) => setTimeout(resolve, 0));
         const largeEnumPicker = document.getElementById('event-command-param-mode');
         largeEnumPicker?.click();
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        for (let attempt = 0; attempt < 50 && !document.querySelector('#event-command-param-mode-listbox [role="option"]'); attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
         const largeEnumOptions = [...document.querySelectorAll('#event-command-param-mode-listbox [role="option"]')];
         const largeEnumOverflowNotice = document.querySelector('#event-command-param-mode-listbox .cmd-picker-more')?.textContent || '';
         const largeEnumSearch = document.getElementById('event-command-param-mode-search');
@@ -392,6 +409,11 @@ function createWindow() {
             && document.getElementById('event-command-param-mode-value')?.textContent === 'MODE_150',
           accessible: unnamedOnPage().length === 0,
         };
+        document.querySelector('button[aria-label="Add event marker"]')?.click();
+        await new Promise((resolve) => setTimeout(resolve, 1_050));
+        const markerAutosave = await window.bordeauxAPI.restoreLastProject();
+        const eventMarkerAutosave = markerAutosave.project.paths[0].markers.length === 2
+          && markerAutosave.project.paths[0].markers[1].name === 'event2';
         await window.bordeauxAPI.newProject();
         const javaExported = await window.bordeauxAPI.exportJava(project, 'linked');
         const saved = await window.bordeauxAPI.saveProject(project, true);
@@ -401,7 +423,7 @@ function createWindow() {
         const exported = await window.bordeauxAPI.exportBdx(opened.project);
         window.bordeauxAPI.setDirty(true);
         const probe = document.createElement('script'); probe.textContent = 'window.__bordeauxInlineScriptRan = true'; document.head.appendChild(probe);
-        return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, chapLoader, validation: validation.ok, javaDiscovery: javaConnection.catalog.projectName === 'SmokeRobot' && javaConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), javaInstalled: installedJavaConnection.integration.installed, javaBuilt: builtJavaConnection.catalog.authoritative === true && builtJavaConnection.catalog.catalogHash === reopenedJavaConnection.catalog.catalogHash, javaRecent: recentJavaProjects.length === 1 && reopenedJavaConnection.catalog.projectName === 'SmokeRobot', javaUi, javaExported: javaExported.exported && javaExported.eventCount === 1, restored: restored.project.name === project.name, roundTrip: saved.saved && opened.project.name === project.name && opened.project.routine.nodes[0].ref === 'path_smoke', exported: exported.exported, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
+        return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, chapLoader, validation: validation.ok, motorPreset, eventMarkerAutosave, javaDiscovery: javaConnection.catalog.projectName === 'SmokeRobot' && javaConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), javaInstalled: installedJavaConnection.integration.installed, javaBuilt: builtJavaConnection.catalog.authoritative === true && builtJavaConnection.catalog.catalogHash === reopenedJavaConnection.catalog.catalogHash, javaRecent: recentJavaProjects.length === 1 && reopenedJavaConnection.catalog.projectName === 'SmokeRobot', javaUi, javaExported: javaExported.exported && javaExported.eventCount === 1, restored: restored.project.name === project.name, roundTrip: saved.saved && opened.project.name === project.name && opened.project.routine.nodes[0].ref === 'path_smoke', exported: exported.exported, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
       })()`);
       await new Promise((resolve) => setTimeout(resolve, 50));
       window.close();
@@ -410,7 +432,7 @@ function createWindow() {
       result.filesWritten = filesWritten;
       result.closeGuard = smokeCloseGuardTriggered && !window.isDestroyed();
       console.log(`BORDEAUX_SMOKE_OK ${JSON.stringify(result)}`);
-      const passed = result.api && result.root && result.unnamed.length === 0 && result.main > 0 && result.nav > 0 && result.chapLoader === "rigged" && result.validation && result.javaDiscovery && result.javaInstalled && result.javaBuilt && result.javaRecent && result.javaUi.markerInspector && result.javaUi.linkAction && result.javaUi.commandEnabled && result.javaUi.commandOptions === 4 && result.javaUi.searchHiddenForSmallCatalog && result.javaUi.recentHiddenForSingleProject && result.javaUi.cancelSwitch && result.javaUi.parameter && result.javaUi.jsonShapeRejected && result.javaUi.jsonShapeAccepted && result.javaUi.longRangeRejected && result.javaUi.exactInteger && result.javaUi.largeEnumPicker && result.javaUi.accessible && result.javaExported && result.restored && result.roundTrip && result.exported && result.nodeGlobalsBlocked && result.popupBlocked && result.inlineScriptBlocked && result.filesWritten && result.closeGuard;
+      const passed = result.api && result.root && result.unnamed.length === 0 && result.main > 0 && result.nav > 0 && result.chapLoader === "rigged" && result.validation && result.motorPreset && result.eventMarkerAutosave && result.javaDiscovery && result.javaInstalled && result.javaBuilt && result.javaRecent && result.javaUi.markerInspector && result.javaUi.linkAction && result.javaUi.commandEnabled && result.javaUi.commandOptions === 4 && result.javaUi.searchHiddenForSmallCatalog && result.javaUi.recentHiddenForSingleProject && result.javaUi.cancelSwitch && result.javaUi.parameter && result.javaUi.jsonShapeRejected && result.javaUi.jsonShapeAccepted && result.javaUi.longRangeRejected && result.javaUi.exactInteger && result.javaUi.largeEnumPicker && result.javaUi.accessible && result.javaExported && result.restored && result.roundTrip && result.exported && result.nodeGlobalsBlocked && result.popupBlocked && result.inlineScriptBlocked && result.filesWritten && result.closeGuard;
       allowClose = true;
       app.exit(passed ? 0 : 1);
     });
