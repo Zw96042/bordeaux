@@ -863,7 +863,7 @@
         m.actionIntent && h('div', { className: 'cmd-project-notice', role: 'status' }, 'Pending action: ' + m.actionIntent.description + ' (' + m.actionIntent.semanticTag + '). Choose a generated command marked “Matches action” before Java export.'),
         catalog && catalog.warnings && catalog.warnings.length > 0 && h('div', { className: 'seg-hint' }, catalog.warnings.length + ' source discovery warning' + (catalog.warnings.length === 1 ? '' : 's') + '. Generated annotations remain authoritative.'),
         h('section', { className: 'cmd-command-editor', 'aria-label': 'Marker command' },
-          h(InlinePicker, {
+          h(Dropdown, {
             id: 'event-marker-command',
             label: 'Command',
             value: invocationId,
@@ -921,7 +921,6 @@
               h('span', { className: 'cmd-toggle-track', 'aria-hidden': true }, h('span', null))))),
         h('div', { className: 'fieldlabel' }, 'Group type'),
         h(Seg, { value: m.group || 'sequential', ariaLabel: 'Group type', options: [{ v: 'sequential', label: 'Seq' }, { v: 'parallel', label: 'Parallel' }, { v: 'deadline', label: 'Deadline' }], onChange: (v) => actions.setMarker(sel.idx, { group: v }) }),
-        h('div', { className: 'cgroup-h' }, 'Event schedule'),
         h('div', { className: 'fieldlabel' }, 'Trigger from'),
         h(Seg, { value: schedule.trigger || 'time', ariaLabel: 'Event trigger', options: [
           { v: 'time', label: 'Time', title: 'Fire when planned time reaches this marker' },
@@ -938,15 +937,18 @@
           h('span', { className: 'inrow-l' }, 'End time', h('small', null, 'expire or stop repeating')),
           h(Toggle, { on: schedule.endTimeS != null, ariaLabel: 'Limit event end time', onChange: (on) => actions.setMarker(sel.idx, { schedule: { ...schedule, endTimeS: on ? (derived.prof.totalTime || 0) : undefined } }) })),
         schedule.endTimeS != null && h(Num, { label: 'End path time', value: schedule.endTimeS, unit: 's', min: 0, max: derived.prof.totalTime || 0, step: 0.1, precision: 2, onChange: (v) => actions.setMarker(sel.idx, { schedule: { ...schedule, endTimeS: v } }) }),
-        h('label', { className: 'fieldlabel', htmlFor: 'event-condition-id' }, 'Condition ID', h('small', null, 'optional')),
-        h('input', { id: 'event-condition-id', className: 'textinput', value: schedule.conditionId || '', placeholder: 'frc.robot.Conditions#ready', autoComplete: 'off', spellCheck: false,
-          onChange: (event) => actions.setMarker(sel.idx, { schedule: { ...schedule, conditionId: event.target.value.trim() || undefined } }) }),
-        h('div', { className: 'fieldlabel' }, 'Position lock'),
-        h(Seg, { value: markerAnchor, ariaLabel: 'Position lock', options: [{ v: 'param', label: 'Path %' }, { v: 'dist', label: 'Distance' }], onChange: (v) => actions.setMarker(sel.idx, { anchor: v }) }),
-        markerAnchor === 'dist'
-          ? h(Num, { label: 'Distance from start', value: markerDistance, unit: 'm', step: 0.1, precision: 2, min: 0, max: derived.sample.length || 0, onChange: (v) => actions.setMarker(sel.idx, { d: v }) })
-          : h(Num, { label: 'Position along path', value: markerFraction * 100, unit: '%', step: 1, precision: 0, min: 0, max: 100, onChange: (v) => actions.setMarker(sel.idx, { f: v / 100 }) }),
-        h('div', { className: 'seg-hint' }, markerAnchor === 'dist' ? 'Stays at this traveled distance when the path grows.' : 'Scales with the path when its length changes.'),
+        h(Dropdown, { id: 'event-condition-id', label: 'Condition ID · optional', value: schedule.conditionId || '',
+          items: window.AUTO.pickerItems(window.AUTO.CONDITIONS, schedule.conditionId || '', 'No condition'),
+          placeholder: 'Choose a registered condition', icon: 'branch', allowCustom: true,
+          customLabel: 'Enter exact event condition ID', customPlaceholder: 'Exact condition ID',
+          onChange: (value) => actions.setMarker(sel.idx, { schedule: { ...schedule, conditionId: value || undefined } }) }),
+        h('div', { className: 'marker-position-group' },
+          h('div', { className: 'fieldlabel' }, 'Position lock'),
+          h(Seg, { value: markerAnchor, ariaLabel: 'Position lock', options: [{ v: 'param', label: 'Path %' }, { v: 'dist', label: 'Distance' }], onChange: (v) => actions.setMarker(sel.idx, { anchor: v }) }),
+          markerAnchor === 'dist'
+            ? h(Num, { label: 'Distance from start', value: markerDistance, unit: 'm', step: 0.1, precision: 2, min: 0, max: derived.sample.length || 0, onChange: (v) => actions.setMarker(sel.idx, { d: v }) })
+            : h(Num, { label: 'Position along path', value: markerFraction * 100, unit: '%', step: 1, precision: 0, min: 0, max: 100, onChange: (v) => actions.setMarker(sel.idx, { f: v / 100 }) }),
+          h('div', { className: 'seg-hint' }, markerAnchor === 'dist' ? 'Stays at this traveled distance when the path grows.' : 'Scales with the path when its length changes.')),
         h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delMarker(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete marker'));
     }
 
@@ -963,20 +965,21 @@
       tag = (loF * len).toFixed(1) + '\u2013' + (hiF * len).toFixed(1) + ' m';
       body = h(React.Fragment, null,
         h(Num, { label: 'Max velocity', value: rg.maxVel, unit: 'm/s', min: 0, onChange: (v) => actions.setRange(sel.idx, { maxVel: v }) }),
-        h('div', { className: 'fieldlabel' }, 'Position lock'),
-        h(Seg, { value: rangeAnchor, ariaLabel: 'Position lock', options: anchorOptions, onChange: (v) => actions.setRangeAnchor(sel.idx, v) }),
-        rangeAnchor === 'dist'
-          ? h('div', { className: 'grid2' },
-              h(Num, { label: 'Start distance', value: loF * len, unit: 'm', min: 0, max: len, step: 0.1, precision: 2, onChange: (v) => actions.setRange(sel.idx, { d0: Math.min(v, hiF * len) }) }),
-              h(Num, { label: 'End distance', value: hiF * len, unit: 'm', min: 0, max: len, step: 0.1, precision: 2, onChange: (v) => actions.setRange(sel.idx, { d1: Math.max(v, loF * len) }) }))
-          : rangeAnchor === 'wp'
-            ? h('div', { className: 'range-local' },
-                h('div', null, h('b', null, 'From'), h('span', null, wpName(Math.max(0, Math.min(n - 2, rg.w0 || 0)), n) + ' \u00b7 ' + Math.round((rg.t0 || 0) * 100) + '%')),
-                h('div', null, h('b', null, 'To'), h('span', null, wpName(Math.max(0, Math.min(n - 2, rg.w1 || 0)), n) + ' \u00b7 ' + Math.round((rg.t1 || 0) * 100) + '%')))
-            : h('div', { className: 'grid2' },
-                h(Num, { label: 'Start position', value: loF * 100, unit: '%', min: 0, max: 100, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { f0: Math.min(clampFraction(v), hiF), f1: hiF }) }),
-                h(Num, { label: 'End position', value: hiF * 100, unit: '%', min: 0, max: 100, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { f0: loF, f1: Math.max(clampFraction(v), loF) }) })),
-        h('div', { className: 'seg-hint' }, rangeAnchor === 'dist' ? 'Legacy absolute distance from the path start; earlier geometry can move it. Choose Local to keep this range attached here.' : rangeAnchor === 'wp' ? 'Stays at the same positions on these segments when other parts of the path change.' : 'Stays at the same percentages as the whole path changes.'),
+        h('section', { className: 'range-anchor-editor', 'aria-label': 'Range position lock' },
+          h('div', { className: 'fieldlabel' }, 'Position lock'),
+          h(Seg, { value: rangeAnchor, ariaLabel: 'Position lock', options: anchorOptions, onChange: (v) => actions.setRangeAnchor(sel.idx, v) }),
+          rangeAnchor === 'dist'
+            ? h('div', { className: 'grid2' },
+                h(Num, { label: 'Start distance', value: loF * len, unit: 'm', min: 0, max: len, step: 0.1, precision: 2, onChange: (v) => actions.setRange(sel.idx, { d0: Math.min(v, hiF * len) }) }),
+                h(Num, { label: 'End distance', value: hiF * len, unit: 'm', min: 0, max: len, step: 0.1, precision: 2, onChange: (v) => actions.setRange(sel.idx, { d1: Math.max(v, loF * len) }) }))
+            : rangeAnchor === 'wp'
+              ? h('div', { className: 'range-local' },
+                  h('div', null, h('b', null, 'From'), h('span', null, wpName(Math.max(0, Math.min(n - 2, rg.w0 || 0)), n) + ' \u00b7 ' + Math.round((rg.t0 || 0) * 100) + '%')),
+                  h('div', null, h('b', null, 'To'), h('span', null, wpName(Math.max(0, Math.min(n - 2, rg.w1 || 0)), n) + ' \u00b7 ' + Math.round((rg.t1 || 0) * 100) + '%')))
+              : h('div', { className: 'grid2' },
+                  h(Num, { label: 'Start position', value: loF * 100, unit: '%', min: 0, max: 100, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { f0: Math.min(clampFraction(v), hiF), f1: hiF }) }),
+                  h(Num, { label: 'End position', value: hiF * 100, unit: '%', min: 0, max: 100, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { f0: loF, f1: Math.max(clampFraction(v), loF) }) })),
+          h('div', { className: 'seg-hint' }, rangeAnchor === 'dist' ? 'Legacy distance from the path start. Local keeps the range attached to these segments.' : rangeAnchor === 'wp' ? 'Stays attached to these segment positions.' : 'Scales with the whole path.')),
         h('div', { className: 'fieldlabel' }, 'Timing priority'),
         h(Seg, { value: drive === 'tank' ? 'heading' : (rg.rotationPriority || 'heading'), ariaLabel: 'Timing priority', options: drive === 'tank'
           ? [{ v: 'heading', label: 'Heading', ariaLabel: 'Heading priority, required for tank drive' }]
@@ -985,8 +988,10 @@
               { v: 'translation', label: 'Translation', ariaLabel: 'Translation priority, preserve translational timing while rotation catches up' },
             ], onChange: (v) => actions.setRange(sel.idx, { rotationPriority: v }) }),
         h('div', { className: 'seg-hint' }, drive === 'tank' ? 'Tank drive must follow the path heading.' : rg.rotationPriority === 'translation' ? 'Keeps this stretch moving. Heading may finish settling afterward.' : 'Adjusts translation so rotation stays on schedule.'),
-        h('button', { className: 'morebtn' + (moreLimits ? ' on' : ''), type: 'button', onClick: () => setMoreLimits(!moreLimits) }, h(Icon, { name: 'chevron', size: 14 }), moreLimits ? 'Fewer limits' : 'More limits \u00b7 accel & rotation'),
-        moreLimits && h(React.Fragment, null,
+        h('button', { className: 'range-disclosure' + (moreRangeLimits ? ' on' : ''), type: 'button', 'aria-expanded': moreRangeLimits, onClick: () => setMoreRangeLimits(!moreRangeLimits) },
+          h('span', { className: 'range-disclosure-copy' }, h('strong', null, 'Acceleration & rotation'), h('small', null, 'Optional local limits')),
+          h(Icon, { name: 'chevron', size: 14 })),
+        moreRangeLimits && h(React.Fragment, null,
           h('div', { className: 'cgroup-h' }, 'Translation'),
           h('div', { className: 'grid2' },
             h(Num, { label: 'Max accel', value: rg.maxAccel, unit: 'm/s\u00b2', min: 0, onChange: (v) => actions.setRange(sel.idx, { maxAccel: v }) }),
@@ -997,7 +1002,7 @@
             h(Num, { label: 'Max \u03b1', value: rg.maxAngAccel, unit: '\u00b0/s\u00b2', step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { maxAngAccel: v }) }))),
         h('label', { className: 'fieldlabel', htmlFor: 'constraint-range-label' }, 'Label'),
         h('input', { id: 'constraint-range-label', className: 'textinput', value: rg.name || '', placeholder: 'e.g. Reef approach', autoComplete: 'off', spellCheck: false, 'data-lpignore': 'true', 'data-1p-ignore': true, onChange: (e) => actions.setRange(sel.idx, { name: e.target.value }) }),
-        h('div', { className: 'chint' }, 'Drag either endpoint on the field or edit its locked position here. Where ranges overlap, the tightest limit wins.'),
+        h('div', { className: 'chint' }, 'Drag endpoints on the field. Overlaps use the tightest limits.'),
         h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delRange(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete range'));
     } else {
       return null;
