@@ -285,7 +285,7 @@ public final class BordeauxTrajectoryReader {
     private static Double optionalPositiveFinite(JsonNode value, String context) {
         if (value == null) return null;
         double result = finite(value, context);
-        if (result <= 0) throw new BordeauxRuntimeException(context + " must be greater than zero");
+        if (result < 0.001) throw new BordeauxRuntimeException(context + " must be at least 0.001 seconds");
         return result;
     }
 

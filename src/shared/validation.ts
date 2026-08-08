@@ -387,8 +387,9 @@ function validateProjectInner(project: unknown): ValidationResult {
           else {
             if (marker.schedule.trigger !== undefined && marker.schedule.trigger !== "time" && marker.schedule.trigger !== "position") issues.push(issue(`${markerBase}.schedule.trigger`, "Event trigger must be time or position"));
             validateOptionalFinite(issues, marker.schedule.repeatEveryS, `${markerBase}.schedule.repeatEveryS`, "Repeat period", { positive: true });
+            if (finite(marker.schedule.repeatEveryS) && marker.schedule.repeatEveryS < 0.001) issues.push(issue(`${markerBase}.schedule.repeatEveryS`, "Repeat period cannot be less than 0.001 seconds"));
             validateOptionalFinite(issues, marker.schedule.endTimeS, `${markerBase}.schedule.endTimeS`, "Event end time", { nonnegative: true });
-            if (typeof marker.schedule.conditionId !== "undefined" && (typeof marker.schedule.conditionId !== "string" || !/^[A-Za-z0-9_.:#()$,-]+$/.test(marker.schedule.conditionId))) issues.push(issue(`${markerBase}.schedule.conditionId`, "Condition ID is invalid"));
+            if (typeof marker.schedule.conditionId !== "undefined" && (typeof marker.schedule.conditionId !== "string" || !/^[A-Za-z0-9_.:#()$,-]{1,256}$/.test(marker.schedule.conditionId))) issues.push(issue(`${markerBase}.schedule.conditionId`, "Condition ID is invalid"));
           }
         }
         if (marker.invocation !== undefined) {

@@ -158,6 +158,9 @@ describe("project defaults and validation", () => {
 
     (project.paths[0].markers[0].schedule as any).trigger = "distance";
     expect(validateProject(project).issues.some((issue) => issue.path.endsWith("schedule.trigger"))).toBe(true);
+    (project.paths[0].markers[0].schedule as any).trigger = "time";
+    (project.paths[0].markers[0].schedule as any).repeatEveryS = 0.0001;
+    expect(validateProject(project).issues.some((issue) => issue.path.endsWith("schedule.repeatEveryS"))).toBe(true);
   });
 
   it("rejects orphan folders and invalid per-segment heading modes", () => {
