@@ -87,7 +87,7 @@ public final class BordeauxEventRunner implements AutoCloseable {
             BordeauxEvent event = events.get(index);
             EventState state = states.get(index);
             if (state.complete) continue;
-            if (event.endTimeS() != null && elapsedS > event.endTimeS() + 1e-9) { state.complete = true; continue; }
+            if (event.endTimeS() != null && elapsedS > event.endTimeS() + 1e-9 && !state.activated) { state.complete = true; continue; }
             boolean due = event.trigger() == BordeauxEvent.Trigger.TIME
                     ? elapsedS >= event.timeS() : maximumFraction >= event.fraction();
             if (!state.activated && due) {
@@ -105,6 +105,7 @@ public final class BordeauxEventRunner implements AutoCloseable {
                 state.nextTimeS += event.repeatEveryS();
                 if (++scheduledThisUpdate > 10_000) throw new BordeauxRuntimeException("Event repetition catch-up exceeds 10000 executions");
             }
+            if (event.endTimeS() != null && state.nextTimeS > event.endTimeS() + 1e-9) state.complete = true;
         }
     }
 

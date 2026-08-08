@@ -92,6 +92,33 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void gatesPositionEventsAndCatchesUpBoundedRepetitions() {
+        ObjectNode arguments = MAPPER.createObjectNode();
+        BordeauxEvent event = new BordeauxEvent(
+                "collect", "Collect", 0.2, 0.5, "collect", arguments, false,
+                BordeauxEvent.Trigger.POSITION, 0.2, 1.0, "has-note");
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "auto", "Auto", 1.2, CATALOG_ID, HASH, List.of(event));
+        boolean[] hasNote = {false};
+        BordeauxConditionRegistry conditions = BordeauxConditionRegistry.builder()
+                .register("has-note", () -> hasNote[0]).build();
+        List<String> created = new ArrayList<>();
+        BordeauxEventRunner runner = new BordeauxEventRunner(
+                path, registry(created, "collect"), conditions, new RecordingScheduler());
+
+        runner.periodic(0.1, 0.4);
+        runner.periodic(0.2, 0.5);
+        assertTrue(created.isEmpty());
+        hasNote[0] = true;
+        runner.periodic(0.65, 0.3);
+        assertEquals(List.of("collect", "collect"), created);
+        runner.periodic(1.1, 0.5);
+        assertEquals(4, runner.firedCount());
+        assertThrows(BordeauxRuntimeException.class,
+                () -> BordeauxConditionRegistry.empty().evaluate("missing"));
+    }
+
+    @Test
     void readsMixedFollowSectionsAndTrajectorySamples() {
         BordeauxPathEvents path = read("""
                 {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
