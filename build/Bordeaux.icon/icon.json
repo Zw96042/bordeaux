@@ -1,0 +1,35 @@
+{
+  "fill": {
+    "linear-gradient": [
+      "display-p3:0.09020,0.09412,0.10980,1.00000",
+      "display-p3:0.14118,0.10588,0.12549,1.00000"
+    ]
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "fill": "none",
+          "image-name": "chap-bird.png",
+          "name": "WRLP Chap",
+          "position": {
+            "scale": 1.0,
+            "translation-in-points": [0, 0]
+          }
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.16
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.0
+      }
+    }
+  ],
+  "supported-platforms": {
+    "circles": ["watchOS"],
+    "squares": "shared"
+  }
+}

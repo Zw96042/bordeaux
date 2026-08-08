@@ -1,6 +1,6 @@
 // Bordeaux — shared UI primitives. Exports window.UI
 (function () {
-  const { useState, useRef, useEffect } = React;
+  const { useState, useRef, useEffect, useId } = React;
   const h = React.createElement;
 
   const PATHS = {
@@ -30,6 +30,10 @@
     zoomout: 'M7 11h8 M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z M16 16l5 5',
     fit: 'M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5',
     copy: 'M9 9h10v10H9z M5 15H4V4h11v1',
+    edit: 'M4 20h4l11-11-4-4L4 16v4z M13.5 6.5l4 4',
+    folder: 'M3 6h7l2 2h9v11H3z',
+    search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z M16 16l5 5',
+    refresh: 'M20 7v5h-5 M4 17v-5h5 M18.5 10a7 7 0 0 0-12-3L4 10 M5.5 14a7 7 0 0 0 12 3l2.5-3',
     zones: 'M4 12h16 M4 7h16 M4 17h16',
     car: 'M5 6h14v12H5z M9 6V4h6v2',
     info: 'M12 8h.01 M11 12h1v5h1 M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z',
@@ -48,18 +52,20 @@
     layers: 'M12 3l9 5-9 5-9-5z M3 13l9 5 9-5',
     pin: 'M12 21s7-6.5 7-12a7 7 0 1 0-14 0c0 5.5 7 12 7 12z M12 9a2 2 0 1 0 0 0z',
     ruler: 'M4 14L14 4l6 6L10 20z M8 10l2 2M11 7l2 2M14 10l2 2',
+    sliders: 'M4 6h5M15 6h5M9 3v6M4 12h9M19 12h1M13 9v6M4 18h3M13 18h7M7 15v6',
   };
 
   function Icon({ name, size = 18, fill = false, stroke = 'currentColor', sw = 1.7 }) {
-    return h('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: fill ? 'currentColor' : 'none', stroke: fill ? 'none' : stroke, strokeWidth: sw, strokeLinecap: 'round', strokeLinejoin: 'round' }, h('path', { d: PATHS[name] || '' }));
+    return h('svg', { width: size, height: size, viewBox: '0 0 24 24', 'aria-hidden': true, focusable: false, fill: fill ? 'currentColor' : 'none', stroke: fill ? 'none' : stroke, strokeWidth: sw, strokeLinecap: 'round', strokeLinejoin: 'round' }, h('path', { d: PATHS[name] || '' }));
   }
 
   function IconBtn({ icon, active, onClick, title, danger, size = 18, fill }) {
-    return h('button', { className: 'iconbtn' + (active ? ' active' : '') + (danger ? ' danger' : ''), onClick, title, type: 'button' }, h(Icon, { name: icon, size, fill }));
+    return h('button', { className: 'iconbtn' + (active ? ' active' : '') + (danger ? ' danger' : ''), onClick, title, 'aria-label': title, 'aria-pressed': active == null ? undefined : active, type: 'button' }, h(Icon, { name: icon, size, fill }));
   }
 
   // numeric field with drag-to-scrub
   function Num({ label, value, onChange, unit, step = 0.01, min, max, precision = 2, accentDrag }) {
+    const id = useId();
     const [edit, setEdit] = useState(null);
     const ref = useRef(null);
     const start = () => (down) => {
@@ -72,50 +78,67 @@
     };
     const disp = edit != null ? edit : (typeof value === 'number' ? value.toFixed(precision) : value);
     return h('div', { className: 'numrow' },
-      label != null && h('label', { className: 'numlbl', onPointerDown: start() }, label),
+      label != null && h('label', { className: 'numlbl', htmlFor: id, onPointerDown: start() }, label),
       h('div', { className: 'numbox' },
         h('input', {
-          ref, className: 'numinput', value: disp, inputMode: 'decimal',
+          id, ref, className: 'numinput', value: disp, inputMode: 'decimal', 'aria-describedby': unit ? id + '-unit' : undefined,
           onChange: (e) => setEdit(e.target.value),
           onFocus: (e) => { setEdit(typeof value === 'number' ? String(value) : value); requestAnimationFrame(() => e.target.select()); },
           onBlur: (e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) onChange(n); setEdit(null); },
           onKeyDown: (e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setEdit(null); e.target.blur(); } },
         }),
-        unit && h('span', { className: 'numunit' }, unit)),
+        unit && h('span', { id: id + '-unit', className: 'numunit' }, unit)),
     );
   }
 
   function Section({ icon, title, count, right, children, open, onToggle, sub }) {
     return h('div', { className: 'section' + (open ? ' open' : '') },
-      h('div', { className: 'sechead', onClick: onToggle, role: 'button' },
-        h('span', { className: 'secchev' }, h(Icon, { name: 'chevron', size: 15 })),
-        icon && h('span', { className: 'secicon' }, h(Icon, { name: icon, size: 16 })),
-        h('span', { className: 'sectitle' }, title),
-        sub && h('span', { className: 'secsub' }, sub),
-        count != null && h('span', { className: 'seccount' }, count),
+      h('div', { className: 'sechead' },
+        h('button', { className: 'sechead-toggle', type: 'button', onClick: onToggle, 'aria-expanded': open },
+          h('span', { className: 'secchev' }, h(Icon, { name: 'chevron', size: 15 })),
+          icon && h('span', { className: 'secicon' }, h(Icon, { name: icon, size: 16 })),
+          h('span', { className: 'sectitle' }, title),
+          sub && h('span', { className: 'secsub' }, sub),
+          count != null && h('span', { className: 'seccount' }, count)),
         right),
       open && h('div', { className: 'secbody' }, children));
   }
 
-  function Toggle({ on, onChange, label }) {
-    return h('button', { className: 'toggle' + (on ? ' on' : ''), onClick: () => onChange(!on), type: 'button' },
+  function Toggle({ on, onChange, label, ariaLabel }) {
+    return h('button', { className: 'toggle' + (on ? ' on' : ''), onClick: () => onChange(!on), type: 'button', 'aria-label': ariaLabel || label || 'Toggle setting', 'aria-pressed': on },
       h('span', { className: 'toggle-track' }, h('span', { className: 'toggle-thumb' })),
       label && h('span', { className: 'toggle-lbl' }, label));
   }
 
-  function Seg({ value, options, onChange }) {
-    return h('div', { className: 'seg' }, options.map(o =>
-      h('button', { key: o.v, type: 'button', className: 'seg-i' + (value === o.v ? ' on' : ''), onClick: () => onChange(o.v) }, o.label)));
+  function Seg({ value, options, onChange, ariaLabel, className }) {
+    const count = Math.max(1, options.length);
+    const activeIndex = Math.max(0, options.findIndex((option) => option.v === value));
+    const style = {
+      '--seg-count': count,
+      '--seg-clip-left': (activeIndex / count * 100) + '%',
+      '--seg-clip-right': ((count - activeIndex - 1) / count * 100) + '%',
+    };
+    return h('div', { className: 'seg' + (className ? ' ' + className : ''), role: 'group', 'aria-label': ariaLabel, style },
+      h('span', { className: 'seg-indicator', 'aria-hidden': true }),
+      options.map(o => h('button', { key: o.v, type: 'button', className: 'seg-i' + (value === o.v ? ' on' : ''), title: o.title, 'aria-label': o.ariaLabel, 'aria-pressed': value === o.v, onClick: () => onChange(o.v) }, o.label)));
   }
 
-  // grouped <select> — items: [{id,label}] with .group buckets rendered as <optgroup>
-  function GroupSelect({ value, items, onChange, className }) {
-    const groups = [];
-    items.forEach((it) => { const g = it.group || ''; let b = groups.find((x) => x.label === g); if (!b) { b = { label: g, items: [] }; groups.push(b); } b.items.push(it); });
-    return h('select', { className: (className || 'selectinput'), value, onChange: (e) => onChange(e.target.value) },
-      groups.map((g) => g.label
-        ? h('optgroup', { key: g.label, label: g.label }, g.items.map((it) => h('option', { key: it.id, value: it.id }, it.label)))
-        : g.items.map((it) => h('option', { key: it.id, value: it.id }, it.label))));
+  function constraintRangeSummary(range, constraints, robot) {
+    const c = constraints || {};
+    const velocityBase = Math.min(c.maxVel || Infinity, robot && robot.maxSpeed > 0 ? robot.maxSpeed : Infinity);
+    const candidates = [
+      { key: 'maxVel', base: velocityBase, order: 0, text: (v) => 'v \u2264 ' + v.toFixed(1) + ' m/s', aria: (v) => 'maximum velocity ' + v.toFixed(1) + ' meters per second' },
+      { key: 'maxAccel', base: c.maxAccel, order: 1, text: (v) => 'a \u2264 ' + v.toFixed(1) + ' m/s\u00b2', aria: (v) => 'maximum acceleration ' + v.toFixed(1) + ' meters per second squared' },
+      { key: 'maxDecel', base: c.maxDecel != null ? c.maxDecel : c.maxAccel, order: 2, text: (v) => 'decel \u2264 ' + v.toFixed(1) + ' m/s\u00b2', aria: (v) => 'maximum deceleration ' + v.toFixed(1) + ' meters per second squared' },
+      { key: 'maxAngVel', base: c.maxAngVel, order: 3, text: (v) => '\u03c9 \u2264 ' + v.toFixed(0) + '\u00b0/s', aria: (v) => 'maximum angular velocity ' + v.toFixed(0) + ' degrees per second' },
+      { key: 'maxAngAccel', base: c.maxAngAccel, order: 4, text: (v) => '\u03b1 \u2264 ' + v.toFixed(0) + '\u00b0/s\u00b2', aria: (v) => 'maximum angular acceleration ' + v.toFixed(0) + ' degrees per second squared' },
+    ].filter((candidate) => {
+      const value = range && range[candidate.key], baseline = candidate.base;
+      return Number.isFinite(value) && value > 0 && Number.isFinite(baseline) && baseline > 0 && value < baseline - Math.max(1e-6, Math.abs(baseline) * 1e-6);
+    }).map((candidate) => ({ ...candidate, value: range[candidate.key], ratio: range[candidate.key] / candidate.base }));
+    candidates.sort((a, b) => a.ratio - b.ratio || a.order - b.order);
+    const chosen = candidates[0];
+    return chosen ? { text: chosen.text(chosen.value), ariaLabel: chosen.aria(chosen.value), key: chosen.key } : null;
   }
 
   // floating context menu — items: [{label,icon,onClick,danger,sep}]
@@ -144,5 +167,5 @@
             it.hint && h('span', { className: 'ctxmenu-k' }, it.hint))));
   }
 
-  window.UI = { Icon, IconBtn, Num, Section, Toggle, Seg, GroupSelect, ContextMenu };
+  window.UI = { Icon, IconBtn, Num, Section, Toggle, Seg, ContextMenu, constraintRangeSummary };
 })();

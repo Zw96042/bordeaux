@@ -69,7 +69,7 @@
     const pick = (type, cat) => { onPick(type, cat); setOpen(false); };
     if (variant === 'gap') {
       return h('div', { className: 'rt-gap' + (open ? ' open' : '') },
-        h('button', { className: 'rt-gap-btn', type: 'button', title: 'Insert step here', onClick: () => setOpen((o) => !o) }, h(Icon, { name: open ? 'x' : 'plus', size: 13 })),
+        h('button', { className: 'rt-gap-btn', type: 'button', title: 'Insert step here', 'aria-label': open ? 'Close step chooser' : 'Insert step here', 'aria-expanded': open, onClick: () => setOpen((o) => !o) }, h(Icon, { name: open ? 'x' : 'plus', size: 13 })),
         open && h(Chooser, { onPick: pick }));
     }
     return h('div', { className: 'rt-addwrap' },
@@ -78,7 +78,7 @@
       open && h(Chooser, { onPick: pick }));
   }
 
-  function Grip(props) { return h('button', { className: 'rt-grip', type: 'button', title: 'Drag to reorder', onPointerDown: props.onPointerDown, onClick: (e) => e.stopPropagation() }, h(Icon, { name: 'drag', size: 13 })); }
+  function Grip(props) { return h('button', { className: 'rt-grip', type: 'button', title: 'Drag to reorder', 'aria-label': 'Drag step to reorder', onPointerDown: props.onPointerDown, onClick: (e) => e.stopPropagation() }, h(Icon, { name: 'drag', size: 13 })); }
 
   // ---- one step card ----
   function StepCard(props) {
@@ -93,7 +93,7 @@
     const seg = run.segs.find((s) => s.nodeId === node.id);
     let icon, color, meta, tag, kindCls;
     if (node.type === 'path') {
-      const doc = paths[node.ref]; icon = 'route'; color = 'var(--accent)'; kindCls = 'path';
+      const doc = paths.find((path) => path.id === node.ref); icon = 'route'; color = 'var(--accent)'; kindCls = 'path';
       meta = seg ? (fmt(seg.t1 - seg.t0) + '  ·  ' + seg.deriv.sample.length.toFixed(2) + ' m') : (doc ? 'not in run path' : 'unbound');
     } else if (node.type === 'decision') {
       icon = 'branch'; color = '#9aa3b0'; kindCls = 'decision'; meta = 'routes the run';
@@ -109,18 +109,21 @@
     const cls = 'rt-step ' + kindCls + (sel ? ' sel' : '') + (active ? ' active' : '') + (fired ? ' fired' : '')
       + (dragging ? ' dragging' : '') + (dropB ? ' drop-before' : '') + (dropA ? ' drop-after' : '');
 
-    const card = h('div', { className: cls, 'data-id': node.id, style: { '--fc': color }, onClick: () => onSelect(sel ? null : node.id) },
+    const card = h('div', { className: cls, 'data-id': node.id, style: { '--fc': color } },
       h(Grip, { onPointerDown: (e) => dnd.start(node.id, e) }),
       isDecision
-        ? h('button', { className: 'rt-collapse' + (isCollapsed ? ' on' : ''), type: 'button', title: isCollapsed ? 'Expand branches' : 'Collapse branches', onClick: (e) => { e.stopPropagation(); toggleCollapse(node.id); } }, h(Icon, { name: 'chevron', size: 14 }))
+        ? h('button', { className: 'rt-collapse' + (isCollapsed ? ' on' : ''), type: 'button', 'aria-expanded': !isCollapsed, 'aria-label': isCollapsed ? 'Expand decision branches' : 'Collapse decision branches', title: isCollapsed ? 'Expand branches' : 'Collapse branches', onClick: (e) => { e.stopPropagation(); toggleCollapse(node.id); } }, h(Icon, { name: 'chevron', size: 14 }))
         : seg ? h('span', { className: 'rt-step-idx' }, seg.idxLabel) : null,
       h('span', { className: 'rt-step-ic', style: { color } }, h(Icon, { name: icon, size: 15 })),
-      h('div', { className: 'rt-step-body' },
+      h('button', { className: 'rt-step-body', type: 'button', 'aria-pressed': sel, onClick: () => onSelect(sel ? null : node.id) },
         h('div', { className: 'rt-step-title' }, A.nodeTitle(node, paths)),
         h('div', { className: 'rt-step-meta' }, isCollapsed ? (A.branchCount(node.then) + A.branchCount(node.else)) + ' steps in 2 branches' : meta)),
       tag && h('span', { className: 'rt-step-tag', style: { color, borderColor: color } }, tag),
       active && h('span', { className: 'rt-step-live' }, node.type === 'path' || node.cat === 'generate' ? 'running' : 'firing'),
-      h('button', { className: 'rt-tool danger', type: 'button', title: 'Delete step', onClick: (e) => { e.stopPropagation(); acq.del(node.id); } }, h(Icon, { name: 'trash', size: 13 })));
+      h('span', { className: 'rt-step-tools' },
+        h('button', { className: 'rt-tool', type: 'button', title: 'Move step up', 'aria-label': 'Move step up', onClick: () => acq.move(node.id, -1) }, '\u2191'),
+        h('button', { className: 'rt-tool', type: 'button', title: 'Move step down', 'aria-label': 'Move step down', onClick: () => acq.move(node.id, 1) }, '\u2193'),
+        h('button', { className: 'rt-tool danger', type: 'button', title: 'Delete step', 'aria-label': 'Delete step', onClick: (e) => { e.stopPropagation(); acq.del(node.id); } }, h(Icon, { name: 'trash', size: 13 }))));
 
     if (!isDecision) {
       return h('div', { className: 'rt-step-wrap' + (isFunction && !nested ? ' fnwrap' : '') }, card);
@@ -169,7 +172,7 @@
       h('div', { className: 'rt-hd' },
         h('span', { className: 'rt-mark' }),
         h('div', { className: 'rt-titlecol' },
-          h('input', { className: 'rt-name', value: routine.name, spellCheck: false, onChange: (e) => acq.rename(e.target.value) }),
+          h('input', { className: 'rt-name', 'aria-label': 'Routine name', value: routine.name, spellCheck: false, onChange: (e) => acq.rename(e.target.value) }),
           h('div', { className: 'rt-sub' }, 'Autonomous Routine · ', nSteps, nSteps === 1 ? ' step' : ' steps', ' · ', fmt(run.total)))),
 
       h('div', { className: 'rt-scroll' },

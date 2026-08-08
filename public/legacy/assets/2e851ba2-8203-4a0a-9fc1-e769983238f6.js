@@ -19,9 +19,9 @@
     return h('div', { className: 'rt-params' },
       list.length === 0 && h('div', { className: 'rt-param-empty' }, 'No parameters passed to the function.'),
       list.map((p, i) => h('div', { className: 'rt-param-row', key: i },
-        h('input', { className: 'textinput k', value: p.k, placeholder: 'key', spellCheck: false, onChange: (e) => setRow(i, { k: e.target.value }) }),
-        h('input', { className: 'textinput v', value: p.v, placeholder: 'value', spellCheck: false, onChange: (e) => setRow(i, { v: e.target.value }) }),
-        h('button', { className: 'rt-param-del', type: 'button', title: 'Remove', onClick: () => del(i) }, h(Icon, { name: 'x', size: 13 })))),
+        h('input', { className: 'textinput k', 'aria-label': 'Parameter ' + (i + 1) + ' key', value: p.k, placeholder: 'key', spellCheck: false, onChange: (e) => setRow(i, { k: e.target.value }) }),
+        h('input', { className: 'textinput v', 'aria-label': 'Parameter ' + (i + 1) + ' value', value: p.v, placeholder: 'value', spellCheck: false, onChange: (e) => setRow(i, { v: e.target.value }) }),
+        h('button', { className: 'rt-param-del', type: 'button', title: 'Remove', 'aria-label': 'Remove parameter ' + (i + 1), onClick: () => del(i) }, h(Icon, { name: 'x', size: 13 })))),
       h('button', { className: 'rt-param-add', type: 'button', onClick: add }, h(Icon, { name: 'plus', size: 13 }), 'Add parameter'));
   }
 
@@ -33,12 +33,12 @@
     let icon = 'dot', title = '', tag = null, accent = 'var(--accent)', body = null;
 
     if (node.type === 'path') {
-      const doc = paths[node.ref];
+      const doc = paths.find((path) => path.id === node.ref);
       icon = 'route'; title = 'Path'; tag = 'step';
       body = h(React.Fragment, null,
         FieldLabel('Bound path'),
-        h('select', { className: 'selectinput', value: node.ref, onChange: (e) => set({ ref: +e.target.value }) },
-          paths.map((p, i) => h('option', { key: i, value: i }, p.name))),
+        h('select', { className: 'selectinput', 'aria-label': 'Routine path', value: node.ref, onChange: (e) => set({ ref: e.target.value }) },
+          paths.map((p) => h('option', { key: p.id, value: p.id }, p.name))),
         seg && h('div', { className: 'rt-stat' },
           h('div', { className: 'rt-stat-i' }, h('span', { className: 'rt-stat-v' }, fmt(seg.t1 - seg.t0)), h('span', { className: 'rt-stat-k' }, 'duration')),
           h('div', { className: 'rt-stat-i' }, h('span', { className: 'rt-stat-v' }, seg.deriv.sample.length.toFixed(2) + ' m'), h('span', { className: 'rt-stat-k' }, 'distance')),
@@ -51,10 +51,10 @@
       const out = acq.outcomes[node.id] || 'then';
       body = h(React.Fragment, null,
         FieldLabel('Condition'),
-        h('input', { className: 'textinput', value: node.cond, spellCheck: false, onChange: (e) => set({ cond: e.target.value }) }),
+        h('input', { className: 'textinput', 'aria-label': 'Decision condition', value: node.cond, spellCheck: false, onChange: (e) => set({ cond: e.target.value }) }),
         h('div', { className: 'grid2', style: { marginTop: '10px' } },
-          h('div', null, FieldLabel('If true'), h('input', { className: 'textinput', value: node.thenLabel, spellCheck: false, onChange: (e) => set({ thenLabel: e.target.value }) })),
-          h('div', null, FieldLabel('If false'), h('input', { className: 'textinput', value: node.elseLabel, spellCheck: false, onChange: (e) => set({ elseLabel: e.target.value }) }))),
+          h('div', null, FieldLabel('If true'), h('input', { className: 'textinput', 'aria-label': 'True branch label', value: node.thenLabel, spellCheck: false, onChange: (e) => set({ thenLabel: e.target.value }) })),
+          h('div', null, FieldLabel('If false'), h('input', { className: 'textinput', 'aria-label': 'False branch label', value: node.elseLabel, spellCheck: false, onChange: (e) => set({ elseLabel: e.target.value }) }))),
         FieldLabel('Simulated outcome'),
         h(Seg, { value: out, options: [{ v: 'then', label: node.thenLabel || 'true' }, { v: 'else', label: node.elseLabel || 'false' }], onChange: (v) => acq.setOutcome(node.id, v) }),
         h('div', { className: 'seg-hint' }, 'Picks which branch the simulation runs. Both branches stay in the routine.'),
@@ -67,9 +67,9 @@
         body = h(React.Fragment, null,
           h('div', { className: 'rt-callout' }, h(Icon, { name: 'info', size: 14 }), 'Autonomous Routine invokes this function at runtime. Your robot code decides what trajectory it returns.'),
           FieldLabel('Function reference'),
-          h('input', { className: 'textinput rt-fnref-input', value: node.funcRef, spellCheck: false, onChange: (e) => set({ funcRef: e.target.value }) }),
+          h('input', { className: 'textinput rt-fnref-input', 'aria-label': 'Function reference', value: node.funcRef, spellCheck: false, onChange: (e) => set({ funcRef: e.target.value }) }),
           FieldLabel('Trigger'),
-          h('input', { className: 'textinput', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
+          h('input', { className: 'textinput', 'aria-label': 'Function trigger', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
           FieldLabel('Parameters'),
           h(Params, { params: node.params, onChange: (p) => set({ params: p }) }),
           FieldLabel('Sim preview', node.preview ? h('button', { className: 'rt-mini-clear', type: 'button', onClick: () => set({ preview: null }) }, 'clear') : null),
@@ -77,7 +77,7 @@
             ? h('div', { className: 'rt-genbadge' }, h(Icon, { name: 'compass', size: 13 }), 'Dashed preview trajectory shown on the field — illustration only, not the deployed path.')
             : h('div', { className: 'seg-hint' }, 'No preview attached. This step shows as a runtime marker in the simulation.'),
           FieldLabel('Notes'),
-          h('textarea', { className: 'rt-note', value: node.note || '', placeholder: 'What this generated path is for\u2026', onChange: (e) => set({ note: e.target.value }) }),
+          h('textarea', { className: 'rt-note', 'aria-label': 'Function notes', value: node.note || '', placeholder: 'What this generated path is for\u2026', onChange: (e) => set({ note: e.target.value }) }),
           h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete function'));
 
       } else if (node.cat === 'sequence') {
@@ -85,43 +85,43 @@
         body = h(React.Fragment, null,
           h('div', { className: 'rt-callout' }, h(Icon, { name: 'info', size: 14 }), 'Sequence ops re-order the routine itself at runtime — independent of any robot.'),
           FieldLabel('Operation'),
-          h('select', { className: 'selectinput', value: node.op, onChange: (e) => set({ op: e.target.value }) },
+          h('select', { className: 'selectinput', 'aria-label': 'Sequence operation', value: node.op, onChange: (e) => set({ op: e.target.value }) },
             A.SEQ_OPS.map((o) => h('option', { key: o.id, value: o.id }, o.label))),
           h('div', { className: 'seg-hint' }, op.blurb),
           (node.op !== 'reorder') && h(React.Fragment, null,
             FieldLabel('Target path'),
-            h('select', { className: 'selectinput', value: node.target || '', onChange: (e) => set({ target: e.target.value }) },
+            h('select', { className: 'selectinput', 'aria-label': 'Sequence target path', value: node.target || '', onChange: (e) => set({ target: e.target.value }) },
               h('option', { value: '' }, '— choose a path —'),
               paths.map((p, i) => h('option', { key: i, value: p.name }, p.name)))),
           FieldLabel('Trigger'),
-          h('input', { className: 'textinput', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
+          h('input', { className: 'textinput', 'aria-label': 'Sequence trigger', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
           FieldLabel('Notes'),
-          h('textarea', { className: 'rt-note', value: node.note || '', placeholder: 'Why this re-sequences the run\u2026', onChange: (e) => set({ note: e.target.value }) }),
+          h('textarea', { className: 'rt-note', 'aria-label': 'Sequence notes', value: node.note || '', placeholder: 'Why this re-sequences the run\u2026', onChange: (e) => set({ note: e.target.value }) }),
           h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete function'));
 
       } else if (node.cat === 'velocity') {
         const pct = Math.round((node.scale != null ? node.scale : 0.5) * 100);
         body = h(React.Fragment, null,
           FieldLabel('Title'),
-          h('input', { className: 'textinput', value: node.title, spellCheck: false, onChange: (e) => set({ title: e.target.value }) }),
+          h('input', { className: 'textinput', 'aria-label': 'Velocity rule title', value: node.title, spellCheck: false, onChange: (e) => set({ title: e.target.value }) }),
           FieldLabel('Trigger'),
-          h('input', { className: 'textinput', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
+          h('input', { className: 'textinput', 'aria-label': 'Velocity rule trigger', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
           FieldLabel('Velocity scale', h('span', { className: 'rt-scaleval' }, pct + '%')),
-          h('input', { className: 'rt-slider', type: 'range', min: 5, max: 100, step: 5, value: pct, onChange: (e) => set({ scale: +e.target.value / 100 }) }),
+          h('input', { className: 'rt-slider', type: 'range', 'aria-label': 'Velocity scale', min: 5, max: 100, step: 5, value: pct, onChange: (e) => set({ scale: +e.target.value / 100 }) }),
           h('div', { className: 'seg-hint' }, 'Caps drive speed to ' + pct + '% of the active constraints while this is held.'),
           FieldLabel('Notes'),
-          h('textarea', { className: 'rt-note', value: node.note || '', placeholder: 'When and why to slow down\u2026', onChange: (e) => set({ note: e.target.value }) }),
+          h('textarea', { className: 'rt-note', 'aria-label': 'Velocity rule notes', value: node.note || '', placeholder: 'When and why to slow down\u2026', onChange: (e) => set({ note: e.target.value }) }),
           h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete function'));
 
       } else { // terminate
         body = h(React.Fragment, null,
           FieldLabel('Title'),
-          h('input', { className: 'textinput', value: node.title, spellCheck: false, onChange: (e) => set({ title: e.target.value }) }),
+          h('input', { className: 'textinput', 'aria-label': 'Terminate rule title', value: node.title, spellCheck: false, onChange: (e) => set({ title: e.target.value }) }),
           FieldLabel('Trigger'),
-          h('input', { className: 'textinput', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
+          h('input', { className: 'textinput', 'aria-label': 'Terminate rule trigger', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
           h('div', { className: 'seg-hint' }, 'Ends the running path the moment the trigger fires and advances to the next step.'),
           FieldLabel('Notes'),
-          h('textarea', { className: 'rt-note', value: node.note || '', placeholder: 'What this ends and why\u2026', onChange: (e) => set({ note: e.target.value }) }),
+          h('textarea', { className: 'rt-note', 'aria-label': 'Terminate rule notes', value: node.note || '', placeholder: 'What this ends and why\u2026', onChange: (e) => set({ note: e.target.value }) }),
           h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete function'));
       }
     }
@@ -129,9 +129,9 @@
     return h('div', { className: 'ctxinsp' },
       h('div', { className: 'ctxinsp-hd' },
         h('span', { className: 'ctxinsp-ic', style: { background: 'color-mix(in srgb,' + accent + ' 16%, transparent)', color: accent } }, h(Icon, { name: icon, size: 15 })),
-        h('span', { className: 'ctxinsp-t' }, title),
+        h('span', { className: 'ctxinsp-t', title }, title),
         tag && h('span', { className: 'ctxinsp-tag' }, tag),
-        h('button', { className: 'ctxinsp-x', type: 'button', title: 'Close', onClick: () => acq.select(null) }, h(Icon, { name: 'x', size: 14 }))),
+        h('button', { className: 'ctxinsp-x', type: 'button', title: 'Close', 'aria-label': 'Close step inspector', onClick: () => acq.select(null) }, h(Icon, { name: 'x', size: 14 }))),
       h('div', { className: 'ctxinsp-body' }, body));
   }
 
@@ -178,12 +178,12 @@
           h('span', { className: 'rt-tp-logic', style: { color: l.color } }, h(Icon, { name: l.icon, size: 12 })),
           h('span', { className: 'rt-tp-logtx' }, l.text)))),
       h('div', { className: 'rt-tp-ctl' },
-        h('button', { className: 'rt-tp-btn', type: 'button', title: 'Reset & exit playback', onClick: controls.reset }, h(Icon, { name: 'rewind', size: 15 })),
-        h('button', { className: 'rt-tp-btn', type: 'button', title: 'Step back', onClick: () => controls.step(-1) }, h('span', { style: { transform: 'scaleX(-1)', display: 'flex' } }, h(Icon, { name: 'play', size: 12, fill: true }))),
-        h('button', { className: 'rt-tp-btn play', type: 'button', title: 'Play / pause', onClick: controls.toggle }, h(Icon, { name: playing ? 'pause' : 'play', size: 15, fill: true })),
-        h('button', { className: 'rt-tp-btn', type: 'button', title: 'Step forward', onClick: () => controls.step(1) }, h(Icon, { name: 'play', size: 12, fill: true })),
+        h('button', { className: 'rt-tp-btn', type: 'button', title: 'Reset & exit playback', 'aria-label': 'Reset and exit routine playback', onClick: controls.reset }, h(Icon, { name: 'rewind', size: 15 })),
+        h('button', { className: 'rt-tp-btn', type: 'button', title: 'Step back', 'aria-label': 'Step routine backward', onClick: () => controls.step(-1) }, h('span', { style: { transform: 'scaleX(-1)', display: 'flex' } }, h(Icon, { name: 'play', size: 12, fill: true }))),
+        h('button', { className: 'rt-tp-btn play', type: 'button', title: 'Play / pause', 'aria-label': playing ? 'Pause routine playback' : 'Play routine', onClick: controls.toggle }, h(Icon, { name: playing ? 'pause' : 'play', size: 15, fill: !playing })),
+        h('button', { className: 'rt-tp-btn', type: 'button', title: 'Step forward', 'aria-label': 'Step routine forward', onClick: () => controls.step(1) }, h(Icon, { name: 'play', size: 12, fill: true })),
         h('div', { className: 'rt-tp-scrubwrap' },
-          h('input', { className: 'rt-tp-scrub', type: 'range', min: 0, max: 1000, value: Math.round(pct * 1000), onChange: (e) => controls.seek((e.target.value / 1000) * run.total) }),
+          h('input', { className: 'rt-tp-scrub', type: 'range', 'aria-label': 'Routine playback position', min: 0, max: 1000, value: Math.round(pct * 1000), onChange: (e) => controls.seek((e.target.value / 1000) * run.total) }),
           run.segs.map((s) => h('span', { key: s.nodeId, className: 'rt-tp-tick', style: { left: (run.total ? (s.t1 / run.total) * 100 : 0) + '%' } }))),
         h('div', { className: 'rt-tp-step' },
           h('span', { className: 'rt-tp-n' }, activeIdx >= 0 ? String(activeIdx + 1).padStart(2, '0') : '–', h('span', { className: 'rt-tp-dim' }, '/' + String(nSteps).padStart(2, '0'))),

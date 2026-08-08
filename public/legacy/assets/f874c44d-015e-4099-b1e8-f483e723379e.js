@@ -29,7 +29,7 @@
 
   // ---- display title for any node ----
   function nodeTitle(node, paths) {
-    if (node.type === 'path') { const p = paths && paths[node.ref]; return p ? p.name : '(unbound path)'; }
+    if (node.type === 'path') { const p = paths && paths.find((path) => path.id === node.ref); return p ? p.name : '(unbound path)'; }
     if (node.type === 'decision') return node.cond;
     if (node.cat === 'generate') return node.funcRef || 'GeneratePath';
     if (node.cat === 'sequence') { const o = seqOp(node.op); return o.verb + (node.target ? ' · ' + node.target : ''); }
@@ -50,12 +50,13 @@
 
   // ---- demo routine: a blue-side Reefscape qualification auto ----
   // Generate steps reference robot-code functions (funcRef); the dashed preview is sim-only.
-  function demoRoutine() {
+  function demoRoutine(paths) {
     _id = 0;
+    paths = paths || [];
     return {
       name: 'Qual_Auto_A',
       nodes: [
-        { id: uid('p'), type: 'path', ref: 0 },
+        { id: uid('p'), type: 'path', ref: paths[0] ? paths[0].id : '' },
         { id: uid('f'), type: 'function', cat: 'terminate', title: 'Coral scored', trigger: 'Vision confirms L4 placement', note: 'Cuts the scoring dwell the instant the coral clears the gripper instead of waiting out a fixed timer.' },
         {
           id: uid('d'), type: 'decision', cond: 'Coral remaining \u2265 1', metric: 'gamePieces',
@@ -71,8 +72,8 @@
             { id: uid('s'), type: 'function', cat: 'sequence', op: 'skip', target: 'Reef_Station', trigger: 'No target in view', note: 'Abandons the opportunistic pickup and proceeds straight to the next scored path.' },
           ],
         },
-        { id: uid('p'), type: 'path', ref: 1 },
-        { id: uid('p'), type: 'path', ref: 2 },
+        { id: uid('p'), type: 'path', ref: paths[1] ? paths[1].id : '' },
+        { id: uid('p'), type: 'path', ref: paths[2] ? paths[2].id : '' },
         { id: uid('g'), type: 'function', cat: 'generate', funcRef: 'GenerateParkingPath', trigger: 'Routine end',
           params: [{ k: 'zone', v: 'alliance' }],
           note: 'Robot code plans a clean exit to the park zone from wherever the robot finishes.',
@@ -82,8 +83,8 @@
   }
 
   // ---- node factory ----
-  function newNode(type, cat) {
-    if (type === 'path') return { id: uid('p'), type: 'path', ref: 0 };
+  function newNode(type, cat, pathRef) {
+    if (type === 'path') return { id: uid('p'), type: 'path', ref: pathRef || '' };
     if (type === 'decision') return { id: uid('d'), type: 'decision', cond: 'New condition?', thenLabel: 'Yes', elseLabel: 'No', then: [], else: [] };
     const c = cat || 'terminate';
     if (c === 'generate') return { id: uid('g'), type: 'function', cat: 'generate', funcRef: 'GeneratePath', trigger: 'On entry', params: [], note: '', preview: null };
@@ -103,19 +104,19 @@
   function countSteps(routine) { let n = 0; walk(routine.nodes, () => n++); return n; }
 
   // ---- derive a path-bearing node into a field trajectory ----
-  function derivePathNode(node, paths, robot) {
+  function derivePathNode(node, paths, robot, plannerId) {
     let doc = null;
-    if (node.type === 'path') doc = paths[node.ref];
+    if (node.type === 'path') doc = paths.find((path) => path.id === node.ref);
     else if (node.type === 'function' && node.cat === 'generate' && node.preview) doc = node.preview;
     if (!doc) return null;
-    const d = window.PM.derivePath(doc, robot, 56);
+    const d = window.PM.derivePath(doc, robot, 56, plannerId);
     return { doc, deriv: d, pts: d.sample.pts, total: d.prof.totalTime || 0 };
   }
 
   const EVENT_DWELL = 0.45; // seconds a non-driving function holds for, in the run
 
   // ---- flatten a routine into an executed step list given decision outcomes ----
-  function buildRun(routine, paths, robot, outcomes) {
+  function buildRun(routine, paths, robot, outcomes, plannerId) {
     outcomes = outcomes || {};
     const flat = [];
     const collect = (nodes) => {
@@ -138,7 +139,7 @@
     let t = 0, pIdx = 0; const steps = []; const segs = []; let lastPose = null;
     flat.forEach((it) => {
       if (it.kind === 'path' || it.kind === 'gen') {
-        const dp = derivePathNode(it.node, paths, robot);
+        const dp = derivePathNode(it.node, paths, robot, plannerId);
         if (!dp || dp.pts.length < 2) { steps.push({ ...it, t0: t, t1: t, dur: 0 }); return; }
         const t0 = t, dur = dp.total, t1 = t + dur;
         pIdx += 1;
