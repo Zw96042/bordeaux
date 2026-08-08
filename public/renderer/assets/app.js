@@ -317,7 +317,7 @@
         sessionId: agentSessionId,
         revision,
         project: clone(project),
-        plannerId,
+        plannerId: selectedPlannerId,
         activePathId: doc.id,
         allianceView: alliance,
         fieldPack: { id: '2026-rebuilt', revision: '2026-manual-tu19-welded-4' },
@@ -327,7 +327,7 @@
         window.bordeauxAPI.updateAgentProposalStatus(current.id, 'stale');
         return { ...current, status: 'stale' };
       });
-    }, [project, plannerId, alliance, activeIdx, agentSessionId, doc.id]);
+    }, [project, selectedPlannerId, alliance, activeIdx, agentSessionId, doc.id]);
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.onAgentProposal !== 'function') return;
       let active = true;
@@ -368,7 +368,7 @@
     }, []);
 
     // ---- derived path data ----
-    const derived = useMemo(() => window.PM.derivePath(doc, robot, PERSEG, plannerId), [doc, robot, plannerId]);
+    const derived = useMemo(() => window.PM.derivePath(doc, robot, PERSEG, selectedPlannerId), [doc, robot, selectedPlannerId]);
 
     useEffect(() => { setTimes((t) => (t[doc.id] === derived.prof.totalTime ? t : { ...t, [doc.id]: derived.prof.totalTime })); }, [derived, doc.id]);
 
@@ -461,7 +461,7 @@
 
       // The original cubic planners can be split exactly with de Casteljau,
       // preserving the authored curve instead of reshaping both neighboring spans.
-      if (onPath && originalType === 'bezier' && (plannerId === 'profiledSpline' || plannerId === 'optimizedTrajectory')) {
+      if (onPath && originalType === 'bezier' && (selectedPlannerId === 'profiledSpline' || selectedPlannerId === 'optimizedTrajectory')) {
         const a = wps[segment], b = wps[segment + 1], t = nearest && Number.isFinite(nearest.t) ? Math.max(0.001, Math.min(0.999, nearest.t)) : 0.5;
         if (a && b && a.nextC && b.prevC) {
           const split = window.PM.splitBezier(a, a.nextC, b.prevC, b, t);
@@ -487,25 +487,25 @@
       }
       candidate._selAfter = insertAt;
       return { doc: candidate, index: insertAt, previewRequired, segmentType: originalType };
-    }, [derived, plannerId]);
+    }, [derived, selectedPlannerId]);
 
     const addWaypoint = useCallback((p, segmentHint, onPath, selectedVisit) => {
       const prepared = prepareWaypointInsertion(p, segmentHint, onPath, selectedVisit);
-      const compatibility = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid';
+      const compatibility = isLabviewPlanner(selectedPlannerId);
       if (compatibility || prepared.previewRequired) {
         try {
-          const previewDerived = window.PM.derivePath(prepared.doc, robot, PERSEG, plannerId);
+          const previewDerived = window.PM.derivePath(prepared.doc, robot, PERSEG, selectedPlannerId);
           const message = compatibility
-            ? (plannerId === 'labviewClothoid' ? 'A new clothoid vertex rebuilds the neighboring turn.' : 'Compatibility geometry changes are shown before they are applied.')
+            ? (selectedPlannerId === 'labviewClothoid' ? 'A new clothoid vertex rebuilds the neighboring turn.' : 'Compatibility geometry changes are shown before they are applied.')
             : 'Splitting this ' + prepared.segmentType + ' may rebuild its geometry. Review the dashed path first.';
-          setWaypointPreview({ ...prepared, derived: previewDerived, plannerId, message });
+          setWaypointPreview({ ...prepared, derived: previewDerived, plannerId: selectedPlannerId, message });
         } catch (error) {
           console.error('Could not preview waypoint insertion:', error);
         }
         return;
       }
       commit(() => prepared.doc);
-    }, [commit, plannerId, prepareWaypointInsertion, robot]);
+    }, [commit, selectedPlannerId, prepareWaypointInsertion, robot]);
     const appendWaypoint = useCallback((rawPoint) => {
       const point = clampWorld(rawPoint);
       const candidate = clone(docRef.current);
@@ -545,21 +545,21 @@
       remapWaypointRanges(candidate, Array.from({ length: oldCount }, (_, index) => index));
       candidate._selAfter = oldCount;
 
-      const compatibility = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid';
+      const compatibility = isLabviewPlanner(selectedPlannerId);
       if (compatibility || segmentType === 'clothoid') {
         try {
-          const previewDerived = window.PM.derivePath(candidate, robot, PERSEG, plannerId);
+          const previewDerived = window.PM.derivePath(candidate, robot, PERSEG, selectedPlannerId);
           const message = compatibility
             ? 'The new endpoint and compatibility geometry are shown before they are applied.'
             : 'The new clothoid join may rebuild the previous turn. Review the dashed path first.';
-          setWaypointPreview({ doc: candidate, index: oldCount, derived: previewDerived, plannerId, message, actionLabel: 'Place endpoint' });
+          setWaypointPreview({ doc: candidate, index: oldCount, derived: previewDerived, plannerId: selectedPlannerId, message, actionLabel: 'Place endpoint' });
         } catch (error) {
           console.error('Could not preview waypoint placement:', error);
         }
         return;
       }
       commit(() => candidate);
-    }, [commit, plannerId, robot]);
+    }, [commit, selectedPlannerId, robot]);
     const setJiggle = useCallback((options) => {
       if (!options) {
         commit((d) => { delete d.waypoints[d.waypoints.length - 1].jiggle; return d; });
@@ -592,7 +592,7 @@
       commit(() => waypointPreview.doc);
       setWaypointPreview(null);
     }, [commit, waypointPreview]);
-    useEffect(() => { setWaypointPreview(null); }, [doc, plannerId]);
+    useEffect(() => { setWaypointPreview(null); }, [doc, selectedPlannerId]);
     useEffect(() => { if (doc._selAfter != null) { select('wp', doc._selAfter); mutate((d) => { delete d._selAfter; return d; }); } }, [doc._selAfter]);
 
     const setWp = useCallback((i, patch) => commit((d) => {
@@ -734,6 +734,10 @@
     // ---- segment + waypoint structural ops (memo §3 / §4 / §7 / §8) ----
     const PX = { X0: 397, X1: 3502, Y0: 97, Y1: 1486 };
     const setSegMeta = useCallback((i, patch) => commit((d) => { Object.assign(d.waypoints[i], patch); return d; }), [commit]);
+    const setLabviewTrajectoryType = useCallback((trajectoryType) => commit((d) => {
+      d.labview = { ...LV_DEFAULTS, ...(d.labview || {}), trajectoryType };
+      return d;
+    }), [commit]);
     const setSegmentHeadingMode = useCallback((i, mode) => commit((d) => {
       const w = d.waypoints[i], next = d.waypoints[i + 1];
       if (mode === 'inherit') delete w.segmentHeadingMode;
@@ -747,6 +751,14 @@
     const setHeadingTransition = useCallback((i, patch) => commit((d) => {
       const w = d.waypoints[i]; if (!w || i <= 0 || i >= d.waypoints.length - 1) return d;
       w.headingTransition = Object.assign({ placement: 'after', rotationPriority: 'heading', distanceM: 0.75 }, w.headingTransition || {}, patch);
+      if (patch.placement && patch.placement !== 'after') {
+        const defaultMode = d.headingMode || 'targets';
+        const incomingMode = d.waypoints[i - 1].segmentHeadingMode || defaultMode;
+        const outgoingMode = w.segmentHeadingMode || defaultMode;
+        if ((incomingMode === 'tangent' || incomingMode === 'lookAt') && (outgoingMode === 'manual' || outgoingMode === 'targets')) {
+          w.thetaOn = true;
+        }
+      }
       return d;
     }), [commit]);
     const setSegmentLookAt = useCallback((i, patch) => commit((d) => {
@@ -904,7 +916,7 @@
 
     const inspActions = { setWp, toggleStop, toggleTheta, setHandleLen, delWp, setTarget, delTarget, setMarker, delMarker, setRange, setRangeAnchor, delRange, setConstraint, setDoc, rename, select, setTool,
       addTargetMid, addMarkerMid, addRangeMid,
-      setSegMeta, setSegmentHeadingMode, setHeadingTransition, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, reorderWp, insertWp,
+      setSegMeta, setLabviewTrajectoryType, setSegmentHeadingMode, setHeadingTransition, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, reorderWp, insertWp,
       setStop, setWait, setTurnInPlace, setTurnInPlaceMeta, setHeadingMode, toggleDriveBackward,
       openInspector: () => setInspectorOpen(true) };
     const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginHistory,
@@ -974,7 +986,10 @@
     const agentCandidate = agentCandidates.find((candidate) => candidate.id === agentCandidateId) || agentCandidates[0] || null;
     const agentProposalPreviews = useMemo(() => agentCandidates.flatMap((candidate) => {
       if (!candidate.path) return [];
-      try { return [{ id: candidate.id, label: candidate.label, selected: candidate.id === (agentCandidate && agentCandidate.id), valid: candidate.valid !== false, derived: window.PM.derivePath(candidate.path, robot, PERSEG, plannerId) }]; }
+      try {
+        const candidatePlanner = isLabviewPlanner(plannerId) ? labviewPlannerForPath(candidate.path, plannerId) : plannerId;
+        return [{ id: candidate.id, label: candidate.label, selected: candidate.id === (agentCandidate && agentCandidate.id), valid: candidate.valid !== false, derived: window.PM.derivePath(candidate.path, robot, PERSEG, candidatePlanner) }];
+      }
       catch (_) { return []; }
     }), [agentProposal, agentCandidateId, robot, plannerId]);
     const rejectAgentProposal = useCallback(() => {
@@ -1075,6 +1090,9 @@
       return { x: cx - nw / 2, y: cy - nh / 2, w: nw, h: nh };
     }), []);
     const zoomPct = Math.round(FIT.w / view.w * 100);
+    const setPlannerFamily = useCallback((family) => {
+      setPlannerId(family === 'labview' ? labviewPlannerForPath(docRef.current, plannerId) : 'profiledSpline');
+    }, [plannerId]);
 
     // ---- desktop project workflow ----
     const canReplaceProject = useCallback(() => !dirty || confirm('Discard unsaved changes to this project?'), [dirty]);
@@ -1085,6 +1103,8 @@
       setPlannerId(next.plannerId || 'profiledSpline');
       setActiveIdx(0); setSel({ kind: null, idx: -1 }); setRoutineSel(null);
       hist.current = { past: [], future: [] };
+      routineHist.current = { past: [], future: [] };
+      projectHist.current = { past: [], future: [] };
       setDirty(false);
     }, []);
     useEffect(() => {
@@ -1163,7 +1183,7 @@
     // ---- export ----
     const onExport = () => {
       if (window.bordeauxAPI && typeof window.bordeauxAPI.exportBdx === 'function') {
-        window.bordeauxAPI.exportBdx({ schemaVersion: '1.0', ...project, routine, plannerId }, doc.id).catch((err) => {
+        window.bordeauxAPI.exportBdx({ schemaVersion: '1.0', ...project, routine, plannerId: selectedPlannerId }, doc.id).catch((err) => {
           console.error('BDX export failed:', err);
           alert('BDX export failed: ' + (err && err.message ? err.message : err));
         });
@@ -1229,7 +1249,7 @@
     const selNode = (page === 'auto' && routineSel) ? window.AUTO.findNode(routine, routineSel) : null;
 
     return h('div', { className: 'app' },
-      h(window.Panels.Toolbar, { project, page, setPage, alliance, setAlliance, onNew: newProject, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExport, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerId }),
+      h(window.Panels.Toolbar, { project, page, setPage, alliance, setAlliance, onNew: newProject, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExport, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily }),
       page === 'robot'
         ? h('main', { className: 'page-main' }, h(window.RobotPage, { robot, setRobot, accent, mcpEnabled, agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
         : page === 'auto'
@@ -1238,7 +1258,6 @@
               h(window.RoutinePanel, { routine, run, paths: project.paths, selId: routineSel, onSelect: setRoutineSel, acq, time: routineTime, running: routineRunning })),
             h('div', { className: 'fieldcol' },
               h(window.FieldView, { doc, derived, sel: { kind: null, idx: -1 }, tool: 'select', view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, playTime: 0, actions: autoFieldActions, onSelPos: () => {}, routine: routineOverlay, routinePose }),
-              h(window.Panels.RoutineLegend, { run, time: routineTime, running: routineRunning }),
               h(window.RoutineTransport, { run, time: routineTime, playing: routinePlaying, controls: routineControls, running: routineRunning, outcomes: routineOutcomes }),
               h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
             h('aside', { className: 'rail rail-r' + (selNode ? '' : ' collapsed'), 'aria-label': 'Routine step inspector' },
@@ -1272,13 +1291,12 @@
                   agentProposal.status === 'ready' && h('button', { type: 'button', onClick: rejectAgentProposal }, 'Reject'),
                   agentProposal.status === 'ready' && h('button', { className: 'primary', type: 'button', disabled: !agentCandidate || agentCandidate.valid === false || (agentProposal.blockingIssues && agentProposal.blockingIssues.length > 0), onClick: applyAgentProposal }, agentProposal.operation === 'replace' ? 'Apply repair' : 'Add path'))),
               h(window.Panels.ConstraintBar, { c: doc.constraints, robot, onOpen: () => select(null, -1) }),
-              h(window.Panels.Overlay, { metric, setMetric, derived, diagOpen, onToggleDiag: () => setDiagOpen((o) => !o), plannerId }),
               diagOpen && h(window.Panels.PathChecks, { derived, doc, onClose: () => setDiagOpen(false), onPick: pickCheck }),
-              h(window.Panels.Transport, { derived, doc, metric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen }),
+              h(window.Panels.Transport, { derived, doc, metric, setMetric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen, diagOpen, onToggleDiag: () => setDiagOpen((o) => !o), plannerId: selectedPlannerId }),
               h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
             h('aside', { className: 'rail rail-r' + (inspectorOpen ? '' : ' collapsed'), 'aria-label': 'Path inspector' },
               inspectorOpen
-                ? h(window.ContextInspector, { doc, sel, derived, actions: inspActions, accent, drive: robot.drive, robot, plannerId, javaProject: { ...javaProjectState, link: linkJavaProject, openRecent: openRecentJavaProject, refresh: refreshJavaProject, install: installJavaSupport, build: buildJavaCatalog, cancelBuild: cancelJavaCatalogBuild, export: () => onExportJava('linked') }, onClose: () => setInspectorOpen(false) })
+                ? h(window.ContextInspector, { doc, sel, derived, actions: inspActions, accent, drive: robot.drive, robot, plannerId: selectedPlannerId, javaProject: { ...javaProjectState, link: linkJavaProject, openRecent: openRecentJavaProject, refresh: refreshJavaProject, install: installJavaSupport, build: buildJavaCatalog, cancelBuild: cancelJavaCatalogBuild, export: () => onExportJava('linked') }, onClose: () => setInspectorOpen(false) })
                 : h('button', { className: 'inspector-tab', type: 'button', title: 'Show inspector', onClick: () => setInspectorOpen(true) }, h(window.UI.Icon, { name: 'sliders', size: 16 }), h('span', null, 'Inspector'))),
             headMenu && h(window.UI.ContextMenu, { x: headMenu.x, y: headMenu.y, items: headMenu.items, onClose: () => setHeadMenu(null) })));
   }
