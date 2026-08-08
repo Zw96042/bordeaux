@@ -160,6 +160,36 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void choosesNextPathAndSchedulesCommandsBetweenPaths() throws Exception {
+        ObjectNode arguments = (ObjectNode) MAPPER.readTree("{}");
+        BordeauxRoutine routine = new BordeauxRoutine("Choose note", List.of(
+                new BordeauxRoutineNode.Path("first", "path-a"),
+                new BordeauxRoutineNode.Decision("choose", "has-note",
+                        List.of(new BordeauxRoutineNode.Command("collect", "collect", arguments),
+                                new BordeauxRoutineNode.Path("a-next", "path-b")),
+                        List.of(new BordeauxRoutineNode.Path("b-next", "path-c")))));
+        BordeauxPathEvents document = new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), routine);
+        boolean[] hasNote = {true};
+        List<String> created = new ArrayList<>();
+        RecordingScheduler scheduler = new RecordingScheduler();
+        BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, registry(created, "collect"),
+                BordeauxConditionRegistry.builder().register("has-note", () -> hasNote[0]).build(), scheduler);
+
+        assertEquals("path-a", runner.start().orElseThrow());
+        assertEquals("path-b", runner.completePath("path-a").orElseThrow());
+        assertEquals(List.of("collect"), created);
+        assertEquals(1, runner.commandCount());
+        assertTrue(runner.completePath("path-b").isEmpty());
+
+        hasNote[0] = false;
+        runner.reset();
+        runner.start();
+        assertEquals("path-c", runner.completePath("path-a").orElseThrow());
+        assertThrows(BordeauxRuntimeException.class, () -> runner.completePath("wrong"));
+    }
+
+    @Test
     void followsTimeThenMeasuredPositionWithoutRegressing() {
         List<BordeauxSample> samples = List.of(
                 sample(0, 0, 0), sample(1, 0.5, 1), sample(2, 1, 2),
