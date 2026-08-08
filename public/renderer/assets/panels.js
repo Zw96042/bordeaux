@@ -140,6 +140,74 @@
           h('div', { className: 'pathlib-scroll' }, needle ? (results.length ? results.map((row) => pathRow(row.path, row.index, true)) : h('div', { className: 'pathlib-empty pathlib-emptysearch' }, h('strong', null, 'No matching paths'), h('span', null, 'Try a different name or folder.'))) : [folders.map(group), group(null)]))));
   }
 
+  function RoutineLibrary({ routines, activeRoutineId, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine }) {
+    const [open, setOpen] = useState(false);
+    const [query, setQuery] = useState('');
+    const [menuId, setMenuId] = useState(null);
+    const [editingId, setEditingId] = useState(null);
+    const [draft, setDraft] = useState('');
+    const triggerRef = useRef(null), panelRef = useRef(null), searchRef = useRef(null), editRef = useRef(null);
+    const active = routines.find((routine) => routine.id === activeRoutineId) || routines[0];
+    const close = () => {
+      setOpen(false); setMenuId(null); setEditingId(null); setQuery('');
+      requestAnimationFrame(() => triggerRef.current && triggerRef.current.focus());
+    };
+    const beginRename = (routine) => { setMenuId(null); setEditingId(routine.id); setDraft(routine.name); };
+    const submitRename = (event) => {
+      event.preventDefault();
+      if (renameRoutine(editingId, draft)) setEditingId(null);
+    };
+    useEffect(() => { if (open) requestAnimationFrame(() => searchRef.current && searchRef.current.focus()); }, [open]);
+    useEffect(() => { if (editingId) requestAnimationFrame(() => { editRef.current && editRef.current.focus(); editRef.current && editRef.current.select(); }); }, [editingId]);
+    useEffect(() => {
+      if (!open) return undefined;
+      const onKey = (event) => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        if (editingId) setEditingId(null); else if (menuId) setMenuId(null); else close();
+      };
+      window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
+    }, [open, editingId, menuId]);
+    const trapFocus = (event) => {
+      if (event.key !== 'Tab' || !panelRef.current) return;
+      const focusable = Array.from(panelRef.current.querySelectorAll('button:not(:disabled),input:not(:disabled),[tabindex]:not([tabindex="-1"])'));
+      if (!focusable.length) return;
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    const needle = query.trim().toLowerCase();
+    const visible = routines.filter((routine) => routine.name.toLowerCase().includes(needle));
+    const row = (routine) => editingId === routine.id
+      ? h('div', { key: routine.id, className: 'pathlib-editrow' },
+          h('form', { className: 'pathlib-rename', onSubmit: submitRename },
+            h('input', { ref: editRef, value: draft, 'aria-label': 'Routine name', autoComplete: 'off', spellCheck: false, onChange: (event) => setDraft(event.target.value) }),
+            h('button', { type: 'submit' }, 'Save'),
+            h('button', { type: 'button', onClick: () => setEditingId(null) }, 'Cancel')))
+      : h('div', { key: routine.id, className: 'pathlib-item' },
+          h('div', { className: 'pathlib-path' + (routine.id === activeRoutineId ? ' on' : '') },
+            h('button', { type: 'button', className: 'pathlib-pick', 'aria-current': routine.id === activeRoutineId ? 'true' : undefined, onClick: () => { setActiveRoutine(routine.id); close(); } },
+              h(Icon, { name: routine.id === activeRoutineId ? 'check' : 'layers', size: 14 }),
+              h('span', { className: 'pathlib-copy' }, h('span', { className: 'pathlib-name' }, routine.name)),
+              h('span', { className: 'pathlib-time' }, window.AUTO.countSteps(routine) + ' steps')),
+            h('button', { className: 'pathlib-more', type: 'button', title: 'Routine actions', 'aria-label': 'Actions for ' + routine.name, 'aria-expanded': menuId === routine.id, onClick: () => setMenuId((current) => current === routine.id ? null : routine.id) }, '\u2026')),
+          menuId === routine.id && h('div', { className: 'pathlib-actionmenu', role: 'group', 'aria-label': routine.name + ' actions' },
+            h('div', { className: 'pathlib-actionrow' },
+              h('button', { type: 'button', onClick: () => beginRename(routine) }, h(Icon, { name: 'edit', size: 13 }), 'Rename'),
+              h('button', { type: 'button', onClick: () => { duplicateRoutine(routine.id); close(); } }, h(Icon, { name: 'copy', size: 13 }), 'Duplicate'),
+              h('button', { className: 'danger', type: 'button', disabled: routines.length <= 1, onClick: () => { if (deleteRoutine(routine.id)) close(); } }, h(Icon, { name: 'trash', size: 13 }), 'Delete'))));
+    return h('div', { className: 'pathsw routinelib' },
+      h('button', { ref: triggerRef, className: 'pathsw-btn' + (open ? ' open' : ''), type: 'button', title: active.name, 'aria-haspopup': 'dialog', 'aria-expanded': open, onClick: () => open ? close() : setOpen(true) },
+        h('span', { className: 'pathsw-ic' }, h(Icon, { name: 'layers', size: 15 })), h('span', { className: 'pathsw-nm' }, active.name), h('span', { className: 'pathsw-t' }, window.AUTO.countSteps(active) + ' steps'), h(Icon, { name: 'chevron', size: 14 })),
+      open && h(React.Fragment, null,
+        h('button', { className: 'pathlib-scrim', type: 'button', tabIndex: -1, 'aria-label': 'Close routine library', onClick: close }),
+        h('aside', { ref: panelRef, className: 'pathlib-panel', role: 'dialog', 'aria-modal': true, 'aria-label': 'Routine library', tabIndex: -1, onKeyDown: trapFocus },
+          h('div', { className: 'pathlib-head' }, h('div', null, h(Icon, { name: 'layers', size: 15 }), h('strong', null, 'Routine library'), h('span', null, routines.length)), h('button', { type: 'button', 'aria-label': 'Close routine library', onClick: close }, h(Icon, { name: 'x', size: 15 }))),
+          h('div', { className: 'pathlib-create routinelib-create' }, h('button', { className: 'primary', type: 'button', onClick: () => { addRoutine(); close(); } }, h(Icon, { name: 'plus', size: 14 }), 'New routine')),
+          h('div', { className: 'pathlib-searchwrap' }, h(Icon, { name: 'search', size: 14 }), h('input', { ref: searchRef, className: 'pathlib-search', type: 'search', 'aria-label': 'Search routines', autoComplete: 'off', spellCheck: false, placeholder: 'Search routines', value: query, onChange: (event) => { setMenuId(null); setQuery(event.target.value); } })),
+          h('div', { className: 'pathlib-scroll' }, visible.length ? visible.map(row) : h('div', { className: 'pathlib-empty pathlib-emptysearch' }, h('strong', null, 'No matching routines'), h('span', null, 'Try a different name.'))))));
+  }
+
   // ---------------- top bar ----------------
   function PlannerFamily({ plannerId, onChange }) {
     const value = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid' ? 'labview' : 'java';
@@ -151,7 +219,8 @@
 
   function Toolbar(props) {
     const { project, page, setPage, alliance, setAlliance,
-      onUndo, onRedo, onExport, onExportJava, javaProject, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily } = props;
+      onUndo, onRedo, onExport, onExportJava, javaProject, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
+      routines, activeRoutineId, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine } = props;
     const plan = page === 'plan';
     const labview = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid';
     const javaReady = !!(javaProject && javaProject.catalog && javaProject.catalog.authoritative && javaProject.integration && javaProject.integration.installed && javaProject.integration.supportVersion === javaProject.catalog.supportVersion);
@@ -162,7 +231,8 @@
           h('button', { className: plan ? 'on' : '', type: 'button', 'aria-current': plan ? 'page' : undefined, onClick: () => setPage('plan') }, h(Icon, { name: 'route', size: 15 }), 'Plan'),
           h('button', { className: page === 'auto' ? 'on' : '', type: 'button', 'aria-current': page === 'auto' ? 'page' : undefined, onClick: () => setPage('auto') }, h(Icon, { name: 'layers', size: 15 }), 'Acquatine'),
           h('button', { className: page === 'robot' ? 'on' : '', type: 'button', 'aria-current': page === 'robot' ? 'page' : undefined, onClick: () => setPage('robot') }, h(Icon, { name: 'car', size: 15 }), 'Robot')),
-        plan && h(PathLibrary, { project, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times })),
+        plan && h(PathLibrary, { project, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times }),
+        page === 'auto' && h(RoutineLibrary, { routines, activeRoutineId, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine })),
 
       h('div', { className: 'tb-right' },
         plan && h(React.Fragment, null,

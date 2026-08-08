@@ -643,6 +643,22 @@ describe("renderer compatibility preview", () => {
     expect(app).toContain("resetForPath(index)");
   });
 
+  it("manages a searchable library of stable autonomous routines", () => {
+    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
+
+    expect(panels).toContain("function RoutineLibrary");
+    expect(panels).toContain("'aria-label': 'Routine library'");
+    expect(panels).toContain("'aria-label': 'Search routines'");
+    expect(panels).toContain("duplicateRoutine(routine.id)");
+    expect(panels).toContain("deleteRoutine(routine.id)");
+    expect(app).toContain("const routineId = () => 'routine_'");
+    expect(app).toContain("const addRoutine = () =>");
+    expect(app).toContain("const duplicateRoutine = (id) =>");
+    expect(app).toContain("const deleteRoutine = (id) =>");
+    expect(app).toContain("routines.forEach((candidate) => window.AUTO.walk");
+  });
+
   it("uses one Bordeaux accent and does not expose theme customization", () => {
     const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
     const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
