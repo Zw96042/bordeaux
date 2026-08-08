@@ -1015,6 +1015,42 @@
       if (index !== i) return path; const next = { ...path }; if (folderId) next.folderId = folderId; else delete next.folderId; return next;
     }) }));
     const setActive = (i) => resetForPath(i);
+    const resetForRoutine = () => {
+      setRoutineSel(null); setRoutineTime(0); setRoutinePlaying(false); setRoutineOutcomes({});
+    };
+    const uniqueRoutineName = (base) => {
+      const used = new Set(routines.map((candidate) => candidate.name.toLowerCase()));
+      if (!used.has(base.toLowerCase())) return base;
+      let suffix = 2; while (used.has((base + ' ' + suffix).toLowerCase())) suffix++;
+      return base + ' ' + suffix;
+    };
+    const setActiveRoutine = (id) => {
+      if (!routines.some((candidate) => candidate.id === id)) return;
+      setProject((current) => withRoutineState(current, { ...routineState(current), activeRoutineId: id }));
+      routineHist.current = { past: [], future: [] }; resetForRoutine(); setPage('auto');
+    };
+    const addRoutine = () => {
+      const created = blankRoutine(uniqueRoutineName('New routine'));
+      commitRoutineState((state) => ({ routines: [...state.routines, created], activeRoutineId: created.id }));
+      resetForRoutine(); setPage('auto'); return created;
+    };
+    const duplicateRoutine = (id) => {
+      const source = routines.find((candidate) => candidate.id === id); if (!source) return null;
+      const created = { ...clone(source), id: routineId(), name: uniqueRoutineName(source.name + ' copy') };
+      commitRoutineState((state) => { const index = state.routines.findIndex((candidate) => candidate.id === id); const next = state.routines.slice(); next.splice(index + 1, 0, created); return { routines: next, activeRoutineId: created.id }; });
+      resetForRoutine(); return created;
+    };
+    const deleteRoutine = (id) => {
+      if (routines.length <= 1) return false;
+      const target = routines.find((candidate) => candidate.id === id); if (!target) return false;
+      if (!confirm('Delete routine “' + target.name + '”? This cannot be undone.')) return false;
+      commitRoutineState((state) => { const index = state.routines.findIndex((candidate) => candidate.id === id); const next = state.routines.filter((candidate) => candidate.id !== id); const activeRoutineId = state.activeRoutineId === id ? next[Math.min(index, next.length - 1)].id : state.activeRoutineId; return { routines: next, activeRoutineId }; });
+      resetForRoutine(); return true;
+    };
+    const renameRoutine = (id, name) => {
+      const clean = (name || '').trim(); if (!clean) return false;
+      commitRoutineState((state) => ({ ...state, routines: state.routines.map((candidate) => candidate.id === id ? { ...candidate, name: clean } : candidate) })); return true;
+    };
     const agentCandidates = agentProposal && Array.isArray(agentProposal.candidates) ? agentProposal.candidates : [];
     const agentCandidate = agentCandidates.find((candidate) => candidate.id === agentCandidateId) || agentCandidates[0] || null;
     const agentProposalPreviews = useMemo(() => agentCandidates.flatMap((candidate) => {
@@ -1282,7 +1318,8 @@
     const selNode = (page === 'auto' && routineSel) ? window.AUTO.findNode(routine, routineSel) : null;
 
     return h('div', { className: 'app' },
-      h(window.Panels.Toolbar, { project, page, setPage, alliance, setAlliance, onNew: newProject, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExport, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily }),
+      h(window.Panels.Toolbar, { project, page, setPage, alliance, setAlliance, onNew: newProject, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExport, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
+        routines, activeRoutineId: routine.id, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine }),
       page === 'robot'
         ? h('main', { className: 'page-main' }, h(window.RobotPage, { robot, setRobot, accent, mcpEnabled, agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
         : page === 'auto'
