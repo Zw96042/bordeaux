@@ -2,26 +2,52 @@
 (function () {
   const { useRef, useState } = React;
   const h = React.createElement;
-  const { Icon } = window.UI;
+  const { Dropdown, Icon } = window.UI;
 
-  const footprintFor = (shape, w, l) => {
+  // Published 12 V free speeds from the manufacturers' product documentation.
+  const DRIVE_MOTORS = [
+    { value: 'custom', label: 'Custom motor', meta: 'Enter its published free speed' },
+    { value: 'rev-neo', label: 'REV NEO V1.1', meta: '5,676 RPM', rpm: 5676 },
+    { value: 'rev-vortex', label: 'REV NEO Vortex', meta: '6,784 RPM', rpm: 6784 },
+    { value: 'ctre-kraken-x60', label: 'CTRE Kraken X60', meta: '6,000 RPM', rpm: 6000 },
+    { value: 'ctre-falcon-500', label: 'CTRE Falcon 500', meta: '6,380 RPM', rpm: 6380 },
+  ];
+
+  const footprintFor = (shape, w, l, preset) => {
     if (shape === 'rectangle') return undefined;
+    const vertexCount = preset && preset.vertices || 12;
     const verticesM = shape === 'round'
-      ? Array.from({ length: 12 }, (_, index) => {
-          const angle = index * Math.PI / 6;
+      ? Array.from({ length: vertexCount }, (_, index) => {
+          const angle = index * Math.PI * 2 / vertexCount;
           return { x: Math.cos(angle) * l / 2, y: Math.sin(angle) * w / 2 };
         })
-      : [{ x: -l / 2, y: -w / 2 }, { x: l / 2, y: -w * 0.32 }, { x: l / 2, y: w * 0.32 }, { x: -l / 2, y: w / 2 }];
+      : (() => {
+          const front = Math.min(w, preset && preset.frontWidthM || w * 0.64) / 2;
+          const rear = Math.min(w, preset && preset.rearWidthM || w) / 2;
+          return [{ x: -l / 2, y: -rear }, { x: l / 2, y: -front }, { x: l / 2, y: front }, { x: -l / 2, y: rear }];
+        })();
     return { kind: 'polygon', verticesM };
   };
   const sameFootprint = (value, expected) => value && expected && value.verticesM.length === expected.verticesM.length
     && value.verticesM.every((point, index) => Math.hypot(point.x - expected.verticesM[index].x, point.y - expected.verticesM[index].y) < 1e-6);
-  const footprintShape = (robot) => !robot.footprint ? 'rectangle'
-    : sameFootprint(robot.footprint, footprintFor('round', robot.w, robot.l)) ? 'round'
-    : sameFootprint(robot.footprint, footprintFor('trapezoid', robot.w, robot.l)) ? 'trapezoid' : 'custom';
+  const footprintShape = (robot) => {
+    if (!robot.footprint) return 'rectangle';
+    if (robot.footprintPreset) return robot.footprintPreset.kind;
+    if (sameFootprint(robot.footprint, footprintFor('round', robot.w, robot.l))) return 'round';
+    return sameFootprint(robot.footprint, footprintFor('trapezoid', robot.w, robot.l)) ? 'trapezoid' : 'custom';
+  };
 
   // big numeric field with drag-to-scrub on the label
   function BigNum({ label, value, onChange, unit, step = 0.01, min, max, precision = 2 }) {
+    const [edit, setEdit] = useState(null);
+    const cancelEdit = useRef(false);
+    const commitEdit = (raw) => {
+      let next = Number(raw);
+      if (!Number.isFinite(next)) return;
+      if (min != null) next = Math.max(min, next);
+      if (max != null) next = Math.min(max, next);
+      onChange(next);
+    };
     const start = (down) => {
       down.preventDefault();
       const sx = down.clientX, v0 = (typeof value === 'number' ? value : 0);
@@ -30,11 +56,17 @@
       const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); document.body.style.cursor = ''; };
       window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up); document.body.style.cursor = 'ew-resize';
     };
+    const display = edit != null ? edit : (typeof value === 'number' ? value.toFixed(precision) : '');
     return h('div', { className: 'rp-big', onPointerDown: (e) => { if (e.target.tagName !== 'INPUT') start(e); } },
       h('input', {
-        value: typeof value === 'number' ? value.toFixed(precision) : '', inputMode: 'decimal', 'aria-label': label,
-        onChange: (e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) onChange(n); },
-        onFocus: (e) => requestAnimationFrame(() => e.target.select()),
+        value: display, inputMode: 'decimal', 'aria-label': label, min, max, step,
+        onChange: (e) => setEdit(e.target.value),
+        onFocus: (e) => { cancelEdit.current = false; setEdit(String(value)); requestAnimationFrame(() => e.target.select()); },
+        onBlur: (e) => { if (!cancelEdit.current) commitEdit(e.target.value); cancelEdit.current = false; setEdit(null); },
+        onKeyDown: (e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+          else if (e.key === 'Escape') { e.preventDefault(); cancelEdit.current = true; e.currentTarget.blur(); }
+        },
       }),
       unit && h('span', { className: 'u' }, unit));
   }
@@ -42,10 +74,18 @@
   function RobotPage({ robot, setRobot, mcpEnabled, agentProposal, onApplyProposal, onRejectProposal }) {
     const isSwerve = robot.drive === 'swerve';
     const [customEditing, setCustomEditing] = useState(false);
+    const [selectedVertex, setSelectedVertex] = useState(0);
+    const [dragVertices, setDragVertices] = useState(null);
+    const previewRef = useRef(null);
     const shape = customEditing && robot.footprint ? 'custom' : footprintShape(robot);
-    const footprint = robot.footprint && robot.footprint.kind === 'polygon' && Array.isArray(robot.footprint.verticesM)
+    const roundPreset = robot.footprintPreset && robot.footprintPreset.kind === 'round'
+      ? robot.footprintPreset : { kind: 'round', vertices: 12 };
+    const trapezoidPreset = robot.footprintPreset && robot.footprintPreset.kind === 'trapezoid'
+      ? robot.footprintPreset : { kind: 'trapezoid', frontWidthM: robot.w * 0.64, rearWidthM: robot.w };
+    const storedFootprint = robot.footprint && robot.footprint.kind === 'polygon' && Array.isArray(robot.footprint.verticesM)
       ? robot.footprint.verticesM
       : [{ x: -robot.l / 2, y: -robot.w / 2 }, { x: robot.l / 2, y: -robot.w / 2 }, { x: robot.l / 2, y: robot.w / 2 }, { x: -robot.l / 2, y: robot.w / 2 }];
+    const footprint = dragVertices || storedFootprint;
     const maxDim = Math.max(robot.w, robot.l, 0.4, ...footprint.flatMap((point) => [Math.abs(point.x) * 2, Math.abs(point.y) * 2]));
     const unit = 220 / maxDim;
     const rw = robot.l * unit, rh = robot.w * unit;
@@ -54,6 +94,21 @@
       const next = footprint[(index + 1) % footprint.length];
       return area + point.x * next.y - point.y * next.x;
     }, 0)) / 2;
+    const footprintCrosses = footprint.map((point, index) => {
+      const next = footprint[(index + 1) % footprint.length], after = footprint[(index + 2) % footprint.length];
+      return (next.x - point.x) * (after.y - next.y) - (next.y - point.y) * (after.x - next.x);
+    }).filter((value) => Math.abs(value) > 1e-9);
+    const winding = Math.sign(footprintCrosses[0] || 0);
+    const containsOrigin = winding !== 0 && footprint.every((point, index) => {
+      const next = footprint[(index + 1) % footprint.length];
+      const cross = (next.x - point.x) * -point.y - (next.y - point.y) * -point.x;
+      return Math.abs(cross) <= 1e-9 || Math.sign(cross) === winding;
+    });
+    const xs = footprint.map((point) => point.x), ys = footprint.map((point) => point.y);
+    const withinEnvelope = Math.max(...xs) - Math.min(...xs) <= robot.l + 1e-6
+      && Math.max(...ys) - Math.min(...ys) <= robot.w + 1e-6;
+    const footprintValid = containsOrigin && withinEnvelope && footprintCrosses.length > 0
+      && footprintCrosses.every((value) => Math.sign(value) === winding);
 
     // ft helpers (FRC teams often think in ft)
     const m2ft = (m) => m * 3.28084;
