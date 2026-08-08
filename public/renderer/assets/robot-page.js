@@ -113,6 +113,23 @@
     // ft helpers (FRC teams often think in ft)
     const m2ft = (m) => m * 3.28084;
     const planning = robot.planning || {};
+    const fallbackRatio = 6.75, fallbackWheelDiameterM = 0.1016;
+    const driveModel = robot.driveModel || {
+      motorId: 'custom',
+      motorFreeRpm: robot.maxSpeed * 60 * fallbackRatio / (Math.PI * fallbackWheelDiameterM),
+      gearRatio: fallbackRatio,
+      wheelDiameterM: fallbackWheelDiameterM,
+    };
+    const chassisFreeSpeed = (model) => model.motorFreeRpm / 60 * Math.PI * model.wheelDiameterM / model.gearRatio;
+    const setDriveModel = (patch) => {
+      const next = { ...driveModel, ...patch };
+      if (![next.motorFreeRpm, next.gearRatio, next.wheelDiameterM].every((value) => Number.isFinite(value) && value > 0)) return;
+      const maxSpeed = chassisFreeSpeed(next);
+      const nextPlanning = planning.intake && planning.intake.maxCollectSpeedMps > maxSpeed
+        ? { ...planning, intake: { ...planning.intake, maxCollectSpeedMps: maxSpeed } }
+        : planning;
+      setRobot({ driveModel: next, maxSpeed, ...(nextPlanning !== planning ? { planning: nextPlanning } : {}) });
+    };
     const intake = planning.intake;
     const shooter = planning.shooter;
     const setPlanning = (patch) => setRobot({ planning: { ...planning, ...patch } });
@@ -124,16 +141,23 @@
         kind: 'polygon', verticesM: robot.footprint.verticesM.map((point) => ({
           x: point.x * nextL / robot.l, y: point.y * nextW / robot.w,
         })),
-      } : footprintFor(shape, nextW, nextL);
-      setRobot({ [key]: value, footprint });
+      } : footprintFor(shape, nextW, nextL, shape === 'round' ? roundPreset : {
+        ...trapezoidPreset,
+        frontWidthM: Math.min(nextW, trapezoidPreset.frontWidthM * nextW / robot.w),
+        rearWidthM: Math.min(nextW, trapezoidPreset.rearWidthM * nextW / robot.w),
+      });
+      const footprintPreset = shape === 'round' ? roundPreset : shape === 'trapezoid'
+        ? { ...trapezoidPreset, frontWidthM: Math.min(nextW, trapezoidPreset.frontWidthM * nextW / robot.w), rearWidthM: Math.min(nextW, trapezoidPreset.rearWidthM * nextW / robot.w) }
+        : shape === 'custom' ? { kind: 'custom' } : undefined;
+      setRobot({ [key]: value, footprint, footprintPreset });
     };
-    const setVertices = (verticesM) => setRobot({ footprint: { kind: 'polygon', verticesM } });
+    const setVertices = (verticesM) => setRobot({ footprint: { kind: 'polygon', verticesM }, footprintPreset: { kind: 'custom' } });
     const updateVertex = (index, key, value) => setVertices(footprint.map((point, pointIndex) => (
       pointIndex === index ? { ...point, [key]: value } : point
     )));
-    const addVertex = () => {
+    const addVertex = (edgeHint) => {
       if (footprint.length >= 16) return;
-      let edge = 0, longest = -1;
+      let edge = Number.isInteger(edgeHint) ? edgeHint : 0, longest = Number.isInteger(edgeHint) ? Infinity : -1;
       footprint.forEach((point, index) => {
         const next = footprint[(index + 1) % footprint.length];
         const length = Math.hypot(next.x - point.x, next.y - point.y);
@@ -142,13 +166,67 @@
       const next = footprint[(edge + 1) % footprint.length];
       const vertices = footprint.map((point) => ({ ...point }));
       vertices.splice(edge + 1, 0, { x: (footprint[edge].x + next.x) / 2, y: (footprint[edge].y + next.y) / 2 });
+      setSelectedVertex(edge + 1);
       setVertices(vertices);
+    };
+    const eventPoint = (event) => {
+      const rect = previewRef.current.getBoundingClientRect();
+      return {
+        x: Math.max(-robot.l / 2, Math.min(robot.l / 2, (event.clientX - rect.left - rect.width / 2) / unit)),
+        y: Math.max(-robot.w / 2, Math.min(robot.w / 2, -(event.clientY - rect.top - rect.height / 2) / unit)),
+      };
+    };
+    const startVertexDrag = (index, event) => {
+      event.preventDefault(); event.stopPropagation();
+      setSelectedVertex(index); setCustomEditing(true);
+      const target = event.currentTarget, pointerId = event.pointerId;
+      let animationFrame = 0, pendingVertices = null;
+      if (target.setPointerCapture) target.setPointerCapture(pointerId);
+      const renderPending = () => { animationFrame = 0; if (pendingVertices) setDragVertices(pendingVertices); };
+      const move = (pointer) => {
+        const point = eventPoint(pointer);
+        pendingVertices = footprint.map((vertex, pointIndex) => pointIndex === index ? point : vertex);
+        if (!animationFrame) animationFrame = requestAnimationFrame(renderPending);
+      };
+      const finish = () => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', finish);
+        window.removeEventListener('pointercancel', finish);
+        if (animationFrame) cancelAnimationFrame(animationFrame);
+        setDragVertices(null);
+        if (pendingVertices) setVertices(pendingVertices);
+        if (target.hasPointerCapture && target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId);
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', finish);
+      window.addEventListener('pointercancel', finish);
+    };
+    const addVertexFromPreview = (event) => {
+      if (shape !== 'custom' || footprint.length >= 16) return;
+      const point = eventPoint(event);
+      let edge = 0, nearest = Infinity;
+      footprint.forEach((start, index) => {
+        const end = footprint[(index + 1) % footprint.length];
+        const dx = end.x - start.x, dy = end.y - start.y;
+        const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy || 1)));
+        const distance = Math.hypot(point.x - (start.x + dx * t), point.y - (start.y + dy * t));
+        if (distance < nearest) { nearest = distance; edge = index; }
+      });
+      addVertex(edge);
+    };
+    const setRoundVertices = (vertices) => {
+      const preset = { kind: 'round', vertices: Math.max(8, Math.min(16, Math.round(vertices))) };
+      setRobot({ footprintPreset: preset, footprint: footprintFor('round', robot.w, robot.l, preset) });
+    };
+    const setTrapezoidWidth = (key, value) => {
+      const preset = { ...trapezoidPreset, [key]: Math.max(0.05, Math.min(robot.w, value)) };
+      setRobot({ footprintPreset: preset, footprint: footprintFor('trapezoid', robot.w, robot.l, preset) });
     };
 
     return h('div', { className: 'robotpage' },
       h('div', { className: 'rp-wrap' },
         h('div', { className: 'rp-title' }, 'Robot'),
-        h('div', { className: 'rp-sub' }, 'One robot for the whole project \u2014 every path plans around these. Set it once here and the field preview, velocity caps, and footprint update everywhere.'),
+        h('div', { className: 'rp-sub' }, 'Project-wide dimensions and drivetrain limits.'),
         h('div', { className: 'rp-grid' },
           // ---- left column: controls ----
           h('div', { className: 'rp-col' },
