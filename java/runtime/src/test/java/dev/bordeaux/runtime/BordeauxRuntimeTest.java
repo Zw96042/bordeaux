@@ -141,6 +141,25 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void readsStrictBetweenPathRoutineTree() {
+        BordeauxPathEvents path = read("""
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
+                 "catalog":{"schemaVersion":"1.0","catalogId":"test-robot","supportVersion":"0.1.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "routine":{"name":"Choose note","nodes":[
+                   {"id":"choose","type":"decision","cond":"has-note","thenLabel":"yes","elseLabel":"no",
+                    "then":[{"id":"collect","type":"function","cat":"command","invocation":{"commandId":"collect","arguments":{}}},
+                            {"id":"run","type":"path","ref":"auto"}],"else":[]}]},
+                 "paths":[{"id":"auto","name":"Auto","totalTimeS":1,"samples":[],"events":[]}]}
+                """);
+
+        BordeauxRoutineNode.Decision decision = (BordeauxRoutineNode.Decision) path.routine().nodes().get(0);
+
+        assertEquals("has-note", decision.conditionId());
+        assertTrue(decision.whenTrue().get(0) instanceof BordeauxRoutineNode.Command);
+        assertTrue(decision.whenTrue().get(1) instanceof BordeauxRoutineNode.Path);
+    }
+
+    @Test
     void followsTimeThenMeasuredPositionWithoutRegressing() {
         List<BordeauxSample> samples = List.of(
                 sample(0, 0, 0), sample(1, 0.5, 1), sample(2, 1, 2),

@@ -21,6 +21,7 @@ public final class BordeauxTrajectoryReader {
     static final int MAX_PATHS = 128;
     static final int MAX_EVENTS = 10_000;
     static final int MAX_SAMPLES = 1_000_000;
+    static final int MAX_ROUTINE_NODES = 10_000;
 
     private static final ObjectMapper MAPPER = new ObjectMapper(JsonFactory.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
@@ -79,6 +80,7 @@ public final class BordeauxTrajectoryReader {
 
         List<JsonNode> idMatches = new ArrayList<>();
         List<JsonNode> nameMatches = new ArrayList<>();
+        Set<String> pathIds = new HashSet<>();
         int sampleCount = 0;
         int eventCount = 0;
         for (int index = 0; index < paths.size(); index++) {
@@ -95,16 +97,19 @@ public final class BordeauxTrajectoryReader {
             eventCount += events.size();
             if (sampleCount > MAX_SAMPLES) throw new BordeauxRuntimeException("Trajectory exceeds the sample limit of " + MAX_SAMPLES);
             if (eventCount > MAX_EVENTS) throw new BordeauxRuntimeException("Trajectory exceeds the event limit of " + MAX_EVENTS);
-            if (pathSelector.equals(text(path, "id", "$.paths[" + index + "]"))) idMatches.add(path);
+            String pathId = text(path, "id", "$.paths[" + index + "]");
+            if (!pathIds.add(pathId)) throw new BordeauxRuntimeException("Duplicate path ID '" + pathId + "'");
+            if (pathSelector.equals(pathId)) idMatches.add(path);
             if (pathSelector.equals(text(path, "name", "$.paths[" + index + "]"))) nameMatches.add(path);
         }
         List<JsonNode> matches = idMatches.isEmpty() ? nameMatches : idMatches;
         if (matches.isEmpty()) throw new BordeauxRuntimeException("No path matches '" + pathSelector + "'");
         if (matches.size() != 1) throw new BordeauxRuntimeException("Path selector '" + pathSelector + "' is ambiguous");
-        return parsePath(matches.get(0), catalogId, catalogHash);
+        BordeauxRoutine routine = parseRoutine(root.get("routine"), pathIds);
+        return parsePath(matches.get(0), catalogId, catalogHash, routine);
     }
 
-    private static BordeauxPathEvents parsePath(JsonNode path, String catalogId, String catalogHash) {
+    private static BordeauxPathEvents parsePath(JsonNode path, String catalogId, String catalogHash, BordeauxRoutine routine) {
         String id = text(path, "id", "path");
         String name = text(path, "name", "path '" + id + "'");
         double totalTimeS = nonnegativeFinite(path.get("totalTimeS"), "Path '" + id + "' totalTimeS");
@@ -200,7 +205,52 @@ public final class BordeauxTrajectoryReader {
         indexed.sort(Comparator.comparingDouble((IndexedEvent value) -> value.event().timeS())
                 .thenComparingInt(IndexedEvent::index));
         return new BordeauxPathEvents(
-                id, name, totalTimeS, catalogId, catalogHash, indexed.stream().map(IndexedEvent::event).toList(), samples, sections);
+                id, name, totalTimeS, catalogId, catalogHash, indexed.stream().map(IndexedEvent::event).toList(), samples, sections, routine);
+    }
+
+    private static BordeauxRoutine parseRoutine(JsonNode value, Set<String> pathIds) {
+        if (value == null || value.isNull()) return BordeauxRoutine.empty();
+        ObjectNode routine = requireObject(value, "$.routine must be an object or null");
+        String name = text(routine, "name", "$.routine");
+        JsonNode nodes = routine.get("nodes");
+        if (nodes == null || !nodes.isArray()) throw new BordeauxRuntimeException("$.routine.nodes must be an array");
+        return new BordeauxRoutine(name, parseRoutineNodes(nodes, "$.routine.nodes", pathIds, new HashSet<>(), new int[] {0}));
+    }
+
+    private static List<BordeauxRoutineNode> parseRoutineNodes(JsonNode nodes, String path,
+            Set<String> pathIds, Set<String> nodeIds, int[] count) {
+        List<BordeauxRoutineNode> parsed = new ArrayList<>();
+        for (int index = 0; index < nodes.size(); index++) {
+            if (++count[0] > MAX_ROUTINE_NODES) throw new BordeauxRuntimeException("Routine exceeds the node limit of " + MAX_ROUTINE_NODES);
+            String base = path + "[" + index + "]";
+            ObjectNode node = requireObject(nodes.get(index), base + " must be an object");
+            String id = text(node, "id", base);
+            if (!nodeIds.add(id)) throw new BordeauxRuntimeException("Routine contains duplicate node ID '" + id + "'");
+            String type = text(node, "type", base);
+            if ("path".equals(type)) {
+                String ref = text(node, "ref", base);
+                if (!pathIds.contains(ref)) throw new BordeauxRuntimeException(base + ".ref does not match an exported path ID");
+                parsed.add(new BordeauxRoutineNode.Path(id, ref));
+            } else if ("decision".equals(type)) {
+                String condition = text(node, "cond", base);
+                if (!condition.matches("[A-Za-z0-9_.:#()$,-]{1,256}")) throw new BordeauxRuntimeException(base + ".cond must be a stable condition ID");
+                JsonNode whenTrue = node.get("then");
+                JsonNode whenFalse = node.get("else");
+                if (whenTrue == null || !whenTrue.isArray() || whenFalse == null || !whenFalse.isArray()) {
+                    throw new BordeauxRuntimeException(base + " decision branches must be arrays");
+                }
+                parsed.add(new BordeauxRoutineNode.Decision(id, condition,
+                        parseRoutineNodes(whenTrue, base + ".then", pathIds, nodeIds, count),
+                        parseRoutineNodes(whenFalse, base + ".else", pathIds, nodeIds, count)));
+            } else if ("function".equals(type) && "command".equals(text(node, "cat", base))) {
+                ObjectNode invocation = requireObject(node.get("invocation"), base + ".invocation must be an object");
+                ObjectNode arguments = requireObject(invocation.get("arguments"), base + ".invocation.arguments must be an object");
+                parsed.add(new BordeauxRoutineNode.Command(id, text(invocation, "commandId", base + ".invocation"), arguments));
+            } else {
+                throw new BordeauxRuntimeException(base + " must be a path, decision, or bound command");
+            }
+        }
+        return parsed;
     }
 
     private static ObjectNode requireObject(JsonNode node, String message) {
