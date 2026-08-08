@@ -184,7 +184,7 @@ function validateRoutineNodes(issues: ValidationIssue[], value: unknown, path: s
       issues.push(issue(`${base}.type`, "Routine node type is invalid"));
       return;
     }
-    if (!["terminate", "sequence", "generate", "velocity"].includes(String(node.cat))) issues.push(issue(`${base}.cat`, "Routine function category is invalid"));
+    if (!["command", "terminate", "sequence", "generate", "velocity"].includes(String(node.cat))) issues.push(issue(`${base}.cat`, "Routine function category is invalid"));
     validateOptionalFinite(issues, node.scale, `${base}.scale`, "Velocity scale", { nonnegative: true });
   });
 }

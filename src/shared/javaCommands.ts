@@ -6,6 +6,7 @@ import type {
   JavaCommandDescriptor,
   JavaCommandParameter,
   JavaValueSchema,
+  RoutineNode,
   ValidationIssue,
 } from "./types";
 
@@ -242,5 +243,28 @@ export function validateProjectJavaInvocations(project: BordeauxProject, catalog
       issues.push({ path: invocationBase, message, severity: "error" });
     }
   }));
+  const validateRoutineNodes = (nodes: RoutineNode[], path: string) => {
+    nodes.forEach((value, index) => {
+      const node = value;
+      const base = `${path}[${index}]`;
+      if (node.type === "decision") {
+        validateRoutineNodes(node.then, `${base}.then`);
+        validateRoutineNodes(node.else, `${base}.else`);
+      } else if (node.type === "function" && node.cat === "command") {
+        if (!node.invocation) {
+          issues.push({ path: `${base}.invocation`, message: "Between-path command must be bound before export", severity: "error" });
+          return;
+        }
+        const command = commands.get(node.invocation.commandId);
+        if (!command) {
+          issues.push({ path: `${base}.invocation.commandId`, message: `Command ${node.invocation.commandId} is not in the linked generated catalog`, severity: "error" });
+          return;
+        }
+        javaInvocationErrors(node.invocation, command).forEach((message) =>
+          issues.push({ path: `${base}.invocation`, message, severity: "error" }));
+      }
+    });
+  };
+  if (project.routine) validateRoutineNodes(project.routine.nodes, "$.routine.nodes");
   return issues;
 }

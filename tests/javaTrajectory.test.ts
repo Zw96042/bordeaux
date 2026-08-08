@@ -91,6 +91,25 @@ describe("Java trajectory export", () => {
     expect(sections[1].endSample).toBeGreaterThan(sections[1].startSample);
   });
 
+  it("exports decisions and bound commands between paths", () => {
+    const project = createDemoProject();
+    const pathId = project.paths[0].id;
+    project.routine = { name: "Choose note", nodes: [{
+      id: "note-present", type: "decision", cond: "frc.robot.Conditions#hasNote",
+      thenLabel: "present", elseLabel: "missing",
+      then: [{ id: "score", type: "function", cat: "command", invocation: {
+        commandId: "frc.robot.AutoCommands#score",
+        arguments: { sequence: "2", target: { level: "L4" } },
+      } }, { id: "run-a", type: "path", ref: pathId }],
+      else: [{ id: "run-b", type: "path", ref: pathId }],
+    }] };
+
+    const routine = buildJavaTrajectory(project, generatedCatalog()).document.routine!;
+
+    expect(routine.nodes[0]).toEqual(expect.objectContaining({ type: "decision", cond: "frc.robot.Conditions#hasNote" }));
+    expect((routine.nodes[0] as { then: unknown[] }).then[0]).toEqual(expect.objectContaining({ cat: "command" }));
+  });
+
   it("blocks source-only, unresolved legacy, and schema-invalid commands", () => {
     const project = createDemoProject();
     project.paths[0].markers = [{ id: "legacy", f: 0.2, name: "Legacy", cmd: "shoot" }];

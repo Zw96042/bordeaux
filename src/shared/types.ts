@@ -330,7 +330,7 @@ export interface PathConstraints {
 export interface RoutineFunctionNode {
   id: string;
   type: "function";
-  cat: "terminate" | "sequence" | "generate" | "velocity";
+  cat: "command" | "terminate" | "sequence" | "generate" | "velocity";
   title?: string;
   trigger?: string;
   note?: string;
@@ -338,6 +338,8 @@ export interface RoutineFunctionNode {
   funcRef?: string;
   op?: string;
   target?: string;
+  /** Generated Java command invoked between path steps. */
+  invocation?: CommandInvocation;
 }
 
 export interface RoutinePathNode {

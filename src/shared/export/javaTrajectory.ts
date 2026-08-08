@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { buildBdxExport } from "./bdx";
 import { validateProjectJavaInvocations } from "../javaCommands";
-import type { BordeauxProject, CommandInvocation, FollowMode, JavaCommandCatalog, PathDoc, TrajectorySample } from "../types";
+import type { AutonomousRoutine, BordeauxProject, CommandInvocation, FollowMode, JavaCommandCatalog, PathDoc, RoutineNode, TrajectorySample } from "../types";
 
 const MAX_SAMPLE_COUNT = 1_000_000;
 const MAX_EVENT_COUNT = 10_000;
@@ -56,7 +56,7 @@ export interface JavaTrajectoryDocument {
     acceleration: "meters_per_second_squared";
   };
   robot: ReturnType<typeof buildBdxExport>["robot"];
-  routine: ReturnType<typeof buildBdxExport>["routine"];
+  routine: AutonomousRoutine | null;
   paths: JavaTrajectoryPath[];
 }
 
@@ -102,6 +102,25 @@ function followSections(path: PathDoc, samples: readonly TrajectorySample[]): Ja
     endSample: samples.length - 1,
   });
   return sections;
+}
+
+function deployableRoutine(project: BordeauxProject, pathIds: Set<string>): AutonomousRoutine | null {
+  if (!project.routine) return null;
+  const nodes = (source: RoutineNode[]): RoutineNode[] => source.map((node) => {
+    if (node.type === "path") {
+      if (!pathIds.has(node.ref)) throw new Error(`Routine path ${node.ref} is not Java-exportable`);
+      return { id: node.id, type: "path", ref: node.ref };
+    }
+    if (node.type === "decision") {
+      if (!/^[A-Za-z0-9_.:#()$,-]{1,256}$/.test(node.cond)) throw new Error(`Routine decision ${node.id} needs a stable condition ID`);
+      return { id: node.id, type: "decision", cond: node.cond, thenLabel: node.thenLabel, elseLabel: node.elseLabel, then: nodes(node.then), else: nodes(node.else) };
+    }
+    if (node.cat !== "command" || !node.invocation) {
+      throw new Error(`Routine function ${node.id} is simulation-only; use a bound Command step for Java export`);
+    }
+    return { id: node.id, type: "function", cat: "command", title: node.title, invocation: node.invocation };
+  });
+  return { name: project.routine.name, nodes: nodes(project.routine.nodes) };
 }
 
 export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaCommandCatalog): BuiltJavaTrajectory {
@@ -161,7 +180,7 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
     },
     units: native.units,
     robot: native.robot,
-    routine: native.routine,
+    routine: deployableRoutine(project, new Set(paths.map((path) => path.id))),
     paths,
   };
   const contents = `${JSON.stringify(document, null, 2)}\n`;
