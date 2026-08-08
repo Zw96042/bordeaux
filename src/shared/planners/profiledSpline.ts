@@ -33,26 +33,36 @@ function timeAtFraction(fraction: number, pts: Array<{ s: number }>, times: numb
 
 function diagnosticsFor(pathName: string, derived: any): ValidationIssue[] {
   return (derived.warnings || []).map((warning: any, index: number) => ({
-    severity: warning.sev === "high" ? "error" : "warning",
+    severity: warning.sev === "high" && warning.kind !== "vel" ? "error" : "warning",
     path: `paths.${pathName}.diagnostics[${index}]`,
     message: warning.text || "Trajectory diagnostic",
   }));
 }
 
 function markersFor(input: PlannerInput, pts: Array<{ s: number }>, times: number[]): BdxMarker[] {
-  return (input.path.markers || []).map((marker) => ({
-    name: marker.name,
-    command: marker.cmd ?? null,
-    group: marker.group ?? null,
-    timeS: R(timeAtFraction(marker.f, pts, times), 4),
-    fraction: R(marker.f, 5),
-  }));
+  const length = pts[pts.length - 1]?.s ?? 0;
+  return (input.path.markers || []).map((marker, index) => {
+    const fraction = marker.anchor === "dist" && length > 1e-9
+      ? Math.max(0, Math.min(1, (marker.d ?? marker.f * length) / length))
+      : marker.f;
+    return {
+      id: marker.id ?? `${input.path.id}:event:${index}`,
+      name: marker.name,
+      command: marker.cmd ?? null,
+      ...(marker.invocation ? { invocation: marker.invocation } : {}),
+      group: marker.group ?? null,
+      timeS: R(timeAtFraction(fraction, pts, times), 4),
+      fraction: R(fraction, 5),
+    };
+  });
 }
 
 export const profiledSplinePlanner: TrajectoryPlanner = {
   id: "profiledSpline",
   generate(input: PlannerInput): PlannerResult {
-    const derived = PM.derivePath(input.path, input.robot, input.samplesPerSegment ?? SAMPLES_PER_SEGMENT);
+    // Stationary rotations are sampled by the shared post-processor. Keep the
+    // authored turn visible to heading continuity, but do not time it here.
+    const derived = PM.derivePath(input.path, input.robot, input.samplesPerSegment ?? SAMPLES_PER_SEGMENT, { skipStationaryActions: true });
     const pts = derived.sample.pts || [];
     const metrics = derived.metrics || {};
     const times = derived.prof.t || [];

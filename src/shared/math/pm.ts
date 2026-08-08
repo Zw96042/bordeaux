@@ -194,7 +194,12 @@
     const decelG = (c.maxDecel != null && c.maxDecel > 0) ? c.maxDecel : accelG;
     const aFwd = new Array(n).fill(accelG), aBack = new Array(n).fill(decelG);
     const rangeAngV = new Array(n).fill(Infinity);
-    if (ranges.length) {
+    // Index i describes the interval (i - 1, i). Evaluating overlap instead of
+    // requiring both endpoints to be inside a policy preserves very short
+    // transition windows that fall between geometry samples.
+    const translationPriority = new Array(n).fill(false);
+    const headingTransitions = opts.headingTransitions || [];
+    if (ranges.length || headingTransitions.length) {
       for (let i = 0; i < n; i++) {
         const f = pts[i].s / totalS;
         let rv = Infinity, ra = Infinity, rd = Infinity, rw = Infinity;
@@ -211,6 +216,16 @@
         if (ra < Infinity) aFwd[i] = Math.min(accelG, ra);
         if (rd < Infinity) aBack[i] = Math.min(decelG, rd);
         if (rw < Infinity) rangeAngV[i] = rw * Math.PI / 180;
+      }
+      for (let i = 1; i < n; i++) {
+        const start = pts[i - 1].s / totalS, end = pts[i].s / totalS;
+        const overlaps = (lo, hi) => Math.min(end, hi) - Math.max(start, lo) >= -1e-9;
+        const activeRanges = ranges.filter((R) => overlaps(Math.min(R.f0, R.f1), Math.max(R.f0, R.f1)));
+        const activeTransitions = headingTransitions.filter((policy) => overlaps(policy.start, policy.end));
+        const activePolicies = activeRanges.length + activeTransitions.length;
+        translationPriority[i] = activePolicies > 0
+          && activeRanges.every((R) => R.rotationPriority === 'translation')
+          && activeTransitions.every((policy) => policy.rotationPriority === 'translation');
       }
     }
     // ---- rotational limit: cap v so the commanded heading can actually be tracked ----
@@ -230,7 +245,7 @@
         for (let i = 1; i < n; i++) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i - 1] * w[i - 1] + 2 * Aang * dth[i])));
         for (let i = n - 2; i >= 0; i--) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i + 1] * w[i + 1] + 2 * Aang * dth[i + 1])));
       }
-      for (let i = 0; i < n; i++) { const gi = Math.abs(g[i]); if (gi > 1e-4) { const vr = w[i] / gi; if (vr < v[i] - 0.05) rotLimited[i] = 1; v[i] = Math.min(v[i], vr); } }
+      for (let i = 0; i < n; i++) { const gi = Math.abs(g[i]); const translationInterval = i > 0 && translationPriority[i]; if (!translationInterval && gi > 1e-4) { const vr = w[i] / gi; if (vr < v[i] - 0.05) rotLimited[i] = 1; v[i] = Math.min(v[i], vr); } }
     }
     // forward
     for (let i = 1; i < n; i++) {
@@ -242,6 +257,56 @@
       const ds = pts[i + 1].s - pts[i].s;
       v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i + 1] * v[i + 1] + 2 * aBack[i] * ds)));
     }
+    // Enforce angular acceleration in the generated timing itself. A changing
+    // heading gradient can violate alpha even when omega is below its cap;
+    // solve the adjacent-sample bound against the interval time, then repeat
+    // the linear accel passes because either constraint may tighten the other.
+    if (head && head.length === n && Aang > 1e-4) {
+      const angularBudget = Aang * 0.8;
+      const intervalDt = (index, candidate, candidateIndex) => {
+        const ds = pts[index].s - pts[index - 1].s;
+        const before = candidateIndex === index - 1 ? candidate : v[index - 1];
+        const after = candidateIndex === index ? candidate : v[index];
+        return 2 * ds / Math.max(1e-6, before + after);
+      };
+      const intervalOmega = (index, candidate, candidateIndex) => {
+        if (index <= 0 || index >= n) return 0;
+        const dt = intervalDt(index, candidate, candidateIndex);
+        return dt > 1e-9 ? Math.abs(angWrap(head[index] - head[index - 1])) / dt : 0;
+      };
+      const capInterval = (interval, referenceInterval, variableIndex, referenceDtInterval) => {
+        const referenceOmega = intervalOmega(referenceInterval, v[variableIndex], -1);
+        const allowed = (candidate) => intervalOmega(interval, candidate, variableIndex) <= referenceOmega + angularBudget * intervalDt(referenceDtInterval, candidate, variableIndex) + 1e-9;
+        if (allowed(v[variableIndex])) return false;
+        let low = 0, high = v[variableIndex];
+        for (let iteration = 0; iteration < 28; iteration++) {
+          const candidate = (low + high) / 2;
+          if (allowed(candidate)) low = candidate; else high = candidate;
+        }
+        v[variableIndex] = low;
+        return true;
+      };
+      const stopped = new Set(opts.stopIdx || []);
+      const translationInterval = (interval) => interval > 0 && interval < n && translationPriority[interval];
+      for (let pass = 0; pass < 20; pass++) {
+        let changed = false;
+        for (let interval = 2; interval < n; interval++) {
+          if (!stopped.has(interval - 1) && !translationInterval(interval)) changed = capInterval(interval, interval - 1, interval, interval) || changed;
+        }
+        for (let interval = n - 2; interval >= 1; interval--) {
+          if (!stopped.has(interval) && !translationInterval(interval)) changed = capInterval(interval, interval + 1, interval - 1, interval + 1) || changed;
+        }
+        for (let i = 1; i < n; i++) {
+          const ds = pts[i].s - pts[i - 1].s;
+          v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * aFwd[i] * ds)));
+        }
+        for (let i = n - 2; i >= 0; i--) {
+          const ds = pts[i + 1].s - pts[i].s;
+          v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i + 1] * v[i + 1] + 2 * aBack[i] * ds)));
+        }
+        if (!changed) break;
+      }
+    }
     // time
     const t = new Array(n).fill(0);
     for (let i = 1; i < n; i++) {
@@ -249,15 +314,30 @@
       const vm = (v[i] + v[i - 1]) / 2;
       t[i] = t[i - 1] + (vm > 1e-4 ? ds / vm : 0);
     }
+    // Stationary turns happen after arrival and before any wait.
+    const turns = [], turnDelay = new Map(); let terminalDelay = 0;
+    (opts.turns || []).slice().sort((a, b) => a.idx - b.idx).forEach((turn) => {
+      if (turn.idx < 0 || turn.idx >= n) return;
+      let delta = angWrap(turn.end - turn.start);
+      if (turn.direction === 'clockwise' && delta > 0) delta -= Math.PI * 2;
+      if (turn.direction === 'counterclockwise' && delta < 0) delta += Math.PI * 2;
+      if (Math.abs(delta) < 1e-9) return;
+      const wMax = Math.max(1e-6, (turn.maxAngVel || 540) * D2R), aMax = Math.max(1e-6, (turn.maxAngAccel || 720) * D2R), jMax = Math.max(0, (turn.maxAngJerk || 0) * D2R);
+      const duration = Math.max(Math.abs(delta) * 1.875 / wMax, Math.sqrt(Math.abs(delta) * 5.77351 / aMax), jMax > 1e-9 ? Math.cbrt(Math.abs(delta) * 60 / jMax) : 0);
+      const t0 = t[turn.idx]; turns.push({ idx: turn.idx, t0, t1: t0 + duration, start: turn.start, delta }); turnDelay.set(turn.idx, duration);
+      for (let j = turn.idx + 1; j < n; j++) t[j] += duration;
+      if (turn.idx === n - 1) terminalDelay += duration;
+    });
     // dwell / wait-at-waypoint holds (memo §15) — only meaningful at stop points
     const holds = [];
     const dwell = (opts.dwell || []).slice().sort((a, b) => a.idx - b.idx);
     for (let d = 0; d < dwell.length; d++) {
       const dw = dwell[d]; if (!(dw.wait > 0) || dw.idx < 0 || dw.idx >= n) continue;
-      const t0 = t[dw.idx]; holds.push({ idx: dw.idx, t0, t1: t0 + dw.wait });
+      const t0 = t[dw.idx] + (turnDelay.get(dw.idx) || 0); holds.push({ idx: dw.idx, t0, t1: t0 + dw.wait });
       for (let j = dw.idx + 1; j < n; j++) t[j] += dw.wait;
+      if (dw.idx === n - 1) terminalDelay += dw.wait;
     }
-    return { v, t, totalTime: t[n - 1], holds, rotLimited };
+    return { v, t, totalTime: t[n - 1] + terminalDelay, holds, turns, rotLimited };
   }
 
   // heading anchors -> continuous heading along arclength fraction f in [0,1]
@@ -290,6 +370,17 @@
           const p = pts[hd.idx]; const f = pts[n - 1].s > 1e-6 ? p.s / pts[n - 1].s : 0;
           let heading = mode === 'tank' ? p.heading : headingAt(f, anchors); if (rev) heading += Math.PI;
           return { x: p.x, y: p.y, heading, speed: 0, s: p.s, f, hold: true };
+        }
+      }
+    }
+    if (prof.turns && prof.turns.length) {
+      for (let k = 0; k < prof.turns.length; k++) {
+        const turn = prof.turns[k];
+        if (time >= turn.t0 - 1e-9 && time <= turn.t1 + 1e-9) {
+          const p = pts[turn.idx], u = Math.max(0, Math.min(1, (time - turn.t0) / Math.max(1e-9, turn.t1 - turn.t0)));
+          const q = 10 * u ** 3 - 15 * u ** 4 + 6 * u ** 5, f = pts[n - 1].s > 1e-6 ? p.s / pts[n - 1].s : 0;
+          let heading = turn.start + turn.delta * q; if (rev) heading += Math.PI;
+          return { x: p.x, y: p.y, heading, speed: 0, s: p.s, f, turn: true };
         }
       }
     }
@@ -461,18 +552,138 @@
   ];
 
   // ---- constraint-range anchoring -------------------------------------------
-  // A range can be anchored three ways (the memo's request). We resolve each to
+  // A range can be anchored three ways. We resolve each to
   // concrete arclength fractions [f0,f1] against the CURRENT path so the profile
   // engine + overlays stay simple, while the stored anchor keeps the range
   // attached the way the user intends as the path is edited.
   //   param : fixed percent of the path        {f0,f1}
-  //   dist  : fixed metres of travel           {d0,d1}
-  //   wp    : pinned to a waypoint span        {w0,w1}
+  //   dist  : legacy fixed metres of travel    {d0,d1}
+  //   wp    : local positions within segments  {w0,t0,w1,t1}; omitted t values
+  //           preserve legacy whole-waypoint spans
   function waypointFracs(doc, smp) {
     const pts = smp.pts; const total = smp.length || 1; const n = doc.waypoints.length;
     if (!pts.length) return doc.waypoints.map(() => 0);
+    if (Array.isArray(smp.wpIdx) && smp.wpIdx.length === n) return smp.wpIdx.map((index) => pts[Math.max(0, Math.min(pts.length - 1, index))].s / total);
     const perSeg = (pts.length - 1) / Math.max(1, n - 1);
     return doc.waypoints.map((_, k) => { const i = Math.min(pts.length - 1, Math.round(k * perSeg)); return pts[i].s / total; });
+  }
+  function resolvedHeadingTransition(waypoint) {
+    const value = (waypoint && waypoint.headingTransition) || {};
+    return { placement: value.placement || 'after', rotationPriority: value.rotationPriority || 'heading', distanceM: value.distanceM != null ? value.distanceM : 0.75 };
+  }
+  function headingTransitionWindows(waypoints, modes, breaks, wpFrac, totalDistance) {
+    const total = Math.max(totalDistance || 0, 1e-9), windows = [];
+    for (let segment = 1; segment < modes.length; segment++) {
+      if (modes[segment] === modes[segment - 1] || breaks[segment]) continue;
+      const policy = resolvedHeadingTransition(waypoints[segment]);
+      const boundary = Math.max(0, Math.min(1, wpFrac[segment] != null ? wpFrac[segment] : 0));
+      const beforeShare = policy.placement === 'before' ? 1 : policy.placement === 'split' ? 0.5 : 0;
+      const previousValue = wpFrac[segment - 1] != null ? wpFrac[segment - 1] : boundary;
+      const nextValue = wpFrac[segment + 1] != null ? wpFrac[segment + 1] : boundary;
+      const previousLength = Math.max(0, boundary - Math.max(0, Math.min(1, previousValue)));
+      const nextLength = Math.max(0, Math.max(0, Math.min(1, nextValue)) - boundary);
+      const before = Math.min(previousLength, policy.distanceM * beforeShare / total);
+      const after = Math.min(nextLength, policy.distanceM * (1 - beforeShare) / total);
+      windows.push({ ...policy, waypointIndex: segment, start: boundary - before, end: boundary + after });
+    }
+    return windows;
+  }
+  function headingTransitionGoals(modes, breaks, wpIdx, pts, anchorsByLaw) {
+    const totalDistance = pts.length ? pts[pts.length - 1].s : 0, goals = [];
+    for (let segment = 1; segment < modes.length; segment++) {
+      const law = modes[segment];
+      if ((law !== 'manual' && law !== 'targets') || modes[segment - 1] === law || breaks[segment]) continue;
+      let spanEndSegment = segment;
+      while (spanEndSegment + 1 < modes.length && modes[spanEndSegment + 1] === law && !breaks[spanEndSegment + 1]) spanEndSegment++;
+      const boundaryIndex = Math.max(0, Math.min(pts.length - 1, wpIdx[segment]));
+      const spanEndIndex = Math.max(boundaryIndex, Math.min(pts.length - 1, wpIdx[spanEndSegment + 1]));
+      const boundaryDistance = pts[boundaryIndex].s, spanEndDistance = pts[spanEndIndex].s;
+      const anchor = anchorsByLaw[law].find((candidate) => {
+        const distance = Math.max(0, Math.min(1, candidate.f)) * totalDistance;
+        return distance >= boundaryDistance - 1e-9 && distance <= spanEndDistance + 1e-9;
+      });
+      if (anchor) goals.push({ segmentIndex: segment, distanceM: Math.max(boundaryDistance, Math.max(0, Math.min(1, anchor.f)) * totalDistance), heading: anchor.rad, spanEndIndex });
+    }
+    return goals;
+  }
+  function smoothHeadingTransitions(raw, modes, breaks, wpIdx, pts, waypoints, transitionGoals) {
+    if (!raw.length) return [];
+    transitionGoals = transitionGoals || [];
+    const unwrappedRaw = [raw[0]];
+    for (let i = 1; i < raw.length; i++) unwrappedRaw.push(unwrappedRaw[i - 1] + angWrap(raw[i] - unwrappedRaw[i - 1]));
+    const out = unwrappedRaw.slice();
+    const protectedAnchorIndices = new Set();
+    for (let segment = 1; segment < modes.length; segment++) {
+      if (modes[segment] === modes[segment - 1] || breaks[segment]) continue;
+      const boundary = Math.max(1, Math.min(out.length - 1, wpIdx[segment]));
+      const previousBoundary = Math.max(0, Math.min(boundary - 1, wpIdx[segment - 1]));
+      const nextBoundary = Math.max(boundary, Math.min(out.length - 1, wpIdx[segment + 1]));
+      let outgoingStart = Math.min(boundary + 1, nextBoundary);
+      while (outgoingStart < nextBoundary && pts[outgoingStart].s - pts[boundary].s <= 1e-9) outgoingStart++;
+      const policy = resolvedHeadingTransition(waypoints[segment]);
+      let protectedBefore = -1;
+      protectedAnchorIndices.forEach((index) => { if (index <= boundary) protectedBefore = Math.max(protectedBefore, index); });
+      const boundaryProtected = protectedBefore === boundary;
+      const authoredBeforeShare = policy.placement === 'before' ? 1 : policy.placement === 'split' ? 0.5 : 0;
+      const beforeShare = boundaryProtected ? 0 : authoredBeforeShare;
+      const incoming = boundaryProtected ? out[boundary] : out[boundary - 1];
+      const transitionGoal = transitionGoals.find((goal) => goal.segmentIndex === segment);
+      if (transitionGoal) {
+        const boundaryDistance = pts[boundary].s;
+        const beforeDistance = Math.min(policy.distanceM * beforeShare, Math.max(0, boundaryDistance - pts[previousBoundary].s));
+        const goalAtBoundary = transitionGoal.distanceM <= boundaryDistance + 1e-9;
+        const afterDistance = Math.min(policy.distanceM * (1 - beforeShare), Math.max(0, (goalAtBoundary ? pts[transitionGoal.spanEndIndex].s : transitionGoal.distanceM) - boundaryDistance));
+        const requestedStart = boundaryDistance - beforeDistance;
+        const requestedEnd = goalAtBoundary ? boundaryDistance + afterDistance : Math.min(transitionGoal.distanceM, boundaryDistance + afterDistance);
+        let startIndex = previousBoundary;
+        while (startIndex < boundary && pts[startIndex].s < requestedStart - 1e-9) startIndex++;
+        if (protectedBefore >= startIndex && protectedBefore < boundary) startIndex = protectedBefore + 1;
+        let anchorIndex = boundary;
+        while (anchorIndex < transitionGoal.spanEndIndex && pts[anchorIndex].s < transitionGoal.distanceM - 1e-9) anchorIndex++;
+        let endIndex = startIndex;
+        while (endIndex < transitionGoal.spanEndIndex && pts[endIndex].s < requestedEnd - 1e-9) endIndex++;
+        const goalIndex = goalAtBoundary ? endIndex : anchorIndex;
+        const startHeading = startIndex < boundary ? out[startIndex] : incoming;
+        const goalHeading = startHeading + angWrap(transitionGoal.heading - startHeading);
+        const startDistance = pts[startIndex].s, endDistance = pts[endIndex].s;
+        for (let i = startIndex; i <= goalIndex; i++) {
+          const t = endDistance > startDistance + 1e-9 ? Math.max(0, Math.min(1, (pts[i].s - startDistance) / (endDistance - startDistance))) : 1;
+          const smooth = t * t * t * (t * (t * 6 - 15) + 10);
+          out[i] = startHeading + (goalHeading - startHeading) * smooth;
+        }
+        if (goalIndex < transitionGoal.spanEndIndex) {
+          const nextIndex = goalIndex + 1;
+          const branchOffset = goalHeading + angWrap(raw[nextIndex] - goalHeading) - unwrappedRaw[nextIndex];
+          for (let i = nextIndex; i <= transitionGoal.spanEndIndex; i++) out[i] = unwrappedRaw[i] + branchOffset;
+        }
+        protectedAnchorIndices.add(goalIndex);
+        continue;
+      }
+      const outgoing = incoming + angWrap(raw[outgoingStart] - incoming), delta = outgoing - incoming;
+      const beforeDistance = Math.min(policy.distanceM * beforeShare, Math.max(0, pts[boundary].s - pts[previousBoundary].s));
+      if (beforeDistance > 1e-9) {
+        const startDistance = pts[boundary].s - beforeDistance;
+        for (let i = previousBoundary; i < boundary; i++) {
+          if (pts[i].s < startDistance - 1e-9) continue;
+          if (i <= protectedBefore) continue;
+          const t = Math.max(0, Math.min(1, (pts[i].s - startDistance) / beforeDistance));
+          const smooth = t * t * t * (t * (t * 6 - 15) + 10);
+          out[i] += delta * beforeShare * smooth;
+        }
+      }
+      const boundaryHeading = incoming + delta * beforeShare;
+      const afterDistance = Math.min(policy.distanceM * (1 - beforeShare), Math.max(0, pts[nextBoundary].s - pts[boundary].s));
+      let previous = boundaryHeading;
+      const afterStartIndex = boundaryProtected ? boundary + 1 : boundary;
+      for (let i = afterStartIndex; i <= nextBoundary; i++) {
+        const base = previous + angWrap(raw[i === boundary ? outgoingStart : i] - previous);
+        const t = afterDistance > 1e-9 ? Math.max(0, Math.min(1, (pts[i].s - pts[boundary].s) / afterDistance)) : 1;
+        const smooth = t * t * t * (t * (t * 6 - 15) + 10);
+        out[i] = base + (boundaryHeading - outgoing) * (1 - smooth);
+        previous = out[i];
+      }
+    }
+    return out;
   }
   function effectiveRanges(doc, smp) {
     const ranges = doc.ranges || []; const total = smp.length || 1;
@@ -480,14 +691,70 @@
     return ranges.map((r) => {
       let f0 = r.f0, f1 = r.f1;
       if (r.anchor === 'dist') { f0 = (r.d0 != null ? r.d0 : (r.f0 || 0) * total) / total; f1 = (r.d1 != null ? r.d1 : (r.f1 || 0) * total) / total; }
-      else if (r.anchor === 'wp' && wf) { const lo = Math.max(0, Math.min(wf.length - 1, r.w0 != null ? r.w0 : 0)); const hi = Math.max(0, Math.min(wf.length - 1, r.w1 != null ? r.w1 : wf.length - 1)); f0 = wf[lo]; f1 = wf[hi]; }
+      else if (r.anchor === 'wp' && wf) {
+        const localFraction = (waypoint, local, fallback) => {
+          if (local == null) return wf[Math.max(0, Math.min(wf.length - 1, waypoint != null ? waypoint : fallback))];
+          const segment = Math.max(0, Math.min(wf.length - 2, Math.round(waypoint != null ? waypoint : 0)));
+          const t = Math.max(0, Math.min(1, local));
+          return wf[segment] + (wf[segment + 1] - wf[segment]) * t;
+        };
+        f0 = localFraction(r.w0, r.t0, 0); f1 = localFraction(r.w1, r.t1, wf.length - 1);
+      }
       f0 = Math.max(0, Math.min(1, f0 || 0)); f1 = Math.max(0, Math.min(1, f1 || 0));
-      return { f0, f1, maxVel: r.maxVel, maxAccel: r.maxAccel, maxDecel: r.maxDecel, maxAngVel: r.maxAngVel, maxAngAccel: r.maxAngAccel, anchor: r.anchor || 'param', name: r.name };
+      return { f0, f1, maxVel: r.maxVel, maxAccel: r.maxAccel, maxDecel: r.maxDecel, maxAngVel: r.maxAngVel, maxAngAccel: r.maxAngAccel, rotationPriority: r.rotationPriority, anchor: r.anchor || 'param', name: r.name };
     });
   }
 
+  function featureFraction(feature, smp) {
+    const total = smp.length || 1;
+    const raw = feature && feature.anchor === 'dist'
+      ? (feature.d != null ? feature.d : (feature.f || 0) * total) / total
+      : (feature && feature.f) || 0;
+    return Math.max(0, Math.min(1, raw));
+  }
+
+  function remapWaypointRange(range, oldToNew, removedIndex, newCount) {
+    if (!range || range.anchor !== 'wp') return range;
+    const next = { ...range };
+    const last = Math.max(0, newCount - 1);
+    if (range.t0 != null || range.t1 != null) {
+      const remapLocal = (segment, local) => {
+        const authored = Number.isInteger(segment) ? segment : 0;
+        const oldSegment = Math.max(0, Math.min(oldToNew.length - 2, authored));
+        const oldLocal = Math.max(0, Math.min(1, local != null ? local : (authored >= oldToNew.length - 1 ? 1 : 0)));
+        const a = oldToNew[oldSegment], b = oldToNew[oldSegment + 1];
+        if (!Number.isInteger(a) || !Number.isInteger(b) || newCount < 2) {
+          const fallback = Number.isInteger(a) ? a : Math.max(0, Math.min(last, oldSegment));
+          return { segment: Math.max(0, Math.min(Math.max(0, newCount - 2), fallback)), local: oldLocal };
+        }
+        const position = Math.max(0, Math.min(last, a + (b - a) * oldLocal));
+        const mappedSegment = Math.min(Math.max(0, newCount - 2), Math.floor(position));
+        return { segment: mappedSegment, local: position >= last ? 1 : position - mappedSegment };
+      };
+      let start = remapLocal(range.w0, range.t0), end = remapLocal(range.w1, range.t1);
+      if (start.segment + start.local > end.segment + end.local) { const swap = start; start = end; end = swap; }
+      next.w0 = start.segment; next.t0 = start.local; next.w1 = end.segment; next.t1 = end.local;
+      return next;
+    }
+    const oldStart = Number.isInteger(range.w0) ? range.w0 : 0;
+    const oldEnd = Number.isInteger(range.w1) ? range.w1 : oldToNew.length - 1;
+    const resolve = (value, start) => {
+      const mapped = oldToNew[value];
+      if (Number.isInteger(mapped)) return mapped;
+      if (value === removedIndex) return start ? Math.min(value, last) : Math.max(0, value - 1);
+      return Math.max(0, Math.min(last, value));
+    };
+    if (oldStart === removedIndex && oldEnd === removedIndex) {
+      next.w0 = next.w1 = Math.min(removedIndex, last);
+      return next;
+    }
+    const a = resolve(oldStart, true), b = resolve(oldEnd, false);
+    next.w0 = Math.min(a, b); next.w1 = Math.max(a, b);
+    return next;
+  }
+
   // ---- one-call derivation: everything the field + panels need for a path ----
-  function derivePath(doc, robot, perSeg) {
+  function derivePath(doc, robot, perSeg, options) {
     perSeg = perSeg || 56;
     const smp = sample(doc.waypoints, perSeg);
     const pts = smp.pts;
@@ -503,21 +770,59 @@
     const sv = doc.waypoints[0] && doc.waypoints[0].stop ? 0 : doc.startVel;
     const gv = doc.waypoints[nWp - 1] && doc.waypoints[nWp - 1].stop ? 0 : doc.goalVel;
     const effRanges = effectiveRanges(doc, smp);
-    // heading-generation mode (memo §3/§5): tank always follows tangent; swerve uses the path mode
+    // Heading mode is owned by the outgoing segment; omitted overrides inherit the path default.
     const headingMode = (robot && robot.drive === 'tank') ? 'tangent' : (doc.headingMode || 'targets');
-    const mode = headingMode === 'tangent' ? 'tank' : 'swerve';
-    const entries = [];
-    if (headingMode !== 'tangent') {
-      doc.waypoints.forEach((w, k) => { const isEnd = k === 0 || k === nWp - 1; if (isEnd || w.thetaOn) entries.push({ f: wpFrac[k], rad: (w.theta || 0) * D2R }); });
-      if (headingMode === 'targets') (doc.targets || []).forEach((t) => entries.push({ f: t.f, rad: t.deg * D2R }));
-    }
-    const anchors = buildAnchors(entries);
-    const head = pts.map((p) => { const f = total > 1e-6 ? p.s / total : 0; return mode === 'tank' ? p.heading : headingAt(f, anchors); });
-    const dwell = [];
+    const effectiveHeadingMode = (segment) => (robot && robot.drive === 'tank')
+      ? 'tangent'
+      : ((doc.waypoints[segment] && doc.waypoints[segment].segmentHeadingMode) || headingMode);
+    const manualEntries = [], targetEntries = [];
+    doc.waypoints.forEach((w, k) => {
+      const isEnd = k === 0 || k === nWp - 1;
+      if (isEnd || w.thetaOn) {
+        const entry = { f: wpFrac[k], rad: (w.theta || 0) * D2R };
+        manualEntries.push(entry); targetEntries.push({ ...entry });
+      }
+    });
+    (doc.targets || []).forEach((t) => targetEntries.push({ f: featureFraction(t, smp), rad: t.deg * D2R }));
+    const manualAnchors = buildAnchors(manualEntries), targetAnchors = buildAnchors(targetEntries);
+    const rawHead: number[] = [];
+    const segmentModes = doc.waypoints.slice(0, -1).map((_, segment) => effectiveHeadingMode(segment));
+    pts.forEach((p, pointIndex) => {
+      const f = total > 1e-6 ? p.s / total : 0;
+      let segment = 0;
+      while (segment < nWp - 2 && pointIndex >= wpIdx[segment + 1]) segment++;
+      const segmentMode = effectiveHeadingMode(segment);
+      if (segmentMode === 'lookAt') {
+        const target = doc.waypoints[segment] && doc.waypoints[segment].segmentLookAt;
+        const dx = target ? target.x - p.x : 0, dy = target ? target.y - p.y : 0;
+        rawHead.push(Math.hypot(dx, dy) > 1e-6 ? Math.atan2(dy, dx) : (rawHead.length ? rawHead[rawHead.length - 1] : p.heading));
+      } else {
+        rawHead.push(segmentMode === 'tangent' ? p.heading : headingAt(f, segmentMode === 'targets' ? targetAnchors : manualAnchors));
+      }
+    });
+    const segmentLaws = doc.waypoints.slice(0, -1).map((w, segment) => segmentModes[segment] === 'lookAt' ? 'lookAt:' + (w.segmentLookAt ? w.segmentLookAt.x : '') + ':' + (w.segmentLookAt ? w.segmentLookAt.y : '') : segmentModes[segment]);
+    const transitionBreaks = doc.waypoints.slice(0, -1).map((w) => !!w.turnInPlace);
+    const headingTransitions = headingTransitionWindows(doc.waypoints, segmentLaws, transitionBreaks, wpFrac, total);
+    const transitionGoals = headingTransitionGoals(segmentLaws, transitionBreaks, wpIdx, pts, {
+      manual: manualAnchors,
+      targets: targetAnchors,
+    });
+    const head = smoothHeadingTransitions(rawHead, segmentLaws, transitionBreaks, wpIdx, pts, doc.waypoints, transitionGoals);
+    const allTangent = doc.waypoints.slice(0, -1).every((_, segment) => effectiveHeadingMode(segment) === 'tangent');
+    const mode = allTangent ? 'tank' : 'swerve';
+    const anchors = mode === 'tank' ? [] : buildAnchors(pts.map((p, i) => ({ f: total > 1e-6 ? p.s / total : 0, rad: head[i] })));
+    const dwell = [], turns = [];
     doc.waypoints.forEach((w, k) => { if (w.stop && w.wait > 0) dwell.push({ idx: wpIdx[k], wait: w.wait }); });
-    const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, heading: head, dwell });
+    if (!(options && options.skipStationaryActions)) doc.waypoints.forEach((w, k) => { if (w.stop && w.turnInPlace) turns.push({ idx: wpIdx[k], start: k > 0 ? head[Math.max(0, wpIdx[k] - 1)] : head[0], end: w.turnInPlace.headingDeg * D2R, direction: w.turnInPlace.direction, maxAngVel: doc.constraints.maxAngVel, maxAngAccel: Math.min(doc.constraints.maxAngAccel, doc.constraints.maxAngDecel || doc.constraints.maxAngAccel), maxAngJerk: doc.constraints.maxAngJerk }); });
+    const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns });
     const mtr = metrics(pts, prof, anchors, mode);
     const warnings = analyze(pts, prof, mtr, robot || {});
+    doc.waypoints.slice(0, -1).forEach((w, segment) => {
+      if (w.segmentHeadingMode !== 'lookAt' || !w.segmentLookAt) return;
+      let nearest = Infinity;
+      for (let i = wpIdx[segment]; i <= wpIdx[segment + 1] && i < pts.length; i++) nearest = Math.min(nearest, Math.hypot(pts[i].x - w.segmentLookAt.x, pts[i].y - w.segmentLookAt.y));
+      if (nearest < 0.05) warnings.push({ f: wpFrac[segment], kind: 'lookAt', sev: 'high', text: 'Tracked field point lies on the driven segment' });
+    });
     // rotational diagnostics: flag contiguous rotation-limited stretches (memo §16)
     if (prof.rotLimited) {
       const rl = prof.rotLimited;
@@ -539,5 +844,22 @@
     });
     return { sample: smp, prof, anchors, metrics: mtr, warnings, wpFrac, wpIdx, mode, effRanges, headingMode, rev: !!doc.driveBackward };
   }
-export const PM = { bez, bezD, sample, profile, poseAtTime, headingAt, metrics, analyze, metricColor, metricGradient, METRICS, SEGTYPES, buildAnchors, pointAtFraction, nearestFraction, autoHandles, angWrap, angLerp, D2R, R2D, lerp, derivePath, effectiveRanges, waypointFracs };
+  function jigglePositions(anchor, baseRad, options, bounds = { w: 17.548, h: 8.052 }) {
+    const distance = Number(options.distanceM ?? options.distance), strokes = Math.round(Number(options.strokes)), startDeg = Number(options.startDeg), stepDeg = Number(options.stepDeg);
+    if (!(distance >= 0.03) || strokes < 2 || strokes > 12 || !Number.isFinite(startDeg + stepDeg)) return null;
+    const directions = new Set(), positions = [];
+    for (let stroke = 0; stroke < strokes; stroke++) {
+      const relativeDeg = startDeg + stepDeg * stroke;
+      const key = ((relativeDeg % 360) + 360) % 360;
+      const roundedKey = Math.round(key * 1000) / 1000;
+      if (directions.has(roundedKey)) return null;
+      directions.add(roundedKey);
+      const angle = baseRad + relativeDeg * D2R;
+      const point = { x: anchor.x + Math.cos(angle) * distance, y: anchor.y + Math.sin(angle) * distance };
+      if (point.x < 0 || point.x > bounds.w || point.y < 0 || point.y > bounds.h) return null;
+      positions.push(point, { x: anchor.x, y: anchor.y });
+    }
+    return positions;
+  }
+export const PM = { bez, bezD, sample, profile, poseAtTime, headingAt, metrics, analyze, metricColor, metricGradient, METRICS, SEGTYPES, buildAnchors, pointAtFraction, nearestFraction, autoHandles, angWrap, angLerp, D2R, R2D, lerp, derivePath, jigglePositions, effectiveRanges, featureFraction, remapWaypointRange, waypointFracs };
 export default PM;

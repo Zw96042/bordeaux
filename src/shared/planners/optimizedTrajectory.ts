@@ -43,6 +43,21 @@ function remapTiming(samples: TrajectorySample[], velocities: number[]): Traject
   });
 }
 
+function timeAtFraction(samples: TrajectorySample[], fraction: number): number {
+  if (samples.length === 0) return 0;
+  const target = Math.max(0, Math.min(1, fraction));
+  if (target <= samples[0].f) return samples[0].t;
+  for (let index = 1; index < samples.length; index += 1) {
+    const current = samples[index];
+    if (current.f >= target) {
+      const previous = samples[index - 1];
+      const span = Math.max(1e-9, current.f - previous.f);
+      return previous.t + (current.t - previous.t) * ((target - previous.f) / span);
+    }
+  }
+  return samples[samples.length - 1].t;
+}
+
 function smoothVelocities(input: PlannerInput, samples: TrajectorySample[]): number[] {
   const maxSpeed = Math.max(0.01, input.robot.maxSpeed || input.path.constraints.maxVel || 0.01);
   const maxVel = Math.max(0.01, Math.min(maxSpeed, input.path.constraints.maxVel || maxSpeed));
@@ -136,14 +151,13 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
       const velocities = smoothVelocities(input, base.samples);
       const samples = remapTiming(base.samples, velocities);
       const totalTimeS = R(samples[samples.length - 1]?.t ?? base.totalTimeS, 4);
-      const markerScale = base.totalTimeS > 1e-9 ? totalTimeS / base.totalTimeS : 1;
 
       return {
         planner: "optimizedTrajectory",
         totalTimeS,
         totalDistanceM: base.totalDistanceM,
         samples,
-        markers: base.markers.map((marker) => ({ ...marker, timeS: R(marker.timeS * markerScale, 4) })),
+        markers: base.markers.map((marker) => ({ ...marker, timeS: R(timeAtFraction(samples, marker.fraction), 4) })),
         diagnostics: base.diagnostics,
         optimization: diagnostics(samples, performance.now() - started),
       };
@@ -163,4 +177,3 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
     }
   },
 };
-
