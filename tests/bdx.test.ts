@@ -465,7 +465,7 @@ describe("canonical shipped renderer", () => {
     const html = fs.readFileSync(path.join(process.cwd(), "public/renderer/index.html"), "utf8");
     const styles = fs.readFileSync(path.join(process.cwd(), "public/renderer/styles.css"), "utf8");
     const app = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js"), "utf8");
-    const ui = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/760c13dd-1656-409e-a1f2-58b2285a7f6e.js"), "utf8");
+    const ui = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/ui-primitives.js"), "utf8");
     expect(html).toContain("Content-Security-Policy");
     expect(styles).toContain(":focus-visible");
     expect(styles).toContain(".numbox .numinput:focus-visible");
@@ -490,7 +490,7 @@ describe("canonical shipped renderer", () => {
   });
 
   it("lets the active constraint-range tool claim segment hit lines", () => {
-    const field = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js"), "utf8");
+    const field = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/field-view.js"), "utf8");
     expect(field).toContain("if (tool === 'range' && pts.length > 1) { startRangeDrag(world, visit); return; }");
     expect(field).toContain("tool === 'waypoint' || tool === 'rotation' || tool === 'marker'");
     expect(field).toContain("tool === 'range' ? 'crosshair'");
@@ -553,7 +553,7 @@ describe("canonical shipped renderer", () => {
 
   it("keeps playback, direct target rotation, and shift-delete wired into the editor", () => {
     const app = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js"), "utf8");
-    const field = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js"), "utf8");
+    const field = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/field-view.js"), "utf8");
     expect(app).toContain("const togglePlayback = useCallback");
     expect(app).toContain("playRef.current >= totalNow - 1e-3");
     expect(field).toContain("'data-role': 'rth'");

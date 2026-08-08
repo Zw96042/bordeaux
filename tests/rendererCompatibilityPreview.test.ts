@@ -34,7 +34,7 @@ interface RendererWindow {
 
 function rendererMath() {
   const window: RendererWindow = {};
-  const source = fs.readFileSync(new URL("../public/renderer/assets/91d3dc25-ddca-4323-acb3-c8839e67735f.js", import.meta.url), "utf8");
+  const source = fs.readFileSync(new URL("../public/renderer/assets/path-math.js", import.meta.url), "utf8");
   vm.runInNewContext(source, { window, console, Math, Number, Set, Map, Infinity, isFinite });
   return window.PM!;
 }
@@ -43,14 +43,14 @@ function rendererUi() {
   const window: RendererWindow = {};
   const noop = () => undefined;
   const React = { useState: noop, useRef: noop, useEffect: noop, useId: () => "id", createElement: noop };
-  const source = fs.readFileSync(new URL("../public/renderer/assets/760c13dd-1656-409e-a1f2-58b2285a7f6e.js", import.meta.url), "utf8");
+  const source = fs.readFileSync(new URL("../public/renderer/assets/ui-primitives.js", import.meta.url), "utf8");
   vm.runInNewContext(source, { window, React, console, Math, Number, Infinity });
   return window.UI!;
 }
 
 describe("renderer compatibility preview", () => {
   it("rotates the field artwork with overlays in Red view", () => {
-    const source = fs.readFileSync(new URL("../public/renderer/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
+    const source = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
     expect(source).toContain("const FIELD_CX = (X0 + X1) / 2, FIELD_CY = (Y0 + Y1) / 2");
     expect(source).toContain("transform: flip ? `rotate(180 ${FIELD_CX} ${FIELD_CY})` : undefined");
   });
@@ -507,7 +507,7 @@ describe("renderer compatibility preview", () => {
   });
 
   it("keeps Select mode non-destructive and previews compatibility insertions", () => {
-    const field = fs.readFileSync(new URL("../public/renderer/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
     const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
 
     expect(field).not.toContain("if (d.onPath) actions.addWaypoint(d.world)");
@@ -523,7 +523,7 @@ describe("renderer compatibility preview", () => {
     const panels = fs.readFileSync(new URL("../public/renderer/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
     const inspector = fs.readFileSync(new URL("../public/renderer/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
     const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
-    const field = fs.readFileSync(new URL("../public/renderer/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
     const styles = fs.readFileSync(new URL("../public/renderer/styles.css", import.meta.url), "utf8");
 
     expect(panels).toContain("actions.setTool('waypoint')");
@@ -677,10 +677,10 @@ describe("renderer compatibility preview", () => {
   });
 
   it("splits stopped Bezier geometry and exposes segment-local heading modes", () => {
-    const math = fs.readFileSync(new URL("../public/renderer/assets/91d3dc25-ddca-4323-acb3-c8839e67735f.js", import.meta.url), "utf8");
+    const math = fs.readFileSync(new URL("../public/renderer/assets/path-math.js", import.meta.url), "utf8");
     const inspector = fs.readFileSync(new URL("../public/renderer/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
     const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
-    const field = fs.readFileSync(new URL("../public/renderer/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
 
     expect(math).toContain("function lvBezierPiece");
     expect(math).toContain("raw[end].stop || end === raw.length - 1");
@@ -702,7 +702,7 @@ describe("renderer compatibility preview", () => {
   });
 
   it("mirrors authored heading-transition controls in the browser planner and inspector", () => {
-    const math = fs.readFileSync(new URL("../public/renderer/assets/91d3dc25-ddca-4323-acb3-c8839e67735f.js", import.meta.url), "utf8");
+    const math = fs.readFileSync(new URL("../public/renderer/assets/path-math.js", import.meta.url), "utf8");
     const inspector = fs.readFileSync(new URL("../public/renderer/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
     const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
 
@@ -721,7 +721,7 @@ describe("renderer compatibility preview", () => {
 
   it("uses segmented controls instead of native dropdowns for planner and segment choices", () => {
     const styles = fs.readFileSync(new URL("../public/renderer/styles.css", import.meta.url), "utf8");
-    const ui = fs.readFileSync(new URL("../public/renderer/assets/760c13dd-1656-409e-a1f2-58b2285a7f6e.js", import.meta.url), "utf8");
+    const ui = fs.readFileSync(new URL("../public/renderer/assets/ui-primitives.js", import.meta.url), "utf8");
     const panels = fs.readFileSync(new URL("../public/renderer/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
     const inspector = fs.readFileSync(new URL("../public/renderer/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
 
@@ -747,8 +747,8 @@ describe("renderer compatibility preview", () => {
   });
 
   it("routes overlapping field visits through a stable ordered candidate", () => {
-    const math = fs.readFileSync(new URL("../public/renderer/assets/91d3dc25-ddca-4323-acb3-c8839e67735f.js", import.meta.url), "utf8");
-    const field = fs.readFileSync(new URL("../public/renderer/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
+    const math = fs.readFileSync(new URL("../public/renderer/assets/path-math.js", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
     const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
 
     expect(math).toContain("function nearestVisits");
@@ -771,7 +771,7 @@ describe("renderer compatibility preview", () => {
   it("keeps the inspector modeless and independently collapsible", () => {
     const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
     const inspector = fs.readFileSync(new URL("../public/renderer/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
-    const ui = fs.readFileSync(new URL("../public/renderer/assets/760c13dd-1656-409e-a1f2-58b2285a7f6e.js", import.meta.url), "utf8");
+    const ui = fs.readFileSync(new URL("../public/renderer/assets/ui-primitives.js", import.meta.url), "utf8");
     const styles = fs.readFileSync(new URL("../public/renderer/styles.css", import.meta.url), "utf8");
 
     expect(app).toContain("const [inspectorOpen, setInspectorOpen] = useState(true)");
@@ -787,7 +787,7 @@ describe("renderer compatibility preview", () => {
   it("opens the hidden inspector when editable path items are double-clicked", () => {
     const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
     const outline = fs.readFileSync(new URL("../public/renderer/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
-    const field = fs.readFileSync(new URL("../public/renderer/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
 
     expect(app).toContain("openInspector: () => setInspectorOpen(true)");
     expect(outline).toContain("const inspectItem = (actions, kind, index, event)");
@@ -808,10 +808,10 @@ describe("renderer compatibility preview", () => {
   });
 
   it("wires stationary turns, endpoint jiggles, and draggable segment track points", () => {
-    const math = fs.readFileSync(new URL("../public/renderer/assets/91d3dc25-ddca-4323-acb3-c8839e67735f.js", import.meta.url), "utf8");
+    const math = fs.readFileSync(new URL("../public/renderer/assets/path-math.js", import.meta.url), "utf8");
     const app = fs.readFileSync(new URL("../public/renderer/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
     const inspector = fs.readFileSync(new URL("../public/renderer/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
-    const field = fs.readFileSync(new URL("../public/renderer/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
 
     expect(math).toContain("function jigglePositions");
     expect(math).toContain("prof.turns");
