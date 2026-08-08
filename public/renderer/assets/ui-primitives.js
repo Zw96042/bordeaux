@@ -153,6 +153,83 @@
         .filter((element) => element.getClientRects().length > 0 && !panelRef.current?.contains(element));
       const index = focusable.indexOf(triggerRef.current);
       const next = focusable[index + (backward ? -1 : 1)];
+      setOpen(false);
+      requestAnimationFrame(() => (next || triggerRef.current)?.focus());
+    };
+    const handleKeyDown = (event) => {
+      if (!open) {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          setOpen(true);
+        }
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setOpen(false);
+        triggerRef.current && triggerRef.current.focus();
+      } else if (event.key === 'Tab') {
+        event.preventDefault();
+        focusAfterTrigger(event.shiftKey);
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        focusOption(activeIndex + 1);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        focusOption(activeIndex - 1);
+      } else if (event.key === 'Enter' && visibleItems[activeIndex]) {
+        event.preventDefault();
+        choose(visibleItems[activeIndex].value);
+      }
+    };
+
+    const panel = open && panelStyle && ReactDOM.createPortal(h('div', { ref: panelRef, className: 'cmd-picker-panel dropdown-panel', style: panelStyle, onKeyDown: handleKeyDown },
+      showSearch && h('div', { className: 'cmd-picker-search' }, h(Icon, { name: 'search', size: 14 }),
+        h('label', { className: 'sr-only', htmlFor: id + '-search' }, 'Filter ' + pickerName.toLowerCase()),
+        h('input', { id: id + '-search', ref: searchRef, type: 'search', value: query,
+          placeholder: 'Filter ' + pickerName.toLowerCase() + '…', autoComplete: 'off', spellCheck: false,
+          'data-lpignore': 'true', 'data-1p-ignore': true, 'aria-controls': listboxId,
+          role: 'combobox', 'aria-expanded': true, 'aria-autocomplete': 'list',
+          'aria-activedescendant': visibleItems[activeIndex] ? listboxId + '-option-' + activeIndex : undefined,
+          onChange: (event) => setQuery(event.target.value) })),
+      h('div', { id: listboxId, className: 'cmd-picker-list', role: 'listbox', 'aria-labelledby': label ? labelId : undefined, 'aria-label': label ? undefined : pickerName },
+        visibleItems.length === 0 ? h('div', { className: 'cmd-picker-empty' }, 'No matches')
+          : visibleItems.map((item, index) => h('button', { key: item.value,
+              id: listboxId + '-option-' + index,
+              ref: (node) => { optionRefs.current[index] = node; },
+              className: 'cmd-picker-option' + (index === activeIndex ? ' active' : ''), type: 'button',
+              role: 'option', tabIndex: -1, 'aria-selected': item.value === value, 'data-value': item.value,
+              onMouseEnter: () => setActiveIndex(index), onClick: () => choose(item.value) },
+            h('span', { className: 'cmd-picker-check' }, item.value === value && h(Icon, { name: 'check', size: 13 })),
+            h('span', { className: 'cmd-picker-option-copy' }, h('strong', { title: item.label }, item.label), item.meta && h('small', null, item.meta)),
+            item.badge && h('span', { className: 'cmd-picker-badge' }, item.badge))),
+        hiddenMatchCount > 0 && h('div', { className: 'cmd-picker-more', role: 'status' },
+          visibleItems.length + ' of ' + filteredItems.length + ' shown · Keep typing to narrow results')),
+      allowCustom && h('form', { className: 'cmd-picker-custom', onSubmit: (event) => {
+        event.preventDefault();
+        const exactValue = customDraft.trim();
+        if (exactValue) choose(exactValue);
+      } },
+        h('label', { className: 'sr-only', htmlFor: id + '-custom' }, customLabel),
+        h('input', { id: id + '-custom', value: customDraft, placeholder: customPlaceholder,
+          autoComplete: 'off', spellCheck: false, 'aria-label': customLabel,
+          onKeyDown: (event) => { if (event.key !== 'Escape' && event.key !== 'Tab') event.stopPropagation(); },
+          onChange: (event) => setCustomDraft(event.target.value) }),
+        h('button', { type: 'submit', disabled: customDraft.trim().length === 0 }, 'Use'))), document.body);
+
+    return h('div', { className: 'cmd-picker dropdown' + (compact ? ' compact' : '') + (className ? ' ' + className : ''), ref: rootRef, onKeyDown: handleKeyDown },
+      label && h('span', { id: labelId, className: 'fieldlabel' }, label),
+      h('button', { id, ref: triggerRef, className: 'cmd-picker-trigger', type: 'button', role: 'combobox',
+        'aria-labelledby': label ? labelId + ' ' + id + '-value' : undefined, 'aria-label': label ? undefined : pickerName,
+        'aria-controls': listboxId, 'aria-expanded': open,
+        'aria-haspopup': 'listbox', disabled, onClick: () => setOpen((current) => !current) },
+        icon && h(Icon, { name: icon, size: 14 }),
+        h('span', { id: id + '-value', title: selected ? selected.label : placeholder }, selected ? selected.label : placeholder),
+        selected && selected.badge && h('small', null, selected.badge),
+        h(Icon, { name: 'chevron', size: 13 })),
+      panel);
+  }
+
   // numeric field with drag-to-scrub
   function Num({ label, value, onChange, unit, step = 0.01, min, max, precision = 2, accentDrag }) {
     const id = useId();
@@ -257,5 +334,5 @@
             it.hint && h('span', { className: 'ctxmenu-k' }, it.hint))));
   }
 
-  window.UI = { Icon, IconBtn, Num, Section, Toggle, Seg, ContextMenu, constraintRangeSummary };
+  window.UI = { Icon, IconBtn, Dropdown, Num, Section, Toggle, Seg, ContextMenu, constraintRangeSummary };
 })();
