@@ -24,8 +24,20 @@ export interface RobotConfig {
     kind: "polygon";
     verticesM: ControlPoint[];
   };
+  /** Editor hint used to preserve parameterized footprint controls across saves. */
+  footprintPreset?:
+    | { kind: "round"; vertices: number }
+    | { kind: "trapezoid"; frontWidthM: number; rearWidthM: number }
+    | { kind: "custom" };
   /** Optional strategy-facing mechanism details used only by agent-assisted planning. */
   planning?: RobotPlanningProfile;
+  /** Optional drivetrain inputs used to derive the free chassis speed. */
+  driveModel?: {
+    motorId: string;
+    motorFreeRpm: number;
+    gearRatio: number;
+    wheelDiameterM: number;
+  };
   maxSpeed: number;
 }
 

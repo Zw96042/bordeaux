@@ -68,6 +68,24 @@ describe("robot footprint geometry", () => {
     expect(validateProject(project).issues.some((issue) => issue.path === "$.robot.footprint.verticesM")).toBe(true);
   });
 
+  it("validates editable footprint preset parameters", () => {
+    const project = createDemoProject();
+    project.robot.footprintPreset = { kind: "round", vertices: 7 };
+    expect(validateProject(project).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "$.robot.footprintPreset.vertices" }),
+    ]));
+
+    project.robot.footprintPreset = { kind: "trapezoid", frontWidthM: project.robot.w + 0.1, rearWidthM: project.robot.w };
+    expect(validateProject(project).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "$.robot.footprintPreset" }),
+    ]));
+
+    project.robot.footprintPreset = { kind: "custom" };
+    expect(validateProject(project).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "$.robot.footprint" }),
+    ]));
+  });
+
   it("validates optional agent planning geometry without inventing defaults", () => {
     const project = createDemoProject();
     expect(project.robot.planning).toBeUndefined();
@@ -81,5 +99,34 @@ describe("robot footprint geometry", () => {
     project.robot.planning.intake!.maxCollectSpeedMps = 2;
     project.robot.planning.intake!.directionDeg = 181;
     expect(validateProject(project).issues).toEqual(expect.arrayContaining([expect.objectContaining({ path: "$.robot.planning.intake.directionDeg" })]));
+  });
+
+  it("validates an optional motor-derived drive model", () => {
+    const project = createDemoProject();
+    project.robot.driveModel = {
+      motorId: "rev-neo-v1",
+      motorFreeRpm: 5676,
+      gearRatio: 6.75,
+      wheelDiameterM: 0.1016,
+    };
+    project.robot.maxSpeed = project.robot.driveModel.motorFreeRpm / 60
+      * Math.PI * project.robot.driveModel.wheelDiameterM / project.robot.driveModel.gearRatio;
+    expect(validateProject(project).ok).toBe(true);
+
+    project.robot.driveModel.gearRatio = 0;
+    expect(validateProject(project).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "$.robot.driveModel.gearRatio" }),
+    ]));
+  });
+
+  it("validates the per-path LabVIEW trajectory type", () => {
+    const project = createDemoProject();
+    project.paths[0].labview = { ...project.paths[0].labview, trajectoryType: "clothoid" };
+    expect(validateProject(project).ok).toBe(true);
+
+    project.paths[0].labview.trajectoryType = "arc" as "clothoid";
+    expect(validateProject(project).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "$.paths[0].labview.trajectoryType" }),
+    ]));
   });
 });

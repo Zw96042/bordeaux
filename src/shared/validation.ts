@@ -39,6 +39,25 @@ function validatePoint(issues: ValidationIssue[], value: unknown, path: string, 
 }
 
 function validateRobotFootprint(issues: ValidationIssue[], robot: RecordValue): void {
+  if (robot.footprintPreset !== undefined) {
+    const presetPath = "$.robot.footprintPreset";
+    if (!isRecord(robot.footprintPreset) || !["round", "trapezoid", "custom"].includes(String(robot.footprintPreset.kind))) {
+      issues.push(issue(presetPath, "Robot footprint preset must be round, trapezoid, or custom"));
+    } else if (robot.footprintPreset.kind === "round"
+      && (!Number.isInteger(robot.footprintPreset.vertices) || Number(robot.footprintPreset.vertices) < 8 || Number(robot.footprintPreset.vertices) > 16)) {
+      issues.push(issue(`${presetPath}.vertices`, "Round footprint detail must contain between 8 and 16 vertices"));
+    } else if (robot.footprintPreset.kind === "trapezoid") {
+      validateFinite(issues, robot.footprintPreset.frontWidthM, `${presetPath}.frontWidthM`, "Trapezoid front width", { positive: true });
+      validateFinite(issues, robot.footprintPreset.rearWidthM, `${presetPath}.rearWidthM`, "Trapezoid rear width", { positive: true });
+      if (finite(robot.w) && ((finite(robot.footprintPreset.frontWidthM) && robot.footprintPreset.frontWidthM > robot.w)
+        || (finite(robot.footprintPreset.rearWidthM) && robot.footprintPreset.rearWidthM > robot.w))) {
+        issues.push(issue(presetPath, "Trapezoid widths cannot exceed the robot width"));
+      }
+    }
+  }
+  if (isRecord(robot.footprintPreset) && robot.footprintPreset.kind === "custom" && robot.footprint === undefined) {
+    issues.push(issue("$.robot.footprint", "A custom footprint preset requires polygon vertices"));
+  }
   if (robot.footprint === undefined) return;
   const path = "$.robot.footprint";
   if (!isRecord(robot.footprint)) {
@@ -207,6 +226,16 @@ function validateProjectInner(project: unknown): ValidationResult {
     validateFinite(issues, project.robot.l, "$.robot.l", "Robot length", { positive: true });
     validateOptionalFinite(issues, project.robot.heightM, "$.robot.heightM", "Robot height", { positive: true });
     validateFinite(issues, project.robot.maxSpeed, "$.robot.maxSpeed", "Robot max speed", { positive: true });
+    if (project.robot.driveModel !== undefined) {
+      const modelPath = "$.robot.driveModel";
+      if (!isRecord(project.robot.driveModel)) issues.push(issue(modelPath, "Robot drive model must be an object"));
+      else {
+        if (typeof project.robot.driveModel.motorId !== "string" || !project.robot.driveModel.motorId.trim()) issues.push(issue(`${modelPath}.motorId`, "Drive motor ID is required"));
+        validateFinite(issues, project.robot.driveModel.motorFreeRpm, `${modelPath}.motorFreeRpm`, "Motor free speed", { positive: true });
+        validateFinite(issues, project.robot.driveModel.gearRatio, `${modelPath}.gearRatio`, "Drive gear ratio", { positive: true });
+        validateFinite(issues, project.robot.driveModel.wheelDiameterM, `${modelPath}.wheelDiameterM`, "Drive wheel diameter", { positive: true });
+      }
+    }
     validateRobotFootprint(issues, project.robot);
     validateRobotPlanning(issues, project.robot);
   }
