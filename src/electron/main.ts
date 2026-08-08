@@ -29,6 +29,13 @@ import { AgentBridgeClient, AgentBridgeServer } from "./agentBridge";
 import { AgentSessionService } from "./agentSession";
 import { serveBordeauxMcp } from "../mcp/server";
 
+function ignoreClosedStandardStream(error: NodeJS.ErrnoException): void {
+  if (error.code !== "EIO" && error.code !== "EPIPE") throw error;
+}
+
+process.stdout.on("error", ignoreClosedStandardStream);
+process.stderr.on("error", ignoreClosedStandardStream);
+
 let mainWindow: BrowserWindow | null = null;
 let recentFiles: string[] = [];
 let currentProjectPath: string | null = null;
@@ -206,6 +213,7 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 720,
     title: "Bordeaux",
+    ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const } : {}),
     backgroundColor: "#12151b",
     show: false,
     webPreferences: {

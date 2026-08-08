@@ -556,6 +556,8 @@ input,select{font-family:inherit}
 
 /* ============ top bar ============ */
 .toolbar{height:50px;display:flex;align-items:center;gap:12px;padding:0 12px;background:var(--bg-1);border-bottom:1px solid var(--line);flex-shrink:0;z-index:30}
+[data-platform="darwin"] .toolbar{-webkit-app-region:drag;padding-left:82px}
+[data-platform="darwin"] .toolbar button,[data-platform="darwin"] .toolbar input,[data-platform="darwin"] .toolbar select,[data-platform="darwin"] .toolbar [role="dialog"]{-webkit-app-region:no-drag}
 .tb-left{display:flex;align-items:center;gap:12px;min-width:0;flex:0 1 auto}
 .tb-center{display:flex;align-items:center;gap:2px;background:var(--bg-2);border:1px solid var(--line);border-radius:8px;padding:3px;flex:0 0 auto}
 .tb-right{display:flex;align-items:center;gap:6px;flex:1 1 auto;justify-content:flex-end}

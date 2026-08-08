@@ -3,11 +3,13 @@ import type { BordeauxProject } from "../shared/types";
 import type { AgentProposal, AgentSessionSnapshot } from "../shared/agent/types";
 
 contextBridge.exposeInMainWorld("bordeauxAPI", {
+  platform: process.platform,
   openProject: () => ipcRenderer.invoke("project:open"),
   openRecentProject: (index: number) => ipcRenderer.invoke("project:openRecent", index),
   restoreLastProject: () => ipcRenderer.invoke("project:restoreLast"),
   newProject: () => ipcRenderer.invoke("project:new"),
   saveProject: (project: BordeauxProject, saveAs = false) => ipcRenderer.invoke("project:save", project, saveAs),
+  autosaveProject: (project: BordeauxProject) => ipcRenderer.invoke("project:autosave", project),
   exportBdx: (project: BordeauxProject, pathId?: string) => ipcRenderer.invoke("project:exportBdx", project, pathId),
   exportJava: (project: BordeauxProject, destination: "linked" | "saveAs" = "linked") => ipcRenderer.invoke("project:exportJava", project, destination),
   validateProject: (project: BordeauxProject) => ipcRenderer.invoke("project:validate", project),
