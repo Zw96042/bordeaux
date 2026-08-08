@@ -530,6 +530,14 @@ describe("canonical shipped renderer", () => {
     expect(inspector).toContain("Java JSON only");
   });
 
+  it("authors conditional repeated command schedules", () => {
+    const inspector = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js"), "utf8");
+    expect(inspector).toContain("ariaLabel: 'Event trigger'");
+    expect(inspector).toContain("ariaLabel: 'Repeat event'");
+    expect(inspector).toContain("ariaLabel: 'Limit event end time'");
+    expect(inspector).toContain("id: 'event-condition-id'");
+  });
+
   it("keeps playback, direct target rotation, and shift-delete wired into the editor", () => {
     const app = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js"), "utf8");
     const field = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js"), "utf8");

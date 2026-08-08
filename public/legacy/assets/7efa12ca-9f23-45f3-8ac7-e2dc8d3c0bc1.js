@@ -880,6 +880,7 @@
       const markerFraction = window.PM.featureFraction(m, derived.sample);
       const markerDistance = markerFraction * (derived.sample.length || 0);
       const markerAnchor = m.anchor === 'dist' ? 'dist' : 'param';
+      const schedule = m.schedule || {};
       const catalog = javaProject && javaProject.catalog;
       const integration = javaProject && javaProject.integration;
       const commands = catalog ? catalog.commands || [] : [];
@@ -1029,6 +1030,26 @@
               h('span', { className: 'cmd-toggle-track', 'aria-hidden': true }, h('span', null))))),
         h('div', { className: 'fieldlabel' }, 'Group type'),
         h(Seg, { value: m.group || 'sequential', ariaLabel: 'Group type', options: [{ v: 'sequential', label: 'Seq' }, { v: 'parallel', label: 'Parallel' }, { v: 'deadline', label: 'Deadline' }], onChange: (v) => actions.setMarker(sel.idx, { group: v }) }),
+        h('div', { className: 'cgroup-h' }, 'Event schedule'),
+        h('div', { className: 'fieldlabel' }, 'Trigger from'),
+        h(Seg, { value: schedule.trigger || 'time', ariaLabel: 'Event trigger', options: [
+          { v: 'time', label: 'Time', title: 'Fire when planned time reaches this marker' },
+          { v: 'position', label: 'Position', title: 'Fire when measured progress reaches this marker' },
+        ], onChange: (v) => actions.setMarker(sel.idx, { schedule: { ...schedule, trigger: v } }) }),
+        h('div', { className: 'seg-hint' }, schedule.trigger === 'position'
+          ? 'Uses measured robot progress, even on a time-followed path.'
+          : 'Uses the marker’s planned arrival time.'),
+        h('div', { className: 'inrow' },
+          h('span', { className: 'inrow-l' }, 'Repeat command', h('small', null, 'while the window is active')),
+          h(Toggle, { on: schedule.repeatEveryS != null, ariaLabel: 'Repeat event', onChange: (on) => actions.setMarker(sel.idx, { schedule: { ...schedule, repeatEveryS: on ? 0.1 : undefined } }) })),
+        schedule.repeatEveryS != null && h(Num, { label: 'Repeat every', value: schedule.repeatEveryS, unit: 's', min: 0.001, step: 0.02, precision: 3, onChange: (v) => actions.setMarker(sel.idx, { schedule: { ...schedule, repeatEveryS: v } }) }),
+        h('div', { className: 'inrow' },
+          h('span', { className: 'inrow-l' }, 'End time', h('small', null, 'expire or stop repeating')),
+          h(Toggle, { on: schedule.endTimeS != null, ariaLabel: 'Limit event end time', onChange: (on) => actions.setMarker(sel.idx, { schedule: { ...schedule, endTimeS: on ? (derived.prof.totalTime || 0) : undefined } }) })),
+        schedule.endTimeS != null && h(Num, { label: 'End path time', value: schedule.endTimeS, unit: 's', min: 0, max: derived.prof.totalTime || 0, step: 0.1, precision: 2, onChange: (v) => actions.setMarker(sel.idx, { schedule: { ...schedule, endTimeS: v } }) }),
+        h('label', { className: 'fieldlabel', htmlFor: 'event-condition-id' }, 'Condition ID', h('small', null, 'optional')),
+        h('input', { id: 'event-condition-id', className: 'textinput', value: schedule.conditionId || '', placeholder: 'frc.robot.Conditions#ready', autoComplete: 'off', spellCheck: false,
+          onChange: (event) => actions.setMarker(sel.idx, { schedule: { ...schedule, conditionId: event.target.value.trim() || undefined } }) }),
         h('div', { className: 'fieldlabel' }, 'Position lock'),
         h(Seg, { value: markerAnchor, ariaLabel: 'Position lock', options: [{ v: 'param', label: 'Path %' }, { v: 'dist', label: 'Distance' }], onChange: (v) => actions.setMarker(sel.idx, { anchor: v }) }),
         markerAnchor === 'dist'
