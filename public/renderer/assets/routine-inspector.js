@@ -4,7 +4,7 @@
 (function () {
   const { useState } = React;
   const h = React.createElement;
-  const { Icon, Num, Seg } = window.UI;
+  const { Icon, Dropdown, Num, Seg } = window.UI;
   const A = window.AUTO;
   const fmt = (t) => (t || 0).toFixed(2) + 's';
 
@@ -36,9 +36,9 @@
       const doc = paths.find((path) => path.id === node.ref);
       icon = 'route'; title = 'Path'; tag = 'step';
       body = h(React.Fragment, null,
-        FieldLabel('Bound path'),
-        h('select', { className: 'selectinput', 'aria-label': 'Routine path', value: node.ref, onChange: (e) => set({ ref: e.target.value }) },
-          paths.map((p) => h('option', { key: p.id, value: p.id }, p.name))),
+        h(Dropdown, { id: 'routine-bound-path', label: 'Bound path', value: node.ref, icon: 'route',
+          items: paths.map((path) => ({ value: path.id, label: path.name })),
+          onChange: (value) => set({ ref: value }) }),
         seg && h('div', { className: 'rt-stat' },
           h('div', { className: 'rt-stat-i' }, h('span', { className: 'rt-stat-v' }, fmt(seg.t1 - seg.t0)), h('span', { className: 'rt-stat-k' }, 'duration')),
           h('div', { className: 'rt-stat-i' }, h('span', { className: 'rt-stat-v' }, seg.deriv.sample.length.toFixed(2) + ' m'), h('span', { className: 'rt-stat-k' }, 'distance')),
@@ -50,8 +50,10 @@
       icon = 'branch'; title = 'Decision'; tag = 'branch'; accent = '#9aa3b0';
       const out = acq.outcomes[node.id] || 'then';
       body = h(React.Fragment, null,
-        FieldLabel('Condition ID'),
-        h('input', { className: 'textinput', 'aria-label': 'Decision condition ID', value: node.cond, placeholder: 'frc.robot.Conditions#hasNote', spellCheck: false, onChange: (e) => set({ cond: e.target.value.trim() }) }),
+        h(Dropdown, { id: 'routine-condition', label: 'Condition ID', value: node.cond,
+          items: A.pickerItems(A.CONDITIONS, node.cond), placeholder: 'Choose a registered condition', icon: 'branch',
+          allowCustom: true, customLabel: 'Enter exact decision condition ID', customPlaceholder: 'Exact condition ID',
+          onChange: (value) => set({ cond: value }) }),
         h('div', { className: 'grid2', style: { marginTop: '10px' } },
           h('div', null, FieldLabel('If true'), h('input', { className: 'textinput', 'aria-label': 'True branch label', value: node.thenLabel, spellCheck: false, onChange: (e) => set({ thenLabel: e.target.value }) })),
           h('div', null, FieldLabel('If false'), h('input', { className: 'textinput', 'aria-label': 'False branch label', value: node.elseLabel, spellCheck: false, onChange: (e) => set({ elseLabel: e.target.value }) }))),
@@ -76,15 +78,17 @@
         })) : saved;
         body = h(React.Fragment, null,
           h('div', { className: 'rt-callout' }, h(Icon, { name: 'info', size: 14 }), 'Runs after the previous path and before the next path is selected.'),
-          FieldLabel('Java command'),
           javaProject && javaProject.catalog
-            ? h('select', { className: 'selectinput', 'aria-label': 'Between-path command', value: invocationId, onChange: (event) => {
-                const command = commands.find((candidate) => candidate.id === event.target.value);
+            ? h(Dropdown, { id: 'routine-command', label: 'Java command', value: invocationId,
+                items: [{ value: '', label: 'Choose a command', meta: 'No command selected' }, ...commands.map((command) => ({
+                  value: command.id, label: command.label, meta: command.description || command.id,
+                  badge: command.runtimeReady === true ? 'ready' : 'build',
+                }))], placeholder: 'Choose a command', icon: 'bolt', onChange: (value) => {
+                const command = commands.find((candidate) => candidate.id === value);
                 set({ title: command ? command.label : 'Robot command', invocation: command ? { commandId: command.id, arguments: editor.commandArguments(command) } : null });
-              } },
-              h('option', { value: '' }, '— choose a command —'),
-              commands.map((command) => h('option', { key: command.id, value: command.id }, command.label)))
-            : h('button', { className: 'cmd-primary-action', type: 'button', onClick: javaProject && javaProject.link }, 'Choose Java project'),
+              } })
+            : h(React.Fragment, null, FieldLabel('Java command'),
+                h('button', { className: 'cmd-primary-action', type: 'button', onClick: javaProject && javaProject.link }, 'Choose Java project')),
           invocationId && !selected && h('div', { className: 'cmd-project-error', role: 'status' }, 'This saved command is missing from the linked catalog.'),
           selected && selected.runtimeReady !== true && h('div', { className: 'cmd-project-error', role: 'status' }, 'Build the annotated command catalog before export.'),
           selected && h('form', { className: 'cmd-parameters', onSubmit: (event) => event.preventDefault() },
@@ -103,10 +107,14 @@
       } else if (node.cat === 'generate') {
         body = h(React.Fragment, null,
           h('div', { className: 'rt-callout' }, h(Icon, { name: 'info', size: 14 }), 'Autonomous Routine invokes this function at runtime. Your robot code decides what trajectory it returns.'),
-          FieldLabel('Function reference'),
-          h('input', { className: 'textinput rt-fnref-input', 'aria-label': 'Function reference', value: node.funcRef, spellCheck: false, onChange: (e) => set({ funcRef: e.target.value }) }),
-          FieldLabel('Trigger'),
-          h('input', { className: 'textinput', 'aria-label': 'Function trigger', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
+          h(Dropdown, { id: 'routine-function', label: 'Function reference', value: node.funcRef,
+            items: A.pickerItems(A.FUNCTIONS, node.funcRef), placeholder: 'Choose a runtime function', icon: 'compass',
+            allowCustom: true, customLabel: 'Enter exact function reference', customPlaceholder: 'Exact function reference',
+            onChange: (value) => set({ funcRef: value }) }),
+          h(Dropdown, { id: 'routine-generate-trigger', label: 'Trigger', value: node.trigger,
+            items: A.pickerItems(A.TRIGGERS, node.trigger), placeholder: 'Choose when it runs', icon: 'bolt',
+            allowCustom: true, customLabel: 'Enter exact function trigger', customPlaceholder: 'Exact trigger',
+            onChange: (value) => set({ trigger: value }) }),
           FieldLabel('Parameters'),
           h(Params, { params: node.params, onChange: (p) => set({ params: p }) }),
           FieldLabel('Sim preview', node.preview ? h('button', { className: 'rt-mini-clear', type: 'button', onClick: () => set({ preview: null }) }, 'clear') : null),
@@ -121,17 +129,18 @@
         const op = A.seqOp(node.op);
         body = h(React.Fragment, null,
           h('div', { className: 'rt-callout' }, h(Icon, { name: 'info', size: 14 }), 'Sequence ops re-order the routine itself at runtime — independent of any robot.'),
-          FieldLabel('Operation'),
-          h('select', { className: 'selectinput', 'aria-label': 'Sequence operation', value: node.op, onChange: (e) => set({ op: e.target.value }) },
-            A.SEQ_OPS.map((o) => h('option', { key: o.id, value: o.id }, o.label))),
+          h(Dropdown, { id: 'routine-sequence-operation', label: 'Operation', value: node.op,
+            items: A.SEQ_OPS.map((operation) => ({ value: operation.id, label: operation.label, meta: operation.blurb })),
+            onChange: (value) => set({ op: value }) }),
           h('div', { className: 'seg-hint' }, op.blurb),
           (node.op !== 'reorder') && h(React.Fragment, null,
-            FieldLabel('Target path'),
-            h('select', { className: 'selectinput', 'aria-label': 'Sequence target path', value: node.target || '', onChange: (e) => set({ target: e.target.value }) },
-              h('option', { value: '' }, '— choose a path —'),
-              paths.map((p, i) => h('option', { key: i, value: p.name }, p.name)))),
-          FieldLabel('Trigger'),
-          h('input', { className: 'textinput', 'aria-label': 'Sequence trigger', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
+            h(Dropdown, { id: 'routine-sequence-target', label: 'Target path', value: node.target || '', icon: 'route',
+              items: [{ value: '', label: 'Choose a path' }, ...paths.map((path) => ({ value: path.name, label: path.name }))],
+              onChange: (value) => set({ target: value }) })),
+          h(Dropdown, { id: 'routine-sequence-trigger', label: 'Trigger', value: node.trigger,
+            items: A.pickerItems(A.TRIGGERS, node.trigger), placeholder: 'Choose when it runs', icon: 'bolt',
+            allowCustom: true, customLabel: 'Enter exact sequence trigger', customPlaceholder: 'Exact trigger',
+            onChange: (value) => set({ trigger: value }) }),
           FieldLabel('Notes'),
           h('textarea', { className: 'rt-note', 'aria-label': 'Sequence notes', value: node.note || '', placeholder: 'Why this re-sequences the run\u2026', onChange: (e) => set({ note: e.target.value }) }),
           h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete function'));
@@ -141,8 +150,10 @@
         body = h(React.Fragment, null,
           FieldLabel('Title'),
           h('input', { className: 'textinput', 'aria-label': 'Velocity rule title', value: node.title, spellCheck: false, onChange: (e) => set({ title: e.target.value }) }),
-          FieldLabel('Trigger'),
-          h('input', { className: 'textinput', 'aria-label': 'Velocity rule trigger', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
+          h(Dropdown, { id: 'routine-velocity-trigger', label: 'Trigger', value: node.trigger,
+            items: A.pickerItems(A.TRIGGERS, node.trigger), placeholder: 'Choose when it runs', icon: 'bolt',
+            allowCustom: true, customLabel: 'Enter exact velocity trigger', customPlaceholder: 'Exact trigger',
+            onChange: (value) => set({ trigger: value }) }),
           FieldLabel('Velocity scale', h('span', { className: 'rt-scaleval' }, pct + '%')),
           h('input', { className: 'rt-slider', type: 'range', 'aria-label': 'Velocity scale', min: 5, max: 100, step: 5, value: pct, onChange: (e) => set({ scale: +e.target.value / 100 }) }),
           h('div', { className: 'seg-hint' }, 'Caps drive speed to ' + pct + '% of the active constraints while this is held.'),
@@ -154,8 +165,10 @@
         body = h(React.Fragment, null,
           FieldLabel('Title'),
           h('input', { className: 'textinput', 'aria-label': 'Terminate rule title', value: node.title, spellCheck: false, onChange: (e) => set({ title: e.target.value }) }),
-          FieldLabel('Trigger'),
-          h('input', { className: 'textinput', 'aria-label': 'Terminate rule trigger', value: node.trigger, spellCheck: false, onChange: (e) => set({ trigger: e.target.value }) }),
+          h(Dropdown, { id: 'routine-terminate-trigger', label: 'Trigger', value: node.trigger,
+            items: A.pickerItems(A.TRIGGERS, node.trigger), placeholder: 'Choose when it runs', icon: 'bolt',
+            allowCustom: true, customLabel: 'Enter exact termination trigger', customPlaceholder: 'Exact trigger',
+            onChange: (value) => set({ trigger: value }) }),
           h('div', { className: 'seg-hint' }, 'Ends the running path the moment the trigger fires and advances to the next step.'),
           FieldLabel('Notes'),
           h('textarea', { className: 'rt-note', 'aria-label': 'Terminate rule notes', value: node.note || '', placeholder: 'What this ends and why\u2026', onChange: (e) => set({ note: e.target.value }) }),
