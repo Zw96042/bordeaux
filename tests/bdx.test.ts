@@ -462,10 +462,11 @@ describe("canonical shipped renderer", () => {
     expect(field).toContain("tool === 'range' ? 'crosshair'");
   });
 
-  it("renders waypoint and segment outline selection as compact flat list states", () => {
+  it("uses the shared outline selection style for waypoints and segments", () => {
     const html = fs.readFileSync(path.join(process.cwd(), "public/legacy/index.html"), "utf8");
     const outline = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js"), "utf8");
-    expect(html).toContain(".wpfeatrow.sel,.segfeatrow.sel{background:transparent");
+    expect(html).not.toContain(".wpfeatrow.sel,.segfeatrow.sel");
+    expect(html).toContain(".featrow.sel{background:var(--accent-soft);border-left-color:var(--accent)}");
     expect(outline).toContain("featrow wpfeatrow");
     expect(outline).toContain("featrow segfeatrow");
     expect(outline).toContain("className: 'featindent'");

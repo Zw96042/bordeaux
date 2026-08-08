@@ -68,7 +68,7 @@ html, body { font-synthesis: none; }
   border: 1px dashed rgba(255,255,255,0.11);
   border-radius: 6px;
 }
-.fieldlabel, .cgroup-h, .outline-grp {
+.fieldlabel, .numlbl, .cgroup-h, .outline-grp {
   letter-spacing: .06em !important;
 }
 .textinput, .selectinput {
@@ -683,10 +683,6 @@ input,select{font-family:inherit}
 .featrow{display:flex;align-items:center;gap:7px;min-height:34px;padding:2px 5px;cursor:pointer;border-left:2px solid transparent}
 @media (hover:hover) and (pointer:fine){.featrow:hover{background:var(--bg-2)}}
 .featrow.sel{background:var(--accent-soft);border-left-color:var(--accent)}
-.wpfeatrow,.segfeatrow{border-left:0}
-.wpfeatrow.sel,.segfeatrow.sel{background:transparent;border-left-color:transparent}
-.wpfeatrow.sel .featnm,.segfeatrow.sel .featnm{color:var(--accent-2)}
-.wpfeatrow.sel .featmeta,.segfeatrow.sel .featmeta{color:var(--txt-2)}
 .featdot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
 .featdot.sq{border-radius:2px}
 .featdot.g{background:var(--good)}.featdot.r{background:var(--bad)}.featdot.b{background:var(--accent)}.featdot.n{background:var(--txt-3)}.featdot.w{background:var(--warn)}
@@ -716,10 +712,11 @@ input,select{font-family:inherit}
 
 /* form bits */
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px}
-.fieldlabel{font-size:10px;color:var(--txt-3);text-transform:uppercase;letter-spacing:.7px;margin:12px 0 7px;font-weight:600;display:flex;align-items:center;justify-content:space-between;white-space:nowrap;gap:8px}
+.fieldlabel,.numlbl{font-size:10px;color:var(--txt-3);text-transform:uppercase;letter-spacing:.7px;font-weight:600}
+.fieldlabel{margin:12px 0 7px;display:flex;align-items:center;justify-content:space-between;white-space:nowrap;gap:8px}
 .fieldlabel>span{white-space:nowrap}
 .numrow{display:flex;flex-direction:column;gap:5px;min-width:0}
-.numlbl{font-size:10.5px;color:var(--txt-2);cursor:ew-resize;user-select:none}
+.numlbl{cursor:ew-resize;user-select:none}
 .numbox{display:flex;align-items:center;background:var(--bg-2);border:1px solid var(--line);border-radius:5px;padding:0 9px;height:32px;transition:border-color .12s}
 .numbox:focus-within{border-color:var(--accent)}
 .numinput{flex:1;min-width:0;background:none;border:none;outline:none;color:var(--txt);font-family:var(--mono);font-size:12.5px;padding:0}
