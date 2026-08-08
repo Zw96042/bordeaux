@@ -1,6 +1,7 @@
 package dev.bordeaux.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -110,6 +111,32 @@ class BordeauxRuntimeTest {
         assertEquals(2, path.followSections().size());
         assertEquals(BordeauxFollowSection.Mode.POSITION, path.followSections().get(1).mode());
         assertEquals(3, path.samples().get(2).xM());
+    }
+
+    @Test
+    void followsTimeThenMeasuredPositionWithoutRegressing() {
+        List<BordeauxSample> samples = List.of(
+                sample(0, 0, 0), sample(1, 0.5, 1), sample(2, 1, 2),
+                sample(3, 1.5, 3), sample(4, 2, 4));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "mixed", "Mixed", 2, CATALOG_ID, HASH, List.of(), samples, List.of(
+                        new BordeauxFollowSection(0, BordeauxFollowSection.Mode.TIME, 0, 2),
+                        new BordeauxFollowSection(1, BordeauxFollowSection.Mode.POSITION, 2, 4)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(1, follower.update(0.5, 0, 0).index());
+        assertEquals(2, follower.update(0.5, 0, 0).index());
+        assertEquals(1, follower.sectionIndex());
+        assertEquals(4, follower.update(10, 2, 0).index());
+        assertFalse(follower.isFinished());
+        assertEquals(4, follower.update(0.02, 3, 0).index());
+        assertFalse(follower.isFinished());
+        follower.update(0.02, 4, 0);
+        assertTrue(follower.isFinished());
+
+        follower.reset();
+        assertEquals(0, follower.update(0, 0, 0).index());
+        assertThrows(BordeauxRuntimeException.class, () -> follower.update(-1, 0, 0));
     }
 
     @Test
@@ -251,6 +278,10 @@ class BordeauxRuntimeTest {
     private static BordeauxPathEvents read(String json) {
         return BordeauxTrajectoryReader.read(
                 new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), "auto");
+    }
+
+    private static BordeauxSample sample(int index, double timeS, double xM) {
+        return new BordeauxSample(index, timeS, xM, xM / 4, xM, 0, 0, index == 4 ? 0 : 1);
     }
 
     private static BordeauxCommandRegistry registry(List<String> created, String... ids) {
