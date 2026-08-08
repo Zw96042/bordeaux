@@ -258,6 +258,39 @@ describe("motion features", () => {
     expect(Math.max(...durations) - Math.min(...durations)).toBeLessThan(0.08);
   });
 
+  it.each(PLANNERS)("can ignore, blend toward, or meet a boundary heading when entering Targets with %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.constraints.maxAngVel = 360;
+    path.constraints.maxAngAccel = 720;
+    path.constraints.maxAngDecel = 720;
+    path.headingMode = "targets";
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "tangent" },
+      { x: 4, y: 2, theta: -45, thetaOn: true, segType: "line", segmentHeadingMode: "targets" },
+      { x: 7, y: 2, theta: 90, thetaOn: true },
+    ]);
+
+    const atBoundary: number[] = [];
+    for (const placement of ["before", "split", "after"] as const) {
+      path.waypoints[1].headingTransition = { placement, rotationPriority: "heading", distanceM: 0.75 };
+      const result = getPlanner(plannerId).generate({ path: structuredClone(path), robot: project.robot });
+      const boundary = result.samples.reduce((nearest, sample, index) => Math.abs(sample.x - 4) < Math.abs(result.samples[nearest].x - 4) ? index : nearest, 0);
+      atBoundary.push(result.samples[boundary].headingRad);
+      if (placement === "after") {
+        const tangentSamples = result.samples.filter((sample) => sample.s <= result.samples[boundary].s + 1e-6);
+        expect(Math.max(...tangentSamples.map((sample) => Math.abs(sample.headingRad)))).toBeLessThan(1 * Math.PI / 180);
+        const next = result.samples.find((sample) => sample.s > result.samples[boundary].s + 1e-4);
+        expect(next).toBeDefined();
+        expect(next!.headingRad).toBeGreaterThan(result.samples[boundary].headingRad);
+      }
+    }
+
+    expect(Math.abs(atBoundary[0] + 45 * Math.PI / 180)).toBeLessThan(1 * Math.PI / 180);
+    expect(Math.abs(atBoundary[1] + 22.5 * Math.PI / 180)).toBeLessThan(2 * Math.PI / 180);
+    expect(Math.abs(atBoundary[2])).toBeLessThan(1 * Math.PI / 180);
+  });
+
   it("validates and round-trips authored heading-transition controls", () => {
     const project = createDemoProject();
     project.paths[0].waypoints = buildWaypoints([

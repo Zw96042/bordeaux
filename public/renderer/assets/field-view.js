@@ -455,6 +455,13 @@
       const waypointMode = (index) => segmentMode(Math.min(index, Math.max(0, doc.waypoints.length - 2)));
       const waypointTangent = (index) => waypointMode(index) === 'tangent';
       const waypointTracksPoint = (index) => waypointMode(index) === 'lookAt';
+      const waypointHeadingIgnored = (index) => {
+        if (index <= 0 || index >= doc.waypoints.length - 1) return false;
+        const incomingMode = segmentMode(index - 1), outgoingMode = segmentMode(index);
+        const continuityOwned = (incomingMode === 'tangent' || incomingMode === 'lookAt')
+          && (outgoingMode === 'manual' || outgoingMode === 'targets');
+        return continuityOwned && ((((doc.waypoints[index].headingTransition || {}).placement) || 'after') === 'after');
+      };
       const targetActive = (target) => {
         const f = window.PM.featureFraction(target, derived.sample); let segment = 0;
         if (derived.wpFrac) for (let i = 0; i < derived.wpFrac.length - 1; i++) if (f >= derived.wpFrac[i] - 1e-6) segment = i;
@@ -543,7 +550,7 @@
           const c = W2P(wp); reserveLabelSpace(c.x, c.y, P(30), P(30));
           const isStart = i === 0, isEnd = i === doc.waypoints.length - 1;
           const wpTangent = waypointTangent(i);
-          if (!isTank && (wpTangent || isStart || isEnd || wp.thetaOn || (sel.kind === 'wp' && sel.idx === i))) {
+          if (!isTank && !waypointHeadingIgnored(i) && (wpTangent || isStart || isEnd || wp.thetaOn || (sel.kind === 'wp' && sel.idx === i))) {
             const heading = waypointHeadingDeg(i);
             const deg = (flip ? heading + 180 : heading) * Math.PI / 180;
             const end = { x: c.x + Math.cos(-deg) * P(35), y: c.y + Math.sin(-deg) * P(35) };
@@ -797,7 +804,7 @@
         const group = [];
         const wpTangent = waypointTangent(i);
         const wpTracksPoint = waypointTracksPoint(i);
-        if (!isTank && (wpTangent || isStart || isEnd || w.thetaOn || isSel)) {
+        if (!isTank && !waypointHeadingIgnored(i) && (wpTangent || isStart || isEnd || w.thetaOn || isSel)) {
           group.push(h('g', { key: 'th' }, headArrow(c.x, c.y, waypointHeadingDeg(i), col, P(26), wpTangent || wpTracksPoint ? null : i)));
         }
         if (isSel && showHandles) {

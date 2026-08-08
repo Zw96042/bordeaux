@@ -291,16 +291,24 @@ function transitionWindowsForSamples(path: PathDoc, samples: readonly { x: numbe
   return headingTransitionWindows(path.waypoints, laws, breaks, fractions, totalDistance);
 }
 
-function headingTargets(path: PathDoc, geometry: readonly GeometryPoint[], waypointIndices: readonly number[], includeTargets: boolean): Array<{ f: number; heading: number }> {
+function headingTargets(path: PathDoc, geometry: readonly GeometryPoint[], waypointIndices: readonly number[], segmentModes: readonly string[], law: "manual" | "targets"): Array<{ f: number; heading: number }> {
   const totalDistance = geometry.at(-1)?.s ?? 0;
   const entries: Array<{ f: number; heading: number }> = [];
   path.waypoints.forEach((waypoint, index) => {
     const endpoint = index === 0 || index === path.waypoints.length - 1;
-    if (endpoint || waypoint.thetaOn) {
+    const incomingMode = segmentModes[index - 1];
+    const outgoingMode = segmentModes[index];
+    const boundaryHeadingActive = !endpoint
+      && waypoint.thetaOn
+      && ((incomingMode === "tangent" || incomingMode === "lookAt") && (outgoingMode === "manual" || outgoingMode === "targets"))
+      && (waypoint.headingTransition?.placement ?? "after") !== "after";
+    if (endpoint
+      || (waypoint.thetaOn && (incomingMode === law || (waypoint.turnInPlace && outgoingMode === law)))
+      || (boundaryHeadingActive && outgoingMode === law)) {
       entries.push({ f: geometry[waypointIndices[index]].s / Math.max(totalDistance, EPSILON), heading: waypoint.theta * Math.PI / 180 });
     }
   });
-  if (includeTargets) {
+  if (law === "targets") {
     path.targets.forEach((target) => {
       const fraction = target.anchor === "dist"
         ? (target.d ?? target.f * totalDistance) / Math.max(totalDistance, EPSILON)
@@ -344,12 +352,12 @@ function buildTimeline(input: PlannerInput, geometry: readonly GeometryPoint[]):
   const totalDistance = geometry.at(-1)?.s ?? 0;
   const waypointIndices = nearestGeometryIndices(path, geometry);
   const ranges = rangeFractions(path, totalDistance, waypointIndices, geometry);
-  const manualHeadings = headingTargets(path, geometry, waypointIndices, false);
-  const targetHeadings = headingTargets(path, geometry, waypointIndices, true);
-  const rawRobotHeadings: number[] = [];
   const segmentModes = path.waypoints.slice(0, -1).map((waypoint) => robot.drive === "tank"
     ? "tangent"
     : waypoint.segmentHeadingMode ?? path.headingMode ?? "targets");
+  const manualHeadings = headingTargets(path, geometry, waypointIndices, segmentModes, "manual");
+  const targetHeadings = headingTargets(path, geometry, waypointIndices, segmentModes, "targets");
+  const rawRobotHeadings: number[] = [];
   geometry.forEach((point, index) => {
     const segment = segmentAtGeometryIndex(index, waypointIndices);
     const headingMode = segmentModes[segment];

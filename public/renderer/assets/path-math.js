@@ -1209,18 +1209,23 @@
     const effectiveHeadingMode = (segment) => (robot && robot.drive === 'tank')
       ? 'tangent'
       : ((doc.waypoints[segment] && doc.waypoints[segment].segmentHeadingMode) || headingMode);
+    const segmentModes = doc.waypoints.slice(0, -1).map((_, segment) => effectiveHeadingMode(segment));
     const manualEntries = [], targetEntries = [];
     doc.waypoints.forEach((w, k) => {
       const isEnd = k === 0 || k === nWp - 1;
-      if (isEnd || w.thetaOn) {
-        const entry = { f: wpFrac[k], rad: (w.theta || 0) * D2R };
-        manualEntries.push(entry); targetEntries.push({ ...entry });
-      }
+      const incomingMode = segmentModes[k - 1];
+      const outgoingMode = segmentModes[k];
+      const boundaryHeadingActive = !isEnd
+        && w.thetaOn
+        && ((incomingMode === 'tangent' || incomingMode === 'lookAt') && (outgoingMode === 'manual' || outgoingMode === 'targets'))
+        && (((w.headingTransition || {}).placement) || 'after') !== 'after';
+      const entry = { f: wpFrac[k], rad: (w.theta || 0) * D2R };
+      if (isEnd || (w.thetaOn && (incomingMode === 'manual' || (w.turnInPlace && outgoingMode === 'manual'))) || (boundaryHeadingActive && outgoingMode === 'manual')) manualEntries.push(entry);
+      if (isEnd || (w.thetaOn && (incomingMode === 'targets' || (w.turnInPlace && outgoingMode === 'targets'))) || (boundaryHeadingActive && outgoingMode === 'targets')) targetEntries.push({ ...entry });
     });
     (doc.targets || []).forEach((t) => targetEntries.push({ f: featureFraction(t, smp), rad: t.deg * D2R }));
     const manualAnchors = buildAnchors(manualEntries), targetAnchors = buildAnchors(targetEntries);
     const rawHead = [];
-    const segmentModes = doc.waypoints.slice(0, -1).map((_, segment) => effectiveHeadingMode(segment));
     pts.forEach((p, pointIndex) => {
       const f = total > 1e-6 ? p.s / total : 0;
       let segment = 0;
