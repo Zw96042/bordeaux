@@ -460,6 +460,9 @@ function validateProjectInner(project: unknown): ValidationResult {
           issues.push(issue(`${base}.labview`, "LabVIEW compatibility settings must be an object"));
         } else {
           const labview = path.labview;
+          if (labview.trajectoryType !== undefined && labview.trajectoryType !== "bezier" && labview.trajectoryType !== "clothoid") {
+            issues.push(issue(`${base}.labview.trajectoryType`, "LabVIEW trajectory type must be Bezier or clothoid"));
+          }
           validateOptionalFinite(issues, labview.samplePeriodS, `${base}.labview.samplePeriodS`, "LabVIEW sample period", { positive: true });
           validateOptionalFinite(issues, labview.minTurnRadiusM, `${base}.labview.minTurnRadiusM`, "LabVIEW minimum turn radius", { positive: true });
           if (finite(labview.samplePeriodS) && (labview.samplePeriodS < 0.001 || labview.samplePeriodS > 0.1)) {

@@ -26,6 +26,7 @@ interface RendererWindow {
       metrics: { v: number[]; omega: number[]; head: number[] };
       checks: Array<{ level: "error" | "warning" | "note"; text: string }>;
     };
+    labviewPlannerForPath(path: unknown, fallback?: string): "labviewBezier" | "labviewClothoid";
   };
   UI?: {
     constraintRangeSummary(range: Record<string, number>, constraints: Record<string, number>, robot: { maxSpeed: number }): { text: string; ariaLabel: string; key: string } | null;
@@ -49,6 +50,24 @@ function rendererUi() {
 }
 
 describe("renderer compatibility preview", () => {
+  it("preserves the global method when migrating legacy LabVIEW paths", () => {
+    const path = createDemoProject().paths[0];
+    path.waypoints.slice(0, -1).forEach((waypoint) => { waypoint.segType = "bezier"; });
+    expect(rendererMath().labviewPlannerForPath(path, "labviewClothoid")).toBe("labviewClothoid");
+
+    path.labview = { trajectoryType: "bezier" };
+    expect(rendererMath().labviewPlannerForPath(path, "labviewClothoid")).toBe("labviewBezier");
+  });
+
+  it("derives a legacy path method before applying LabVIEW defaults", () => {
+    const source = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
+    const deriveMethod = source.indexOf("const trajectoryType = labviewPlannerForPath(p, project.plannerId)");
+    const applyDefaults = source.indexOf("p.labview = { ...LV_DEFAULTS, ...(p.labview || {}), trajectoryType }");
+
+    expect(deriveMethod).toBeGreaterThan(-1);
+    expect(applyDefaults).toBeGreaterThan(deriveMethod);
+  });
+
   it("rotates the field artwork with overlays in Red view", () => {
     const source = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
     expect(source).toContain("const FIELD_CX = (X0 + X1) / 2, FIELD_CY = (Y0 + Y1) / 2");

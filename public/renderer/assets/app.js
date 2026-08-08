@@ -4,12 +4,15 @@
   const h = React.createElement;
   const { FIELD_W, FIELD_H, IMG_W, IMG_H } = window.FIELD_DIMS;
   const PERSEG = 56;
+  document.documentElement.dataset.platform = window.bordeauxAPI?.platform || 'web';
 
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const clampWorld = (p) => ({ x: Math.max(0, Math.min(FIELD_W, p.x)), y: Math.max(0, Math.min(FIELD_H, p.y)) });
   const pathId = () => 'path_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
   const markerId = () => 'event_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
   const LV_DEFAULTS = { samplePeriodS: 0.02, minTurnRadiusM: 0.5, bezierTangentMode: 'handles', reversePath: false, zeroVelocity: false, pickupBalls: false, currentLimit: 0, zeroTranslationalVelocity: false, correctAtBeginningOfPath: false };
+  const isLabviewPlanner = (id) => id === 'labviewBezier' || id === 'labviewClothoid';
+  const labviewPlannerForPath = window.PM.labviewPlannerForPath;
 
   function normalizeProject(raw) {
     const project = clone(raw);
@@ -17,7 +20,8 @@
     (project.paths || []).forEach((p) => {
       if (!p.id) { do { p.id = pathId(); } while (used.has(p.id)); }
       used.add(p.id);
-      p.labview = { ...LV_DEFAULTS, ...(p.labview || {}) };
+      const trajectoryType = labviewPlannerForPath(p, project.plannerId) === 'labviewClothoid' ? 'clothoid' : 'bezier';
+      p.labview = { ...LV_DEFAULTS, ...(p.labview || {}), trajectoryType };
       if (Array.isArray(p.waypoints)) p.waypoints = buildWps(p.waypoints);
       (p.markers || []).forEach((marker) => { if (!marker.id) marker.id = markerId(); });
     });
@@ -78,7 +82,7 @@
       constraints: { ...DEF_CONS },
       headingMode: 'targets',
       startVel: 0, goalVel: 0,
-      labview: { ...LV_DEFAULTS },
+      labview: { ...LV_DEFAULTS, trajectoryType: 'bezier' },
     };
   }
 

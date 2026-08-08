@@ -441,6 +441,18 @@ describe("LabVIEW .bdx compatibility", () => {
     expect(() => buildLabviewBdx(mixed, mixed.paths[0].id)).toThrow(/entirely Bezier or entirely clothoid/);
   });
 
+  it("uses the selected path's LabVIEW trajectory type instead of the project fallback", () => {
+    const project = createDemoProject();
+    project.plannerId = "labviewBezier";
+    project.paths[0].labview = { ...project.paths[0].labview, trajectoryType: "clothoid" };
+    project.paths[0].waypoints = buildWaypoints([{ x: 1, y: 2 }, { x: 2, y: 2 }]);
+
+    const reader = new BinaryReader(buildLabviewBdx(project, project.paths[0].id).buffer);
+    reader.string(); reader.boolean(); reader.boolean(); reader.u32();
+    expect(reader.string()).toBe("Linear 0");
+    expect(reader.u16()).toBe(0);
+  });
+
   it("rejects position-followed segments in LabVIEW exports", () => {
     const project = createDemoProject();
     project.paths[0].followMode = "position";

@@ -1319,5 +1319,17 @@
     }
     return positions;
   }
-  window.PM = { bez, bezD, splitBezier, nearestPointOnSegment, sample, profile, poseAtTime, headingAt, metrics, analyze, metricColor, metricGradient, METRICS, SEGTYPES, buildAnchors, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, angLerp, D2R, R2D, lerp, derivePath, jigglePositions, effectiveRanges, featureFraction, remapWaypointRange, waypointFracs };
+
+  function labviewPlannerForPath(path, fallback) {
+    const type = path.labview && path.labview.trajectoryType;
+    if (type === 'clothoid') return 'labviewClothoid';
+    if (type === 'bezier') return 'labviewBezier';
+    // Legacy LabVIEW projects selected one method globally, independent of segment metadata.
+    if (fallback === 'labviewClothoid' || fallback === 'labviewBezier') return fallback;
+    const authored = path.waypoints.slice(0, -1).map((waypoint) => waypoint.segType).filter(Boolean);
+    if (authored.length && authored.every((segmentType) => segmentType === 'clothoid')) return 'labviewClothoid';
+    return 'labviewBezier';
+  }
+
+  window.PM = { bez, bezD, splitBezier, nearestPointOnSegment, sample, profile, poseAtTime, headingAt, metrics, analyze, metricColor, metricGradient, METRICS, SEGTYPES, buildAnchors, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, angLerp, D2R, R2D, lerp, derivePath, jigglePositions, labviewPlannerForPath, effectiveRanges, featureFraction, remapWaypointRange, waypointFracs };
 })();

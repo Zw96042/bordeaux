@@ -153,6 +153,8 @@ function profileIndices(samples: UniformSample[]): { accel: number; decel: numbe
 }
 
 function labviewPathKind(path: PathDoc, plannerId: BordeauxProject["plannerId"]): LabviewPathKind {
+  if (path.labview?.trajectoryType === "bezier") return "bezier";
+  if (path.labview?.trajectoryType === "clothoid") return "clothoid";
   if (plannerId === "labviewBezier") return "bezier";
   if (plannerId === "labviewClothoid") return "clothoid";
   const segmentTypes = path.waypoints.slice(0, -1).map((waypoint) => waypoint.segType ?? "bezier");
@@ -250,7 +252,14 @@ export function buildLabviewBdx(project: BordeauxProject, pathId?: string): Labv
   const samplePeriodS = Number.isFinite(configuredSamplePeriod) && configuredSamplePeriod! >= 0.001 && configuredSamplePeriod! <= 0.1
     ? configuredSamplePeriod!
     : DEFAULT_SAMPLE_PERIOD_S;
-  const exportData = buildBdxExport({ ...project, paths: [source], routine: undefined });
+  const exportData = buildBdxExport({
+    ...project,
+    plannerId: source.labview?.trajectoryType
+      ? (kind === "clothoid" ? "labviewClothoid" : "labviewBezier")
+      : project.plannerId,
+    paths: [source],
+    routine: undefined,
+  });
   const selected = exportData.paths[0];
   if (!selected) throw new Error("The selected path did not generate a trajectory");
 

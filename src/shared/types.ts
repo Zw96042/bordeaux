@@ -303,6 +303,8 @@ export interface PathFolder {
 }
 
 export interface LabviewPathOptions {
+  /** Compatibility geometry used for this path while the LabVIEW family is active. */
+  trajectoryType?: "bezier" | "clothoid";
   samplePeriodS?: number;
   minTurnRadiusM?: number;
   bezierTangentMode?: "handles" | "automatic";
