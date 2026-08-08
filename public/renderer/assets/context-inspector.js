@@ -419,7 +419,7 @@
               h('input', { type: 'radio', name: id, value: option, checked: current === option, onChange: () => onChange(option) }),
               h('span', { title: option }, option)))));
       }
-      return h(InlinePicker, {
+      return h(Dropdown, {
         id,
         label,
         value: current == null ? '' : current,
@@ -456,30 +456,33 @@
     return h(JsonValueEditor, { id, label, value: current, schema, onChange });
   }
 
+  const JIGGLE_DEFAULTS = { distanceM: 0.03, strokes: 8, startDeg: 45, stepDeg: -45, strokeTimeS: 0.08 };
+
   function ContextInspector(props) {
     const { doc, sel, derived, actions, drive, robot, plannerId, javaProject, onClose } = props;
     const [moreLimits, setMoreLimits] = React.useState(false);
+    const [moreRangeLimits, setMoreRangeLimits] = React.useState(false);
     const [moreBdx, setMoreBdx] = React.useState(false);
-    const [jiggleDistance, setJiggleDistance] = React.useState(0.18);
-    const [jiggleStrokes, setJiggleStrokes] = React.useState(4);
-    const [jiggleStart, setJiggleStart] = React.useState(90);
-    const [jiggleStep, setJiggleStep] = React.useState(-90);
-    const [jiggleStrokeTime, setJiggleStrokeTime] = React.useState(0.4);
+    const [jiggleDistance, setJiggleDistance] = React.useState(JIGGLE_DEFAULTS.distanceM);
+    const [jiggleStrokes, setJiggleStrokes] = React.useState(JIGGLE_DEFAULTS.strokes);
+    const [jiggleStart, setJiggleStart] = React.useState(JIGGLE_DEFAULTS.startDeg);
+    const [jiggleStep, setJiggleStep] = React.useState(JIGGLE_DEFAULTS.stepDeg);
+    const [jiggleStrokeTime, setJiggleStrokeTime] = React.useState(JIGGLE_DEFAULTS.strokeTimeS);
     const [jiggleError, setJiggleError] = React.useState(false);
     const wps = doc.waypoints;
     const isTank = drive === 'tank';
+    const isLabviewPlanner = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid';
     const n = wps.length;
     const headingMode = isTank ? 'tangent' : (doc.headingMode || 'targets');
     const handlesEffective = plannerId !== 'labviewClothoid' && !(plannerId === 'labviewBezier' && doc.labview?.bezierTangentMode === 'automatic');
     const endpointJiggle = wps[n - 1] && wps[n - 1].jiggle;
 
     React.useEffect(() => {
-      if (!endpointJiggle) return;
-      setJiggleDistance(endpointJiggle.distanceM);
-      setJiggleStrokes(endpointJiggle.strokes);
-      setJiggleStart(endpointJiggle.startDeg);
-      setJiggleStep(endpointJiggle.stepDeg);
-      setJiggleStrokeTime(endpointJiggle.strokeTimeS);
+      setJiggleDistance(endpointJiggle?.distanceM ?? JIGGLE_DEFAULTS.distanceM);
+      setJiggleStrokes(endpointJiggle?.strokes ?? JIGGLE_DEFAULTS.strokes);
+      setJiggleStart(endpointJiggle?.startDeg ?? JIGGLE_DEFAULTS.startDeg);
+      setJiggleStep(endpointJiggle?.stepDeg ?? JIGGLE_DEFAULTS.stepDeg);
+      setJiggleStrokeTime(endpointJiggle?.strokeTimeS ?? JIGGLE_DEFAULTS.strokeTimeS);
       setJiggleError(false);
     }, [doc.id, endpointJiggle?.distanceM, endpointJiggle?.strokes, endpointJiggle?.startDeg, endpointJiggle?.stepDeg, endpointJiggle?.strokeTimeS]);
 
@@ -545,6 +548,23 @@
       const isStart = i === 0, isEnd = i === n - 1, isAnchor = isStart || isEnd;
       const headingSegment = Math.max(0, Math.min(n - 2, i));
       const waypointHeadingMode = isTank ? 'tangent' : (wps[headingSegment].segmentHeadingMode || headingMode);
+      const incomingHeadingMode = i > 0 ? (wps[i - 1].segmentHeadingMode || headingMode) : waypointHeadingMode;
+      const mixedHeadingLaw = !isAnchor && incomingHeadingMode !== waypointHeadingMode;
+      const continuityOwnedHeading = mixedHeadingLaw && (waypointHeadingMode === 'manual' || waypointHeadingMode === 'targets')
+        && (incomingHeadingMode === 'tangent' || incomingHeadingMode === 'lookAt');
+      const boundaryTransition = Object.assign({ placement: 'after', rotationPriority: 'heading', distanceM: 0.75 }, w.headingTransition || {});
+      const boundaryHeadingOptions = [
+        { v: 'after', label: incomingHeadingMode === 'lookAt' ? 'Keep tracking' : 'Keep tangent', title: 'Keep the incoming heading law exact through the waypoint' },
+        { v: 'split', label: 'Blend', title: 'Share the heading change across both segments' },
+        { v: 'before', label: 'Meet heading', title: 'Reach the authored heading at the waypoint' },
+      ];
+      const incomingAuthoredHeading = mixedHeadingLaw && (incomingHeadingMode === 'manual' || incomingHeadingMode === 'targets');
+      const interiorHeadingEditor = (headingHint) => h(React.Fragment, null,
+        headingHint,
+        h('div', { className: 'inrow first' },
+          h('span', { className: 'inrow-l' }, 'Pin heading here', h('small', null, 'otherwise it interpolates')),
+          h(Toggle, { on: !!w.thetaOn, ariaLabel: 'Pin heading at waypoint', onChange: (v) => actions.toggleTheta(i, v) })),
+        w.thetaOn && h(Num, { label: 'Heading \u03b8', value: w.theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v }) }));
       icon = 'waypoint'; title = wpName(i, n); tag = isAnchor ? 'anchor' : null;
       body = h(React.Fragment, null,
         h('div', { className: 'grid2' },
@@ -552,9 +572,21 @@
           h(Num, { label: 'Y', value: w.y, unit: 'm', onChange: (v) => actions.setWp(i, { y: v }) })),
 
         // Heading — mode-aware
-        h('div', { className: 'fieldlabel' }, 'Heading \u03b8'),
         isTank
           ? h('div', { className: 'hint' }, h(Icon, { name: 'info', size: 14 }), 'Tank \u2014 heading follows the path tangent.')
+          : continuityOwnedHeading
+            ? h(React.Fragment, null,
+                h('div', { className: 'fieldlabel' }, 'Heading at this boundary'),
+                h(Seg, { value: boundaryTransition.placement, ariaLabel: 'Heading at this boundary', options: boundaryHeadingOptions, onChange: (v) => actions.setHeadingTransition(i, { placement: v }) }),
+                h('div', { className: 'seg-hint' }, boundaryTransition.placement === 'after'
+                  ? 'Keeps the incoming ' + (incomingHeadingMode === 'tangent' ? 'tangent' : 'tracking law') + ' exact. This waypoint heading is ignored.'
+                  : boundaryTransition.placement === 'split'
+                    ? 'Uses this heading as the goal and blends across both segments.'
+                    : 'Leaves the incoming ' + (incomingHeadingMode === 'tangent' ? 'tangent' : 'tracking law') + ' near the end to meet this heading exactly.'),
+                boundaryTransition.placement !== 'after' && h(Num, { label: boundaryTransition.placement === 'before' ? 'Heading to meet' : 'Heading goal', value: w.theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v, thetaOn: true }) }))
+          : incomingAuthoredHeading
+            ? interiorHeadingEditor(h('div', { className: 'hint' }, h(Icon, { name: 'compass', size: 14 }),
+                'This heading finishes the incoming ' + incomingHeadingMode + ' law. The outgoing ' + waypointHeadingMode + ' law begins from it continuously.'))
           : waypointHeadingMode === 'lookAt'
             ? h('div', { className: 'hint' }, h(Icon, { name: 'compass', size: 14 }), 'This segment continuously faces its tracked field point. Select the segment to edit or drag it.')
           : waypointHeadingMode === 'tangent'
@@ -562,15 +594,8 @@
                 h('div', { className: 'hint' }, h(Icon, { name: 'compass', size: 14 }), 'This segment follows the path tangent. Set a manual heading to override only this segment.'),
                 h('button', { className: 'qbtn wide', type: 'button', style: { marginTop: '4px' }, onClick: () => { actions.setSegmentHeadingMode(headingSegment, 'manual'); actions.faceWaypoint(i, 'tangent'); } }, h(Icon, { name: 'compass', size: 14 }), 'Set manual heading on segment'))
             : isAnchor
-              ? h(React.Fragment, null,
-                  h(Num, { label: 'Angle', value: w.theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v }) }),
-                  h(FaceRow, { i, actions, n }))
-              : h(React.Fragment, null,
-                  h('div', { className: 'inrow first' },
-                    h('span', { className: 'inrow-l' }, 'Pin heading here', h('small', null, 'otherwise it interpolates')),
-                    h(Toggle, { on: !!w.thetaOn, ariaLabel: 'Pin heading at waypoint', onChange: (v) => actions.toggleTheta(i, v) })),
-                  w.thetaOn && h(Num, { label: 'Angle', value: w.theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v }) }),
-                  h(FaceRow, { i, actions, n })),
+              ? h(Num, { label: 'Heading \u03b8', value: w.theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v }) })
+              : interiorHeadingEditor(),
 
         // Stop & wait
         !isAnchor && h('div', { className: 'inrow' },
