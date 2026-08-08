@@ -487,6 +487,9 @@ describe("canonical shipped renderer", () => {
     expect(robotPage).toContain("['rectangle', 'Rectangle'], ['round', 'Round'], ['trapezoid', 'Trapezoid'], ['custom', 'Custom']");
     expect(robotPage).toContain("const maxDim = Math.max(robot.w, robot.l, 0.4, ...footprint.flatMap");
     expect(robotPage).toContain("x: point.x * nextL / robot.l, y: point.y * nextW / robot.w");
+    expect(robotPage).toContain("Custom convex vertices");
+    expect(robotPage).toContain("disabled: footprint.length >= 16");
+    expect(robotPage).toContain("disabled: footprint.length <= 3");
   });
 
   it("keeps playback, direct target rotation, and shift-delete wired into the editor", () => {

@@ -1,6 +1,6 @@
 // Bordeaux — Robot config page (project-global). Needs React + window.UI. Exports window.RobotPage
 (function () {
-  const { useRef } = React;
+  const { useRef, useState } = React;
   const h = React.createElement;
   const { Icon } = window.UI;
 
@@ -41,7 +41,8 @@
 
   function RobotPage({ robot, setRobot, mcpEnabled, agentProposal, onApplyProposal, onRejectProposal }) {
     const isSwerve = robot.drive === 'swerve';
-    const shape = footprintShape(robot);
+    const [customEditing, setCustomEditing] = useState(false);
+    const shape = customEditing && robot.footprint ? 'custom' : footprintShape(robot);
     const footprint = robot.footprint && robot.footprint.kind === 'polygon' && Array.isArray(robot.footprint.verticesM)
       ? robot.footprint.verticesM
       : [{ x: -robot.l / 2, y: -robot.w / 2 }, { x: robot.l / 2, y: -robot.w / 2 }, { x: robot.l / 2, y: robot.w / 2 }, { x: -robot.l / 2, y: robot.w / 2 }];
@@ -70,6 +71,23 @@
         })),
       } : footprintFor(shape, nextW, nextL);
       setRobot({ [key]: value, footprint });
+    };
+    const setVertices = (verticesM) => setRobot({ footprint: { kind: 'polygon', verticesM } });
+    const updateVertex = (index, key, value) => setVertices(footprint.map((point, pointIndex) => (
+      pointIndex === index ? { ...point, [key]: value } : point
+    )));
+    const addVertex = () => {
+      if (footprint.length >= 16) return;
+      let edge = 0, longest = -1;
+      footprint.forEach((point, index) => {
+        const next = footprint[(index + 1) % footprint.length];
+        const length = Math.hypot(next.x - point.x, next.y - point.y);
+        if (length > longest) { longest = length; edge = index; }
+      });
+      const next = footprint[(edge + 1) % footprint.length];
+      const vertices = footprint.map((point) => ({ ...point }));
+      vertices.splice(edge + 1, 0, { x: (footprint[edge].x + next.x) / 2, y: (footprint[edge].y + next.y) / 2 });
+      setVertices(vertices);
     };
 
     return h('div', { className: 'robotpage' },
@@ -105,8 +123,17 @@
                 h('div', { className: 'rp-shapes', role: 'group', 'aria-label': 'Robot bumper shape' },
                   [['rectangle', 'Rectangle'], ['round', 'Round'], ['trapezoid', 'Trapezoid'], ['custom', 'Custom']].map(([id, label]) => h('button', {
                     key: id, type: 'button', className: shape === id ? 'on' : '', 'aria-pressed': shape === id,
-                    onClick: () => setRobot({ footprint: id === 'custom' ? { kind: 'polygon', verticesM: footprint.map((point) => ({ ...point })) } : footprintFor(id, robot.w, robot.l) }),
-                  }, label)))),
+                    onClick: () => { setCustomEditing(id === 'custom'); setRobot({ footprint: id === 'custom' ? { kind: 'polygon', verticesM: footprint.map((point) => ({ ...point })) } : footprintFor(id, robot.w, robot.l) }); },
+                  }, label))),
+                shape === 'custom' && h('div', { className: 'rp-vertices' },
+                  h('div', { className: 'rp-vertexhead' }, h('span', null, 'Custom convex vertices'), h('span', null, '+X forward · +Y left')),
+                  footprint.map((point, index) => h('div', { className: 'rp-vertex', key: index },
+                    h('span', null, index + 1),
+                    h('label', null, 'X', h('input', { type: 'number', step: 0.01, value: point.x, 'aria-label': `Vertex ${index + 1} X`, onChange: (event) => updateVertex(index, 'x', Number(event.target.value)) })),
+                    h('label', null, 'Y', h('input', { type: 'number', step: 0.01, value: point.y, 'aria-label': `Vertex ${index + 1} Y`, onChange: (event) => updateVertex(index, 'y', Number(event.target.value)) })),
+                    h('button', { type: 'button', disabled: footprint.length <= 3, 'aria-label': `Remove vertex ${index + 1}`, onClick: () => setVertices(footprint.filter((_, pointIndex) => pointIndex !== index)) }, '\u00d7'))),
+                  h('button', { className: 'rp-addvertex', type: 'button', disabled: footprint.length >= 16, onClick: addVertex }, 'Add vertex'),
+                  h('div', { className: 'rp-note' }, 'Keep 3–16 ordered points convex and inside the width and length envelope.'))),
               h('div', { className: 'rp-field' },
                 h('div', { className: 'rp-flabel' }, 'Height', h('small', null, typeof robot.heightM === 'number' ? m2ft(robot.heightM).toFixed(2) + ' ft' : 'required for TRENCH checks')),
                 h(BigNum, { label: 'Robot height', value: robot.heightM, unit: 'm', min: 0.1, max: 2.5, onChange: (v) => setRobot({ heightM: v }) })),
