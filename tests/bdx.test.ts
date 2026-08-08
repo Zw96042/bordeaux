@@ -474,6 +474,14 @@ describe("canonical shipped renderer", () => {
     expect(outline).toContain("wps.length > 2 && h('button', { className: 'featdel'");
   });
 
+  it("renders the field metric overlay as a compact legend", () => {
+    const html = fs.readFileSync(path.join(process.cwd(), "public/legacy/index.html"), "utf8");
+    const panels = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js"), "utf8");
+    expect(html).toContain(".overlayctl{position:absolute;left:16px;bottom:110px;width:236px;background:transparent");
+    expect(panels).not.toContain("className: 'ovlabel'");
+    expect(panels.indexOf("className: 'ovsafety '")).toBeLessThan(panels.indexOf("className: 'ovlegend'"));
+  });
+
   it("keeps playback, direct target rotation, and shift-delete wired into the editor", () => {
     const app = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js"), "utf8");
     const field = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js"), "utf8");

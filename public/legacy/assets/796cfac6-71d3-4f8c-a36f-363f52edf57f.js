@@ -328,22 +328,20 @@
     const errors = issues.filter((check) => check.level === 'error').length;
     return h('div', { className: 'overlayctl' },
       h('div', { className: 'ovrow' },
-        h('span', { className: 'ovlabel' }, 'Overlay'),
         (plannerId === 'labviewBezier' || plannerId === 'labviewClothoid') && h('span', { className: 'ovapprox', title: 'The canvas mirrors the compatibility math; exported samples remain authoritative.' }, '\u2248 preview'),
         h('div', { className: 'ovselwrap' },
           h('select', { className: 'ovselect', 'aria-label': 'Field overlay metric', value: metric, onChange: (e) => setMetric(e.target.value) },
             (window.PM.METRICS || []).map((m) => h('option', { key: m.id, value: m.id }, m.label))),
-          h('span', { className: 'ovchev' }, h(Icon, { name: 'chevron', size: 13 })))),
+          h('span', { className: 'ovchev' }, h(Icon, { name: 'chevron', size: 13 }))),
+        checks.length > 0 && h('button', { className: 'ovsafety ' + (issues.length ? (errors ? 'bad' : 'warn') : 'note') + (diagOpen ? ' open' : ''), type: 'button', onClick: onToggleDiag, title: 'Open path checks' },
+          h('span', { className: 'ovsafety-dot' }),
+          h('span', null, issues.length
+            ? issues.length + (issues.length > 1 ? ' issues' : ' issue')
+            : notes.length + (notes.length > 1 ? ' notes' : ' note')))),
       h('div', { className: 'ovlegend' },
         h('div', { className: 'ovbar', style: { background: grad } }),
         h('div', { className: 'ovscale' },
-          h('span', null, lo), h('span', { className: 'ovunit' }, def.unit || ''), h('span', null, hi))),
-      checks.length > 0 && h('button', { className: 'ovsafety ' + (issues.length ? (errors ? 'bad' : 'warn') : 'note') + (diagOpen ? ' open' : ''), type: 'button', onClick: onToggleDiag, title: 'Open path checks' },
-        h('span', { className: 'ovsafety-dot' }),
-        h('span', null, issues.length
-          ? issues.length + (issues.length > 1 ? ' issues' : ' issue')
-          : notes.length + (notes.length > 1 ? ' notes' : ' note')),
-        h('span', { className: 'ovsafety-go' }, h(Icon, { name: 'chevron', size: 13 }))));
+          h('span', null, lo), h('span', { className: 'ovunit' }, def.unit || ''), h('span', null, hi))));
   }
 
   // ---------------- path checks drawer ----------------

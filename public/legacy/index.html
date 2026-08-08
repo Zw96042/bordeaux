@@ -100,10 +100,10 @@ html, body { font-synthesis: none; }
   outline: 2px solid oklch(0.72 0.10 255 / .82) !important;
   outline-offset: 1px;
 }
-.toolrail, .cbar, .overlayctl, .transport, .viewctl, .diag, .ctxmenu {
+.toolrail, .cbar, .transport, .viewctl, .diag, .ctxmenu {
   box-shadow: var(--polish-elevation) !important;
 }
-.toolrail, .cbar, .overlayctl, .transport, .viewctl, .rt-transport {
+.toolrail, .cbar, .transport, .viewctl, .rt-transport {
   border-color: transparent !important;
   border-radius: 6px !important;
   background: var(--hud-surface) !important;
@@ -179,7 +179,7 @@ html, body { font-synthesis: none; }
     min-width: 0;
     max-width: none;
   }
-  .fieldcol .overlayctl { left: 12px; bottom: 106px; width: 200px; }
+  .fieldcol .overlayctl { left: 12px; bottom: 106px; width: min(236px, calc(100% - 24px)); }
   .fieldcol .viewctl { right: 12px; bottom: 106px; }
   .fieldcol .velgraph { bottom: 230px !important; width: min(560px, calc(100% - 24px)) !important; min-width: 0; }
   .fieldcol .diag { left: 12px; bottom: 230px; width: min(316px, calc(100% - 24px)); }
@@ -753,10 +753,9 @@ input,select{font-family:inherit}
 }
 
 /* ============ metric overlay + legend (bottom-left) ============ */
-.overlayctl{position:absolute;left:16px;bottom:110px;width:210px;background:var(--panel);backdrop-filter:blur(12px);border:1px solid var(--line-2);border-radius:8px;box-shadow:var(--shadow);padding:10px 11px 11px;z-index:25}
-.ovrow{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px}
-.ovlabel{font-size:9.5px;text-transform:uppercase;letter-spacing:.9px;color:var(--txt-3);font-weight:600}
-.ovselwrap{position:relative;flex:1;max-width:128px}
+.overlayctl{position:absolute;left:16px;bottom:110px;width:236px;background:transparent;border:0;padding:0;z-index:25;text-shadow:0 1px 6px rgb(0 0 0 / .75)}
+.ovrow{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:7px}
+.ovselwrap{position:relative;flex:1;max-width:140px}
 .ovselect{width:100%;height:27px;appearance:none;background:var(--bg-2);border:1px solid var(--line);border-radius:5px;color:var(--txt);font-size:11.5px;font-weight:500;padding:0 22px 0 9px;outline:none;cursor:pointer}
 .ovselect:focus{border-color:var(--accent)}
 .ovchev{position:absolute;right:7px;top:50%;transform:translateY(-50%);color:var(--txt-3);pointer-events:none;display:flex}
@@ -764,7 +763,7 @@ input,select{font-family:inherit}
 .ovbar{height:9px;border-radius:3px;border:1px solid rgba(255,255,255,.08)}
 .ovscale{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:9.5px;color:var(--txt-3)}
 .ovunit{color:var(--txt-2)}
-.ovsafety{display:flex;align-items:center;gap:7px;margin-top:10px;padding-top:9px;border-top:1px solid var(--line);font-size:10.5px;color:var(--txt-2);line-height:1.3}
+.ovsafety{display:flex;align-items:center;gap:5px;min-height:27px;margin:0;padding:0 4px;border:0;font-size:10.5px;color:var(--txt-2);line-height:1.3;white-space:nowrap}
 .ovsafety-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;background:var(--txt-3)}
 .ovsafety.ok .ovsafety-dot{background:var(--good)}
 .ovsafety.warn .ovsafety-dot{background:var(--warn)}
@@ -1286,11 +1285,9 @@ input,select{font-family:inherit}
 .facebtn:disabled{opacity:.38;cursor:not-allowed}
 
 /* clickable safety row → path checks */
-.ovsafety{width:100%;text-align:left;cursor:pointer}
+.ovsafety{width:auto;text-align:left;cursor:pointer}
 .ovsafety:hover{color:var(--txt)}
 .ovsafety.ok{cursor:default}
-.ovsafety-go{margin-left:auto;display:flex;color:var(--txt-3)}
-.ovsafety.open .ovsafety-go{color:var(--accent);transform:rotate(180deg)}
 
 /* path-check drawer */
 .diag{position:absolute;left:16px;bottom:84px;width:316px;max-height:min(54vh,460px);display:flex;flex-direction:column;background:var(--panel);backdrop-filter:blur(12px);border:1px solid var(--line-2);border-radius:10px;box-shadow:var(--shadow);z-index:26;overflow:hidden}
