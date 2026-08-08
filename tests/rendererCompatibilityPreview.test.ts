@@ -164,6 +164,30 @@ describe("renderer compatibility preview", () => {
     expect(boundaryHeading("after")).toBeCloseTo(Math.PI / 2, 2);
   });
 
+  it("can ignore, blend toward, or meet a tangent-to-Targets boundary heading", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "targets";
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "tangent" },
+      { x: 4, y: 2, theta: -45, thetaOn: true, segType: "line", segmentHeadingMode: "targets" },
+      { x: 7, y: 2, theta: 90, thetaOn: true },
+    ]);
+    const math = rendererMath();
+    const boundaryHeading = (placement: "before" | "split" | "after") => {
+      path.waypoints[1].headingTransition = { placement, rotationPriority: "heading", distanceM: 0.75 };
+      const result = math.derivePath(structuredClone(path), project.robot, 80, "profiledSpline");
+      const boundary = result.sample.pts.reduce((nearest, point, index) => (
+        Math.abs(point.x - 4) < Math.abs(result.sample.pts[nearest].x - 4) ? index : nearest
+      ), 0);
+      return result.metrics.head[boundary];
+    };
+
+    expect(boundaryHeading("before")).toBeCloseTo(-Math.PI / 4, 2);
+    expect(boundaryHeading("split")).toBeCloseTo(-Math.PI / 8, 2);
+    expect(boundaryHeading("after")).toBeCloseTo(0, 2);
+  });
+
   it("preserves translation through a minimum-distance heading transition", () => {
     const project = createDemoProject();
     const path = project.paths[0];
@@ -493,13 +517,6 @@ describe("renderer compatibility preview", () => {
     expect(preview.sample.pts.filter((point) => point.seg === 1).at(-1)?.t).toBeCloseTo(1, 6);
   });
 
-  it("labels the native planner family as Java", () => {
-    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
-
-    expect(panels).toContain("{ v: 'native', label: 'Java' }");
-    expect(panels).not.toContain("{ v: 'native', label: 'Native' }");
-  });
-
   it("treats expected configured clothoid radii in either turn direction as notes, not issues", () => {
     const project = createDemoProject();
     const path = project.paths[0];
@@ -577,7 +594,7 @@ describe("renderer compatibility preview", () => {
     expect(styles).toContain(".timeline-playhead{z-index:8;top:-20px;bottom:0;width:1px");
     expect(styles).toContain(".timeline-event{z-index:5;top:9px;bottom:4px;width:1px");
     expect(styles).toContain("transform:translate(-50%,-50%) rotate(45deg)");
-    expect(app).toContain("derived, doc, metric, playTime");
+    expect(app).toContain("derived, doc, metric, setMetric, playTime");
     expect(app).not.toContain("bordeaux-notice");
     expect(app).not.toContain("setNotice(");
   });
@@ -724,6 +741,7 @@ describe("renderer compatibility preview", () => {
     const math = fs.readFileSync(new URL("../public/renderer/assets/path-math.js", import.meta.url), "utf8");
     const inspector = fs.readFileSync(new URL("../public/renderer/assets/context-inspector.js", import.meta.url), "utf8");
     const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
 
     expect(math).toContain("function headingTransitionWindows");
     expect(math).toContain("opts.headingTransitions || []");
@@ -732,13 +750,17 @@ describe("renderer compatibility preview", () => {
     expect(inspector).toContain("Transition into this segment");
     expect(inspector).toContain("Heading transition timing priority");
     expect(inspector).toContain("Blend distance");
+    expect(inspector).toContain("Keep tangent");
+    expect(inspector).toContain("Meet heading");
     expect(app).toContain("const setHeadingTransition");
+    expect(app).toContain("w.thetaOn = true");
     expect(app).toContain("transition.placement === 'before' ? 'after'");
     expect(app).toContain("oldLaws[index] !== oldLaws[index - 1]");
     expect(app).toContain("{ placement: 'after', rotationPriority: 'heading', distanceM: 0.75, ...(waypoint.headingTransition || {}) }");
+    expect(field).toContain("const waypointHeadingIgnored");
   });
 
-  it("uses segmented controls instead of native dropdowns for planner and segment choices", () => {
+  it("uses segmented controls for segment choices without a redundant planner chooser", () => {
     const styles = fs.readFileSync(new URL("../public/renderer/styles.css", import.meta.url), "utf8");
     const ui = fs.readFileSync(new URL("../public/renderer/assets/ui-primitives.js", import.meta.url), "utf8");
     const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
@@ -750,10 +772,10 @@ describe("renderer compatibility preview", () => {
     expect(ui).not.toContain("className: 'seg-active-ink'");
     expect(styles).not.toContain(".seg-active-ink");
     expect(ui).not.toContain("function GroupSelect");
-    expect(panels).toContain("function PlannerControl");
-    expect(panels).toContain("className: 'planner-family'");
-    expect(panels).toContain("className: 'planner-method'");
-    expect(panels).not.toContain("'aria-label': 'Trajectory planner', value: plannerId, onChange: (e)");
+    expect(panels).not.toContain("function PlannerControl");
+    expect(panels).not.toContain("optimizedTrajectory");
+    expect(panels).not.toContain("ariaLabel: 'Planner family'");
+    expect(panels).not.toContain("ariaLabel: 'Trajectory planner'");
     expect(inspector).toContain("ariaLabel: 'Path type'");
     expect(inspector).toContain("ariaLabel: 'Heading on this segment'");
     expect(inspector).toContain("className: 'seg-heading'");
@@ -838,8 +860,9 @@ describe("renderer compatibility preview", () => {
     expect(app).toContain("const setTurnInPlace");
     expect(app).toContain("const moveSegmentLookAt");
     expect(inspector).toContain("'Turn in place'");
-    expect(inspector).toContain("'Add jiggle'");
-    expect(inspector).toContain("without creating waypoints");
+    expect(inspector).toContain("'Endpoint jiggle'");
+    expect(inspector).toContain("'Requested time may lengthen to respect path limits.'");
+    expect(inspector).toContain("const JIGGLE_DEFAULTS = { distanceM: 0.03, strokes: 8, startDeg: 45, stepDeg: -45, strokeTimeS: 0.08 }");
     expect(math).toContain("opts.jiggles");
     expect(math).toContain("feasibleJiggleStrokeDuration");
     expect(math).toContain("jiggle.strokeDuration");
@@ -852,5 +875,42 @@ describe("renderer compatibility preview", () => {
     expect(field).toContain("clientToWorld(e.clientX, e.clientY, d.role !== 'ct')");
     expect(field).toContain("const p = d.role === 'ct' ? world : clampWorld(world)");
     expect(math).toContain("function smoothHeadingTransitions");
+  });
+
+  it("uses one searchable dropdown component instead of native selects", () => {
+    const files = [
+      "ui-primitives.js",
+      "panels.js",
+      "context-inspector.js",
+      "routine-inspector.js",
+      "robot-page.js",
+    ].map((name) => fs.readFileSync(new URL(`../public/renderer/assets/${name}`, import.meta.url), "utf8"));
+    const [ui, ...consumers] = files;
+
+    expect(ui).toContain("function Dropdown(");
+    expect(ui).toContain("ReactDOM.createPortal");
+    expect(ui).toContain("const MAX_RENDERED_PICKER_ITEMS = 80");
+    expect(ui).toContain("showSearch && h('div', { className: 'cmd-picker-search'");
+    expect(ui).toContain("role: 'combobox'");
+    expect(ui).toContain("role: 'listbox'");
+    expect(ui).toContain("style: panelStyle, onKeyDown: handleKeyDown");
+    expect(ui).toContain("event.key !== 'Escape' && event.key !== 'Tab'");
+    expect(ui).not.toContain("InlinePicker");
+    expect(consumers.join("\n")).not.toContain("h('select'");
+  });
+
+  it("autosaves an established project and presents only planner-family choices", () => {
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
+    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
+    const preload = fs.readFileSync(new URL("../src/electron/preload.ts", import.meta.url), "utf8");
+    const main = fs.readFileSync(new URL("../src/electron/main.ts", import.meta.url), "utf8");
+
+    expect(app).toContain("window.bordeauxAPI.autosaveProject({ schemaVersion: '1.0'");
+    expect(preload).toContain('autosaveProject: (project: BordeauxProject) => ipcRenderer.invoke("project:autosave", project)');
+    expect(main).toContain('handle("project:autosave"');
+    expect(main).toContain("if (!currentProjectPath) return { saved: false }");
+    expect(panels).toContain("{ v: 'java', label: 'Java' }");
+    expect(panels).toContain("{ v: 'labview', label: 'LabVIEW' }");
+    expect(panels).not.toContain("{ v: 'optimized'");
   });
 });
