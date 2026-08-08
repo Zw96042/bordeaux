@@ -517,7 +517,7 @@ describe("canonical shipped renderer", () => {
   });
 
   it("offers beginner robot-footprint presets and scales them with dimensions", () => {
-    const robotPage = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/8ddc9855-091c-439c-b24a-f683fa800fb7.js"), "utf8");
+    const robotPage = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/robot-page.js"), "utf8");
     expect(robotPage).toContain("['rectangle', 'Rectangle'], ['round', 'Round'], ['trapezoid', 'Trapezoid'], ['custom', 'Custom']");
     expect(robotPage).toContain("const maxDim = Math.max(robot.w, robot.l, 0.4, ...footprint.flatMap");
     expect(robotPage).toContain("x: point.x * nextL / robot.l, y: point.y * nextW / robot.w");
@@ -543,8 +543,8 @@ describe("canonical shipped renderer", () => {
   });
 
   it("authors deployable between-path commands and decisions", () => {
-    const model = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/f874c44d-015e-4099-b1e8-f483e723379e.js"), "utf8");
-    const inspector = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/2e851ba2-8203-4a0a-9fc1-e769983238f6.js"), "utf8");
+    const model = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/routine-model.js"), "utf8");
+    const inspector = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/routine-inspector.js"), "utf8");
     expect(model).toContain("label: 'Command'");
     expect(inspector).toContain("aria-label': 'Between-path command'");
     expect(inspector).toContain("aria-label': 'Decision condition ID'");
