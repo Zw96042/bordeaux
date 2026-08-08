@@ -236,11 +236,11 @@
                 h('button', { className: 'rp-drivebtn' + (isSwerve ? ' on' : ''), type: 'button', 'aria-pressed': isSwerve, onClick: () => setRobot({ drive: 'swerve' }) },
                   h('span', { className: 'dbi' }, h(Icon, { name: 'swerve', size: 22 })),
                   h('div', { className: 'dbt' }, 'Swerve'),
-                  h('div', { className: 'dbd' }, 'Holonomic \u2014 heading is independent of travel. Uses per-waypoint \u03b8.')),
+                  h('div', { className: 'dbd' }, 'Independent heading')),
                 h('button', { className: 'rp-drivebtn' + (!isSwerve ? ' on' : ''), type: 'button', 'aria-pressed': !isSwerve, onClick: () => setRobot({ drive: 'tank' }) },
                   h('span', { className: 'dbi' }, h(Icon, { name: 'tank', size: 22 })),
                   h('div', { className: 'dbt' }, 'Tank'),
-                  h('div', { className: 'dbd' }, 'Differential \u2014 heading follows the path tangent. \u03b8 is automatic.')))),
+                  h('div', { className: 'dbd' }, 'Follows path tangent')))),
 
             h('div', { className: 'rp-sec' },
               h('div', { className: 'rp-sech' }, 'Drive dimensions'),
@@ -256,28 +256,56 @@
                 h('div', { className: 'rp-shapes', role: 'group', 'aria-label': 'Robot bumper shape' },
                   [['rectangle', 'Rectangle'], ['round', 'Round'], ['trapezoid', 'Trapezoid'], ['custom', 'Custom']].map(([id, label]) => h('button', {
                     key: id, type: 'button', className: shape === id ? 'on' : '', 'aria-pressed': shape === id,
-                    onClick: () => { setCustomEditing(id === 'custom'); setRobot({ footprint: id === 'custom' ? { kind: 'polygon', verticesM: footprint.map((point) => ({ ...point })) } : footprintFor(id, robot.w, robot.l) }); },
+                    onClick: () => {
+                      const preset = id === 'round' ? roundPreset : id === 'trapezoid' ? trapezoidPreset : id === 'custom' ? { kind: 'custom' } : undefined;
+                      setCustomEditing(id === 'custom');
+                      setRobot({ footprintPreset: preset, footprint: id === 'custom' ? { kind: 'polygon', verticesM: footprint.map((point) => ({ ...point })) } : footprintFor(id, robot.w, robot.l, preset) });
+                    },
                   }, label))),
+                shape === 'round' && h('div', { className: 'rp-preset-params' },
+                  h('div', { className: 'rp-flabel' }, 'Curve detail', h('small', null, roundPreset.vertices + ' vertices')),
+                  h('input', { type: 'range', min: 8, max: 16, step: 1, value: roundPreset.vertices, 'aria-label': 'Round footprint curve detail', onChange: (event) => setRoundVertices(Number(event.target.value)) }),
+                  h('div', { className: 'rp-note' }, 'Width and length set the ellipse; detail controls how closely its collision polygon follows the curve.')),
+                shape === 'trapezoid' && h('div', { className: 'rp-preset-params rp-two' },
+                  h('div', { className: 'rp-field' }, h('div', { className: 'rp-flabel' }, 'Front width'),
+                    h(BigNum, { label: 'Trapezoid front width', value: trapezoidPreset.frontWidthM, unit: 'm', min: 0.05, max: robot.w, onChange: (value) => setTrapezoidWidth('frontWidthM', value) })),
+                  h('div', { className: 'rp-field' }, h('div', { className: 'rp-flabel' }, 'Rear width'),
+                    h(BigNum, { label: 'Trapezoid rear width', value: trapezoidPreset.rearWidthM, unit: 'm', min: 0.05, max: robot.w, onChange: (value) => setTrapezoidWidth('rearWidthM', value) }))),
                 shape === 'custom' && h('div', { className: 'rp-vertices' },
                   h('div', { className: 'rp-vertexhead' }, h('span', null, 'Custom convex vertices'), h('span', null, '+X forward · +Y left')),
-                  footprint.map((point, index) => h('div', { className: 'rp-vertex', key: index },
+                  footprint.map((point, index) => h('div', { className: 'rp-vertex' + (selectedVertex === index ? ' selected' : ''), key: index, onClick: () => setSelectedVertex(index) },
                     h('span', null, index + 1),
                     h('label', null, 'X', h('input', { type: 'number', step: 0.01, value: point.x, 'aria-label': `Vertex ${index + 1} X`, onChange: (event) => updateVertex(index, 'x', Number(event.target.value)) })),
                     h('label', null, 'Y', h('input', { type: 'number', step: 0.01, value: point.y, 'aria-label': `Vertex ${index + 1} Y`, onChange: (event) => updateVertex(index, 'y', Number(event.target.value)) })),
                     h('button', { type: 'button', disabled: footprint.length <= 3, 'aria-label': `Remove vertex ${index + 1}`, onClick: () => setVertices(footprint.filter((_, pointIndex) => pointIndex !== index)) }, '\u00d7'))),
-                  h('button', { className: 'rp-addvertex', type: 'button', disabled: footprint.length >= 16, onClick: addVertex }, 'Add vertex'),
-                  h('div', { className: 'rp-note' }, 'Keep 3–16 ordered points convex and inside the width and length envelope.'))),
+                  h('button', { className: 'rp-addvertex', type: 'button', disabled: footprint.length >= 16, onClick: () => addVertex() }, 'Add vertex on longest edge'),
+                  h('div', { className: 'rp-note' + (footprintValid ? '' : ' invalid'), role: footprintValid ? undefined : 'status' }, footprintValid
+                    ? 'Drag points in the preview, double-click an edge to add one, or use these fields for exact coordinates.'
+                    : 'Keep the footprint convex, inside the robot dimensions, and around its center point. Move or remove a vertex before leaving Robot.'))),
               h('div', { className: 'rp-field' },
                 h('div', { className: 'rp-flabel' }, 'Height', h('small', null, typeof robot.heightM === 'number' ? m2ft(robot.heightM).toFixed(2) + ' ft' : 'required for TRENCH checks')),
                 h(BigNum, { label: 'Robot height', value: robot.heightM, unit: 'm', min: 0.1, max: 2.5, onChange: (v) => setRobot({ heightM: v }) })),
-              h('div', { className: 'rp-note' }, h(Icon, { name: 'info', size: 14 }), 'Bumper-to-bumper footprint. This is what gets drawn on the field and animated along the path.')),
+              h('div', { className: 'rp-note' }, h(Icon, { name: 'info', size: 14 }), 'Used for collision checks and field preview.')),
 
             h('div', { className: 'rp-sec' },
               h('div', { className: 'rp-sech' }, 'Performance'),
-              h('div', { className: 'rp-field' },
-                h('div', { className: 'rp-flabel' }, 'Max robot speed', h('small', null, m2ft(robot.maxSpeed).toFixed(1) + ' ft/s')),
-                h(BigNum, { label: 'Maximum robot speed', value: robot.maxSpeed, unit: 'm/s', min: 0.5, max: 8, precision: 1, step: 0.1, onChange: (v) => setRobot({ maxSpeed: v }) })),
-              h('div', { className: 'rp-note' }, h(Icon, { name: 'info', size: 14 }), 'The hard ceiling. A path\u2019s own max velocity is clamped to this, so you can\u2019t accidentally plan faster than the robot can drive.'))),
+              h(Dropdown, { id: 'robot-drive-motor', label: 'Drive motor', value: driveModel.motorId, items: DRIVE_MOTORS,
+                onChange: (motorId) => { const preset = DRIVE_MOTORS.find((motor) => motor.value === motorId); setDriveModel({ motorId, ...(preset && preset.rpm ? { motorFreeRpm: preset.rpm } : {}) }); } }),
+              h('div', { className: 'rp-two rp-drive-model' },
+                h('div', { className: 'rp-field' },
+                  h('div', { className: 'rp-flabel' }, 'Motor free speed'),
+                  h(BigNum, { label: 'Motor free speed', value: driveModel.motorFreeRpm, unit: 'RPM', min: 100, max: 30000, precision: 0, step: 25, onChange: (value) => setDriveModel({ motorId: 'custom', motorFreeRpm: value }) })),
+                h('div', { className: 'rp-field' },
+                  h('div', { className: 'rp-flabel' }, 'Drive reduction'),
+                  h(BigNum, { label: 'Drive gear reduction', value: driveModel.gearRatio, unit: ':1', min: 0.1, max: 50, precision: 2, step: 0.05, onChange: (value) => setDriveModel({ gearRatio: value }) })),
+                h('div', { className: 'rp-field' },
+                  h('div', { className: 'rp-flabel' }, 'Wheel diameter'),
+                  h(BigNum, { label: 'Drive wheel diameter', value: driveModel.wheelDiameterM, unit: 'm', min: 0.02, max: 0.5, precision: 4, step: 0.001, onChange: (value) => setDriveModel({ wheelDiameterM: value }) })),
+                h('div', { className: 'rp-drive-result' },
+                  h('span', null, 'Free chassis speed'),
+                  h('strong', null, robot.maxSpeed.toFixed(2), h('small', null, ' m/s')),
+                  h('small', null, m2ft(robot.maxSpeed).toFixed(1) + ' ft/s'))),
+              h('div', { className: 'rp-note' }, h(Icon, { name: 'info', size: 14 }), 'Feeds the planner\u2019s torque-speed envelope.'))),
 
             mcpEnabled && h('div', { className: 'rp-sec rp-agent' },
               h('div', { className: 'rp-sech' }, 'Agent planning profile'),
@@ -321,7 +349,9 @@
           h('div', { className: 'rp-col' },
             h('div', { className: 'rp-preview' },
               h('div', { className: 'rp-stage' },
-                h('svg', { width: 260, height: 260, viewBox: '0 0 260 260' },
+                h('svg', { ref: previewRef, width: 260, height: 260, viewBox: '0 0 260 260',
+                  className: shape === 'custom' ? 'editable' : '', onDoubleClick: addVertexFromPreview,
+                  'aria-label': shape === 'custom' ? 'Editable custom robot footprint. Drag a vertex or double-click an edge to add one.' : 'Robot footprint preview' },
                   h('g', { transform: 'translate(130 130)' },
                     h('polygon', { points: footprintPoints, fill: 'var(--accent-soft)', stroke: 'var(--accent)', strokeWidth: 2.5, strokeLinejoin: 'round' }),
                     // forward indicator (front = +X)
@@ -329,7 +359,29 @@
                     h('path', { d: `M ${rw / 2 + 2} -6 L ${rw / 2 + 14} 0 L ${rw / 2 + 2} 6 Z`, fill: '#fff' }),
                     // width / length ticks
                     h('text', { x: 0, y: -rh / 2 - 10, fill: 'var(--txt-3)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace', textAnchor: 'middle' }, robot.w.toFixed(2) + ' m'),
-                    h('text', { x: rw / 2 + 26, y: 4, fill: 'var(--txt-3)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace', transform: `rotate(90 ${rw / 2 + 26} 0)`, textAnchor: 'middle' }, robot.l.toFixed(2) + ' m')))),
+                    h('text', { x: rw / 2 + 26, y: 4, fill: 'var(--txt-3)', fontSize: 11, fontFamily: 'JetBrains Mono, monospace', transform: `rotate(90 ${rw / 2 + 26} 0)`, textAnchor: 'middle' }, robot.l.toFixed(2) + ' m'),
+                    shape === 'custom' && footprint.map((point, index) => h('g', { key: index },
+                      h('circle', { cx: point.x * unit, cy: -point.y * unit, r: 22, className: 'rp-vertex-hit',
+                        role: 'button', tabIndex: 0, 'aria-label': `Footprint vertex ${index + 1}`,
+                        onPointerDown: (event) => startVertexDrag(index, event),
+                        onDoubleClick: (event) => event.stopPropagation(),
+                        onKeyDown: (event) => {
+                          const step = event.shiftKey ? 0.05 : 0.01;
+                          const dx = event.key === 'ArrowRight' ? step : event.key === 'ArrowLeft' ? -step : 0;
+                          const dy = event.key === 'ArrowUp' ? step : event.key === 'ArrowDown' ? -step : 0;
+                          if (!dx && !dy) return;
+                          event.preventDefault();
+                          setSelectedVertex(index);
+                          setVertices(footprint.map((vertex, pointIndex) => pointIndex === index ? {
+                            x: Math.max(-robot.l / 2, Math.min(robot.l / 2, vertex.x + dx)),
+                            y: Math.max(-robot.w / 2, Math.min(robot.w / 2, vertex.y + dy)),
+                          } : vertex));
+                        },
+                      }),
+                      h('circle', { cx: point.x * unit, cy: -point.y * unit,
+                        r: selectedVertex === index ? 7 : 5, 'aria-hidden': true, pointerEvents: 'none',
+                        className: 'rp-vertex-handle' + (selectedVertex === index ? ' selected' : ''),
+                      })))))),
               h('div', { className: 'rp-readout' },
                 h('div', { className: 'rr' }, h('div', { className: 'rrv' }, isSwerve ? 'Swerve' : 'Tank'), h('div', { className: 'rru' }, 'drive')),
                 h('div', { className: 'rr' }, h('div', { className: 'rrv' }, footprintArea.toFixed(2)), h('div', { className: 'rru' }, 'm\u00b2 footprint')),
