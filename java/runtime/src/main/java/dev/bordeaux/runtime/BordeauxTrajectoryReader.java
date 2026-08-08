@@ -178,8 +178,24 @@ public final class BordeauxTrajectoryReader {
             if (cancelNode == null || !cancelNode.isBoolean()) {
                 throw new BordeauxRuntimeException("Event '" + eventId + "' cancelOnPathEnd must be a boolean");
             }
+            String triggerValue = event.has("trigger") ? text(event, "trigger", "Event '" + eventId + "'") : "time";
+            BordeauxEvent.Trigger trigger = switch (triggerValue) {
+                case "time" -> BordeauxEvent.Trigger.TIME;
+                case "position" -> BordeauxEvent.Trigger.POSITION;
+                default -> throw new BordeauxRuntimeException("Event '" + eventId + "' trigger must be time or position");
+            };
+            Double repeatEveryS = optionalPositiveFinite(event.get("repeatEveryS"), "Event '" + eventId + "' repeatEveryS");
+            Double endTimeS = optionalNonnegativeFinite(event.get("endTimeS"), "Event '" + eventId + "' endTimeS");
+            if (endTimeS != null && endTimeS < timeS) {
+                throw new BordeauxRuntimeException("Event '" + eventId + "' ends before it starts");
+            }
+            String conditionId = event.has("conditionId") ? text(event, "conditionId", "Event '" + eventId + "'") : null;
+            if (conditionId != null && !conditionId.matches("[A-Za-z0-9_.:#()$,-]{1,256}")) {
+                throw new BordeauxRuntimeException("Event '" + eventId + "' conditionId is invalid");
+            }
             indexed.add(new IndexedEvent(index, new BordeauxEvent(
-                    eventId, eventName, timeS, fraction, commandId, objectArguments.deepCopy(), cancelNode.booleanValue())));
+                    eventId, eventName, timeS, fraction, commandId, objectArguments.deepCopy(), cancelNode.booleanValue(),
+                    trigger, repeatEveryS, endTimeS, conditionId)));
         }
         indexed.sort(Comparator.comparingDouble((IndexedEvent value) -> value.event().timeS())
                 .thenComparingInt(IndexedEvent::index));
@@ -214,6 +230,18 @@ public final class BordeauxTrajectoryReader {
             throw new BordeauxRuntimeException(context + " must be a finite number");
         }
         return value.doubleValue();
+    }
+
+    private static Double optionalPositiveFinite(JsonNode value, String context) {
+        if (value == null) return null;
+        double result = finite(value, context);
+        if (result <= 0) throw new BordeauxRuntimeException(context + " must be greater than zero");
+        return result;
+    }
+
+    private static Double optionalNonnegativeFinite(JsonNode value, String context) {
+        if (value == null) return null;
+        return nonnegativeFinite(value, context);
     }
 
     private static int requiredInt(JsonNode value, String context) {
