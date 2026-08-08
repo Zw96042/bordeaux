@@ -258,6 +258,30 @@ function translationPriorityForInterval(
     && activeTransitions.every((transition) => transition.rotationPriority === "translation");
 }
 
+function causalTranslationPriority(
+  fractions: readonly number[],
+  ranges: readonly NormalizedRange[],
+  transitions: readonly HeadingTransitionWindow[],
+): boolean[] {
+  let following = false;
+  return fractions.map((fraction, index) => {
+    if (index === 0) return false;
+    const before = fractions[index - 1];
+    const start = Math.min(before, fraction);
+    const end = Math.max(before, fraction);
+    const overlaps = (candidateStart: number, candidateEnd: number) => (
+      Math.min(end, candidateEnd) - Math.max(start, candidateStart) >= -EPSILON
+    );
+    const activeRanges = ranges.filter((range) => overlaps(range.f0, range.f1));
+    const activeTransitions = transitions.filter((transition) => overlaps(transition.start, transition.end));
+    if (activeRanges.length + activeTransitions.length > 0) {
+      following = activeRanges.every((range) => range.rotationPriority === "translation")
+        && activeTransitions.every((transition) => transition.rotationPriority === "translation");
+    }
+    return following;
+  });
+}
+
 function transitionWindowsForSamples(path: PathDoc, samples: readonly { x: number; y: number; s: number }[]): HeadingTransitionWindow[] {
   const totalDistance = samples.at(-1)?.s ?? 0;
   const waypointIndices = nearestGeometryIndices(path, samples);
@@ -372,6 +396,11 @@ function buildTimeline(input: PlannerInput, geometry: readonly GeometryPoint[]):
   );
   const waypointFractions = waypointIndices.map((index) => geometry[index].s / Math.max(totalDistance, EPSILON));
   const transitions = headingTransitionWindows(path.waypoints, segmentLaws, transitionBreaks, waypointFractions, totalDistance);
+  const translationPriority = causalTranslationPriority(
+    geometry.map((point) => point.s / Math.max(totalDistance, EPSILON)),
+    ranges,
+    transitions,
+  );
 
   const globalMaxVelocity = Math.min(path.constraints.maxVel, robot.maxSpeed);
   const velocityCaps = geometry.map((point, index) => {
@@ -383,9 +412,7 @@ function buildTimeline(input: PlannerInput, geometry: readonly GeometryPoint[]):
     const fraction = point.s / Math.max(totalDistance, EPSILON);
     const range = ranges.filter((candidate) => fraction >= candidate.f0 - EPSILON && fraction <= candidate.f1 + EPSILON);
     range.forEach((candidate) => { cap = Math.min(cap, candidate.maxVel); });
-    const previousFraction = index > 0 ? geometry[index - 1].s / Math.max(totalDistance, EPSILON) : fraction;
-    const translationInterval = index > 0
-      && translationPriorityForInterval(ranges, transitions, previousFraction, fraction);
+    const translationInterval = translationPriority[index];
     if (index > 0 && !translationInterval) {
       const ds = Math.max(EPSILON, point.s - geometry[index - 1].s);
       const headingRatePerMeter = Math.abs(robotHeadings[index] - robotHeadings[index - 1]) / ds;
@@ -410,9 +437,9 @@ function buildTimeline(input: PlannerInput, geometry: readonly GeometryPoint[]):
     const reachableOmega = [...omegaCaps];
     if (path.startVel <= EPSILON) reachableOmega[0] = 0;
     for (let index = 1; index < geometry.length; index += 1) {
+      if (translationPriority[index]) continue;
       const before = geometry[index - 1].s / Math.max(totalDistance, EPSILON);
       const after = geometry[index].s / Math.max(totalDistance, EPSILON);
-      if (translationPriorityForInterval(ranges, transitions, before, after)) continue;
       // Leave headroom for the subsequent fixed-period resampling, whose
       // finite differences otherwise land slightly above the spatial bound.
       let angularAcceleration = path.constraints.maxAngAccel * Math.PI / 180 * 0.6;
@@ -429,7 +456,7 @@ function buildTimeline(input: PlannerInput, geometry: readonly GeometryPoint[]):
     for (let index = geometry.length - 2; index >= 0; index -= 1) {
       const before = geometry[index].s / Math.max(totalDistance, EPSILON);
       const after = geometry[index + 1].s / Math.max(totalDistance, EPSILON);
-      if (translationPriorityForInterval(ranges, transitions, before, after)) continue;
+      if (translationPriority[index + 1]) continue;
       let angularDeceleration = (path.constraints.maxAngDecel ?? path.constraints.maxAngAccel) * Math.PI / 180 * 0.6;
       ranges.forEach((range) => {
         if ((before >= range.f0 - EPSILON && before <= range.f1 + EPSILON)
@@ -441,9 +468,7 @@ function buildTimeline(input: PlannerInput, geometry: readonly GeometryPoint[]):
       reachableOmega[index] = Math.min(reachableOmega[index], Math.sqrt(Math.max(0, reachableOmega[index + 1] ** 2 + 2 * angularDeceleration * headingDelta)));
     }
     for (let index = 1; index < geometry.length; index += 1) {
-      const before = geometry[index - 1].s / Math.max(totalDistance, EPSILON);
-      const after = geometry[index].s / Math.max(totalDistance, EPSILON);
-      if (translationPriorityForInterval(ranges, transitions, before, after)) continue;
+      if (translationPriority[index]) continue;
       const distance = Math.max(EPSILON, geometry[index].s - geometry[index - 1].s);
       const headingRatePerMeter = Math.abs(robotHeadings[index] - robotHeadings[index - 1]) / distance;
       if (headingRatePerMeter > EPSILON) velocityCaps[index] = Math.min(velocityCaps[index], reachableOmega[index] / headingRatePerMeter);

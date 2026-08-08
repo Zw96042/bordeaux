@@ -184,7 +184,7 @@ function validateRoutineNodes(issues: ValidationIssue[], value: unknown, path: s
       issues.push(issue(`${base}.type`, "Routine node type is invalid"));
       return;
     }
-    if (!["terminate", "sequence", "generate", "velocity"].includes(String(node.cat))) issues.push(issue(`${base}.cat`, "Routine function category is invalid"));
+    if (!["command", "terminate", "sequence", "generate", "velocity"].includes(String(node.cat))) issues.push(issue(`${base}.cat`, "Routine function category is invalid"));
     validateOptionalFinite(issues, node.scale, `${base}.scale`, "Velocity scale", { nonnegative: true });
   });
 }
@@ -242,6 +242,7 @@ function validateProjectInner(project: unknown): ValidationResult {
       if (typeof path.name !== "string" || !path.name.trim()) issues.push(issue(`${base}.name`, "Path name is required"));
       if (path.folderId !== undefined && (typeof path.folderId !== "string" || !folderIds.has(path.folderId))) issues.push(issue(`${base}.folderId`, "Path folder does not exist"));
       if (path.headingMode !== undefined && !["manual", "tangent", "targets"].includes(String(path.headingMode))) issues.push(issue(`${base}.headingMode`, "Heading mode is invalid"));
+      if (path.followMode !== undefined && !["time", "position"].includes(String(path.followMode))) issues.push(issue(`${base}.followMode`, "Follow mode must be time or position"));
       validateFinite(issues, path.startVel, `${base}.startVel`, "Start velocity", { nonnegative: true });
       validateFinite(issues, path.goalVel, `${base}.goalVel`, "Goal velocity", { nonnegative: true });
 
@@ -281,6 +282,7 @@ function validateProjectInner(project: unknown): ValidationResult {
           }
           if (waypoint.segType !== undefined && !["bezier", "line", "arc", "clothoid"].includes(String(waypoint.segType))) issues.push(issue(`${wpBase}.segType`, "Segment type is invalid"));
           if (waypoint.segmentHeadingMode !== undefined && !["manual", "tangent", "targets", "lookAt"].includes(String(waypoint.segmentHeadingMode))) issues.push(issue(`${wpBase}.segmentHeadingMode`, "Segment heading mode is invalid"));
+          if (waypoint.segmentFollowMode !== undefined && !["time", "position"].includes(String(waypoint.segmentFollowMode))) issues.push(issue(`${wpBase}.segmentFollowMode`, "Segment follow mode must be time or position"));
           if (waypoint.segmentLookAt !== undefined) {
             validatePoint(issues, waypoint.segmentLookAt, `${wpBase}.segmentLookAt`, "Tracked field point");
             if (isRecord(waypoint.segmentLookAt) && finite(waypoint.segmentLookAt.x) && finite(waypoint.segmentLookAt.y)
@@ -380,6 +382,16 @@ function validateProjectInner(project: unknown): ValidationResult {
         if (typeof marker.name !== "string" || !marker.name.trim()) issues.push(issue(`${markerBase}.name`, "Marker name is required"));
         if (marker.cmd !== undefined && typeof marker.cmd !== "string") issues.push(issue(`${markerBase}.cmd`, "Legacy marker command must be a string"));
         if (marker.group !== undefined && marker.group !== "sequential" && marker.group !== "parallel" && marker.group !== "deadline") issues.push(issue(`${markerBase}.group`, "Marker group is invalid"));
+        if (marker.schedule !== undefined) {
+          if (!isRecord(marker.schedule)) issues.push(issue(`${markerBase}.schedule`, "Event schedule must be an object"));
+          else {
+            if (marker.schedule.trigger !== undefined && marker.schedule.trigger !== "time" && marker.schedule.trigger !== "position") issues.push(issue(`${markerBase}.schedule.trigger`, "Event trigger must be time or position"));
+            validateOptionalFinite(issues, marker.schedule.repeatEveryS, `${markerBase}.schedule.repeatEveryS`, "Repeat period", { positive: true });
+            if (finite(marker.schedule.repeatEveryS) && marker.schedule.repeatEveryS < 0.001) issues.push(issue(`${markerBase}.schedule.repeatEveryS`, "Repeat period cannot be less than 0.001 seconds"));
+            validateOptionalFinite(issues, marker.schedule.endTimeS, `${markerBase}.schedule.endTimeS`, "Event end time", { nonnegative: true });
+            if (typeof marker.schedule.conditionId !== "undefined" && (typeof marker.schedule.conditionId !== "string" || !/^[A-Za-z0-9_.:#()$,-]{1,256}$/.test(marker.schedule.conditionId))) issues.push(issue(`${markerBase}.schedule.conditionId`, "Condition ID is invalid"));
+          }
+        }
         if (marker.invocation !== undefined) {
           if (!isRecord(marker.invocation)) {
             issues.push(issue(`${markerBase}.invocation`, "Command invocation must be an object"));

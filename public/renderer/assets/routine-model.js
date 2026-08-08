@@ -1,20 +1,21 @@
 // Autonomous Routine — autonomous routine model + run engine (no React). Exports window.AUTO
 // A routine is an ordered list of STEPS. Three step kinds: Path, Decision, Function.
-// A Function carries one of four runtime CAPABILITIES: Terminate, Sequence, Generate, Velocity.
+// A Function carries a runtime capability or a generated Java command.
 // Autonomous Routine is robot-agnostic: it ORCHESTRATES runtime generation, it does not define behaviors.
 (function () {
   const D2R = Math.PI / 180;
   let _id = 0;
   const uid = (p) => (p || 'n') + '_' + (++_id);
 
-  // ---- the four runtime capabilities a Function can carry ----
+  // ---- runtime capabilities a Function can carry ----
   const CATS = {
+    command:   { id: 'command',   label: 'Command',   icon: 'bolt',     color: '#4fbf78', blurb: 'Run a robot command between paths' },
     terminate: { id: 'terminate', label: 'Terminate', icon: 'stop',    color: '#d2655f', blurb: 'End the running path early and advance' },
     sequence:  { id: 'sequence',  label: 'Sequence',  icon: 'shuffle',  color: '#8a7bf0', blurb: 'Skip · repeat · jump · reorder paths' },
     generate:  { id: 'generate',  label: 'Generate',  icon: 'compass',  color: '#cf962f', blurb: 'Invoke a runtime path function' },
     velocity:  { id: 'velocity',  label: 'Velocity',  icon: 'gauge',    color: '#2bb3c4', blurb: 'Scale drive velocities live' },
   };
-  const CAT_LIST = ['terminate', 'sequence', 'generate', 'velocity'];
+  const CAT_LIST = ['command', 'terminate', 'sequence', 'generate', 'velocity'];
 
   // ---- Sequence is a CORE Autonomous Routine feature: orchestration ops, robot-independent ----
   const SEQ_OPS = [
@@ -31,6 +32,7 @@
   function nodeTitle(node, paths) {
     if (node.type === 'path') { const p = paths && paths.find((path) => path.id === node.ref); return p ? p.name : '(unbound path)'; }
     if (node.type === 'decision') return node.cond;
+    if (node.cat === 'command') return node.title || (node.invocation && node.invocation.commandId) || 'Choose command';
     if (node.cat === 'generate') return node.funcRef || 'GeneratePath';
     if (node.cat === 'sequence') { const o = seqOp(node.op); return o.verb + (node.target ? ' · ' + node.target : ''); }
     return node.title || CATS[node.cat].label;
@@ -85,8 +87,9 @@
   // ---- node factory ----
   function newNode(type, cat, pathRef) {
     if (type === 'path') return { id: uid('p'), type: 'path', ref: pathRef || '' };
-    if (type === 'decision') return { id: uid('d'), type: 'decision', cond: 'New condition?', thenLabel: 'Yes', elseLabel: 'No', then: [], else: [] };
+    if (type === 'decision') return { id: uid('d'), type: 'decision', cond: 'robot.condition', thenLabel: 'Yes', elseLabel: 'No', then: [], else: [] };
     const c = cat || 'terminate';
+    if (c === 'command') return { id: uid('c'), type: 'function', cat: 'command', title: 'Robot command', invocation: null };
     if (c === 'generate') return { id: uid('g'), type: 'function', cat: 'generate', funcRef: 'GeneratePath', trigger: 'On entry', params: [], note: '', preview: null };
     if (c === 'sequence') return { id: uid('s'), type: 'function', cat: 'sequence', op: 'skip', target: '', trigger: 'When\u2026', note: '' };
     if (c === 'velocity') return { id: uid('v'), type: 'function', cat: 'velocity', title: 'Velocity rule', trigger: 'When\u2026', scale: 0.5, note: '' };

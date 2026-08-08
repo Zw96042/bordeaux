@@ -30,19 +30,28 @@ public final class BordeauxEventRunner implements AutoCloseable {
 
     private final BordeauxPathEvents path;
     private final BordeauxCommandRegistry registry;
+    private final BordeauxConditionRegistry conditions;
     private final Scheduler scheduler;
     private final List<Command> cancelOnEnd = new ArrayList<>();
-    private int nextEvent;
+    private final List<EventState> states = new ArrayList<>();
+    private int firedCount;
     private double lastElapsedS = -1;
+    private double maximumFraction;
     private boolean active = true;
 
     public BordeauxEventRunner(BordeauxPathEvents path, BordeauxCommandRegistry registry) {
-        this(path, registry, Scheduler.wpilib());
+        this(path, registry, BordeauxConditionRegistry.empty(), Scheduler.wpilib());
     }
 
     public BordeauxEventRunner(BordeauxPathEvents path, BordeauxCommandRegistry registry, Scheduler scheduler) {
+        this(path, registry, BordeauxConditionRegistry.empty(), scheduler);
+    }
+
+    public BordeauxEventRunner(BordeauxPathEvents path, BordeauxCommandRegistry registry,
+            BordeauxConditionRegistry conditions, Scheduler scheduler) {
         this.path = Objects.requireNonNull(path, "path");
         this.registry = Objects.requireNonNull(registry, "registry");
+        this.conditions = Objects.requireNonNull(conditions, "conditions");
         this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
         if (!path.catalogId().equals(registry.catalogId())) {
             throw new BordeauxRuntimeException("Trajectory catalog ID '" + path.catalogId()
@@ -52,31 +61,52 @@ public final class BordeauxEventRunner implements AutoCloseable {
             throw new BordeauxRuntimeException("Trajectory catalog hash " + path.catalogHash()
                     + " does not match robot registry " + registry.catalogHash());
         }
+        reset();
     }
 
     /** Call once per robot loop with elapsed path time. All newly due events are caught up in order. */
     public void periodic(double elapsedS) {
+        periodic(elapsedS, maximumFraction);
+    }
+
+    /** Call once per robot loop with elapsed time and monotonic measured path progress. */
+    public void periodic(double elapsedS, double measuredFraction) {
         if (!active) throw new BordeauxRuntimeException("Event runner is stopped; call reset() before periodic()");
-        if (!Double.isFinite(elapsedS) || elapsedS < 0) {
-            throw new BordeauxRuntimeException("Elapsed path time must be finite and nonnegative");
+        if (!Double.isFinite(elapsedS) || elapsedS < 0 || !Double.isFinite(measuredFraction)
+                || measuredFraction < 0 || measuredFraction > 1) {
+            throw new BordeauxRuntimeException("Elapsed time and measured fraction must be finite and in range");
         }
         if (elapsedS < lastElapsedS) {
             throw new BordeauxRuntimeException("Elapsed path time moved backwards; call reset() before restarting a path");
         }
         lastElapsedS = elapsedS;
+        maximumFraction = Math.max(maximumFraction, measuredFraction);
         List<BordeauxEvent> events = path.events();
-        while (nextEvent < events.size() && events.get(nextEvent).timeS() <= elapsedS) {
-            BordeauxEvent event = events.get(nextEvent);
-            try {
-                Command command = registry.create(event.commandId(), event.arguments());
-                scheduler.schedule(command);
-                if (event.cancelOnPathEnd()) cancelOnEnd.add(command);
-                nextEvent++;
-            } catch (BordeauxRuntimeException exception) {
-                throw new BordeauxRuntimeException("Event '" + event.eventId() + "' failed: " + exception.getMessage(), exception);
-            } catch (RuntimeException exception) {
-                throw new BordeauxRuntimeException("Event '" + event.eventId() + "' could not be scheduled: " + exception.getMessage(), exception);
+        int scheduledThisUpdate = 0;
+        for (int index = 0; index < events.size(); index++) {
+            BordeauxEvent event = events.get(index);
+            EventState state = states.get(index);
+            if (state.complete) continue;
+            boolean expired = event.endTimeS() != null && elapsedS > event.endTimeS() + 1e-9;
+            if (expired && (!state.activated || event.repeatEveryS() == null)) { state.complete = true; continue; }
+            boolean due = event.trigger() == BordeauxEvent.Trigger.TIME
+                    ? elapsedS >= event.timeS() : maximumFraction >= event.fraction();
+            if (!state.activated && due) {
+                state.activated = true;
+                state.nextTimeS = event.trigger() == BordeauxEvent.Trigger.TIME ? event.timeS() : elapsedS;
             }
+            if (!state.activated) continue;
+            if (event.repeatEveryS() == null) {
+                if (conditions.evaluate(event.conditionId())) { schedule(event); state.complete = true; }
+                continue;
+            }
+            while (state.nextTimeS <= elapsedS + 1e-9
+                    && (event.endTimeS() == null || state.nextTimeS <= event.endTimeS() + 1e-9)) {
+                if (conditions.evaluate(event.conditionId())) schedule(event);
+                state.nextTimeS += event.repeatEveryS();
+                if (++scheduledThisUpdate > 10_000) throw new BordeauxRuntimeException("Event repetition catch-up exceeds 10000 executions");
+            }
+            if (event.endTimeS() != null && state.nextTimeS > event.endTimeS() + 1e-9) state.complete = true;
         }
     }
 
@@ -94,13 +124,27 @@ public final class BordeauxEventRunner implements AutoCloseable {
     /** Cancels owned commands and prepares the same path to run again from time zero. */
     public void reset() {
         cancelOwnedCommands();
-        nextEvent = 0;
+        states.clear();
+        path.events().forEach(event -> states.add(new EventState()));
+        firedCount = 0;
         lastElapsedS = -1;
+        maximumFraction = 0;
         active = true;
     }
 
     public int firedCount() {
-        return nextEvent;
+        return firedCount;
+    }
+
+    private void schedule(BordeauxEvent event) {
+        try {
+            Command command = registry.create(event.commandId(), event.arguments());
+            scheduler.schedule(command);
+            if (event.cancelOnPathEnd()) cancelOnEnd.add(command);
+            firedCount++;
+        } catch (RuntimeException exception) {
+            throw new BordeauxRuntimeException("Event '" + event.eventId() + "' could not be scheduled: " + exception.getMessage(), exception);
+        }
     }
 
     private void cancelOwnedCommands() {
@@ -111,5 +155,11 @@ public final class BordeauxEventRunner implements AutoCloseable {
     @Override
     public void close() {
         stop();
+    }
+
+    private static final class EventState {
+        private boolean activated;
+        private boolean complete;
+        private double nextTimeS;
     }
 }

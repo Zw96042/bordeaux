@@ -131,16 +131,36 @@ describe("project defaults and validation", () => {
     expect(() => buildBdxExport(project as BordeauxProject)).toThrow(/Invalid Bordeaux project|finite/);
   });
 
-  it("round-trips path folders and per-segment heading modes", () => {
+  it("round-trips path folders and per-segment modes", () => {
     const project = createDemoProject();
     project.pathFolders = [{ id: "folder_scoring", name: "Scoring" }];
     project.paths[0].folderId = "folder_scoring";
     project.paths[0].waypoints[0].segmentHeadingMode = "tangent";
+    project.paths[0].followMode = "position";
+    project.paths[0].waypoints[0].segmentFollowMode = "time";
 
     const parsed = parseProject(JSON.stringify(project));
     expect(parsed.pathFolders).toEqual(project.pathFolders);
     expect(parsed.paths[0].folderId).toBe("folder_scoring");
     expect(parsed.paths[0].waypoints[0].segmentHeadingMode).toBe("tangent");
+    expect(parsed.paths[0].followMode).toBe("position");
+    expect(parsed.paths[0].waypoints[0].segmentFollowMode).toBe("time");
+  });
+
+  it("round-trips conditional position event schedules", () => {
+    const project = createDemoProject();
+    project.paths[0].markers = [{
+      id: "event_intake", f: 0.4, name: "Intake", schedule: {
+        trigger: "position", repeatEveryS: 0.1, endTimeS: 2.5, conditionId: "frc.robot.Conditions#hasNote",
+      },
+    }];
+    expect(parseProject(JSON.stringify(project)).paths[0].markers[0].schedule).toEqual(project.paths[0].markers[0].schedule);
+
+    (project.paths[0].markers[0].schedule as any).trigger = "distance";
+    expect(validateProject(project).issues.some((issue) => issue.path.endsWith("schedule.trigger"))).toBe(true);
+    (project.paths[0].markers[0].schedule as any).trigger = "time";
+    (project.paths[0].markers[0].schedule as any).repeatEveryS = 0.0001;
+    expect(validateProject(project).issues.some((issue) => issue.path.endsWith("schedule.repeatEveryS"))).toBe(true);
   });
 
   it("rejects orphan folders and invalid per-segment heading modes", () => {
@@ -148,12 +168,16 @@ describe("project defaults and validation", () => {
     project.pathFolders = [{ id: "folder_one", name: "One" }];
     project.paths[0].folderId = "folder_missing";
     project.paths[0].waypoints[0].segmentHeadingMode = "locked";
+    project.paths[0].followMode = "distance";
+    project.paths[0].waypoints[0].segmentFollowMode = "automatic";
 
     const validation = validateProject(project);
     expect(validation.ok).toBe(false);
     expect(validation.issues.map((item) => item.path)).toEqual(expect.arrayContaining([
       "$.paths[0].folderId",
       "$.paths[0].waypoints[0].segmentHeadingMode",
+      "$.paths[0].followMode",
+      "$.paths[0].waypoints[0].segmentFollowMode",
     ]));
   });
 
@@ -417,6 +441,15 @@ describe("LabVIEW .bdx compatibility", () => {
     expect(() => buildLabviewBdx(mixed, mixed.paths[0].id)).toThrow(/entirely Bezier or entirely clothoid/);
   });
 
+  it("rejects position-followed segments in LabVIEW exports", () => {
+    const project = createDemoProject();
+    project.paths[0].followMode = "position";
+    expect(() => buildLabviewBdx(project, project.paths[0].id)).toThrow(/cannot encode position-based following/);
+
+    project.paths[0].waypoints[0].segmentFollowMode = "time";
+    expect(() => buildLabviewBdx(project, project.paths[0].id)).not.toThrow();
+  });
+
   it("atomically preserves binary bytes", async () => {
     const directory = await fsp.mkdtemp(path.join(os.tmpdir(), "bordeaux-bdx-test-"));
     const file = path.join(directory, "path.bdx");
@@ -428,23 +461,24 @@ describe("LabVIEW .bdx compatibility", () => {
 });
 
 describe("canonical shipped renderer", () => {
-  it("loads the maintained legacy editor with persistence, security, and accessibility hooks", () => {
-    const html = fs.readFileSync(path.join(process.cwd(), "public/legacy/index.html"), "utf8");
-    const app = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js"), "utf8");
-    const ui = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/760c13dd-1656-409e-a1f2-58b2285a7f6e.js"), "utf8");
+  it("loads the maintained editor with persistence, security, and accessibility hooks", () => {
+    const html = fs.readFileSync(path.join(process.cwd(), "public/renderer/index.html"), "utf8");
+    const styles = fs.readFileSync(path.join(process.cwd(), "public/renderer/styles.css"), "utf8");
+    const app = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/app.js"), "utf8");
+    const ui = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/ui-primitives.js"), "utf8");
     expect(html).toContain("Content-Security-Policy");
-    expect(html).toContain(":focus-visible");
-    expect(html).toContain(".numbox .numinput:focus-visible");
-    expect(html).toContain("@container (max-width: 820px)");
-    expect(html).toContain(".tb-file { flex: 0 0 auto");
-    expect(html).toContain(".ctxinsp-t, .featnm");
+    expect(styles).toContain(":focus-visible");
+    expect(styles).toContain(".numbox .numinput:focus-visible");
+    expect(styles).toContain("@container (max-width: 820px)");
+    expect(styles).toContain(".tb-file { flex: 0 0 auto");
+    expect(styles).toContain(".ctxinsp-t, .featnm");
     expect(app).toContain("openRecentProject");
     expect(app).toContain("saveProject");
     expect(app).not.toContain("bordeaux-notice");
     expect(ui).toContain("'aria-expanded': open");
     expect(ui).toContain("htmlFor: id");
-    const panels = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js"), "utf8");
-    const inspector = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js"), "utf8");
+    const panels = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/panels.js"), "utf8");
+    const inspector = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/context-inspector.js"), "utf8");
     expect(panels).toContain("'aria-label': 'Export .bdx'");
     expect(panels).toContain("{ v: 'labviewBezier'");
     expect(panels).toContain("{ v: 'labviewClothoid'");
@@ -456,16 +490,17 @@ describe("canonical shipped renderer", () => {
   });
 
   it("lets the active constraint-range tool claim segment hit lines", () => {
-    const field = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js"), "utf8");
+    const field = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/field-view.js"), "utf8");
     expect(field).toContain("if (tool === 'range' && pts.length > 1) { startRangeDrag(world, visit); return; }");
     expect(field).toContain("tool === 'waypoint' || tool === 'rotation' || tool === 'marker'");
     expect(field).toContain("tool === 'range' ? 'crosshair'");
   });
 
-  it("renders waypoint and segment outline selection as compact flat list states", () => {
-    const html = fs.readFileSync(path.join(process.cwd(), "public/legacy/index.html"), "utf8");
-    const outline = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js"), "utf8");
-    expect(html).toContain(".wpfeatrow.sel,.segfeatrow.sel{background:transparent");
+  it("uses the shared outline selection style for waypoints and segments", () => {
+    const styles = fs.readFileSync(path.join(process.cwd(), "public/renderer/styles.css"), "utf8");
+    const outline = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/panels.js"), "utf8");
+    expect(styles).not.toContain(".wpfeatrow.sel,.segfeatrow.sel");
+    expect(styles).toContain(".featrow.sel{background:var(--accent-soft);border-left-color:var(--accent)}");
     expect(outline).toContain("featrow wpfeatrow");
     expect(outline).toContain("featrow segfeatrow");
     expect(outline).toContain("className: 'featindent'");
@@ -473,9 +508,52 @@ describe("canonical shipped renderer", () => {
     expect(outline).toContain("wps.length > 2 && h('button', { className: 'featdel'");
   });
 
+  it("renders the field metric overlay as a compact legend", () => {
+    const styles = fs.readFileSync(path.join(process.cwd(), "public/renderer/styles.css"), "utf8");
+    const panels = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/panels.js"), "utf8");
+    expect(styles).toContain(".overlayctl{position:absolute;left:16px;bottom:110px;width:236px;background:transparent");
+    expect(panels).not.toContain("className: 'ovlabel'");
+    expect(panels.indexOf("className: 'ovsafety '")).toBeLessThan(panels.indexOf("className: 'ovlegend'"));
+  });
+
+  it("offers beginner robot-footprint presets and scales them with dimensions", () => {
+    const robotPage = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/robot-page.js"), "utf8");
+    expect(robotPage).toContain("['rectangle', 'Rectangle'], ['round', 'Round'], ['trapezoid', 'Trapezoid'], ['custom', 'Custom']");
+    expect(robotPage).toContain("const maxDim = Math.max(robot.w, robot.l, 0.4, ...footprint.flatMap");
+    expect(robotPage).toContain("x: point.x * nextL / robot.l, y: point.y * nextW / robot.w");
+    expect(robotPage).toContain("Custom convex vertices");
+    expect(robotPage).toContain("disabled: footprint.length >= 16");
+    expect(robotPage).toContain("disabled: footprint.length <= 3");
+  });
+
+  it("authors time or position following at path and segment scope", () => {
+    const inspector = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/context-inspector.js"), "utf8");
+    expect(inspector).toContain("ariaLabel: 'Default path follow mode'");
+    expect(inspector).toContain("ariaLabel: 'Segment follow mode'");
+    expect(inspector).toContain("segmentFollowMode: v === 'inherit' ? undefined : v");
+    expect(inspector).toContain("Java JSON only");
+  });
+
+  it("authors conditional repeated command schedules", () => {
+    const inspector = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/context-inspector.js"), "utf8");
+    expect(inspector).toContain("ariaLabel: 'Event trigger'");
+    expect(inspector).toContain("ariaLabel: 'Repeat event'");
+    expect(inspector).toContain("ariaLabel: 'Limit event end time'");
+    expect(inspector).toContain("id: 'event-condition-id'");
+  });
+
+  it("authors deployable between-path commands and decisions", () => {
+    const model = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/routine-model.js"), "utf8");
+    const inspector = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/routine-inspector.js"), "utf8");
+    expect(model).toContain("label: 'Command'");
+    expect(inspector).toContain("aria-label': 'Between-path command'");
+    expect(inspector).toContain("aria-label': 'Decision condition ID'");
+    expect(inspector).toContain("Runs after the previous path and before the next path is selected.");
+  });
+
   it("keeps playback, direct target rotation, and shift-delete wired into the editor", () => {
-    const app = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js"), "utf8");
-    const field = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js"), "utf8");
+    const app = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/app.js"), "utf8");
+    const field = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/field-view.js"), "utf8");
     expect(app).toContain("const togglePlayback = useCallback");
     expect(app).toContain("playRef.current >= totalNow - 1e-3");
     expect(field).toContain("'data-role': 'rth'");
@@ -488,7 +566,7 @@ describe("canonical shipped renderer", () => {
   });
 
   it("supports distance-locked targets, markers, and range controls", () => {
-    const inspector = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js"), "utf8");
+    const inspector = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/context-inspector.js"), "utf8");
     expect(PM.featureFraction({ f: 0.8, anchor: "dist", d: 2 }, { length: 10 })).toBeCloseTo(0.2);
     expect(inspector).toContain("'Position lock'");
     expect(inspector).toContain("label: 'Path %'");

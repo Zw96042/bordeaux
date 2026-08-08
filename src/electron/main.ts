@@ -16,6 +16,7 @@ import {
   writeJavaProjectBookmarks,
 } from "./javaProjectBookmarks";
 import { readProject, saveTargetForOpenedProject, writeBufferAtomically, writeProject } from "./projectFiles";
+import { readRecentProjectFiles, rememberRecentProject, writeRecentProjectFiles } from "./recentProjectFiles";
 import {
   applyJavaSupportInstall,
   cancelJavaCatalogBuild,
@@ -76,11 +77,16 @@ const agentSessions = new AgentSessionService(
 app.setName("Bordeaux");
 app.setAppUserModelId("org.frc2468.bordeaux");
 
-function rememberFile(filePath: string, saveTarget: string | null = filePath) {
+async function rememberFile(filePath: string, saveTarget: string | null = filePath) {
   currentProjectPath = saveTarget;
-  recentFiles = [filePath, ...recentFiles.filter((item) => item !== filePath)].slice(0, 8);
+  recentFiles = rememberRecentProject(recentFiles, filePath);
   app.addRecentDocument(filePath);
   buildMenu();
+  try {
+    await writeRecentProjectFiles(recentProjectsFile(), recentFiles);
+  } catch (error) {
+    console.warn("Could not save recent Bordeaux projects:", error);
+  }
 }
 
 function assertTrustedSender(event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent) {
@@ -92,6 +98,11 @@ function assertTrustedSender(event: Electron.IpcMainInvokeEvent | Electron.IpcMa
 function javaProjectBookmarksFile(): string {
   const directory = smokeDirectory ?? app.getPath("userData");
   return path.join(directory, "java-projects.json");
+}
+
+function recentProjectsFile(): string {
+  const directory = smokeDirectory ?? app.getPath("userData");
+  return path.join(directory, "recent-projects.json");
 }
 
 function javaSupportArtifactsDirectory(): string {
@@ -250,7 +261,7 @@ function createWindow() {
   });
 
   void window.webContents.session.clearCache().finally(() => {
-    if (!window.isDestroyed()) void window.loadFile(path.join(__dirname, "../../public/legacy/index.html"));
+    if (!window.isDestroyed()) void window.loadFile(path.join(__dirname, "../../public/renderer/index.html"));
   });
 
   if (process.env.BORDEAUX_SMOKE_TEST === "1") {
@@ -376,12 +387,13 @@ function createWindow() {
         await window.bordeauxAPI.newProject();
         const javaExported = await window.bordeauxAPI.exportJava(project, 'linked');
         const saved = await window.bordeauxAPI.saveProject(project, true);
+        const restored = await window.bordeauxAPI.restoreLastProject();
         await window.bordeauxAPI.newProject();
         const opened = await window.bordeauxAPI.openProject();
         const exported = await window.bordeauxAPI.exportBdx(opened.project);
         window.bordeauxAPI.setDirty(true);
         const probe = document.createElement('script'); probe.textContent = 'window.__bordeauxInlineScriptRan = true'; document.head.appendChild(probe);
-        return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, chapLoader, validation: validation.ok, javaDiscovery: javaConnection.catalog.projectName === 'SmokeRobot' && javaConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), javaInstalled: installedJavaConnection.integration.installed, javaBuilt: builtJavaConnection.catalog.authoritative === true && builtJavaConnection.catalog.catalogHash === reopenedJavaConnection.catalog.catalogHash, javaRecent: recentJavaProjects.length === 1 && reopenedJavaConnection.catalog.projectName === 'SmokeRobot', javaUi, javaExported: javaExported.exported && javaExported.eventCount === 1, roundTrip: saved.saved && opened.project.name === project.name && opened.project.routine.nodes[0].ref === 'path_smoke', exported: exported.exported, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
+        return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, chapLoader, validation: validation.ok, javaDiscovery: javaConnection.catalog.projectName === 'SmokeRobot' && javaConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), javaInstalled: installedJavaConnection.integration.installed, javaBuilt: builtJavaConnection.catalog.authoritative === true && builtJavaConnection.catalog.catalogHash === reopenedJavaConnection.catalog.catalogHash, javaRecent: recentJavaProjects.length === 1 && reopenedJavaConnection.catalog.projectName === 'SmokeRobot', javaUi, javaExported: javaExported.exported && javaExported.eventCount === 1, restored: restored.project.name === project.name, roundTrip: saved.saved && opened.project.name === project.name && opened.project.routine.nodes[0].ref === 'path_smoke', exported: exported.exported, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
       })()`);
       await new Promise((resolve) => setTimeout(resolve, 50));
       window.close();
@@ -390,7 +402,7 @@ function createWindow() {
       result.filesWritten = filesWritten;
       result.closeGuard = smokeCloseGuardTriggered && !window.isDestroyed();
       console.log(`BORDEAUX_SMOKE_OK ${JSON.stringify(result)}`);
-      const passed = result.api && result.root && result.unnamed.length === 0 && result.main > 0 && result.nav > 0 && result.chapLoader === "rigged" && result.validation && result.javaDiscovery && result.javaInstalled && result.javaBuilt && result.javaRecent && result.javaUi.markerInspector && result.javaUi.linkAction && result.javaUi.commandEnabled && result.javaUi.commandOptions === 4 && result.javaUi.searchHiddenForSmallCatalog && result.javaUi.recentHiddenForSingleProject && result.javaUi.cancelSwitch && result.javaUi.parameter && result.javaUi.jsonShapeRejected && result.javaUi.jsonShapeAccepted && result.javaUi.longRangeRejected && result.javaUi.exactInteger && result.javaUi.largeEnumPicker && result.javaUi.accessible && result.javaExported && result.roundTrip && result.exported && result.nodeGlobalsBlocked && result.popupBlocked && result.inlineScriptBlocked && result.filesWritten && result.closeGuard;
+      const passed = result.api && result.root && result.unnamed.length === 0 && result.main > 0 && result.nav > 0 && result.chapLoader === "rigged" && result.validation && result.javaDiscovery && result.javaInstalled && result.javaBuilt && result.javaRecent && result.javaUi.markerInspector && result.javaUi.linkAction && result.javaUi.commandEnabled && result.javaUi.commandOptions === 4 && result.javaUi.searchHiddenForSmallCatalog && result.javaUi.recentHiddenForSingleProject && result.javaUi.cancelSwitch && result.javaUi.parameter && result.javaUi.jsonShapeRejected && result.javaUi.jsonShapeAccepted && result.javaUi.longRangeRejected && result.javaUi.exactInteger && result.javaUi.largeEnumPicker && result.javaUi.accessible && result.javaExported && result.restored && result.roundTrip && result.exported && result.nodeGlobalsBlocked && result.popupBlocked && result.inlineScriptBlocked && result.filesWritten && result.closeGuard;
       allowClose = true;
       app.exit(passed ? 0 : 1);
     });
@@ -482,7 +494,7 @@ function buildMenu() {
 async function openProjectFile(filePath: string) {
   const decoded = await readProject(filePath);
   const { project } = decoded;
-  rememberFile(filePath, saveTargetForOpenedProject(filePath, decoded));
+  await rememberFile(filePath, saveTargetForOpenedProject(filePath, decoded));
   dirty = false;
   return { project };
 }
@@ -497,6 +509,16 @@ handle("project:open", async () => {
 handle("project:openRecent", async (_event, rawIndex) => {
   if (!Number.isInteger(rawIndex) || typeof rawIndex !== "number" || rawIndex < 0 || rawIndex >= recentFiles.length) throw new Error("Recent project is no longer available");
   return openProjectFile(recentFiles[rawIndex]);
+});
+
+handle("project:restoreLast", async () => {
+  if (!recentFiles[0]) return null;
+  try {
+    return await openProjectFile(recentFiles[0]);
+  } catch (error) {
+    console.warn("Could not restore the last Bordeaux project:", error);
+    return null;
+  }
 });
 
 handle("project:new", () => {
@@ -518,7 +540,7 @@ handle("project:save", async (_event, project, rawSaveAs) => {
     }
   }
   await writeProject(target, project);
-  rememberFile(target);
+  await rememberFile(target);
   dirty = false;
   return { saved: true };
 });
@@ -700,6 +722,12 @@ app.whenReady().then(async () => {
   } catch (error) {
     javaProjectBookmarks = [];
     console.warn("Could not load Java project bookmarks:", error);
+  }
+  try {
+    recentFiles = await readRecentProjectFiles(recentProjectsFile());
+  } catch (error) {
+    recentFiles = [];
+    console.warn("Could not load recent Bordeaux projects:", error);
   }
   agentBridge = new AgentBridgeServer(app.getPath("userData"), agentSessions);
   if (enableMcpAccessOnLaunch) await agentBridge.start();

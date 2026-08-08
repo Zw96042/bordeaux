@@ -419,6 +419,7 @@
       const originalType = (wps[segment] && wps[segment].segType) || 'bezier';
       const nw = { x: projected.x, y: projected.y, linked: true, thetaOn: false, theta: 0, stop: false, segType: originalType };
       if (wps[segment] && wps[segment].segmentHeadingMode) nw.segmentHeadingMode = wps[segment].segmentHeadingMode;
+      if (wps[segment] && wps[segment].segmentFollowMode) nw.segmentFollowMode = wps[segment].segmentFollowMode;
       if (wps[segment] && wps[segment].segmentLookAt) nw.segmentLookAt = { ...wps[segment].segmentLookAt };
       let previewRequired = false;
 
@@ -490,6 +491,8 @@
       end.segType = segmentType;
       if (before.segmentHeadingMode) end.segmentHeadingMode = before.segmentHeadingMode;
       else delete end.segmentHeadingMode;
+      if (before.segmentFollowMode) end.segmentFollowMode = before.segmentFollowMode;
+      else delete end.segmentFollowMode;
       if (before.segmentLookAt) end.segmentLookAt = { ...before.segmentLookAt };
       else delete end.segmentLookAt;
       end.nextC = { x: end.x + tx * handle, y: end.y + ty * handle };
@@ -782,6 +785,7 @@
       const endpointJiggle = d.waypoints[d.waypoints.length - 1].jiggle ? { ...d.waypoints[d.waypoints.length - 1].jiggle } : null;
       const oldSeg = d.waypoints.map((w) => w.segType);
       const oldHeading = d.waypoints.map((w) => w.segmentHeadingMode);
+      const oldFollow = d.waypoints.map((w) => w.segmentFollowMode);
       const oldLookAt = d.waypoints.map((w) => w.segmentLookAt && { ...w.segmentLookAt });
       const oldLaws = d.waypoints.slice(0, -1).map((waypoint) => {
         const mode = waypoint.segmentHeadingMode || d.headingMode || 'targets';
@@ -802,11 +806,14 @@
           w[j].segType = oldSeg[n - 2 - j];
           if (oldHeading[n - 2 - j]) w[j].segmentHeadingMode = oldHeading[n - 2 - j];
           else delete w[j].segmentHeadingMode;
+          if (oldFollow[n - 2 - j]) w[j].segmentFollowMode = oldFollow[n - 2 - j];
+          else delete w[j].segmentFollowMode;
           if (oldLookAt[n - 2 - j]) w[j].segmentLookAt = { ...oldLookAt[n - 2 - j] };
           else delete w[j].segmentLookAt;
         } else {
           delete w[j].segType;
           delete w[j].segmentHeadingMode;
+          delete w[j].segmentFollowMode;
           delete w[j].segmentLookAt;
         }
         delete w[j].headingTransition;
@@ -834,6 +841,7 @@
       w.forEach((waypoint) => delete waypoint.jiggle);
       if (endpointJiggle) w[w.length - 1].jiggle = endpointJiggle;
       delete w[w.length - 1].segmentHeadingMode;
+      delete w[w.length - 1].segmentFollowMode;
       delete w[w.length - 1].segmentLookAt;
       delete w[0].headingTransition;
       delete w[w.length - 1].headingTransition;
@@ -1043,6 +1051,12 @@
       hist.current = { past: [], future: [] };
       setDirty(false);
     }, []);
+    useEffect(() => {
+      let active = true;
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.restoreLastProject !== 'function') return undefined;
+      window.bordeauxAPI.restoreLastProject().then((result) => { if (active && result) loadProject(result.project); }).catch((error) => console.warn('Could not restore the last project:', error));
+      return () => { active = false; };
+    }, [loadProject]);
     const newProject = useCallback(async () => {
       if (!canReplaceProject()) return;
       if (window.bordeauxAPI) await window.bordeauxAPI.newProject();
@@ -1192,7 +1206,7 @@
               h(window.RoutineTransport, { run, time: routineTime, playing: routinePlaying, controls: routineControls, running: routineRunning, outcomes: routineOutcomes }),
               h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
             h('aside', { className: 'rail rail-r' + (selNode ? '' : ' collapsed'), 'aria-label': 'Routine step inspector' },
-              selNode && h(window.StepInspector, { node: selNode, paths: project.paths, acq, run })))
+              selNode && h(window.StepInspector, { node: selNode, paths: project.paths, acq, run, javaProject: { ...javaProjectState, link: linkJavaProject } })))
         : h('main', { className: 'stage stage-plan' },
             h('nav', { className: 'rail rail-l' + (outlineOpen ? '' : ' collapsed'), 'aria-label': 'Path outline' },
               h(window.Panels.Outline, { open: outlineOpen, setOpen: setOutlineOpen, doc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot })),

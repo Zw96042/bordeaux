@@ -6,7 +6,7 @@ import { buildWaypoints, createDemoProject } from "../src/shared/project/default
 interface Point { x: number; y: number }
 interface HeadingAnchor { f: number; rad: number }
 
-interface LegacyWindow {
+interface RendererWindow {
   PM?: {
     bez(p0: Point, c0: Point, c1: Point, p1: Point, t: number): Point;
     splitBezier(p0: Point, c0: Point, c1: Point, p1: Point, t: number): {
@@ -32,44 +32,44 @@ interface LegacyWindow {
   };
 }
 
-function legacyMath() {
-  const window: LegacyWindow = {};
-  const source = fs.readFileSync(new URL("../public/legacy/assets/91d3dc25-ddca-4323-acb3-c8839e67735f.js", import.meta.url), "utf8");
+function rendererMath() {
+  const window: RendererWindow = {};
+  const source = fs.readFileSync(new URL("../public/renderer/assets/path-math.js", import.meta.url), "utf8");
   vm.runInNewContext(source, { window, console, Math, Number, Set, Map, Infinity, isFinite });
   return window.PM!;
 }
 
-function legacyUi() {
-  const window: LegacyWindow = {};
+function rendererUi() {
+  const window: RendererWindow = {};
   const noop = () => undefined;
   const React = { useState: noop, useRef: noop, useEffect: noop, useId: () => "id", createElement: noop };
-  const source = fs.readFileSync(new URL("../public/legacy/assets/760c13dd-1656-409e-a1f2-58b2285a7f6e.js", import.meta.url), "utf8");
+  const source = fs.readFileSync(new URL("../public/renderer/assets/ui-primitives.js", import.meta.url), "utf8");
   vm.runInNewContext(source, { window, React, console, Math, Number, Infinity });
   return window.UI!;
 }
 
-describe("legacy compatibility preview", () => {
+describe("renderer compatibility preview", () => {
   it("rotates the field artwork with overlays in Red view", () => {
-    const source = fs.readFileSync(new URL("../public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
+    const source = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
     expect(source).toContain("const FIELD_CX = (X0 + X1) / 2, FIELD_CY = (Y0 + Y1) / 2");
     expect(source).toContain("transform: flip ? `rotate(180 ${FIELD_CX} ${FIELD_CY})` : undefined");
   });
 
   it("shows the selected candidate's validation blocker in the proposal UI", () => {
-    const source = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const source = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
     expect(source).toContain("agentCandidate.rejectionReason");
     expect(source).toContain("'Blocked: ' + agentCandidate.rejectionReason");
   });
 
   it("restores a ready proposal when its one-time renderer event is missed", () => {
-    const source = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const source = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
     expect(source).toContain("getActiveAgentProposal");
     expect(source).toContain("window.setInterval(restoreProposal, 1000)");
     expect(source).toContain("proposal.id + ':' + proposal.status");
   });
 
   it("shows the strongest locally tightened constraint instead of copied velocity", () => {
-    const summary = legacyUi().constraintRangeSummary({
+    const summary = rendererUi().constraintRangeSummary({
       maxVel: 4.2,
       maxAccel: 6.5,
       maxDecel: 6.5,
@@ -102,7 +102,7 @@ describe("legacy compatibility preview", () => {
       { x: 8, y: 2, theta: 180, thetaOn: true },
     ]);
     path.ranges = [{ anchor: "param", f0: 0.05, f1: 0.95, maxVel: 4, maxAccel: 5, maxDecel: 5, maxAngVel: 60, maxAngAccel: 120 }];
-    const math = legacyMath();
+    const math = rendererMath();
     const heading = math.derivePath(structuredClone(path), project.robot, 56, "profiledSpline");
     path.ranges[0].rotationPriority = "translation";
     const translation = math.derivePath(path, project.robot, 56, "profiledSpline");
@@ -129,7 +129,7 @@ describe("legacy compatibility preview", () => {
       { x: 4, y: 2, theta: 90, thetaOn: true, segType: "line", segmentHeadingMode: "tangent" },
       { x: 7, y: 5, theta: 45, thetaOn: true },
     ]);
-    const math = legacyMath();
+    const math = rendererMath();
     const boundaryHeading = (placement: "before" | "split" | "after") => {
       path.waypoints[1].headingTransition = { placement, rotationPriority: "heading", distanceM: 1 };
       const result = math.derivePath(structuredClone(path), project.robot, 80, "profiledSpline");
@@ -161,7 +161,7 @@ describe("legacy compatibility preview", () => {
       { x: 9, y: 2, theta: 0, thetaOn: true },
     ]);
     path.waypoints[1].headingTransition = { placement: "after", rotationPriority: "heading", distanceM: 0.05 };
-    const math = legacyMath();
+    const math = rendererMath();
     const heading = math.derivePath(structuredClone(path), project.robot, 56, "profiledSpline");
     path.waypoints[1].headingTransition.rotationPriority = "translation";
     const translation = math.derivePath(path, project.robot, 56, "profiledSpline");
@@ -170,6 +170,33 @@ describe("legacy compatibility preview", () => {
     const settledHeadings = translation.metrics.head.filter((_, index) => translation.sample.pts[index].x >= 4);
     expect(Math.max(...settledHeadings)).toBeLessThanOrEqual(Math.PI / 180);
     expect(Math.abs(translation.metrics.head.at(-1)!)).toBeLessThan(0.1 * Math.PI / 180);
+  });
+
+  it("keeps transition placement from stalling the outgoing preview segment", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    Object.assign(path.constraints, {
+      maxVel: 4, maxAccel: 5, maxDecel: 5,
+      maxAngVel: 90, maxAngAccel: 180, maxAngDecel: 180,
+    });
+    path.waypoints = buildWaypoints([
+      { x: 5.1, y: 7.6, theta: 0, thetaOn: true, segmentHeadingMode: "tangent" },
+      { x: 9.3, y: 5.4, theta: -91, thetaOn: true, segmentHeadingMode: "targets" },
+      { x: 6, y: 5.5, theta: 0, thetaOn: true },
+    ]);
+    const math = rendererMath();
+    const durations = (["before", "split", "after"] as const).map((placement) => {
+      path.waypoints[1].headingTransition = { placement, rotationPriority: "translation", distanceM: 0.75 };
+      const result = math.derivePath(structuredClone(path), project.robot, 80, "profiledSpline");
+      const boundary = result.sample.pts.reduce((nearest, point, index) => (
+        Math.hypot(point.x - 9.3, point.y - 5.4) < Math.hypot(result.sample.pts[nearest].x - 9.3, result.sample.pts[nearest].y - 5.4)
+          ? index : nearest
+      ), 0);
+      expect(Math.min(...result.metrics.v.slice(boundary, -1))).toBeGreaterThan(0.05);
+      return result.prof.t.at(-1)! - result.prof.t[boundary];
+    });
+
+    expect(Math.max(...durations) - Math.min(...durations)).toBeLessThan(0.08);
   });
 
   it("previews heading catch-up without overshooting a settled tangent", () => {
@@ -193,7 +220,7 @@ describe("legacy compatibility preview", () => {
       rotationPriority: "translation",
     }];
 
-    const result = legacyMath().derivePath(path, project.robot, 80, "profiledSpline");
+    const result = rendererMath().derivePath(path, project.robot, 80, "profiledSpline");
     const tangentStart = result.sample.pts.findIndex((point) => point.seg === 1);
     const settledHeading = result.metrics.head.slice(Math.max(0, tangentStart));
 
@@ -202,7 +229,7 @@ describe("legacy compatibility preview", () => {
   });
 
   it("splits cubic segments without changing their geometry", () => {
-    const math = legacyMath();
+    const math = rendererMath();
     const curve: [Point, Point, Point, Point] = [
       { x: 0, y: 0 }, { x: 1, y: 3 }, { x: 4, y: -1 }, { x: 6, y: 2 },
     ];
@@ -221,7 +248,7 @@ describe("legacy compatibility preview", () => {
   });
 
   it("projects insertion onto the selected segment when paths pass near each other", () => {
-    const math = legacyMath();
+    const math = rendererMath();
     const samples = [
       { x: 0, y: 0, seg: 0, t: 0, heading: 0 },
       { x: 2, y: 0, seg: 0, t: 1, heading: 0 },
@@ -243,7 +270,7 @@ describe("legacy compatibility preview", () => {
     const path = project.paths[0];
     path.waypoints.at(-1)!.jiggle = { distanceM: 0.18, strokes: 4, startDeg: 90, stepDeg: -90, strokeTimeS: 0.4 };
 
-    const derived = legacyMath().derivePath(path, project.robot, 56, "profiledSpline");
+    const derived = rendererMath().derivePath(path, project.robot, 56, "profiledSpline");
 
     expect(derived.prof.jiggles).toHaveLength(1);
     expect(derived.prof.jiggles![0].strokeDuration).toBeGreaterThanOrEqual(0.4);
@@ -251,7 +278,7 @@ describe("legacy compatibility preview", () => {
   });
 
   it("keeps exact retraces as separate ordered visits", () => {
-    const math = legacyMath();
+    const math = rendererMath();
     const samples = [
       { x: 0, y: 0, s: 0, seg: 0, t: 0, heading: 0 },
       { x: 2, y: 0, s: 2, seg: 0, t: 1, heading: 0 },
@@ -269,7 +296,7 @@ describe("legacy compatibility preview", () => {
   });
 
   it("keeps two visits inside one self-intersecting authored segment", () => {
-    const math = legacyMath();
+    const math = rendererMath();
     const samples = [
       { x: 0, y: 0, s: 0, seg: 0, t: 0, heading: 0 },
       { x: 2, y: 2, s: Math.sqrt(8), seg: 0, t: 0.25, heading: Math.PI / 4 },
@@ -287,7 +314,7 @@ describe("legacy compatibility preview", () => {
   });
 
   it("clusters adjacent polyline edges into one visit", () => {
-    const math = legacyMath();
+    const math = rendererMath();
     const samples = [
       { x: 0, y: 0, s: 0, seg: 0, t: 0, heading: 0 },
       { x: 1, y: 0, s: 1, seg: 0, t: 0.5, heading: 0 },
@@ -298,7 +325,7 @@ describe("legacy compatibility preview", () => {
   });
 
   it("does not count neighboring samples on the same pass as separate passes", () => {
-    const math = legacyMath();
+    const math = rendererMath();
     const samples = [
       { x: -0.3, y: 0.05, s: 0, seg: 0, t: 0, heading: 0 },
       { x: -0.1, y: 0.05, s: 0.2, seg: 0, t: 0.1, heading: 0 },
@@ -326,7 +353,7 @@ describe("legacy compatibility preview", () => {
       { x: 1, y: 1, nextC: { x: 2, y: 3 } },
       { x: 6, y: 4, prevC: { x: 5, y: 6 } },
     ]);
-    const math = legacyMath();
+    const math = rendererMath();
     const bezier = math.derivePath(path, project.robot, 56, "labviewBezier");
     const clothoid = math.derivePath(path, project.robot, 56, "labviewClothoid");
     const a = path.waypoints[0], b = path.waypoints[1];
@@ -348,7 +375,7 @@ describe("legacy compatibility preview", () => {
       { x: 4, y: 5, prevC: { x: 4, y: 4 } },
     ]);
 
-    const points = legacyMath().derivePath(path, project.robot, 56, "labviewBezier").sample.pts;
+    const points = rendererMath().derivePath(path, project.robot, 56, "labviewBezier").sample.pts;
     const stopIndex = points.reduce((best, point, index) => (
       Math.hypot(point.x - 4, point.y - 1) < Math.hypot(points[best].x - 4, points[best].y - 1) ? index : best
     ), 0);
@@ -370,7 +397,7 @@ describe("legacy compatibility preview", () => {
     path.waypoints[1].segmentHeadingMode = "targets";
     path.targets = [{ f: 0.75, deg: 180 }];
 
-    const math = legacyMath();
+    const math = rendererMath();
     const preview = math.derivePath(path, project.robot, 56, "labviewBezier");
 
     expect(math.headingAt(0.25, preview.anchors)).toBeCloseTo(0, 6);
@@ -391,7 +418,7 @@ describe("legacy compatibility preview", () => {
     ]);
     path.targets = [{ f: 0.75, deg: -45 }];
 
-    const preview = legacyMath().derivePath(path, project.robot, 80, "profiledSpline");
+    const preview = rendererMath().derivePath(path, project.robot, 80, "profiledSpline");
     const throughTarget = preview.sample.pts
       .map((point, index) => ({ f: point.s / preview.sample.length, heading: preview.metrics.head[index] }))
       .filter((sample) => sample.f >= 0.49 && sample.f <= 0.75 + 1e-6);
@@ -410,7 +437,7 @@ describe("legacy compatibility preview", () => {
       { x: 4, y: 2, theta: 0, segType: "line", segmentHeadingMode: "tangent" },
       { x: 7, y: 2, theta: 0 },
     ]);
-    const math = legacyMath();
+    const math = rendererMath();
     const preview = math.derivePath(path, project.robot, 56, "profiledSpline");
     const before = math.headingAt(0.4 - 1 / 140, preview.anchors);
     const after = math.headingAt(0.4, preview.anchors);
@@ -424,7 +451,7 @@ describe("legacy compatibility preview", () => {
     const path = project.paths[0];
     path.waypoints = buildWaypoints([{ x: 1, y: 1 }, { x: 1, y: 1 }, { x: 4, y: 3 }]);
 
-    const preview = legacyMath().derivePath(path, project.robot, 56, "labviewClothoid");
+    const preview = rendererMath().derivePath(path, project.robot, 56, "labviewClothoid");
 
     expect(preview.sample.pts.length).toBeGreaterThan(2);
     expect(preview.sample.pts.at(-1)).toMatchObject({ x: 4, y: 3 });
@@ -435,7 +462,7 @@ describe("legacy compatibility preview", () => {
     const path = project.paths[0];
     path.waypoints = buildWaypoints([{ x: 1, y: 1 }, { x: 4, y: 1 }, { x: 4, y: 4 }]);
 
-    const preview = legacyMath().derivePath(path, project.robot, 56, "labviewClothoid");
+    const preview = rendererMath().derivePath(path, project.robot, 56, "labviewClothoid");
     const counts = preview.sample.pts.reduce((result, point) => {
       result[point.seg] = (result[point.seg] || 0) + 1;
       return result;
@@ -448,7 +475,7 @@ describe("legacy compatibility preview", () => {
   });
 
   it("labels the native planner family as Java", () => {
-    const panels = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
+    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
 
     expect(panels).toContain("{ v: 'native', label: 'Java' }");
     expect(panels).not.toContain("{ v: 'native', label: 'Native' }");
@@ -458,7 +485,7 @@ describe("legacy compatibility preview", () => {
     const project = createDemoProject();
     const path = project.paths[0];
     path.labview = { samplePeriodS: 0.02, minTurnRadiusM: 0.5, bezierTangentMode: "handles" };
-    const math = legacyMath();
+    const math = rendererMath();
 
     for (const endY of [4, -2]) {
       path.waypoints = buildWaypoints([{ x: 1, y: 1 }, { x: 4, y: 1 }, { x: 4, y: endY }]);
@@ -470,8 +497,8 @@ describe("legacy compatibility preview", () => {
   });
 
   it("keeps path checks informational until a repair can be validated", () => {
-    const panels = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
 
     expect(panels).toContain("Path checks");
     expect(panels).not.toContain("diag-fixes");
@@ -480,8 +507,8 @@ describe("legacy compatibility preview", () => {
   });
 
   it("keeps Select mode non-destructive and previews compatibility insertions", () => {
-    const field = fs.readFileSync(new URL("../public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
 
     expect(field).not.toContain("if (d.onPath) actions.addWaypoint(d.world)");
     expect(field).not.toContain("if (role === 'seg') actions.addWaypoint");
@@ -493,11 +520,11 @@ describe("legacy compatibility preview", () => {
   });
 
   it("enters explicit waypoint placement and keeps shortcuts active after scrubbing", () => {
-    const panels = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
-    const inspector = fs.readFileSync(new URL("../public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
-    const field = fs.readFileSync(new URL("../public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
-    const styles = fs.readFileSync(new URL("../public/legacy/index.html", import.meta.url), "utf8");
+    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/renderer/assets/context-inspector.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
+    const styles = fs.readFileSync(new URL("../public/renderer/styles.css", import.meta.url), "utf8");
 
     expect(panels).toContain("actions.setTool('waypoint')");
     expect(inspector).toContain("actions.setTool('waypoint')");
@@ -537,8 +564,8 @@ describe("legacy compatibility preview", () => {
   });
 
   it("keeps the grid toggle with the field view controls", () => {
-    const panels = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
     const toolbar = panels.slice(panels.indexOf("function Toolbar"), panels.indexOf("// ---------------- canvas tool rail"));
     const viewControls = panels.slice(panels.indexOf("function ViewControls"), panels.indexOf("function fmt"));
 
@@ -549,8 +576,8 @@ describe("legacy compatibility preview", () => {
   });
 
   it("uses a flat folder-capable path library and stable multi-path metadata", () => {
-    const panels = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
 
     expect(panels).toContain("function PathLibrary");
     expect(panels).toContain("className: 'pathlib-panel'");
@@ -581,9 +608,9 @@ describe("legacy compatibility preview", () => {
   });
 
   it("uses one Bordeaux accent and does not expose theme customization", () => {
-    const panels = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
-    const html = fs.readFileSync(new URL("../public/legacy/index.html", import.meta.url), "utf8");
+    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
+    const styles = fs.readFileSync(new URL("../public/renderer/styles.css", import.meta.url), "utf8");
 
     expect(panels).not.toContain("ThemePicker");
     expect(panels).not.toContain("Choose accent color");
@@ -591,38 +618,39 @@ describe("legacy compatibility preview", () => {
     expect(app).not.toContain("setTheme");
     expect(app).not.toContain("dataset.theme");
     expect(app).not.toContain("ACCENTS");
-    expect(html).not.toContain("[data-theme=");
-    expect(html).not.toContain(".themebtn");
-    expect(html).toContain("--accent:#7ea2ed");
+    expect(styles).not.toContain("[data-theme=");
+    expect(styles).not.toContain(".themebtn");
+    expect(styles).toContain("--accent:#7ea2ed");
   });
 
   it("uses the full WRLP Chap for the app mark and startup animation", () => {
-    const html = fs.readFileSync(new URL("../public/legacy/index.html", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
-    const bird = fs.readFileSync(new URL("../public/legacy/assets/wrlp-chap-bird-original.svg", import.meta.url), "utf8");
-    const loader = fs.readFileSync(new URL("../public/legacy/assets/chap-loader-wrlp.js", import.meta.url), "utf8");
+    const html = fs.readFileSync(new URL("../public/renderer/index.html", import.meta.url), "utf8");
+    const styles = fs.readFileSync(new URL("../public/renderer/styles.css", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
+    const bird = fs.readFileSync(new URL("../public/renderer/assets/wrlp-chap-bird-original.svg", import.meta.url), "utf8");
+    const loader = fs.readFileSync(new URL("../public/renderer/assets/chap-loader-wrlp.js", import.meta.url), "utf8");
 
     expect(html).toContain('id="boot-splash"');
     expect(html).toContain('src="assets/wrlp-chap-bird-original.svg"');
     expect(html).toContain('src="assets/chap-loader-wrlp.js"');
-    expect(html).toContain("boot-chap-leg-l");
-    expect(html).toContain("boot-chap-leg-r");
-    expect(html).toContain("boot-chap-dust 920ms");
-    const splashRule = html.match(/\.boot-splash\{([^}]*)\}/)?.[1] || "";
+    expect(styles).toContain("boot-chap-leg-l");
+    expect(styles).toContain("boot-chap-leg-r");
+    expect(styles).toContain("boot-chap-dust 920ms");
+    const splashRule = styles.match(/\.boot-splash\{([^}]*)\}/)?.[1] || "";
     expect(splashRule).toContain("cursor:wait");
     expect(splashRule).not.toContain("pointer-events:none");
-    expect(html).not.toContain(".boot-splash.boot-splash-ready{pointer-events:none}");
+    expect(styles).not.toContain(".boot-splash.boot-splash-ready{pointer-events:none}");
     expect(html).toContain("class=\"boot-curtain\"");
-    expect(html).toContain(".boot-curtain{position:absolute;inset:-1px;z-index:0;background:var(--bg)");
-    expect(html).toContain("transition:transform var(--boot-curtain) cubic-bezier(.76,0,.24,1) var(--boot-run)");
-    expect(html).toContain(".boot-splash.boot-splash-ready .boot-curtain{transform:translate3d(-101%,0,0)}");
-    expect(html).toContain(".boot-splash-inner{position:absolute;z-index:1;top:50%;left:50%");
-    expect(html).toContain("@keyframes boot-chap-exit{0%{transform:translate3d(-50%,-50%,0);animation-timing-function:cubic-bezier(.3,0,.7,.45)}20%");
+    expect(styles).toContain(".boot-curtain{position:absolute;inset:-1px;z-index:0;background:var(--bg)");
+    expect(styles).toContain("transition:transform var(--boot-curtain) cubic-bezier(.76,0,.24,1) var(--boot-run)");
+    expect(styles).toContain(".boot-splash.boot-splash-ready .boot-curtain{transform:translate3d(-101%,0,0)}");
+    expect(styles).toContain(".boot-splash-inner{position:absolute;z-index:1;top:50%;left:50%");
+    expect(styles).toContain("@keyframes boot-chap-exit{0%{transform:translate3d(-50%,-50%,0);animation-timing-function:cubic-bezier(.3,0,.7,.45)}20%");
     expect(html).toContain('<div id="root"></div>');
     expect(bird).toContain(".st5{fill:#FF330D;stroke:#FFFFFF");
     expect(bird).toContain(".st3{fill:#422397;stroke:#FFFFFF");
-    expect(html).not.toContain("animation-play-state:paused");
-    expect(html).toContain("width:clamp(260px,26vw,370px)");
+    expect(styles).not.toContain("animation-play-state:paused");
+    expect(styles).toContain("width:clamp(260px,26vw,370px)");
     expect(app).toContain("boot-splash-ready");
     expect(app).toContain("const strideMs = 460");
     expect(app).toContain("const strideDistancePx = Math.max(1, runnerWidth * 1.7)");
@@ -649,10 +677,10 @@ describe("legacy compatibility preview", () => {
   });
 
   it("splits stopped Bezier geometry and exposes segment-local heading modes", () => {
-    const math = fs.readFileSync(new URL("../public/legacy/assets/91d3dc25-ddca-4323-acb3-c8839e67735f.js", import.meta.url), "utf8");
-    const inspector = fs.readFileSync(new URL("../public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
-    const field = fs.readFileSync(new URL("../public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
+    const math = fs.readFileSync(new URL("../public/renderer/assets/path-math.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/renderer/assets/context-inspector.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
 
     expect(math).toContain("function lvBezierPiece");
     expect(math).toContain("raw[end].stop || end === raw.length - 1");
@@ -674,9 +702,9 @@ describe("legacy compatibility preview", () => {
   });
 
   it("mirrors authored heading-transition controls in the browser planner and inspector", () => {
-    const math = fs.readFileSync(new URL("../public/legacy/assets/91d3dc25-ddca-4323-acb3-c8839e67735f.js", import.meta.url), "utf8");
-    const inspector = fs.readFileSync(new URL("../public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const math = fs.readFileSync(new URL("../public/renderer/assets/path-math.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/renderer/assets/context-inspector.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
 
     expect(math).toContain("function headingTransitionWindows");
     expect(math).toContain("opts.headingTransitions || []");
@@ -692,16 +720,16 @@ describe("legacy compatibility preview", () => {
   });
 
   it("uses segmented controls instead of native dropdowns for planner and segment choices", () => {
-    const html = fs.readFileSync(new URL("../public/legacy/index.html", import.meta.url), "utf8");
-    const ui = fs.readFileSync(new URL("../public/legacy/assets/760c13dd-1656-409e-a1f2-58b2285a7f6e.js", import.meta.url), "utf8");
-    const panels = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
-    const inspector = fs.readFileSync(new URL("../public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
+    const styles = fs.readFileSync(new URL("../public/renderer/styles.css", import.meta.url), "utf8");
+    const ui = fs.readFileSync(new URL("../public/renderer/assets/ui-primitives.js", import.meta.url), "utf8");
+    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/renderer/assets/context-inspector.js", import.meta.url), "utf8");
 
     expect(ui).toContain("function Seg({ value, options, onChange, ariaLabel, className })");
     expect(ui).toContain("'--seg-clip-left'");
     expect(ui).toContain("className: 'seg-indicator'");
     expect(ui).not.toContain("className: 'seg-active-ink'");
-    expect(html).not.toContain(".seg-active-ink");
+    expect(styles).not.toContain(".seg-active-ink");
     expect(ui).not.toContain("function GroupSelect");
     expect(panels).toContain("function PlannerControl");
     expect(panels).toContain("className: 'planner-family'");
@@ -719,9 +747,9 @@ describe("legacy compatibility preview", () => {
   });
 
   it("routes overlapping field visits through a stable ordered candidate", () => {
-    const math = fs.readFileSync(new URL("../public/legacy/assets/91d3dc25-ddca-4323-acb3-c8839e67735f.js", import.meta.url), "utf8");
-    const field = fs.readFileSync(new URL("../public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
+    const math = fs.readFileSync(new URL("../public/renderer/assets/path-math.js", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
 
     expect(math).toContain("function nearestVisits");
     expect(math).toContain("different distances along the path");
@@ -741,10 +769,10 @@ describe("legacy compatibility preview", () => {
   });
 
   it("keeps the inspector modeless and independently collapsible", () => {
-    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
-    const inspector = fs.readFileSync(new URL("../public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
-    const ui = fs.readFileSync(new URL("../public/legacy/assets/760c13dd-1656-409e-a1f2-58b2285a7f6e.js", import.meta.url), "utf8");
-    const html = fs.readFileSync(new URL("../public/legacy/index.html", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/renderer/assets/context-inspector.js", import.meta.url), "utf8");
+    const ui = fs.readFileSync(new URL("../public/renderer/assets/ui-primitives.js", import.meta.url), "utf8");
+    const styles = fs.readFileSync(new URL("../public/renderer/styles.css", import.meta.url), "utf8");
 
     expect(app).toContain("const [inspectorOpen, setInspectorOpen] = useState(true)");
     expect(app).toContain("className: 'inspector-tab'");
@@ -752,14 +780,14 @@ describe("legacy compatibility preview", () => {
     expect(app).toContain("setInspectorOpen(true)");
     expect(inspector).toContain("title: 'Hide inspector'");
     expect(ui).toContain("sliders:");
-    expect(html).toContain(".seg-heading .seg-i{display:flex");
-    expect(html).toContain("white-space:normal");
+    expect(styles).toContain(".seg-heading .seg-i{display:flex");
+    expect(styles).toContain("white-space:normal");
   });
 
   it("opens the hidden inspector when editable path items are double-clicked", () => {
-    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
-    const outline = fs.readFileSync(new URL("../public/legacy/assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js", import.meta.url), "utf8");
-    const field = fs.readFileSync(new URL("../public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
+    const outline = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
 
     expect(app).toContain("openInspector: () => setInspectorOpen(true)");
     expect(outline).toContain("const inspectItem = (actions, kind, index, event)");
@@ -780,10 +808,10 @@ describe("legacy compatibility preview", () => {
   });
 
   it("wires stationary turns, endpoint jiggles, and draggable segment track points", () => {
-    const math = fs.readFileSync(new URL("../public/legacy/assets/91d3dc25-ddca-4323-acb3-c8839e67735f.js", import.meta.url), "utf8");
-    const app = fs.readFileSync(new URL("../public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js", import.meta.url), "utf8");
-    const inspector = fs.readFileSync(new URL("../public/legacy/assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js", import.meta.url), "utf8");
-    const field = fs.readFileSync(new URL("../public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js", import.meta.url), "utf8");
+    const math = fs.readFileSync(new URL("../public/renderer/assets/path-math.js", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/renderer/assets/context-inspector.js", import.meta.url), "utf8");
+    const field = fs.readFileSync(new URL("../public/renderer/assets/field-view.js", import.meta.url), "utf8");
 
     expect(math).toContain("function jigglePositions");
     expect(math).toContain("prof.turns");

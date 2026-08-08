@@ -1,6 +1,7 @@
 package dev.bordeaux.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -88,6 +89,181 @@ class BordeauxRuntimeTest {
         runner.reset();
         runner.periodic(2.0);
         assertEquals(List.of("first", "later", "same", "first", "later", "same"), created);
+    }
+
+    @Test
+    void gatesPositionEventsAndCatchesUpBoundedRepetitions() {
+        ObjectNode arguments = MAPPER.createObjectNode();
+        BordeauxEvent event = new BordeauxEvent(
+                "collect", "Collect", 0.2, 0.5, "collect", arguments, false,
+                BordeauxEvent.Trigger.POSITION, 0.2, 1.0, "has-note");
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "auto", "Auto", 1.2, CATALOG_ID, HASH, List.of(event));
+        boolean[] hasNote = {false};
+        BordeauxConditionRegistry conditions = BordeauxConditionRegistry.builder()
+                .register("has-note", () -> hasNote[0]).build();
+        List<String> created = new ArrayList<>();
+        BordeauxEventRunner runner = new BordeauxEventRunner(
+                path, registry(created, "collect"), conditions, new RecordingScheduler());
+
+        runner.periodic(0.1, 0.4);
+        runner.periodic(0.2, 0.5);
+        assertTrue(created.isEmpty());
+        hasNote[0] = true;
+        runner.periodic(0.65, 0.3);
+        assertEquals(List.of("collect", "collect"), created);
+        runner.periodic(1.1, 0.5);
+        assertEquals(4, runner.firedCount());
+        assertThrows(BordeauxRuntimeException.class,
+                () -> BordeauxConditionRegistry.empty().evaluate("missing"));
+    }
+
+    @Test
+    void expiresConditionalOneShotEventsAtTheirEndTime() {
+        ObjectNode arguments = MAPPER.createObjectNode();
+        BordeauxEvent event = new BordeauxEvent(
+                "collect", "Collect", 0.2, 0.2, "collect", arguments, false,
+                BordeauxEvent.Trigger.TIME, null, 0.5, "has-note");
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "auto", "Auto", 1, CATALOG_ID, HASH, List.of(event));
+        boolean[] hasNote = {false};
+        List<String> created = new ArrayList<>();
+        BordeauxEventRunner runner = new BordeauxEventRunner(
+                path, registry(created, "collect"),
+                BordeauxConditionRegistry.builder().register("has-note", () -> hasNote[0]).build(),
+                new RecordingScheduler());
+
+        runner.periodic(0.2);
+        hasNote[0] = true;
+        runner.periodic(0.6);
+
+        assertTrue(created.isEmpty());
+    }
+
+    @Test
+    void readsMixedFollowSectionsAndTrajectorySamples() {
+        BordeauxPathEvents path = read("""
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
+                 "catalog":{"schemaVersion":"1.0","catalogId":"test-robot","supportVersion":"0.1.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "paths":[{"id":"auto","name":"Auto","totalTimeS":2,
+                 "samples":[
+                   {"i":0,"t":0,"s":0,"f":0,"x":1,"y":2,"headingRad":0,"velocityMps":0},
+                   {"i":1,"t":1,"s":1,"f":0.5,"x":2,"y":2,"headingRad":0,"velocityMps":1},
+                   {"i":2,"t":2,"s":2,"f":1,"x":3,"y":2,"headingRad":0,"velocityMps":0}],
+                 "followSections":[
+                   {"segmentIndex":0,"mode":"time","startSample":0,"endSample":1},
+                   {"segmentIndex":1,"mode":"position","startSample":1,"endSample":2}],
+                 "events":[]}]}
+                """);
+
+        assertEquals(3, path.samples().size());
+        assertEquals(2, path.followSections().size());
+        assertEquals(BordeauxFollowSection.Mode.POSITION, path.followSections().get(1).mode());
+        assertEquals(3, path.samples().get(2).xM());
+    }
+
+    @Test
+    void readsStrictBetweenPathRoutineTree() {
+        BordeauxPathEvents path = readWithRoutine("""
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
+                 "catalog":{"schemaVersion":"1.0","catalogId":"test-robot","supportVersion":"0.1.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "routine":{"name":"Choose note","nodes":[
+                   {"id":"choose","type":"decision","cond":"has-note","thenLabel":"yes","elseLabel":"no",
+                    "then":[{"id":"collect","type":"function","cat":"command","invocation":{"commandId":"collect","arguments":{}}},
+                            {"id":"run","type":"path","ref":"auto"}],"else":[]}]},
+                 "paths":[{"id":"auto","name":"Auto","totalTimeS":1,"samples":[],"events":[]}]}
+                """);
+
+        BordeauxRoutineNode.Decision decision = (BordeauxRoutineNode.Decision) path.routine().nodes().get(0);
+
+        assertEquals("has-note", decision.conditionId());
+        assertTrue(decision.whenTrue().get(0) instanceof BordeauxRoutineNode.Command);
+        assertTrue(decision.whenTrue().get(1) instanceof BordeauxRoutineNode.Path);
+    }
+
+    @Test
+    void toleratesLegacyRoutineNodesUnlessRoutineReadingIsRequested() {
+        String json = """
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
+                 "catalog":{"schemaVersion":"1.0","catalogId":"test-robot","supportVersion":"0.1.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "routine":{"name":"Legacy","nodes":[
+                   {"id":"stop","type":"function","cat":"terminate","title":"Stop"}]},
+                 "paths":[{"id":"auto","name":"Auto","totalTimeS":1,"samples":[],"events":[]}]}
+                """;
+
+        assertTrue(read(json).routine().nodes().isEmpty());
+        assertThrows(BordeauxRuntimeException.class, () -> readWithRoutine(json));
+    }
+
+    @Test
+    void choosesNextPathAndSchedulesCommandsBetweenPaths() throws Exception {
+        ObjectNode arguments = (ObjectNode) MAPPER.readTree("{}");
+        BordeauxRoutine routine = new BordeauxRoutine("Choose note", List.of(
+                new BordeauxRoutineNode.Path("first", "path-a"),
+                new BordeauxRoutineNode.Decision("choose", "has-note",
+                        List.of(new BordeauxRoutineNode.Command("collect", "collect", arguments),
+                                new BordeauxRoutineNode.Path("a-next", "path-b")),
+                        List.of(new BordeauxRoutineNode.Path("b-next", "path-c")))));
+        BordeauxPathEvents document = new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), routine);
+        boolean[] hasNote = {true};
+        List<String> created = new ArrayList<>();
+        RecordingScheduler scheduler = new RecordingScheduler();
+        BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, registry(created, "collect"),
+                BordeauxConditionRegistry.builder().register("has-note", () -> hasNote[0]).build(), scheduler);
+
+        assertEquals("path-a", runner.start().orElseThrow());
+        assertEquals("path-b", runner.completePath("path-a").orElseThrow());
+        assertEquals(List.of("collect"), created);
+        assertEquals(1, runner.commandCount());
+        assertTrue(runner.completePath("path-b").isEmpty());
+
+        hasNote[0] = false;
+        runner.reset();
+        runner.start();
+        assertEquals("path-c", runner.completePath("path-a").orElseThrow());
+        assertThrows(BordeauxRuntimeException.class, () -> runner.completePath("wrong"));
+    }
+
+    @Test
+    void followsTimeThenMeasuredPositionWithoutRegressing() {
+        List<BordeauxSample> samples = List.of(
+                sample(0, 0, 0), sample(1, 0.5, 1), sample(2, 1, 2),
+                sample(3, 1.5, 3), sample(4, 2, 4));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "mixed", "Mixed", 2, CATALOG_ID, HASH, List.of(), samples, List.of(
+                        new BordeauxFollowSection(0, BordeauxFollowSection.Mode.TIME, 0, 2),
+                        new BordeauxFollowSection(1, BordeauxFollowSection.Mode.POSITION, 2, 4)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(1, follower.update(0.5, 0, 0).index());
+        assertEquals(2, follower.update(0.5, 0, 0).index());
+        assertEquals(1, follower.sectionIndex());
+        assertEquals(4, follower.update(10, 2, 0).index());
+        assertFalse(follower.isFinished());
+        assertEquals(4, follower.update(0.02, 3, 0).index());
+        assertFalse(follower.isFinished());
+        follower.update(0.02, 4, 0);
+        assertTrue(follower.isFinished());
+
+        follower.reset();
+        assertEquals(0, follower.update(0, 0, 0).index());
+        assertThrows(BordeauxRuntimeException.class, () -> follower.update(-1, 0, 0));
+    }
+
+    @Test
+    void stationaryPositionUpdatesDoNotAdvanceTheLookahead() {
+        List<BordeauxSample> samples = List.of(
+                sample(0, 0, 0), sample(1, 0.2, 1), sample(2, 0.4, 2),
+                sample(3, 0.6, 3), sample(4, 0.8, 4), sample(5, 1, 5));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "position", "Position", 1, CATALOG_ID, HASH, List.of(), samples,
+                List.of(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 5)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(2, follower.update(0.02, 0, 0).index());
+        assertEquals(2, follower.update(0.02, 0, 0).index());
+        assertEquals(3, follower.update(0.02, 1, 0).index());
     }
 
     @Test
@@ -229,6 +405,15 @@ class BordeauxRuntimeTest {
     private static BordeauxPathEvents read(String json) {
         return BordeauxTrajectoryReader.read(
                 new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), "auto");
+    }
+
+    private static BordeauxPathEvents readWithRoutine(String json) {
+        return BordeauxTrajectoryReader.readWithRoutine(
+                new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), "auto");
+    }
+
+    private static BordeauxSample sample(int index, double timeS, double xM) {
+        return new BordeauxSample(index, timeS, xM, xM / 4, xM, 0, 0, index == 4 ? 0 : 1);
     }
 
     private static BordeauxCommandRegistry registry(List<String> created, String... ids) {

@@ -60,7 +60,7 @@
       h('div', { className: 'rt-ch-sec' }, 'Behavior'),
       h('button', { className: 'rt-ch-row', type: 'button', onClick: () => setSub('function') },
         h('span', { className: 'rt-ch-ic', style: { color: 'var(--txt-2)' } }, h(Icon, { name: 'bolt', size: 16 })),
-        h('span', { className: 'rt-ch-main' }, h('span', { className: 'rt-ch-t' }, 'Function'), h('span', { className: 'rt-ch-d' }, 'Generate · Velocity · Sequence · Terminate')),
+        h('span', { className: 'rt-ch-main' }, h('span', { className: 'rt-ch-t' }, 'Function'), h('span', { className: 'rt-ch-d' }, 'Command · Generate · Velocity · Sequence · Terminate')),
         h('span', { className: 'rt-ch-more' }, h(Icon, { name: 'chevron', size: 14 }))));
   }
 

@@ -1,8 +1,4 @@
-<!DOCTYPE html>
-<html lang="en"><head>
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-v73tgdbXFMGcUUvQdBMP9Ky1HLDHTXGt9KEq1TYfI3E='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'">
-<script>window.__resources = {"fieldImg":"assets/7712d5c0-2769-423d-b736-63afa7798caf.png"};</script>
-<style id="bordeaux-polish">
+/* Bordeaux renderer styles. */
 :root {
   --panel-border-strong: oklch(1 0 0 / 0.13);
   --panel-soft: oklch(1 0 0 / 0.045);
@@ -68,7 +64,7 @@ html, body { font-synthesis: none; }
   border: 1px dashed rgba(255,255,255,0.11);
   border-radius: 6px;
 }
-.fieldlabel, .cgroup-h, .outline-grp {
+.fieldlabel, .numlbl, .cgroup-h, .outline-grp {
   letter-spacing: .06em !important;
 }
 .textinput, .selectinput {
@@ -100,10 +96,10 @@ html, body { font-synthesis: none; }
   outline: 2px solid oklch(0.72 0.10 255 / .82) !important;
   outline-offset: 1px;
 }
-.toolrail, .cbar, .overlayctl, .transport, .viewctl, .diag, .ctxmenu {
+.toolrail, .cbar, .transport, .viewctl, .diag, .ctxmenu {
   box-shadow: var(--polish-elevation) !important;
 }
-.toolrail, .cbar, .overlayctl, .transport, .viewctl, .rt-transport {
+.toolrail, .cbar, .transport, .viewctl, .rt-transport {
   border-color: transparent !important;
   border-radius: 6px !important;
   background: var(--hud-surface) !important;
@@ -179,7 +175,7 @@ html, body { font-synthesis: none; }
     min-width: 0;
     max-width: none;
   }
-  .fieldcol .overlayctl { left: 12px; bottom: 106px; width: 200px; }
+  .fieldcol .overlayctl { left: 12px; bottom: 106px; width: min(236px, calc(100% - 24px)); }
   .fieldcol .viewctl { right: 12px; bottom: 106px; }
   .fieldcol .velgraph { bottom: 230px !important; width: min(560px, calc(100% - 24px)) !important; min-width: 0; }
   .fieldcol .diag { left: 12px; bottom: 230px; width: min(316px, calc(100% - 24px)); }
@@ -233,11 +229,7 @@ html, body { font-synthesis: none; }
     transition-duration: 0.01ms !important;
   }
 }
-</style>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bordeaux — FRC Path Planner</title>
-<style>/* cyrillic-ext */
+/* cyrillic-ext */
 @font-face {
   font-family: 'JetBrains Mono';
   font-style: normal;
@@ -507,8 +499,7 @@ html, body { font-synthesis: none; }
   src: url("assets/98640faa-af85-4deb-8b67-c9c878328d73.woff2") format('woff2');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
-</style>
-<style>/* Bordeaux — engineering tool. Neutral graphite, low saturation, sharp geometry. */
+/* Bordeaux — engineering tool. Neutral graphite, low saturation, sharp geometry. */
 :root{
   --bg:#0b0c0e; --bg-1:#101113; --bg-2:#16181b; --bg-3:#1d1f23; --bg-4:#24272c;
   --line:#202327; --line-2:#2a2e34; --line-3:#393e46;
@@ -683,10 +674,6 @@ input,select{font-family:inherit}
 .featrow{display:flex;align-items:center;gap:7px;min-height:34px;padding:2px 5px;cursor:pointer;border-left:2px solid transparent}
 @media (hover:hover) and (pointer:fine){.featrow:hover{background:var(--bg-2)}}
 .featrow.sel{background:var(--accent-soft);border-left-color:var(--accent)}
-.wpfeatrow,.segfeatrow{border-left:0}
-.wpfeatrow.sel,.segfeatrow.sel{background:transparent;border-left-color:transparent}
-.wpfeatrow.sel .featnm,.segfeatrow.sel .featnm{color:var(--accent-2)}
-.wpfeatrow.sel .featmeta,.segfeatrow.sel .featmeta{color:var(--txt-2)}
 .featdot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
 .featdot.sq{border-radius:2px}
 .featdot.g{background:var(--good)}.featdot.r{background:var(--bad)}.featdot.b{background:var(--accent)}.featdot.n{background:var(--txt-3)}.featdot.w{background:var(--warn)}
@@ -716,10 +703,11 @@ input,select{font-family:inherit}
 
 /* form bits */
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px}
-.fieldlabel{font-size:10px;color:var(--txt-3);text-transform:uppercase;letter-spacing:.7px;margin:12px 0 7px;font-weight:600;display:flex;align-items:center;justify-content:space-between;white-space:nowrap;gap:8px}
+.fieldlabel,.numlbl{font-size:10px;color:var(--txt-3);text-transform:uppercase;letter-spacing:.7px;font-weight:600}
+.fieldlabel{margin:12px 0 7px;display:flex;align-items:center;justify-content:space-between;white-space:nowrap;gap:8px}
 .fieldlabel>span{white-space:nowrap}
 .numrow{display:flex;flex-direction:column;gap:5px;min-width:0}
-.numlbl{font-size:10.5px;color:var(--txt-2);cursor:ew-resize;user-select:none}
+.numlbl{cursor:ew-resize;user-select:none}
 .numbox{display:flex;align-items:center;background:var(--bg-2);border:1px solid var(--line);border-radius:5px;padding:0 9px;height:32px;transition:border-color .12s}
 .numbox:focus-within{border-color:var(--accent)}
 .numinput{flex:1;min-width:0;background:none;border:none;outline:none;color:var(--txt);font-family:var(--mono);font-size:12.5px;padding:0}
@@ -756,10 +744,9 @@ input,select{font-family:inherit}
 }
 
 /* ============ metric overlay + legend (bottom-left) ============ */
-.overlayctl{position:absolute;left:16px;bottom:110px;width:210px;background:var(--panel);backdrop-filter:blur(12px);border:1px solid var(--line-2);border-radius:8px;box-shadow:var(--shadow);padding:10px 11px 11px;z-index:25}
-.ovrow{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px}
-.ovlabel{font-size:9.5px;text-transform:uppercase;letter-spacing:.9px;color:var(--txt-3);font-weight:600}
-.ovselwrap{position:relative;flex:1;max-width:128px}
+.overlayctl{position:absolute;left:16px;bottom:110px;width:236px;background:transparent;border:0;padding:0;z-index:25;text-shadow:0 1px 6px rgb(0 0 0 / .75)}
+.ovrow{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:7px}
+.ovselwrap{position:relative;flex:1;max-width:140px}
 .ovselect{width:100%;height:27px;appearance:none;background:var(--bg-2);border:1px solid var(--line);border-radius:5px;color:var(--txt);font-size:11.5px;font-weight:500;padding:0 22px 0 9px;outline:none;cursor:pointer}
 .ovselect:focus{border-color:var(--accent)}
 .ovchev{position:absolute;right:7px;top:50%;transform:translateY(-50%);color:var(--txt-3);pointer-events:none;display:flex}
@@ -767,7 +754,7 @@ input,select{font-family:inherit}
 .ovbar{height:9px;border-radius:3px;border:1px solid rgba(255,255,255,.08)}
 .ovscale{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:9.5px;color:var(--txt-3)}
 .ovunit{color:var(--txt-2)}
-.ovsafety{display:flex;align-items:center;gap:7px;margin-top:10px;padding-top:9px;border-top:1px solid var(--line);font-size:10.5px;color:var(--txt-2);line-height:1.3}
+.ovsafety{display:flex;align-items:center;gap:5px;min-height:27px;margin:0;padding:0 4px;border:0;font-size:10.5px;color:var(--txt-2);line-height:1.3;white-space:nowrap}
 .ovsafety-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;background:var(--txt-3)}
 .ovsafety.ok .ovsafety-dot{background:var(--good)}
 .ovsafety.warn .ovsafety-dot{background:var(--warn)}
@@ -864,6 +851,17 @@ input,select{font-family:inherit}
 .rp-big .u{font-family:var(--mono);font-size:12px;color:var(--txt-3)}
 .rp-two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .rp-two .rp-field{min-width:0}
+.rp-shapes{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}
+.rp-shapes button{min-height:34px;padding:0 6px;border:1px solid var(--line-2);border-radius:6px;background:var(--bg-1);color:var(--txt-2);font-size:10.5px}
+.rp-shapes button:hover{border-color:var(--line-3);color:var(--txt)}
+.rp-shapes button.on{border-color:var(--accent);background:var(--accent-soft);color:var(--txt)}
+.rp-vertices{margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:7px;background:var(--bg)}
+.rp-vertexhead{display:flex;justify-content:space-between;gap:8px;margin-bottom:7px;font-size:9.5px;color:var(--txt-3)}
+.rp-vertex{display:grid;grid-template-columns:18px 1fr 1fr 28px;gap:5px;align-items:center;margin-top:5px;font:10px var(--mono);color:var(--txt-3)}
+.rp-vertex label{display:flex;align-items:center;gap:4px}.rp-vertex input{width:100%;min-width:0;height:30px;padding:0 6px;border:1px solid var(--line-2);border-radius:5px;background:var(--bg-1);color:var(--txt);font:11px var(--mono)}
+.rp-vertex button,.rp-addvertex{min-height:30px;border:1px solid var(--line-2);border-radius:5px;background:var(--bg-1);color:var(--txt-2)}
+.rp-vertex button:disabled,.rp-addvertex:disabled{opacity:.4}.rp-addvertex{width:100%;margin-top:8px;font-size:10.5px}
+.rp-vertices .rp-note{margin-top:8px}
 .rp-preview{position:sticky;top:20px;border:1px solid var(--line);border-radius:10px;background:var(--bg-1);padding:24px;display:flex;flex-direction:column;align-items:center}
 .rp-stage{width:100%;aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;position:relative;background:
   linear-gradient(var(--line) 1px,transparent 1px) 0 0/100% 8.33%,
@@ -1289,11 +1287,9 @@ input,select{font-family:inherit}
 .facebtn:disabled{opacity:.38;cursor:not-allowed}
 
 /* clickable safety row → path checks */
-.ovsafety{width:100%;text-align:left;cursor:pointer}
+.ovsafety{width:auto;text-align:left;cursor:pointer}
 .ovsafety:hover{color:var(--txt)}
 .ovsafety.ok{cursor:default}
-.ovsafety-go{margin-left:auto;display:flex;color:var(--txt-3)}
-.ovsafety.open .ovsafety-go{color:var(--accent);transform:rotate(180deg)}
 
 /* path-check drawer */
 .diag{position:absolute;left:16px;bottom:84px;width:316px;max-height:min(54vh,460px);display:flex;flex-direction:column;background:var(--panel);backdrop-filter:blur(12px);border:1px solid var(--line-2);border-radius:10px;box-shadow:var(--shadow);z-index:26;overflow:hidden}
@@ -1428,39 +1424,3 @@ input,select{font-family:inherit}
   *,*::before,*::after{animation:none!important;scroll-behavior:auto!important;transition:none!important}
 }
 .tb-file{width:auto;min-width:54px;padding:0 10px;margin:0}
-</style>
-
-</head>
-<body>
-<div id="boot-splash" class="boot-splash" role="status" aria-label="Loading Bordeaux">
-  <div class="boot-curtain" aria-hidden="true"></div>
-  <div class="boot-splash-inner">
-    <div id="boot-chap-mount" class="boot-runner">
-      <img class="boot-chap boot-chap-fallback" src="assets/wrlp-chap-bird-original.svg" alt=""/>
-      <span class="boot-shadow-fallback" aria-hidden="true"></span>
-    </div>
-    <span class="boot-wordmark">Bordeaux</span>
-  </div>
-</div>
-<div id="root"></div>
-
-<script src="assets/chap-loader-wrlp.js"></script>
-
-<script src="assets/9f0cb425-f5e7-489a-9963-e89e8bdfbcbe.js"></script>
-<script src="assets/0931e455-b9c2-48e3-8ad3-192438d1532d.js"></script>
-
-<script src="assets/91d3dc25-ddca-4323-acb3-c8839e67735f.js"></script>
-<script src="assets/f874c44d-015e-4099-b1e8-f483e723379e.js"></script>
-<script src="assets/760c13dd-1656-409e-a1f2-58b2285a7f6e.js"></script>
-<script src="assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js"></script>
-<script src="assets/7efa12ca-9f23-45f3-8ac7-e2dc8d3c0bc1.js"></script>
-<script src="assets/8ddc9855-091c-439c-b24a-f683fa800fb7.js"></script>
-<script src="assets/796cfac6-71d3-4f8c-a36f-363f52edf57f.js"></script>
-<script src="assets/ef73a688-9273-477b-9d4e-513d0d6d8323.js"></script>
-<script src="assets/2e851ba2-8203-4a0a-9fc1-e769983238f6.js"></script>
-<script src="assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js"></script>
-
-<style id="__om-edit-overrides"></style>
-
-
-</body></html>

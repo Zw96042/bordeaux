@@ -10,4 +10,22 @@ public record BordeauxEvent(
         double fraction,
         String commandId,
         ObjectNode arguments,
-        boolean cancelOnPathEnd) {}
+        boolean cancelOnPathEnd,
+        Trigger trigger,
+        Double repeatEveryS,
+        Double endTimeS,
+        String conditionId) {
+    public enum Trigger { TIME, POSITION }
+
+    public BordeauxEvent(
+            String eventId,
+            String name,
+            double timeS,
+            double fraction,
+            String commandId,
+            ObjectNode arguments,
+            boolean cancelOnPathEnd) {
+        this(eventId, name, timeS, fraction, commandId, arguments, cancelOnPathEnd,
+                Trigger.TIME, null, null, null);
+    }
+}

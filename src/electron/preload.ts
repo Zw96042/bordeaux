@@ -5,6 +5,7 @@ import type { AgentProposal, AgentSessionSnapshot } from "../shared/agent/types"
 contextBridge.exposeInMainWorld("bordeauxAPI", {
   openProject: () => ipcRenderer.invoke("project:open"),
   openRecentProject: (index: number) => ipcRenderer.invoke("project:openRecent", index),
+  restoreLastProject: () => ipcRenderer.invoke("project:restoreLast"),
   newProject: () => ipcRenderer.invoke("project:new"),
   saveProject: (project: BordeauxProject, saveAs = false) => ipcRenderer.invoke("project:save", project, saveAs),
   exportBdx: (project: BordeauxProject, pathId?: string) => ipcRenderer.invoke("project:exportBdx", project, pathId),

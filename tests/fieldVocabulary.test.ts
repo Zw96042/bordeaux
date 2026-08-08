@@ -5,7 +5,7 @@ import { validateProject } from "../src/shared/validation";
 import { createDemoProject } from "../src/shared/project/defaults";
 
 describe("2026 field vocabulary", () => {
-  it("keeps official dimensions separate from the legacy renderer calibration", () => {
+  it("keeps official dimensions separate from the renderer calibration", () => {
     expect(REBUILT_2026_FIELD.dimensions.lengthM).toBe(16.541);
     expect(REBUILT_2026_FIELD.appDisplayTransform.appLengthM).toBe(17.548);
     const official = { x: 4.883, y: 2.25 };

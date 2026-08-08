@@ -10,7 +10,7 @@ For a project you can link immediately, start with [`../examples/bordeaux-templa
 2. Choose **Install or Update Support…**. Bordeaux previews the managed files, preserves a one-time build-file backup, and does not edit `RobotContainer` or deploy code.
 3. Add `@BordeauxCommand` and `@BordeauxParam` annotations in the robot project.
 4. Choose **Build Command Catalog…**. After an explicit trust prompt, Bordeaux runs only `./gradlew bordeauxCatalog --no-daemon --console=plain`.
-5. Add an event marker, select a generated command, and author its typed arguments.
+5. Add an event marker or an Auto-tab Command step, select a generated command, and author its typed arguments.
 6. Export Java JSON. Linked-project export writes `src/main/deploy/bordeaux/<project>.bordeaux.json`; GradleRIO deploys it with the rest of `src/main/deploy`.
 
 The generated catalog is `build/bordeaux/catalog-v1.json`. Bordeaux rejects malformed catalogs, unsupported runtime schemas, hash mismatches, unresolved/source-only commands, and invocation arguments that do not match the generated schema.
@@ -19,7 +19,7 @@ The generated catalog is `build/bordeaux/catalog-v1.json`. Bordeaux rejects malf
 
 The installed `.bordeaux/INTEGRATION.md` contains the project-local handoff. Complete examples live in [`../java/examples`](../java/examples), and the Java API and lifecycle are documented in [`../java/README.md`](../java/README.md).
 
-In brief, call `BordeauxBindings.generated(...)` with the team-owned command-provider instances, load an exported path through `BordeauxTrajectoryReader`, create a `BordeauxEventRunner`, and call `periodic(elapsedSeconds)` beside the path follower. The bootstrap loads the final-round generated direct bindings without making ordinary robot source depend on a not-yet-generated class during a clean compile. The runner catches up events missed by loop jitter and schedules each stable event ID once per run. Call `endPath()` when the path ends; only invocations authored with **Cancel at path end** are canceled.
+In brief, call `BordeauxBindings.generated(...)` with the team-owned command-provider instances and load an exported path through `BordeauxTrajectoryReader`; use `readWithRoutine(...)` when running the exported Auto-tab routine. Use `BordeauxEventRunner.periodic(elapsedSeconds, measuredFraction)` beside the path follower for time- or position-triggered, conditional, and repeated path events. Register sensor predicates under stable IDs with `BordeauxConditionRegistry`. For Auto-tab routines, `BordeauxRoutineRunner.start()` returns the first path ID and `completePath(id)` evaluates decisions, runs between-path commands, and returns the next one. Call `endPath()` when a path ends; only event invocations authored with **Cancel at path end** are canceled.
 
 ## Contract invariants
 

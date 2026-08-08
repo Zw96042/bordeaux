@@ -665,6 +665,15 @@
                 h('span', { className: 'inrow-l' }, 'Drive backward'),
                 h(Toggle, { on: !!doc.driveBackward, ariaLabel: 'Drive backward', onChange: () => actions.toggleDriveBackward() }))),
 
+        h('div', { className: 'cgroup-h' }, 'Follow path by'),
+        h(Seg, { value: doc.followMode || 'time', ariaLabel: 'Default path follow mode', options: [
+          { v: 'time', label: 'Time', title: 'Advance from the robot clock' },
+          { v: 'position', label: 'Position', title: 'Advance from measured field position' },
+        ], onChange: (v) => actions.setDoc({ followMode: v }) }),
+        h('div', { className: 'seg-hint' }, doc.followMode === 'position'
+          ? 'Uses measured field position so contact or delay does not skip the rest of the path. Java JSON only.'
+          : 'Uses the planned timeline. Individual segments can override this.'),
+
         h('div', { className: 'cgroup-h' }, 'Endpoints'),
         h('div', { className: 'grid2' },
           h(Num, { label: 'Start vel', value: doc.startVel || 0, unit: 'm/s', min: 0, onChange: (v) => actions.setDoc({ startVel: v }) }),
@@ -796,6 +805,15 @@
         h('div', { className: 'fieldlabel' }, 'Path type'),
         h(Seg, { value: st, options: window.PM.SEGTYPES.map((type) => ({ v: type.id, label: type.label, title: type.hint })), ariaLabel: 'Path type', onChange: (v) => actions.setSegMeta(i, { segType: v }) }),
         h('div', { className: 'seg-hint' }, segHint),
+        h('div', { className: 'fieldlabel' }, 'Follow segment by'),
+        h(Seg, { value: wps[i].segmentFollowMode || 'inherit', ariaLabel: 'Segment follow mode', options: [
+          { v: 'inherit', label: 'Default', title: 'Use the path default' },
+          { v: 'time', label: 'Time', title: 'Advance from the robot clock' },
+          { v: 'position', label: 'Position', title: 'Advance from measured field position' },
+        ], onChange: (v) => actions.setSegMeta(i, { segmentFollowMode: v === 'inherit' ? undefined : v }) }),
+        h('div', { className: 'seg-hint' }, (wps[i].segmentFollowMode || doc.followMode) === 'position'
+          ? 'Measured progress keeps this stretch active through bumps or delays.'
+          : 'Follows the planned timestamps on this stretch.'),
         !isTank && h(React.Fragment, null,
           h('div', { className: 'fieldlabel' }, 'Heading on this segment'),
           h(Seg, { value: wps[i].segmentHeadingMode || 'inherit', options: [{ v: 'inherit', label: 'Default', title: 'Use path default (' + HEAD_MODES.find((mode) => mode.v === headingMode).label + ')' }, ...HEAD_MODES, { v: 'lookAt', label: 'Track point' }], ariaLabel: 'Heading on this segment', className: 'seg-heading', onChange: (v) => actions.setSegmentHeadingMode(i, v) }),
@@ -862,6 +880,7 @@
       const markerFraction = window.PM.featureFraction(m, derived.sample);
       const markerDistance = markerFraction * (derived.sample.length || 0);
       const markerAnchor = m.anchor === 'dist' ? 'dist' : 'param';
+      const schedule = m.schedule || {};
       const catalog = javaProject && javaProject.catalog;
       const integration = javaProject && javaProject.integration;
       const commands = catalog ? catalog.commands || [] : [];
@@ -1011,6 +1030,26 @@
               h('span', { className: 'cmd-toggle-track', 'aria-hidden': true }, h('span', null))))),
         h('div', { className: 'fieldlabel' }, 'Group type'),
         h(Seg, { value: m.group || 'sequential', ariaLabel: 'Group type', options: [{ v: 'sequential', label: 'Seq' }, { v: 'parallel', label: 'Parallel' }, { v: 'deadline', label: 'Deadline' }], onChange: (v) => actions.setMarker(sel.idx, { group: v }) }),
+        h('div', { className: 'cgroup-h' }, 'Event schedule'),
+        h('div', { className: 'fieldlabel' }, 'Trigger from'),
+        h(Seg, { value: schedule.trigger || 'time', ariaLabel: 'Event trigger', options: [
+          { v: 'time', label: 'Time', title: 'Fire when planned time reaches this marker' },
+          { v: 'position', label: 'Position', title: 'Fire when measured progress reaches this marker' },
+        ], onChange: (v) => actions.setMarker(sel.idx, { schedule: { ...schedule, trigger: v } }) }),
+        h('div', { className: 'seg-hint' }, schedule.trigger === 'position'
+          ? 'Uses measured robot progress, even on a time-followed path.'
+          : 'Uses the marker’s planned arrival time.'),
+        h('div', { className: 'inrow' },
+          h('span', { className: 'inrow-l' }, 'Repeat command', h('small', null, 'while the window is active')),
+          h(Toggle, { on: schedule.repeatEveryS != null, ariaLabel: 'Repeat event', onChange: (on) => actions.setMarker(sel.idx, { schedule: { ...schedule, repeatEveryS: on ? 0.1 : undefined } }) })),
+        schedule.repeatEveryS != null && h(Num, { label: 'Repeat every', value: schedule.repeatEveryS, unit: 's', min: 0.001, step: 0.02, precision: 3, onChange: (v) => actions.setMarker(sel.idx, { schedule: { ...schedule, repeatEveryS: v } }) }),
+        h('div', { className: 'inrow' },
+          h('span', { className: 'inrow-l' }, 'End time', h('small', null, 'expire or stop repeating')),
+          h(Toggle, { on: schedule.endTimeS != null, ariaLabel: 'Limit event end time', onChange: (on) => actions.setMarker(sel.idx, { schedule: { ...schedule, endTimeS: on ? (derived.prof.totalTime || 0) : undefined } }) })),
+        schedule.endTimeS != null && h(Num, { label: 'End path time', value: schedule.endTimeS, unit: 's', min: 0, max: derived.prof.totalTime || 0, step: 0.1, precision: 2, onChange: (v) => actions.setMarker(sel.idx, { schedule: { ...schedule, endTimeS: v } }) }),
+        h('label', { className: 'fieldlabel', htmlFor: 'event-condition-id' }, 'Condition ID', h('small', null, 'optional')),
+        h('input', { id: 'event-condition-id', className: 'textinput', value: schedule.conditionId || '', placeholder: 'frc.robot.Conditions#ready', autoComplete: 'off', spellCheck: false,
+          onChange: (event) => actions.setMarker(sel.idx, { schedule: { ...schedule, conditionId: event.target.value.trim() || undefined } }) }),
         h('div', { className: 'fieldlabel' }, 'Position lock'),
         h(Seg, { value: markerAnchor, ariaLabel: 'Position lock', options: [{ v: 'param', label: 'Path %' }, { v: 'dist', label: 'Distance' }], onChange: (v) => actions.setMarker(sel.idx, { anchor: v }) }),
         markerAnchor === 'dist'
@@ -1083,4 +1122,5 @@
   }
 
   window.ContextInspector = ContextInspector;
+  window.BordeauxCommandEditor = { CommandParameterEditor, commandArguments, parameterValueError, safeControlId };
 })();

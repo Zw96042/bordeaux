@@ -3,6 +3,7 @@ export type DriveType = "swerve" | "tank";
 export type SegmentType = "bezier" | "line" | "arc" | "clothoid";
 export type HeadingMode = "manual" | "tangent" | "targets";
 export type SegmentHeadingMode = HeadingMode | "lookAt";
+export type FollowMode = "time" | "position";
 
 export interface ControlPoint {
   x: number;
@@ -93,6 +94,8 @@ export interface Waypoint {
   segType?: SegmentType;
   /** Heading law for the outgoing segment. Omitted to inherit PathDoc.headingMode. */
   segmentHeadingMode?: SegmentHeadingMode;
+  /** Robot-side following policy for the outgoing segment. Omitted to inherit PathDoc.followMode. */
+  segmentFollowMode?: FollowMode;
   /** Field point continuously faced by the outgoing segment when segmentHeadingMode is lookAt. */
   segmentLookAt?: ControlPoint;
   /** Continuity policy at the boundary into this waypoint's outgoing segment. */
@@ -124,8 +127,20 @@ export interface Marker {
     description: string;
   };
   group?: "sequential" | "parallel" | "deadline";
+  schedule?: EventSchedule;
   anchor?: "param" | "dist";
   d?: number;
+}
+
+export interface EventSchedule {
+  /** Time is backwards-compatible; position uses measured robot progress. */
+  trigger?: "time" | "position";
+  /** Omission executes once. Repetition starts when the marker becomes due. */
+  repeatEveryS?: number;
+  /** Absolute path time after which a pending or repeated event expires. */
+  endTimeS?: number;
+  /** Stable robot-side predicate ID. */
+  conditionId?: string;
 }
 
 export type CommandArgumentValue =
@@ -272,6 +287,8 @@ export interface PathDoc {
   ranges: ConstraintRange[];
   constraints: PathConstraints;
   headingMode?: HeadingMode;
+  /** Robot-side following policy. Omitted for backwards-compatible time following. */
+  followMode?: FollowMode;
   folderId?: string;
   driveBackward?: boolean;
   startVel: number;
@@ -313,7 +330,7 @@ export interface PathConstraints {
 export interface RoutineFunctionNode {
   id: string;
   type: "function";
-  cat: "terminate" | "sequence" | "generate" | "velocity";
+  cat: "command" | "terminate" | "sequence" | "generate" | "velocity";
   title?: string;
   trigger?: string;
   note?: string;
@@ -321,6 +338,8 @@ export interface RoutineFunctionNode {
   funcRef?: string;
   op?: string;
   target?: string;
+  /** Generated Java command invoked between path steps. */
+  invocation?: CommandInvocation;
 }
 
 export interface RoutinePathNode {
