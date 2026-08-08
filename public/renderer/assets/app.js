@@ -10,6 +10,8 @@
   const clampWorld = (p) => ({ x: Math.max(0, Math.min(FIELD_W, p.x)), y: Math.max(0, Math.min(FIELD_H, p.y)) });
   const pathId = () => 'path_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
   const markerId = () => 'event_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+  const routineId = () => 'routine_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+  const blankRoutine = (name) => ({ id: routineId(), name: name || 'Autonomous Routine', nodes: [] });
   const LV_DEFAULTS = { samplePeriodS: 0.02, minTurnRadiusM: 0.5, bezierTangentMode: 'handles', reversePath: false, zeroVelocity: false, pickupBalls: false, currentLimit: 0, zeroTranslationalVelocity: false, correctAtBeginningOfPath: false };
   const isLabviewPlanner = (id) => id === 'labviewBezier' || id === 'labviewClothoid';
   const labviewPlannerForPath = window.PM.labviewPlannerForPath;
@@ -29,8 +31,16 @@
       if (node.type === 'path' && typeof node.ref === 'number') node.ref = project.paths[node.ref] ? project.paths[node.ref].id : '';
       if (node.type === 'decision') { walk(node.then); walk(node.else); }
     });
-    project.routine = project.routine || { name: 'Autonomous Routine', nodes: [] };
-    walk(project.routine.nodes);
+    const routineSources = Array.isArray(project.routines) && project.routines.length
+      ? project.routines : [project.routine || blankRoutine()];
+    const routineIds = new Set();
+    project.routines = routineSources.map((source) => {
+      const routine = { ...source };
+      if (!routine.id || routineIds.has(routine.id)) routine.id = routineId();
+      routineIds.add(routine.id); walk(routine.nodes); return routine;
+    });
+    if (!routineIds.has(project.activeRoutineId)) project.activeRoutineId = project.routines[0].id;
+    project.routine = project.routines.find((routine) => routine.id === project.activeRoutineId) || project.routines[0];
     project.plannerId = project.plannerId || 'profiledSpline';
     return project;
   }
@@ -87,14 +97,30 @@
   }
 
   function freshProject() {
+    const routine = blankRoutine();
     return {
       schemaVersion: '1.0',
       name: 'Untitled',
       robot: { drive: 'swerve', w: 0.84, l: 0.84, heightM: 0.5, maxSpeed: 5.0 },
       paths: [blankPath('NewPath')],
-      routine: { name: 'Autonomous Routine', nodes: [] },
+      routines: [routine],
+      activeRoutineId: routine.id,
+      routine,
       plannerId: 'profiledSpline',
     };
+  }
+
+  function routineState(project) {
+    const routines = Array.isArray(project.routines) && project.routines.length
+      ? project.routines : [project.routine || blankRoutine()];
+    const activeRoutineId = routines.some((routine) => routine.id === project.activeRoutineId)
+      ? project.activeRoutineId : routines[0].id;
+    return { routines, activeRoutineId };
+  }
+
+  function withRoutineState(project, state) {
+    const activeRoutine = state.routines.find((routine) => routine.id === state.activeRoutineId) || state.routines[0];
+    return { ...project, routines: state.routines, activeRoutineId: activeRoutine.id, routine: activeRoutine };
   }
 
   const FIT = { x: 307, y: 7, w: 3285, h: 1569 };
@@ -267,16 +293,23 @@
     }, []);
 
     // ---- Autonomous Routine ----
-    const routine = project.routine || { name: 'Autonomous Routine', nodes: [] };
-    const setRoutine = useCallback((update) => setProject((current) => {
-      routineHist.current.past.push(clone(current.routine || { name: 'Autonomous Routine', nodes: [] }));
+    const routineLibrary = routineState(project);
+    const routines = routineLibrary.routines;
+    const routine = routines.find((candidate) => candidate.id === routineLibrary.activeRoutineId) || routines[0];
+    const commitRoutineState = useCallback((update) => setProject((current) => {
+      const currentState = routineState(current);
+      routineHist.current.past.push(clone(currentState));
       if (routineHist.current.past.length > 80) routineHist.current.past.shift();
       routineHist.current.future = [];
       hist.current.past = []; hist.current.future = [];
       projectHist.current.future = [];
-      const value = typeof update === 'function' ? update(current.routine || { name: 'Autonomous Routine', nodes: [] }) : update;
-      return { ...current, routine: value };
+      return withRoutineState(current, update(clone(currentState)));
     }), []);
+    const setRoutine = useCallback((update) => commitRoutineState((state) => {
+      const current = state.routines.find((candidate) => candidate.id === state.activeRoutineId) || state.routines[0];
+      const value = typeof update === 'function' ? update(current) : update;
+      return { ...state, routines: state.routines.map((candidate) => candidate.id === current.id ? value : candidate) };
+    }), [commitRoutineState]);
     const [routineOutcomes, setRoutineOutcomes] = useState({});
     const [routineTime, setRoutineTime] = useState(0);
     const [routinePlaying, setRoutinePlaying] = useState(false);
@@ -383,9 +416,9 @@
       if (H.past.length) { H.future.push(clone(docRef.current)); writeDoc(H.past.pop()); force((x) => x + 1); return; }
       const R = routineHist.current;
       if (R.past.length) {
-        R.future.push(clone(project.routine || { name: 'Autonomous Routine', nodes: [] }));
+        R.future.push(clone(routineState(project)));
         const previous = R.past.pop();
-        setProject((current) => ({ ...current, routine: previous }));
+        setProject((current) => withRoutineState(current, previous));
         setRoutineSel(null); force((x) => x + 1); return;
       }
       const P = projectHist.current; if (!P.past.length) return;
@@ -397,9 +430,9 @@
       if (H.future.length) { H.past.push(clone(docRef.current)); writeDoc(H.future.pop()); force((x) => x + 1); return; }
       const R = routineHist.current;
       if (R.future.length) {
-        R.past.push(clone(project.routine || { name: 'Autonomous Routine', nodes: [] }));
-        const nextRoutine = R.future.pop();
-        setProject((current) => ({ ...current, routine: nextRoutine }));
+        R.past.push(clone(routineState(project)));
+        const nextState = R.future.pop();
+        setProject((current) => withRoutineState(current, nextState));
         setRoutineSel(null); force((x) => x + 1); return;
       }
       const P = projectHist.current; if (!P.future.length) return;
@@ -951,8 +984,8 @@
     const delPath = (i) => {
       if (project.paths.length <= 1) return false;
       const target = project.paths[i]; let referenced = false;
-      window.AUTO.walk(routine.nodes, (node) => { if (node.type === 'path' && node.ref === target.id) referenced = true; });
-      if (referenced) { alert('“' + target.name + '” is used by the autonomous routine. Remove that routine step before deleting the path.'); return false; }
+      routines.forEach((candidate) => window.AUTO.walk(candidate.nodes, (node) => { if (node.type === 'path' && node.ref === target.id) referenced = true; }));
+      if (referenced) { alert('“' + target.name + '” is used by an autonomous routine. Remove those routine steps before deleting the path.'); return false; }
       if (!confirm('Delete path “' + target.name + '”? This cannot be undone.')) return false;
       setProject((pr) => { const paths = pr.paths.filter((_, k) => k !== i); return { ...pr, paths }; });
       setActiveIdx((a) => Math.max(0, a > i ? a - 1 : a === i ? Math.min(a, project.paths.length - 2) : a));
