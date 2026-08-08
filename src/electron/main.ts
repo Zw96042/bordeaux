@@ -285,7 +285,7 @@ function createWindow() {
           return controls.filter((el) => !String(name(el) || '').trim()).map((el) => el.className);
         };
         const unnamed = [...unnamedOnPage()];
-        for (const page of ['Auto', 'Robot']) {
+        for (const page of ['Acquatine', 'Robot']) {
           [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === page)?.click();
           await new Promise((resolve) => setTimeout(resolve, 0));
           unnamed.push(...unnamedOnPage());
@@ -410,8 +410,12 @@ function createWindow() {
           accessible: unnamedOnPage().length === 0,
         };
         document.querySelector('button[aria-label="Add event marker"]')?.click();
-        await new Promise((resolve) => setTimeout(resolve, 1_050));
-        const markerAutosave = await window.bordeauxAPI.restoreLastProject();
+        let markerAutosave;
+        for (let attempt = 0; attempt < 30; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          markerAutosave = await window.bordeauxAPI.restoreLastProject();
+          if (markerAutosave.project.paths[0].markers.length === 2) break;
+        }
         const eventMarkerAutosave = markerAutosave.project.paths[0].markers.length === 2
           && markerAutosave.project.paths[0].markers[1].name === 'event2';
         await window.bordeauxAPI.newProject();
@@ -421,9 +425,25 @@ function createWindow() {
         await window.bordeauxAPI.newProject();
         const opened = await window.bordeauxAPI.openProject();
         const exported = await window.bordeauxAPI.exportBdx(opened.project);
+        [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === 'Acquatine')?.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        document.querySelector('.routinelib .pathsw-btn')?.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const routineLibraryOpened = document.querySelector('[aria-label="Routine library"]') !== null;
+        [...document.querySelectorAll('.routinelib-create button')].find((button) => button.textContent.trim() === 'New routine')?.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const newRoutineSelected = document.querySelector('.routinelib .pathsw-nm')?.textContent === 'New routine';
+        document.querySelector('.routinelib .pathsw-btn')?.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        document.querySelector('button[aria-label="Actions for New routine"]')?.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        [...document.querySelectorAll('.pathlib-actionrow button')].find((button) => button.textContent.trim() === 'Duplicate')?.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const routineDuplicateSelected = document.querySelector('.routinelib .pathsw-nm')?.textContent === 'New routine copy';
+        const multiRoutineUi = routineLibraryOpened && newRoutineSelected && routineDuplicateSelected;
         window.bordeauxAPI.setDirty(true);
         const probe = document.createElement('script'); probe.textContent = 'window.__bordeauxInlineScriptRan = true'; document.head.appendChild(probe);
-        return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, chapLoader, validation: validation.ok, motorPreset, eventMarkerAutosave, javaDiscovery: javaConnection.catalog.projectName === 'SmokeRobot' && javaConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), javaInstalled: installedJavaConnection.integration.installed, javaBuilt: builtJavaConnection.catalog.authoritative === true && builtJavaConnection.catalog.catalogHash === reopenedJavaConnection.catalog.catalogHash, javaRecent: recentJavaProjects.length === 1 && reopenedJavaConnection.catalog.projectName === 'SmokeRobot', javaUi, javaExported: javaExported.exported && javaExported.eventCount === 1, restored: restored.project.name === project.name, roundTrip: saved.saved && opened.project.name === project.name && opened.project.routine.nodes[0].ref === 'path_smoke', exported: exported.exported, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
+        return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, chapLoader, validation: validation.ok, motorPreset, eventMarkerAutosave, multiRoutineUi, javaDiscovery: javaConnection.catalog.projectName === 'SmokeRobot' && javaConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), javaInstalled: installedJavaConnection.integration.installed, javaBuilt: builtJavaConnection.catalog.authoritative === true && builtJavaConnection.catalog.catalogHash === reopenedJavaConnection.catalog.catalogHash, javaRecent: recentJavaProjects.length === 1 && reopenedJavaConnection.catalog.projectName === 'SmokeRobot', javaUi, javaExported: javaExported.exported && javaExported.eventCount === 1, restored: restored.project.name === project.name, roundTrip: saved.saved && opened.project.name === project.name && opened.project.routine.nodes[0].ref === 'path_smoke', exported: exported.exported, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
       })()`);
       await new Promise((resolve) => setTimeout(resolve, 50));
       window.close();
@@ -432,7 +452,7 @@ function createWindow() {
       result.filesWritten = filesWritten;
       result.closeGuard = smokeCloseGuardTriggered && !window.isDestroyed();
       console.log(`BORDEAUX_SMOKE_OK ${JSON.stringify(result)}`);
-      const passed = result.api && result.root && result.unnamed.length === 0 && result.main > 0 && result.nav > 0 && result.chapLoader === "rigged" && result.validation && result.motorPreset && result.eventMarkerAutosave && result.javaDiscovery && result.javaInstalled && result.javaBuilt && result.javaRecent && result.javaUi.markerInspector && result.javaUi.linkAction && result.javaUi.commandEnabled && result.javaUi.commandOptions === 4 && result.javaUi.searchHiddenForSmallCatalog && result.javaUi.recentHiddenForSingleProject && result.javaUi.cancelSwitch && result.javaUi.parameter && result.javaUi.jsonShapeRejected && result.javaUi.jsonShapeAccepted && result.javaUi.longRangeRejected && result.javaUi.exactInteger && result.javaUi.largeEnumPicker && result.javaUi.accessible && result.javaExported && result.restored && result.roundTrip && result.exported && result.nodeGlobalsBlocked && result.popupBlocked && result.inlineScriptBlocked && result.filesWritten && result.closeGuard;
+      const passed = result.api && result.root && result.unnamed.length === 0 && result.main > 0 && result.nav > 0 && result.chapLoader === "rigged" && result.validation && result.motorPreset && result.eventMarkerAutosave && result.multiRoutineUi && result.javaDiscovery && result.javaInstalled && result.javaBuilt && result.javaRecent && result.javaUi.markerInspector && result.javaUi.linkAction && result.javaUi.commandEnabled && result.javaUi.commandOptions === 4 && result.javaUi.searchHiddenForSmallCatalog && result.javaUi.recentHiddenForSingleProject && result.javaUi.cancelSwitch && result.javaUi.parameter && result.javaUi.jsonShapeRejected && result.javaUi.jsonShapeAccepted && result.javaUi.longRangeRejected && result.javaUi.exactInteger && result.javaUi.largeEnumPicker && result.javaUi.accessible && result.javaExported && result.restored && result.roundTrip && result.exported && result.nodeGlobalsBlocked && result.popupBlocked && result.inlineScriptBlocked && result.filesWritten && result.closeGuard;
       allowClose = true;
       app.exit(passed ? 0 : 1);
     });
