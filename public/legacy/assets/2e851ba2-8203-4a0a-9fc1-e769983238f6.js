@@ -26,7 +26,7 @@
   }
 
   function StepInspector(props) {
-    const { node, paths, acq, run } = props;
+    const { node, paths, acq, run, javaProject } = props;
     if (!node) return null;
     const set = (patch) => acq.set(node.id, patch);
     const seg = run.segs.find((s) => s.nodeId === node.id);
@@ -50,20 +50,57 @@
       icon = 'branch'; title = 'Decision'; tag = 'branch'; accent = '#9aa3b0';
       const out = acq.outcomes[node.id] || 'then';
       body = h(React.Fragment, null,
-        FieldLabel('Condition'),
-        h('input', { className: 'textinput', 'aria-label': 'Decision condition', value: node.cond, spellCheck: false, onChange: (e) => set({ cond: e.target.value }) }),
+        FieldLabel('Condition ID'),
+        h('input', { className: 'textinput', 'aria-label': 'Decision condition ID', value: node.cond, placeholder: 'frc.robot.Conditions#hasNote', spellCheck: false, onChange: (e) => set({ cond: e.target.value.trim() }) }),
         h('div', { className: 'grid2', style: { marginTop: '10px' } },
           h('div', null, FieldLabel('If true'), h('input', { className: 'textinput', 'aria-label': 'True branch label', value: node.thenLabel, spellCheck: false, onChange: (e) => set({ thenLabel: e.target.value }) })),
           h('div', null, FieldLabel('If false'), h('input', { className: 'textinput', 'aria-label': 'False branch label', value: node.elseLabel, spellCheck: false, onChange: (e) => set({ elseLabel: e.target.value }) }))),
         FieldLabel('Simulated outcome'),
         h(Seg, { value: out, options: [{ v: 'then', label: node.thenLabel || 'true' }, { v: 'else', label: node.elseLabel || 'false' }], onChange: (v) => acq.setOutcome(node.id, v) }),
-        h('div', { className: 'seg-hint' }, 'Picks which branch the simulation runs. Both branches stay in the routine.'),
+        h('div', { className: 'seg-hint' }, 'Robot code registers this stable ID. The simulated outcome only controls the editor preview.'),
         h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete decision'));
 
     } else {
       const C = A.CATS[node.cat]; icon = C.icon; accent = C.color; tag = C.label;
       title = 'Function';
-      if (node.cat === 'generate') {
+      if (node.cat === 'command') {
+        const editor = window.BordeauxCommandEditor;
+        const commands = javaProject && javaProject.catalog ? javaProject.catalog.commands || [] : [];
+        const invocationId = node.invocation && node.invocation.commandId || '';
+        const selected = commands.find((command) => command.id === invocationId);
+        const parameters = selected ? (selected.parameters || []).filter((parameter) => parameter.role === 'argument') : [];
+        const saved = node.invocation && node.invocation.arguments || {};
+        const argumentsValue = selected ? Object.fromEntries(parameters.map((parameter) => {
+          const value = Object.prototype.hasOwnProperty.call(saved, parameter.name) ? saved[parameter.name] : undefined;
+          return [parameter.name, editor.parameterValueError(value, parameter) ? editor.commandArguments(selected)[parameter.name] : value];
+        })) : saved;
+        body = h(React.Fragment, null,
+          h('div', { className: 'rt-callout' }, h(Icon, { name: 'info', size: 14 }), 'Runs after the previous path and before the next path is selected.'),
+          FieldLabel('Java command'),
+          javaProject && javaProject.catalog
+            ? h('select', { className: 'selectinput', 'aria-label': 'Between-path command', value: invocationId, onChange: (event) => {
+                const command = commands.find((candidate) => candidate.id === event.target.value);
+                set({ title: command ? command.label : 'Robot command', invocation: command ? { commandId: command.id, arguments: editor.commandArguments(command) } : null });
+              } },
+              h('option', { value: '' }, '— choose a command —'),
+              commands.map((command) => h('option', { key: command.id, value: command.id }, command.label)))
+            : h('button', { className: 'cmd-primary-action', type: 'button', onClick: javaProject && javaProject.link }, 'Choose Java project'),
+          invocationId && !selected && h('div', { className: 'cmd-project-error', role: 'status' }, 'This saved command is missing from the linked catalog.'),
+          selected && selected.runtimeReady !== true && h('div', { className: 'cmd-project-error', role: 'status' }, 'Build the annotated command catalog before export.'),
+          selected && h('form', { className: 'cmd-parameters', onSubmit: (event) => event.preventDefault() },
+            parameters.length === 0 ? h('div', { className: 'cmd-empty-params' }, 'No parameters')
+              : parameters.map((parameter) => h(editor.CommandParameterEditor, {
+                  key: parameter.name,
+                  id: 'routine-command-param-' + editor.safeControlId(parameter.name),
+                  label: parameter.label || parameter.name,
+                  schema: parameter.schema,
+                  parameter,
+                  value: argumentsValue[parameter.name],
+                  onChange: (value) => set({ invocation: { commandId: selected.id, arguments: { ...argumentsValue, [parameter.name]: value } } }),
+                }))),
+          h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete command'));
+
+      } else if (node.cat === 'generate') {
         body = h(React.Fragment, null,
           h('div', { className: 'rt-callout' }, h(Icon, { name: 'info', size: 14 }), 'Autonomous Routine invokes this function at runtime. Your robot code decides what trajectory it returns.'),
           FieldLabel('Function reference'),

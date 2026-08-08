@@ -538,6 +538,15 @@ describe("canonical shipped renderer", () => {
     expect(inspector).toContain("id: 'event-condition-id'");
   });
 
+  it("authors deployable between-path commands and decisions", () => {
+    const model = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/f874c44d-015e-4099-b1e8-f483e723379e.js"), "utf8");
+    const inspector = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/2e851ba2-8203-4a0a-9fc1-e769983238f6.js"), "utf8");
+    expect(model).toContain("label: 'Command'");
+    expect(inspector).toContain("aria-label': 'Between-path command'");
+    expect(inspector).toContain("aria-label': 'Decision condition ID'");
+    expect(inspector).toContain("Runs after the previous path and before the next path is selected.");
+  });
+
   it("keeps playback, direct target rotation, and shift-delete wired into the editor", () => {
     const app = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/34f061c0-0a98-47ac-8cc1-537fad881fe6.js"), "utf8");
     const field = fs.readFileSync(path.join(process.cwd(), "public/legacy/assets/f7c20d72-d5b2-464c-b0cb-59923213228e.js"), "utf8");

@@ -87,7 +87,7 @@
   // ---- node factory ----
   function newNode(type, cat, pathRef) {
     if (type === 'path') return { id: uid('p'), type: 'path', ref: pathRef || '' };
-    if (type === 'decision') return { id: uid('d'), type: 'decision', cond: 'New condition?', thenLabel: 'Yes', elseLabel: 'No', then: [], else: [] };
+    if (type === 'decision') return { id: uid('d'), type: 'decision', cond: 'robot.condition', thenLabel: 'Yes', elseLabel: 'No', then: [], else: [] };
     const c = cat || 'terminate';
     if (c === 'command') return { id: uid('c'), type: 'function', cat: 'command', title: 'Robot command', invocation: null };
     if (c === 'generate') return { id: uid('g'), type: 'function', cat: 'generate', funcRef: 'GeneratePath', trigger: 'On entry', params: [], note: '', preview: null };
