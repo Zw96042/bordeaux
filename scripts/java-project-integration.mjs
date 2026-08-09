@@ -16,7 +16,17 @@ const execFileAsync = promisify(execFile);
 const repositoryRoot = process.cwd();
 const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-java-integration-"));
 try {
-  await fs.cp(path.join(repositoryRoot, "examples", "bordeaux-template-robot"), fixtureRoot, { recursive: true });
+  const fixtureSource = path.join(repositoryRoot, "examples", "bordeaux-template-robot");
+  await fs.cp(fixtureSource, fixtureRoot, {
+    recursive: true,
+    filter: (source) => {
+      const relative = path.relative(fixtureSource, source);
+      if (!relative) return true;
+      const parts = relative.split(path.sep);
+      return !parts.some((part) => part === ".gradle" || part === "build" || part === ".bordeaux")
+        && !parts.some((part) => /^Bordeaux-relaunch-backup-.*\.bordeaux\.json$/.test(part));
+    },
+  });
   if (process.platform !== "win32") await fs.chmod(path.join(fixtureRoot, "gradlew"), 0o755);
 
   const preview = await prepareJavaSupportInstall(fixtureRoot, path.join(repositoryRoot, "java", "dist"));

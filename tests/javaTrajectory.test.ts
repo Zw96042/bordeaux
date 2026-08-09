@@ -158,4 +158,48 @@ describe("Java trajectory export", () => {
     catalog.authoritative = false;
     expect(() => buildJavaTrajectory(createDemoProject(), catalog)).toThrow(/Build the annotated/);
   });
+
+  it("rejects oversized event and metadata payloads during preflight", () => {
+    const eventProject = createDemoProject();
+    eventProject.paths[0].markers = Array.from({ length: 2_001 }, (_, index) => ({
+      id: `event-${index}`,
+      f: 0.5,
+      name: `Event ${index}`,
+      invocation: {
+        commandId: "frc.robot.AutoCommands#score",
+        arguments: { sequence: "1", target: { level: "L4" } },
+      },
+    }));
+    expect(() => buildJavaTrajectory(eventProject, generatedCatalog())).toThrow(/exceeds 2000 events/);
+
+    const metadataProject = createDemoProject();
+    const metadataCatalog = generatedCatalog();
+    metadataCatalog.commands[0].parameters = [{
+      name: "message",
+      javaType: "java.lang.String",
+      role: "argument",
+      schema: { kind: "string", javaType: "java.lang.String" },
+    }];
+    metadataProject.paths[0].markers = [{
+      id: "large-message",
+      f: 0.5,
+      name: "Large message",
+      invocation: {
+        commandId: metadataCatalog.commands[0].id,
+        arguments: { message: "x".repeat(16 * 1024 * 1024) },
+      },
+    }];
+    expect(() => buildJavaTrajectory(metadataProject, metadataCatalog)).toThrow(/exceeds 16777216 bytes/);
+  });
+
+  it("rejects aggregate base samples before generating any trajectory", () => {
+    const project = createDemoProject();
+    project.paths[0].waypoints = buildWaypoints(Array.from({ length: 1_787 }, (_, index) => ({
+      x: 1 + index * 0.001,
+      y: 2,
+      theta: 0,
+    })));
+
+    expect(() => buildJavaTrajectory(project, generatedCatalog())).toThrow("exceeds 100000 samples");
+  });
 });

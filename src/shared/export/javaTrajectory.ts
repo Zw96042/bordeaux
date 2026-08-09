@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import { buildBdxExport } from "./bdx";
+import { DEFAULT_SAMPLES_PER_SEGMENT } from "../planners/limits";
 import { validateProjectJavaInvocations } from "../javaCommands";
 import type { AutonomousRoutine, BordeauxProject, CommandInvocation, FollowMode, JavaCommandCatalog, PathDoc, RoutineNode, TrajectorySample } from "../types";
 
-const MAX_SAMPLE_COUNT = 1_000_000;
-const MAX_EVENT_COUNT = 10_000;
-const MAX_EXPORT_BYTES = 64 * 1024 * 1024;
+const MAX_SAMPLE_COUNT = 100_000;
+const MAX_EVENT_COUNT = 2_000;
+const MAX_EXPORT_BYTES = 16 * 1024 * 1024;
 
 export interface JavaTrajectoryEvent {
   eventId: string;
@@ -74,9 +75,22 @@ function followSections(path: PathDoc, samples: readonly TrajectorySample[]): Ja
   path.waypoints.forEach((waypoint, waypointIndex) => {
     const start = waypointIndex === 0 ? 0 : boundaries[waypointIndex - 1];
     let nearest = start;
-    for (let index = start; index < samples.length; index += 1) {
-      if (Math.hypot(samples[index].x - waypoint.x, samples[index].y - waypoint.y)
-        < Math.hypot(samples[nearest].x - waypoint.x, samples[nearest].y - waypoint.y)) nearest = index;
+    let nearestDistanceSquared = Number.POSITIVE_INFINITY;
+    const remainingWaypoints = path.waypoints.length - waypointIndex - 1;
+    const finalSearchIndex = waypointIndex === path.waypoints.length - 1
+      ? samples.length - 1
+      : Math.max(start, samples.length - remainingWaypoints - 1);
+    for (let index = start; index <= finalSearchIndex; index += 1) {
+      const dx = samples[index].x - waypoint.x;
+      const dy = samples[index].y - waypoint.y;
+      const candidateDistanceSquared = dx * dx + dy * dy;
+      if (candidateDistanceSquared < nearestDistanceSquared) {
+        nearest = index;
+        nearestDistanceSquared = candidateDistanceSquared;
+      }
+      // Planners preserve authored waypoint boundaries. The first matching sample is
+      // the ordered arrival, including when the same coordinate is visited again.
+      if (candidateDistanceSquared <= 1e-18) break;
     }
     boundaries.push(nearest);
   });
@@ -104,6 +118,48 @@ function followSections(path: PathDoc, samples: readonly TrajectorySample[]): Ja
   return sections;
 }
 
+function serializedByteLengthAtMost(value: unknown, limit: number): number {
+  let bytes = 0;
+  const add = (count: number): boolean => {
+    bytes += count;
+    return bytes <= limit;
+  };
+  const visit = (item: unknown, arrayItem = false): boolean => {
+    if (item === undefined || typeof item === "function" || typeof item === "symbol") {
+      return arrayItem ? add(4) : true;
+    }
+    if (item === null || typeof item === "boolean") return add(item === null ? 4 : item ? 4 : 5);
+    if (typeof item === "number") return add(Buffer.byteLength(Number.isFinite(item) ? String(item) : "null", "utf8"));
+    if (typeof item === "string") return add(Buffer.byteLength(JSON.stringify(item), "utf8"));
+    if (typeof item === "bigint") throw new TypeError("Cannot serialize BigInt in a Java trajectory");
+    if (Array.isArray(item)) {
+      if (!add(1)) return false;
+      for (let index = 0; index < item.length; index += 1) {
+        if (index > 0 && !add(1)) return false;
+        if (!visit(item[index], true)) return false;
+      }
+      return add(1);
+    }
+    if (!add(1)) return false;
+    let first = true;
+    for (const [key, child] of Object.entries(item as Record<string, unknown>)) {
+      if (child === undefined || typeof child === "function" || typeof child === "symbol") continue;
+      if (!first && !add(1)) return false;
+      first = false;
+      if (!add(Buffer.byteLength(JSON.stringify(key), "utf8") + 1) || !visit(child)) return false;
+    }
+    return add(1);
+  };
+  visit(value);
+  return bytes;
+}
+
+function assertExportSize(value: unknown): void {
+  if (serializedByteLengthAtMost(value, MAX_EXPORT_BYTES) > MAX_EXPORT_BYTES) {
+    throw new Error(`Java trajectory export exceeds ${MAX_EXPORT_BYTES} bytes`);
+  }
+}
+
 function deployableRoutine(project: BordeauxProject, pathIds: Set<string>): AutonomousRoutine | null {
   if (!project.routine) return null;
   const nodes = (source: RoutineNode[]): RoutineNode[] => source.map((node) => {
@@ -129,12 +185,45 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
   }
   const invocationIssues = validateProjectJavaInvocations(project, catalog);
   if (invocationIssues.length > 0) throw new Error(invocationIssues.map((item) => `${item.path}: ${item.message}`).join("\n"));
+  const sourcePaths = project.paths.filter((path) => path.exportable !== false);
+  let baseSampleCount = 0;
+  for (const path of sourcePaths) {
+    baseSampleCount += Math.max(0, path.waypoints.length - 1) * DEFAULT_SAMPLES_PER_SEGMENT + 1;
+    if (baseSampleCount > MAX_SAMPLE_COUNT) throw new Error(`Java trajectory export exceeds ${MAX_SAMPLE_COUNT} samples`);
+  }
+  let eventCount = 0;
+  for (const path of sourcePaths) {
+    eventCount += path.markers.reduce((count, marker) => count + (marker.invocation ? 1 : 0), 0);
+    if (eventCount > MAX_EVENT_COUNT) throw new Error(`Java trajectory export exceeds ${MAX_EVENT_COUNT} events`);
+  }
+  const routine = deployableRoutine(project, new Set(sourcePaths.map((path) => path.id)));
+  assertExportSize({
+    catalog: {
+      schemaVersion: "1.0",
+      catalogId: catalog.catalogId,
+      supportVersion: catalog.supportVersion,
+      catalogHash: catalog.catalogHash,
+    },
+    robot: project.robot,
+    routine,
+    paths: sourcePaths.map((path) => ({
+      id: path.id,
+      name: path.name,
+      events: path.markers.flatMap((marker) => marker.invocation ? [{
+        eventId: marker.id,
+        name: marker.name,
+        invocation: marker.invocation,
+        schedule: marker.schedule,
+      }] : []),
+    })),
+  });
+
   const native = buildBdxExport(project);
   let sampleCount = 0;
-  let eventCount = 0;
-  const sourcePaths = project.paths.filter((path) => path.exportable !== false);
-  const paths: JavaTrajectoryPath[] = native.paths.map((path, pathIndex) => {
+  const paths: JavaTrajectoryPath[] = [];
+  native.paths.forEach((path, pathIndex) => {
     sampleCount += path.samples.length;
+    if (sampleCount > MAX_SAMPLE_COUNT) throw new Error(`Java trajectory export exceeds ${MAX_SAMPLE_COUNT} samples`);
     const events = path.markers.flatMap((marker) => {
       if (!marker.invocation) return [];
       const source = sourcePaths[pathIndex].markers.find((candidate) => candidate.id === marker.id);
@@ -155,8 +244,7 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
         ...(source?.schedule?.conditionId ? { conditionId: source.schedule.conditionId } : {}),
       }];
     }).sort((left, right) => left.timeS - right.timeS || left.eventId.localeCompare(right.eventId));
-    eventCount += events.length;
-    return {
+    paths.push({
       id: path.id,
       name: path.name,
       planner: path.planner,
@@ -165,10 +253,8 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
       samples: path.samples,
       followSections: followSections(sourcePaths[pathIndex], path.samples),
       events,
-    };
+    });
   });
-  if (sampleCount > MAX_SAMPLE_COUNT) throw new Error(`Java trajectory export exceeds ${MAX_SAMPLE_COUNT} samples`);
-  if (eventCount > MAX_EVENT_COUNT) throw new Error(`Java trajectory export exceeds ${MAX_EVENT_COUNT} events`);
   const document: JavaTrajectoryDocument = {
     schemaVersion: "bordeaux-trajectory/1.0",
     generator: "bordeaux",
@@ -180,9 +266,10 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
     },
     units: native.units,
     robot: native.robot,
-    routine: deployableRoutine(project, new Set(paths.map((path) => path.id))),
+    routine,
     paths,
   };
+  assertExportSize(document);
   const contents = `${JSON.stringify(document, null, 2)}\n`;
   if (Buffer.byteLength(contents, "utf8") > MAX_EXPORT_BYTES) throw new Error(`Java trajectory export exceeds ${MAX_EXPORT_BYTES} bytes`);
   return {
