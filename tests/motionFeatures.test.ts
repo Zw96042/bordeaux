@@ -40,6 +40,16 @@ function interiorTurnProject() {
 }
 
 describe("motion features", () => {
+  it("raises corner speed independently from longitudinal acceleration", () => {
+    const project = createDemoProject();
+    const points = [{ s: 0, curv: 0 }, { s: 1, curv: 1 }, { s: 2, curv: 0 }] as any;
+    const legacy = PM.profile(points, { ...project.paths[0].constraints, maxAccel: 1, maxDecel: 1 }, 3, 3);
+    const faster = PM.profile(points, { ...project.paths[0].constraints, maxAccel: 1, maxDecel: 1, maxCentripetalAccel: 4 }, 3, 3);
+
+    expect(legacy.v[1]).toBeCloseTo(1, 6);
+    expect(faster.v[1]).toBeCloseTo(2, 6);
+  });
+
   it("acquires the first real target monotonically when Targets becomes active", () => {
     const points = Array.from({ length: 25 }, (_, index) => ({ s: index * 0.25 }));
     const waypoints = buildWaypoints([

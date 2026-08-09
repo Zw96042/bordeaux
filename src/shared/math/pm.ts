@@ -178,7 +178,7 @@
     const stopSet = new Set(opts.stopIdx || []);
     const v = new Array(n).fill(vmax);
     // curvature cap: v <= sqrt(aLat / k)
-    const aLat = Math.max(0.1, c.maxAccel);
+    const aLat = Math.max(0.1, c.maxCentripetalAccel ?? c.maxAccel);
     for (let i = 0; i < n; i++) {
       const k = pts[i].curv;
       if (k > 1e-4) v[i] = Math.min(v[i], Math.sqrt(aLat / k));

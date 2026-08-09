@@ -403,7 +403,7 @@
     const v = new Array(n).fill(vmax);
     const vLimit = new Array(n).fill(vmax);
     // curvature cap: v <= sqrt(aLat / k)
-    const aLat = Math.max(0.1, c.maxAccel);
+    const aLat = Math.max(0.1, c.maxCentripetalAccel != null ? c.maxCentripetalAccel : c.maxAccel);
     for (let i = 0; i < n; i++) {
       const k = pts[i].curv;
       if (k > 1e-4) v[i] = Math.min(v[i], Math.sqrt(aLat / k));
@@ -853,7 +853,8 @@
     }
 
     if (curvaturePeak > 1e-6 && constraints.maxVel > 0 && constraints.maxAccel > 0) {
-      const curveLimit = Math.sqrt(constraints.maxAccel / curvaturePeak);
+      const cornerAcceleration = constraints.maxCentripetalAccel != null ? constraints.maxCentripetalAccel : constraints.maxAccel;
+      const curveLimit = Math.sqrt(cornerAcceleration / curvaturePeak);
       if (curveLimit < constraints.maxVel * 0.7) {
         const planned = Math.min(curveLimit, m.v[curvatureAt] || curveLimit);
         checks.push({ f: at(curvatureAt), kind: 'performance', level: 'note', text: 'Turn limits speed to ' + planned.toFixed(1) + ' m/s' });

@@ -415,7 +415,8 @@ function buildTimeline(input: PlannerInput, geometry: readonly GeometryPoint[]):
     let cap = globalMaxVelocity;
     const curvature = Math.abs(point.curvature);
     if (curvature > EPSILON) {
-      cap = Math.min(cap, Math.sqrt(path.constraints.maxAccel / curvature));
+      const cornerAcceleration = path.constraints.maxCentripetalAccel ?? path.constraints.maxAccel;
+      cap = Math.min(cap, Math.sqrt(cornerAcceleration / curvature));
     }
     const fraction = point.s / Math.max(totalDistance, EPSILON);
     const range = ranges.filter((candidate) => fraction >= candidate.f0 - EPSILON && fraction <= candidate.f1 + EPSILON);

@@ -334,6 +334,8 @@ export interface PathConstraints {
   maxVel: number;
   maxAccel: number;
   maxDecel: number;
+  /** Lateral acceleration used to cap speed from path curvature. Omission preserves maxAccel behavior. */
+  maxCentripetalAccel?: number;
   maxAngVel: number;
   maxAngAccel: number;
   maxAngDecel?: number;

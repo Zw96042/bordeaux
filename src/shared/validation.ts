@@ -482,6 +482,7 @@ function validateProjectInner(project: unknown): ValidationResult {
       } else {
         const constraints = path.constraints;
         ["maxVel", "maxAccel", "maxDecel", "maxAngVel", "maxAngAccel"].forEach((key) => validateFinite(issues, constraints[key], `${base}.constraints.${key}`, key, { positive: true }));
+        validateOptionalFinite(issues, constraints.maxCentripetalAccel, `${base}.constraints.maxCentripetalAccel`, "maxCentripetalAccel", { positive: true });
         ["maxAngDecel", "maxJerk", "maxAngJerk"].forEach((key) => validateOptionalFinite(issues, constraints[key], `${base}.constraints.${key}`, key, { nonnegative: true }));
       }
       if (path.labview !== undefined) {
