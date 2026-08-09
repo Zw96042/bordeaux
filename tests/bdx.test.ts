@@ -557,6 +557,7 @@ describe("canonical shipped renderer", () => {
     expect(styles).toContain(".transport.graph-open{height:248px}");
     expect(styles).toContain(".stage-plan .viewctl.graph-open{transform:translateY(-154px)}");
     expect(styles).toContain("clip-path: inset(100% 0 0 0);");
+    expect(styles).toContain("padding: 10px 14px 7px !important;");
     expect(panels).toContain("className: 'velgraph' + (graphOpen ? ' open' : '')");
     expect(panels).toContain("tabIndex: graphOpen ? 0 : -1");
     expect(app).toContain("plannerId: selectedPlannerId }),\n              h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen }))");
