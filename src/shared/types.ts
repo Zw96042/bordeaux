@@ -35,8 +35,15 @@ export interface RobotConfig {
   driveModel?: {
     motorId: string;
     motorFreeRpm: number;
+    motorMaxTorqueNm?: number;
+    motorCount?: number;
     gearRatio: number;
     wheelDiameterM: number;
+    massKg?: number;
+    moiKgM2?: number;
+    wheelbaseM?: number;
+    trackwidthM?: number;
+    wheelFrictionCoefficient?: number;
   };
   maxSpeed: number;
 }

@@ -234,6 +234,16 @@ function validateProjectInner(project: unknown): ValidationResult {
         validateFinite(issues, project.robot.driveModel.motorFreeRpm, `${modelPath}.motorFreeRpm`, "Motor free speed", { positive: true });
         validateFinite(issues, project.robot.driveModel.gearRatio, `${modelPath}.gearRatio`, "Drive gear ratio", { positive: true });
         validateFinite(issues, project.robot.driveModel.wheelDiameterM, `${modelPath}.wheelDiameterM`, "Drive wheel diameter", { positive: true });
+        validateOptionalFinite(issues, project.robot.driveModel.motorMaxTorqueNm, `${modelPath}.motorMaxTorqueNm`, "Motor torque limit", { positive: true });
+        validateOptionalFinite(issues, project.robot.driveModel.motorCount, `${modelPath}.motorCount`, "Drive motor count", { positive: true });
+        validateOptionalFinite(issues, project.robot.driveModel.massKg, `${modelPath}.massKg`, "Robot mass", { positive: true });
+        validateOptionalFinite(issues, project.robot.driveModel.moiKgM2, `${modelPath}.moiKgM2`, "Robot moment of inertia", { positive: true });
+        validateOptionalFinite(issues, project.robot.driveModel.wheelbaseM, `${modelPath}.wheelbaseM`, "Wheelbase", { positive: true });
+        validateOptionalFinite(issues, project.robot.driveModel.trackwidthM, `${modelPath}.trackwidthM`, "Trackwidth", { positive: true });
+        validateOptionalFinite(issues, project.robot.driveModel.wheelFrictionCoefficient, `${modelPath}.wheelFrictionCoefficient`, "Wheel friction coefficient", { positive: true });
+        if (project.robot.driveModel.motorCount !== undefined && !Number.isInteger(project.robot.driveModel.motorCount)) {
+          issues.push(issue(`${modelPath}.motorCount`, "Drive motor count must be an integer"));
+        }
       }
     }
     validateRobotFootprint(issues, project.robot);
