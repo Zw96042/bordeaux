@@ -8,18 +8,7 @@
   const { FIELD_W, FIELD_H } = window.FIELD_DIMS;
   const R2D = 180 / Math.PI;
 
-  const ANCHOR_HINT = {
-    param: 'Holds a fixed percent of the path as its length changes.',
-    dist: 'Pinned to physical travel distance from the path start.',
-    wp: 'Tied to a waypoint span, so it follows those waypoints.',
-  };
   const HEAD_MODES = [{ v: 'manual', label: 'Manual' }, { v: 'tangent', label: 'Tangent' }, { v: 'targets', label: 'Targets' }];
-  const HEAD_HINT = {
-    manual: 'Heading comes only from waypoints you pin. Rotation targets are ignored.',
-    tangent: 'Robot points along the path tangent everywhere. Rotation targets are ignored.',
-    targets: 'Heading interpolates between pinned waypoints and rotation targets.',
-    lookAt: 'Robot continuously faces one draggable point on the field.',
-  };
 
   const handleLen = (w, key) => Math.hypot(w[key].x - w.x, w[key].y - w.y);
   const segNorm = (t) => (t === 'line' || t === 'arc' || t === 'clothoid') ? t : 'bezier';
@@ -504,23 +493,20 @@
           h('button', { className: 'qbtn', type: 'button', onClick: () => actions.reversePath() }, h(Icon, { name: 'shuffle', size: 14 }), 'Reverse path'),
           h('button', { className: 'qbtn', type: 'button', onClick: () => { actions.select(null, -1); actions.setTool('waypoint'); } }, h(Icon, { name: 'plus', size: 14 }), 'Place waypoint')),
 
-        h('div', { className: 'cgroup-h' }, 'Default heading'),
+        h('div', { className: 'cgroup-h' }, 'Facing'),
         isTank
-          ? h('div', { className: 'hint' }, h(Icon, { name: 'info', size: 14 }), 'Tank drive \u2014 heading always follows the path tangent.')
+          ? h('div', { className: 'hint' }, h(Icon, { name: 'info', size: 14 }), 'Tangent only.')
           : h(React.Fragment, null,
               h(Seg, { value: headingMode, options: HEAD_MODES, ariaLabel: 'Default heading', onChange: (v) => actions.setHeadingMode(v) }),
               h('div', { className: 'inrow' },
                 h('span', { className: 'inrow-l' }, 'Drive backward'),
                 h(Toggle, { on: !!doc.driveBackward, ariaLabel: 'Drive backward', onChange: () => actions.toggleDriveBackward() }))),
 
-        h('div', { className: 'cgroup-h' }, 'Follow path by'),
+        h('div', { className: 'cgroup-h' }, 'Timing'),
         h(Seg, { value: doc.followMode || 'time', ariaLabel: 'Default path follow mode', options: [
           { v: 'time', label: 'Time', title: 'Advance from the robot clock' },
           { v: 'position', label: 'Position', title: 'Advance from measured field position' },
         ], onChange: (v) => actions.setDoc({ followMode: v }) }),
-        h('div', { className: 'seg-hint' }, doc.followMode === 'position'
-          ? 'Uses measured field position so contact or delay does not skip the rest of the path. Java JSON only.'
-          : 'Uses the planned timeline. Individual segments can override this.'),
 
         h('div', { className: 'cgroup-h' }, 'Endpoints'),
         h('div', { className: 'grid2' },
@@ -578,11 +564,7 @@
             ? h(React.Fragment, null,
                 h('div', { className: 'fieldlabel' }, 'Heading at this boundary'),
                 h(Seg, { value: boundaryTransition.placement, ariaLabel: 'Heading at this boundary', options: boundaryHeadingOptions, onChange: (v) => actions.setHeadingTransition(i, { placement: v }) }),
-                h('div', { className: 'seg-hint' }, boundaryTransition.placement === 'after'
-                  ? 'Keeps the incoming ' + (incomingHeadingMode === 'tangent' ? 'tangent' : 'tracking law') + ' exact. This waypoint heading is ignored.'
-                  : boundaryTransition.placement === 'split'
-                    ? 'Uses this heading as the goal and blends across both segments.'
-                    : 'Leaves the incoming ' + (incomingHeadingMode === 'tangent' ? 'tangent' : 'tracking law') + ' near the end to meet this heading exactly.'),
+                h('div', { className: 'seg-hint' }, boundaryTransition.placement === 'after' ? 'After this point.' : boundaryTransition.placement === 'split' ? 'Across both segments.' : 'Before this point.'),
                 boundaryTransition.placement !== 'after' && h(Num, { label: boundaryTransition.placement === 'before' ? 'Heading to meet' : 'Heading goal', value: w.theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v, thetaOn: true }) }))
           : incomingAuthoredHeading
             ? interiorHeadingEditor(h('div', { className: 'hint' }, h(Icon, { name: 'compass', size: 14 }),
@@ -609,7 +591,7 @@
           h(Num, { label: 'Turn to heading', value: w.turnInPlace.headingDeg, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setTurnInPlaceMeta(i, { headingDeg: v }) }),
           h('div', { className: 'fieldlabel' }, 'Turn direction'),
           h(Seg, { value: w.turnInPlace.direction || 'shortest', ariaLabel: 'Turn direction', options: [{ v: 'shortest', label: 'Shortest' }, { v: 'counterclockwise', label: 'CCW' }, { v: 'clockwise', label: 'CW' }], onChange: (v) => actions.setTurnInPlaceMeta(i, { direction: v }) }),
-          h('div', { className: 'seg-hint' }, 'Uses the angular velocity, acceleration, and jerk limits. At an interior stop, set the next segment heading to match the turn target.')),
+          h('div', { className: 'seg-hint' }, 'Uses rotation limits.')),
         isAnchor && h(Num, { label: isStart ? 'Start velocity' : 'End velocity', value: isStart ? (doc.startVel || 0) : (doc.goalVel || 0), unit: 'm/s', min: 0, onChange: (v) => actions.setDoc(isStart ? { startVel: v } : { goalVel: v }) }),
 
         // Tangent handles only appear when the selected planner consumes them.
@@ -633,7 +615,7 @@
               h(Num, { label: 'First direction', value: jiggleStart, unit: '\u00b0 rel', step: 15, precision: 0, onChange: (v) => { setJiggleStart(v); setJiggleError(false); } }),
               h(Num, { label: 'Direction step', value: jiggleStep, unit: '\u00b0', step: 15, precision: 0, onChange: (v) => { setJiggleStep(v); setJiggleError(false); } })),
             h('button', { className: 'qbtn wide', type: 'button', onClick: () => setJiggleError(!actions.setJiggle({ distanceM: jiggleDistance, strokes: jiggleStrokes, startDeg: jiggleStart, stepDeg: jiggleStep, strokeTimeS: jiggleStrokeTime })) }, h(Icon, { name: 'route', size: 14 }), 'Update jiggle')),
-          endpointJiggle && h('div', { className: 'seg-hint' }, jiggleError ? 'Keep every unique stroke on the field.' : 'Requested time may lengthen to respect path limits.')),
+          endpointJiggle && h('div', { className: 'seg-hint' }, jiggleError ? 'Keep strokes unique and on-field.' : 'Limits may extend the time.')),
         isEnd && isTank && endpointJiggle && h(React.Fragment, null,
           h('div', { className: 'cgroup-h' }, 'Jiggle unavailable'),
           h('div', { className: 'seg-hint' }, 'Arbitrary-direction jiggle requires a swerve drivetrain.'),
@@ -648,7 +630,6 @@
     else if (sel.kind === 'seg' && wps[sel.idx] && wps[sel.idx + 1]) {
       const i = sel.idx;
       const st = segNorm(wps[i].segType);
-      const segHint = (window.PM.SEGTYPES.find((s) => s.id === st) || {}).hint || '';
       const segmentLaw = (index) => {
         const mode = wps[index].segmentHeadingMode || headingMode;
         return mode === 'lookAt' ? 'lookAt:' + (wps[index].segmentLookAt ? wps[index].segmentLookAt.x + ':' + wps[index].segmentLookAt.y : '') : mode;
@@ -692,54 +673,42 @@
         isLabviewPlanner
           ? h(Seg, { value: plannerId === 'labviewClothoid' ? 'clothoid' : 'bezier', options: [{ v: 'bezier', label: 'Bezier' }, { v: 'clothoid', label: 'Clothoid' }], ariaLabel: 'LabVIEW trajectory type', onChange: actions.setLabviewTrajectoryType })
           : h(Seg, { value: st, options: window.PM.SEGTYPES.map((type) => ({ v: type.id, label: type.label, title: type.hint })), ariaLabel: 'Path type', onChange: (v) => actions.setSegMeta(i, { segType: v }) }),
-        h('div', { className: 'seg-hint' }, isLabviewPlanner ? 'Applies to the entire selected path.' : segHint),
-        h('div', { className: 'fieldlabel' }, 'Follow segment by'),
+        h('div', { className: 'fieldlabel' }, 'Timing'),
         h(Seg, { value: wps[i].segmentFollowMode || 'inherit', ariaLabel: 'Segment follow mode', options: [
           { v: 'inherit', label: 'Default', title: 'Use the path default' },
           { v: 'time', label: 'Time', title: 'Advance from the robot clock' },
           { v: 'position', label: 'Position', title: 'Advance from measured field position' },
         ], onChange: (v) => actions.setSegMeta(i, { segmentFollowMode: v === 'inherit' ? undefined : v }) }),
-        h('div', { className: 'seg-hint' }, (wps[i].segmentFollowMode || doc.followMode) === 'position'
-          ? 'Measured progress keeps this stretch active through bumps or delays.'
-          : 'Follows the planned timestamps on this stretch.'),
         !isTank && h(React.Fragment, null,
-          h('div', { className: 'fieldlabel' }, 'Heading on this segment'),
-          h(Seg, { value: wps[i].segmentHeadingMode || 'inherit', options: [{ v: 'inherit', label: 'Default', title: 'Use path default (' + HEAD_MODES.find((mode) => mode.v === headingMode).label + ')' }, ...HEAD_MODES, { v: 'lookAt', label: 'Track point' }], ariaLabel: 'Heading on this segment', className: 'seg-heading', onChange: (v) => actions.setSegmentHeadingMode(i, v) }),
-          h('div', { className: 'seg-hint' }, wps[i].segmentHeadingMode ? HEAD_HINT[wps[i].segmentHeadingMode] : 'Uses the path default. Change this segment without affecting its neighbors.')),
+          h('div', { className: 'fieldlabel' }, 'Facing'),
+          h(Seg, { value: wps[i].segmentHeadingMode || 'inherit', options: [{ v: 'inherit', label: 'Default', title: 'Use path default (' + HEAD_MODES.find((mode) => mode.v === headingMode).label + ')' }, ...HEAD_MODES, { v: 'lookAt', label: 'Look at' }], ariaLabel: 'Heading on this segment', className: 'seg-heading', onChange: (v) => actions.setSegmentHeadingMode(i, v) })),
         !isTank && wps[i].segmentHeadingMode === 'lookAt' && wps[i].segmentLookAt && h(React.Fragment, null,
           h('div', { className: 'grid2 compact-fields' },
             h(Num, { label: 'Target X', value: wps[i].segmentLookAt.x, unit: 'm', min: 0, max: FIELD_W, onChange: (v) => actions.setSegmentLookAt(i, { x: v }) }),
             h(Num, { label: 'Target Y', value: wps[i].segmentLookAt.y, unit: 'm', min: 0, max: FIELD_H, onChange: (v) => actions.setSegmentLookAt(i, { y: v }) })),
-          h('div', { className: 'seg-hint' }, 'Drag the crosshair on the field. The rotation limits still control how quickly the robot may turn.')),
+          h('div', { className: 'seg-hint' }, 'Drag target on field.')),
         hasHeadingTransition && h(React.Fragment, null,
-          h('div', { className: 'fieldlabel' }, 'Transition into this segment'),
+          h('div', { className: 'fieldlabel' }, 'Heading blend'),
           h(Seg, { value: transition.placement, ariaLabel: 'Heading transition side', options: transitionPlacementOptions, onChange: (v) => actions.setHeadingTransition(i, { placement: v }) }),
-          h('div', { className: 'seg-hint' }, continuityOwnedTransition
-            ? transition.placement === 'after'
-              ? 'Keeps the incoming ' + (incomingHeadingMode === 'tangent' ? 'tangent' : 'tracking law') + ' exact. The boundary heading is ignored.'
-              : transition.placement === 'split'
-                ? 'Uses the boundary heading as the goal and blends across both segments.'
-                : 'Leaves the incoming ' + (incomingHeadingMode === 'tangent' ? 'tangent' : 'tracking law') + ' near the end to meet the boundary heading exactly.'
-            : transition.placement === 'before' ? 'The previous segment absorbs the heading change.' : transition.placement === 'split' ? 'Both adjacent segments share the heading change.' : 'This segment absorbs the heading change.'),
+          h('div', { className: 'seg-hint' }, transition.placement === 'before' ? 'Previous segment.' : transition.placement === 'split' ? 'Both segments.' : 'This segment.'),
           continuityOwnedTransition && transition.placement !== 'after' && h(Num, { label: transition.placement === 'before' ? 'Heading to meet' : 'Heading goal', value: wps[i].theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v, thetaOn: true }) }),
           h('div', { className: 'fieldlabel' }, 'Timing priority'),
           h(Seg, { value: transition.rotationPriority, ariaLabel: 'Heading transition timing priority', options: [
             { v: 'heading', label: 'Heading', title: 'Keep heading positionally exact' },
             { v: 'translation', label: 'Translation', title: 'Preserve translational timing' },
           ], onChange: (v) => actions.setHeadingTransition(i, { rotationPriority: v }) }),
-          h('div', { className: 'seg-hint' }, transition.rotationPriority === 'translation' ? 'Keeps translational timing. Heading may lag, then catch up continuously.' : 'Keeps heading exact along the field. Translation may slow to stay within rotation limits.'),
+          h('div', { className: 'seg-hint' }, transition.rotationPriority === 'translation' ? 'Heading may lag.' : 'Travel may slow.'),
           h(Num, { label: 'Blend distance', value: transition.distanceM, unit: 'm', min: 0.05, step: 0.05, precision: 2, onChange: (v) => actions.setHeadingTransition(i, { distanceM: v }) })),
-        h('div', { className: 'fieldlabel' }, 'Constraint ranges here'),
+        h('div', { className: 'fieldlabel' }, 'Ranges'),
         affecting.length === 0
-          ? h('div', { className: 'seg-hint', style: { marginTop: '0' } }, 'None \u2014 drag the range tool along this stretch to add one.')
+          ? h('div', { className: 'seg-hint', style: { marginTop: '0' } }, 'None.')
           : h('div', { className: 'segranges' }, affecting.map((x) => {
               const summary = constraintRangeSummary(x.rg, doc.constraints, robot);
               const label = summary ? summary.text : (x.rg.name || 'Constraint range');
               return h('button', { key: x.ri, className: 'segrange', type: 'button', 'aria-label': 'Open constraint range, ' + (summary ? summary.ariaLabel : label), onClick: () => actions.select('cr', x.ri) },
                 h('span', { className: 'segrange-dot' }), label, summary && x.rg.name ? h('span', { className: 'segrange-nm' }, x.rg.name) : null);
             })),
-        h('button', { className: 'qbtn wide', type: 'button', style: { marginTop: '14px' }, onClick: () => actions.insertWp(i) }, h(Icon, { name: 'plus', size: 14 }), 'Insert waypoint in segment'),
-        h('div', { className: 'chint' }, 'Continuity belongs to the waypoints at each end \u2014 set Corner/Stop there. This panel edits the segment\u2019s own geometry.'));
+        h('button', { className: 'qbtn wide', type: 'button', style: { marginTop: '14px' }, onClick: () => actions.insertWp(i) }, h(Icon, { name: 'plus', size: 14 }), 'Insert waypoint'));
     }
 
     // ---------------- ROTATION TARGET ----------------
@@ -760,8 +729,8 @@
         targetAnchor === 'dist'
           ? h(Num, { label: 'Distance from start', value: targetDistance, unit: 'm', step: 0.1, precision: 2, min: 0, max: derived.sample.length || 0, onChange: (v) => actions.setTarget(sel.idx, { d: v }) })
           : h(Num, { label: 'Position along path', value: targetFraction * 100, unit: '%', step: 1, precision: 0, min: 0, max: 100, onChange: (v) => actions.setTarget(sel.idx, { f: v / 100 }) }),
-        h('div', { className: 'seg-hint' }, targetAnchor === 'dist' ? 'Stays at this traveled distance when the path grows.' : 'Scales with the path when its length changes.'),
-        h('div', { className: 'seg-hint' }, 'Drag the heading arrow on the field to rotate · hold Shift for 15° steps.'),
+        h('div', { className: 'seg-hint' }, targetAnchor === 'dist' ? 'Distance fixed.' : 'Scales with path.'),
+        h('div', { className: 'seg-hint' }, 'Drag arrow · Shift snaps 15°.'),
         h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delTarget(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete target'));
     }
 
@@ -926,9 +895,7 @@
           { v: 'time', label: 'Time', title: 'Fire when planned time reaches this marker' },
           { v: 'position', label: 'Position', title: 'Fire when measured progress reaches this marker' },
         ], onChange: (v) => actions.setMarker(sel.idx, { schedule: { ...schedule, trigger: v } }) }),
-        h('div', { className: 'seg-hint' }, schedule.trigger === 'position'
-          ? 'Uses measured robot progress, even on a time-followed path.'
-          : 'Uses the marker’s planned arrival time.'),
+        h('div', { className: 'seg-hint' }, schedule.trigger === 'position' ? 'Measured position.' : 'Planned time.'),
         h('div', { className: 'inrow' },
           h('span', { className: 'inrow-l' }, 'Repeat command', h('small', null, 'while the window is active')),
           h(Toggle, { on: schedule.repeatEveryS != null, ariaLabel: 'Repeat event', onChange: (on) => actions.setMarker(sel.idx, { schedule: { ...schedule, repeatEveryS: on ? 0.1 : undefined } }) })),
@@ -948,7 +915,7 @@
           markerAnchor === 'dist'
             ? h(Num, { label: 'Distance from start', value: markerDistance, unit: 'm', step: 0.1, precision: 2, min: 0, max: derived.sample.length || 0, onChange: (v) => actions.setMarker(sel.idx, { d: v }) })
             : h(Num, { label: 'Position along path', value: markerFraction * 100, unit: '%', step: 1, precision: 0, min: 0, max: 100, onChange: (v) => actions.setMarker(sel.idx, { f: v / 100 }) }),
-          h('div', { className: 'seg-hint' }, markerAnchor === 'dist' ? 'Stays at this traveled distance when the path grows.' : 'Scales with the path when its length changes.')),
+          h('div', { className: 'seg-hint' }, markerAnchor === 'dist' ? 'Distance fixed.' : 'Scales with path.')),
         h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delMarker(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete marker'));
     }
 
@@ -979,7 +946,7 @@
               : h('div', { className: 'grid2' },
                   h(Num, { label: 'Start position', value: loF * 100, unit: '%', min: 0, max: 100, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { f0: Math.min(clampFraction(v), hiF), f1: hiF }) }),
                   h(Num, { label: 'End position', value: hiF * 100, unit: '%', min: 0, max: 100, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { f0: loF, f1: Math.max(clampFraction(v), loF) }) })),
-          h('div', { className: 'seg-hint' }, rangeAnchor === 'dist' ? 'Legacy distance from the path start. Local keeps the range attached to these segments.' : rangeAnchor === 'wp' ? 'Stays attached to these segment positions.' : 'Scales with the whole path.')),
+          h('div', { className: 'seg-hint' }, rangeAnchor === 'dist' ? 'Legacy distance.' : rangeAnchor === 'wp' ? 'Stays on these segments.' : 'Scales with path.')),
         h('div', { className: 'fieldlabel' }, 'Timing priority'),
         h(Seg, { value: drive === 'tank' ? 'heading' : (rg.rotationPriority || 'heading'), ariaLabel: 'Timing priority', options: drive === 'tank'
           ? [{ v: 'heading', label: 'Heading', ariaLabel: 'Heading priority, required for tank drive' }]
@@ -987,7 +954,7 @@
               { v: 'heading', label: 'Heading', ariaLabel: 'Heading priority, adjust translation so rotation stays on schedule' },
               { v: 'translation', label: 'Translation', ariaLabel: 'Translation priority, preserve translational timing while rotation catches up' },
             ], onChange: (v) => actions.setRange(sel.idx, { rotationPriority: v }) }),
-        h('div', { className: 'seg-hint' }, drive === 'tank' ? 'Tank drive must follow the path heading.' : rg.rotationPriority === 'translation' ? 'Keeps this stretch moving. Heading may finish settling afterward.' : 'Adjusts translation so rotation stays on schedule.'),
+        h('div', { className: 'seg-hint' }, drive === 'tank' ? 'Required for tank.' : rg.rotationPriority === 'translation' ? 'Heading may lag.' : 'Travel may slow.'),
         h('button', { className: 'range-disclosure' + (moreRangeLimits ? ' on' : ''), type: 'button', 'aria-expanded': moreRangeLimits, onClick: () => setMoreRangeLimits(!moreRangeLimits) },
           h('span', { className: 'range-disclosure-copy' }, h('strong', null, 'Acceleration & rotation'), h('small', null, 'Optional local limits')),
           h(Icon, { name: 'chevron', size: 14 })),
@@ -1002,7 +969,7 @@
             h(Num, { label: 'Max \u03b1', value: rg.maxAngAccel, unit: '\u00b0/s\u00b2', step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { maxAngAccel: v }) }))),
         h('label', { className: 'fieldlabel', htmlFor: 'constraint-range-label' }, 'Label'),
         h('input', { id: 'constraint-range-label', className: 'textinput', value: rg.name || '', placeholder: 'e.g. Reef approach', autoComplete: 'off', spellCheck: false, 'data-lpignore': 'true', 'data-1p-ignore': true, onChange: (e) => actions.setRange(sel.idx, { name: e.target.value }) }),
-        h('div', { className: 'chint' }, 'Drag endpoints on the field. Overlaps use the tightest limits.'),
+        h('div', { className: 'chint' }, 'Drag endpoints · tightest overlap wins.'),
         h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delRange(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete range'));
     } else {
       return null;
