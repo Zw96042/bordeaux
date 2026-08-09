@@ -1,6 +1,6 @@
-import { LABVIEW_BDX_MAX_TRAJECTORY_POINTS } from "../export/labviewBdxReader";
 import { PM } from "../math/pm";
 import type { ConstraintRange, PathDoc, PlannerResult, RobotConfig, TrajectorySample } from "../types";
+import { MAX_TRAJECTORY_SAMPLES } from "./limits";
 
 const EPSILON = 1e-9;
 const DEG = Math.PI / 180;
@@ -96,8 +96,7 @@ function feasibleJiggleStrokeDuration(requested: number, distance: number, limit
   return high;
 }
 
-function samplePeriod(path: PathDoc, samples: readonly TrajectorySample[]): number {
-  if (path.labview?.samplePeriodS && path.labview.samplePeriodS >= 0.001) return path.labview.samplePeriodS;
+function samplePeriod(samples: readonly TrajectorySample[]): number {
   let best = Infinity;
   for (let index = 1; index < samples.length; index += 1) {
     const dt = samples[index].t - samples[index - 1].t;
@@ -185,8 +184,48 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
       }],
     };
   }
-  const period = samplePeriod(path, result.samples);
-  const samples = result.samples.map((sample) => ({ ...sample }));
+  const period = samplePeriod(result.samples);
+  let projectedSampleCount = result.samples.length;
+  const plannedTicks = new Map<number, { turn: number; jiggle: number; wait: number }>();
+  for (const { waypoint, index: waypointIndex } of actions) {
+    const boundary = baseIndices[waypointIndex];
+    const arrival = result.samples[boundary];
+    const previous = result.samples[Math.max(0, boundary - 1)];
+    const startHeading = waypointIndex === 0 ? arrival.headingRad : previous.headingRad;
+    const targetHeading = waypoint.turnInPlace
+      ? waypoint.turnInPlace.headingDeg * DEG + (path.driveBackward ? Math.PI : 0)
+      : arrival.headingRad;
+    const delta = waypoint.turnInPlace
+      ? directedDelta(startHeading, targetHeading, waypoint.turnInPlace.direction)
+      : 0;
+    const angularLimits = activeAngularLimits(path, arrival.f, waypointIndex, result.totalDistanceM);
+    const turnDuration = rotationDuration(delta, angularLimits);
+    const turnTicks = turnDuration > EPSILON ? Math.max(1, Math.ceil(turnDuration / period - EPSILON)) : 0;
+    const jiggleSupported = !waypoint.jiggle || robot?.drive !== "tank";
+    const jigglePositions = waypoint.jiggle && jiggleSupported
+      ? PM.jigglePositions(waypoint, targetHeading, waypoint.jiggle)
+      : null;
+    const linearLimits = activeLinearLimits(path, arrival.f, waypointIndex, result.totalDistanceM);
+    const jiggleDuration = waypoint.jiggle && jigglePositions
+      ? feasibleJiggleStrokeDuration(
+          waypoint.jiggle.strokeTimeS,
+          waypoint.jiggle.distanceM,
+          linearLimits,
+          Math.max(robot?.maxSpeed ?? linearLimits.velocity, EPSILON),
+        )
+      : 0;
+    const jiggleTicks = waypoint.jiggle && jigglePositions
+      ? Math.max(1, Math.ceil(jiggleDuration / period - EPSILON))
+      : 0;
+    const waitTicks = Math.max(0, Math.ceil(Math.max(0, waypoint.wait ?? 0) / period - EPSILON));
+    plannedTicks.set(waypointIndex, { turn: turnTicks, jiggle: jiggleTicks, wait: waitTicks });
+    projectedSampleCount += turnTicks + jiggleTicks * (waypoint.jiggle?.strokes ?? 0) + waitTicks;
+    if (projectedSampleCount > MAX_TRAJECTORY_SAMPLES) {
+      throw new Error(`Stationary actions require ${projectedSampleCount} samples, exceeding the trajectory limit of ${MAX_TRAJECTORY_SAMPLES}`);
+    }
+  }
+
+  let samples = result.samples.map((sample) => ({ ...sample }));
   const markers = result.markers.map((marker) => ({ ...marker }));
   const diagnostics = [...result.diagnostics];
   let inserted = 0;
@@ -200,9 +239,8 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     const startHeading = waypointIndex === 0 ? arrival.headingRad : previous.headingRad;
     const targetHeading = turn ? turn.headingDeg * DEG + (path.driveBackward ? Math.PI : 0) : arrival.headingRad;
     const delta = turn ? directedDelta(startHeading, targetHeading, turn.direction) : 0;
-    const limits = activeAngularLimits(path, arrival.f, waypointIndex, result.totalDistanceM);
-    const rawDuration = rotationDuration(delta, limits);
-    const turnTicks = rawDuration > EPSILON ? Math.max(1, Math.ceil(rawDuration / period - EPSILON)) : 0;
+    const ticks = plannedTicks.get(waypointIndex)!;
+    const turnTicks = ticks.turn;
     const turnDuration = turnTicks * period;
     const jiggle = waypoint.jiggle;
     const jiggleHeading = turn ? targetHeading : arrival.headingRad;
@@ -222,16 +260,10 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
         message: "Jiggle directions must be unique and every stroke must stay on the field",
       });
     }
-    const linearLimits = activeLinearLimits(path, arrival.f, waypointIndex, result.totalDistanceM);
-    const requestedJiggleDuration = jiggle && jigglePositions
-      ? feasibleJiggleStrokeDuration(jiggle.strokeTimeS, jiggle.distanceM, linearLimits, Math.max(robot?.maxSpeed ?? linearLimits.velocity, EPSILON))
-      : 0;
-    const jiggleTicks = jiggle && jigglePositions
-      ? Math.max(1, Math.ceil(requestedJiggleDuration / period - EPSILON))
-      : 0;
+    const jiggleTicks = jiggle && jigglePositions ? ticks.jiggle : 0;
     const jiggleStrokeDuration = jiggleTicks * period;
     const jiggleDuration = jiggle && jigglePositions ? jiggleStrokeDuration * jiggle.strokes : 0;
-    const waitTicks = Math.max(0, Math.ceil(Math.max(0, waypoint.wait ?? 0) / period - EPSILON));
+    const waitTicks = ticks.wait;
     const waitDuration = waitTicks * period;
     const duration = turnDuration + jiggleDuration + waitDuration;
     if (duration <= EPSILON) return;
@@ -310,11 +342,16 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
         angularVelocityRadps: 0,
       });
     }
-    samples.splice(boundary + 1, 0, ...turnSamples, ...jiggleSamples, ...waitSamples);
+    samples = samples.slice(0, boundary + 1).concat(
+      turnSamples,
+      jiggleSamples,
+      waitSamples,
+      samples.slice(boundary + 1),
+    );
     inserted += turnSamples.length + jiggleSamples.length + waitSamples.length;
   });
 
-  if (samples.length > LABVIEW_BDX_MAX_TRAJECTORY_POINTS) throw new Error(`Stationary actions require ${samples.length} samples, exceeding the LabVIEW .bdx limit of ${LABVIEW_BDX_MAX_TRAJECTORY_POINTS}`);
+  if (samples.length > MAX_TRAJECTORY_SAMPLES) throw new Error(`Stationary actions require ${samples.length} samples, exceeding the trajectory limit of ${MAX_TRAJECTORY_SAMPLES}`);
   samples.forEach((sample, index) => {
     sample.i = index;
     if (index === 0) sample.angularVelocityRadps = 0;

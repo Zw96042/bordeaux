@@ -7,8 +7,8 @@ import type {
   TrajectorySample,
   ValidationIssue,
 } from "../types";
+import { DEFAULT_SAMPLES_PER_SEGMENT, MAX_TRAJECTORY_SAMPLES } from "./limits";
 
-const SAMPLES_PER_SEGMENT = 56;
 const R = (value: number, places = 4) => Number(value.toFixed(places));
 
 function timeAtFraction(fraction: number, pts: Array<{ s: number }>, times: number[]): number {
@@ -60,9 +60,17 @@ function markersFor(input: PlannerInput, pts: Array<{ s: number }>, times: numbe
 export const profiledSplinePlanner: TrajectoryPlanner = {
   id: "profiledSpline",
   generate(input: PlannerInput): PlannerResult {
+    const samplesPerSegment = input.samplesPerSegment ?? DEFAULT_SAMPLES_PER_SEGMENT;
+    if (!Number.isInteger(samplesPerSegment) || samplesPerSegment < 1) {
+      throw new Error("Planner samples per segment must be a positive integer");
+    }
+    const segmentCount = Math.max(0, input.path.waypoints.length - 1);
+    if (segmentCount > Math.floor((MAX_TRAJECTORY_SAMPLES - 1) / samplesPerSegment)) {
+      throw new Error(`Path requires more than ${MAX_TRAJECTORY_SAMPLES} trajectory samples`);
+    }
     // Stationary rotations are sampled by the shared post-processor. Keep the
     // authored turn visible to heading continuity, but do not time it here.
-    const derived = PM.derivePath(input.path, input.robot, input.samplesPerSegment ?? SAMPLES_PER_SEGMENT, { skipStationaryActions: true });
+    const derived = PM.derivePath(input.path, input.robot, samplesPerSegment, { skipStationaryActions: true });
     const pts = derived.sample.pts || [];
     const metrics = derived.metrics || {};
     const times = derived.prof.t || [];
