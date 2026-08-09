@@ -16,6 +16,7 @@
 
   function ConstraintsBody({ c, robot, setC, labview, setLabview, plannerId, moreLimits, setMoreLimits, moreBdx, setMoreBdx }) {
     const labviewPlanner = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid';
+    const hardLimits = window.PM.robotHardLimits(robot);
     const rotation = moreLimits ? h('div', { className: 'grid2 compact-fields' },
       h(Num, { label: 'Max \u03c9', value: c.maxAngVel, unit: '\u00b0/s', step: 1, precision: 0, onChange: (v) => setC({ maxAngVel: v }) }),
       h(Num, { label: 'Max \u03b1', value: c.maxAngAccel, unit: '\u00b0/s\u00b2', step: 1, precision: 0, onChange: (v) => setC({ maxAngAccel: v }) })) : null;
@@ -36,15 +37,24 @@
       h('button', { className: 'morebtn' + (moreBdx ? ' on' : ''), type: 'button', 'aria-expanded': moreBdx, onClick: () => setMoreBdx(!moreBdx) }, h('span', null, 'Advanced .bdx flags'), h(Icon, { name: 'chevron', size: 13 })),
       flags) : null;
     return h(React.Fragment, null,
-      h('div', { className: 'cgroup-h' }, 'Translation'),
-      h('div', { className: 'grid2' },
-        h(Num, { label: 'Max vel', value: c.maxVel, unit: 'm/s', min: 0.1, max: robot.maxSpeed, onChange: (v) => setC({ maxVel: v }) }),
-        h(Num, { label: 'Max accel', value: c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxAccel: v }) })),
-      h('div', { className: 'grid2' },
-        h(Num, { label: 'Max decel', value: c.maxDecel != null ? c.maxDecel : c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxDecel: v }) }),
-        h(Num, { label: 'Corner accel', value: c.maxCentripetalAccel != null ? c.maxCentripetalAccel : c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxCentripetalAccel: v }) })),
-      h('button', { className: 'morebtn' + (moreLimits ? ' on' : ''), type: 'button', 'aria-expanded': moreLimits, onClick: () => setMoreLimits(!moreLimits) }, h('span', null, moreLimits ? 'Fewer limits' : 'Rotation limits'), h(Icon, { name: 'chevron', size: 13 })),
-      rotation,
+      hardLimits
+        ? h(React.Fragment, null,
+            h('div', { className: 'cgroup-h' }, 'Robot limits'),
+            Stat3([
+              { v: hardLimits.maxSpeed.toFixed(1), k: 'M/S' },
+              { v: hardLimits.maxAccel.toFixed(1), k: 'M/S² ACCEL' },
+              { v: hardLimits.maxCornerAccel.toFixed(1), k: 'M/S² CORNER' },
+            ]))
+        : h(React.Fragment, null,
+            h('div', { className: 'cgroup-h' }, 'Translation'),
+            h('div', { className: 'grid2' },
+              h(Num, { label: 'Max vel', value: c.maxVel, unit: 'm/s', min: 0.1, max: robot.maxSpeed, onChange: (v) => setC({ maxVel: v }) }),
+              h(Num, { label: 'Max accel', value: c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxAccel: v }) })),
+            h('div', { className: 'grid2' },
+              h(Num, { label: 'Max decel', value: c.maxDecel != null ? c.maxDecel : c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxDecel: v }) }),
+              h(Num, { label: 'Corner accel', value: c.maxCentripetalAccel != null ? c.maxCentripetalAccel : c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxCentripetalAccel: v }) })),
+            h('button', { className: 'morebtn' + (moreLimits ? ' on' : ''), type: 'button', 'aria-expanded': moreLimits, onClick: () => setMoreLimits(!moreLimits) }, h('span', null, moreLimits ? 'Fewer limits' : 'Rotation limits'), h(Icon, { name: 'chevron', size: 13 })),
+            rotation),
       compatibility);
   }
 
@@ -461,6 +471,7 @@
     const [jiggleStrokeTime, setJiggleStrokeTime] = React.useState(JIGGLE_DEFAULTS.strokeTimeS);
     const [jiggleError, setJiggleError] = React.useState(false);
     const wps = doc.waypoints;
+    const pathLimits = window.PM.effectiveConstraints(doc.constraints, robot);
     const isTank = drive === 'tank';
     const isLabviewPlanner = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid';
     const n = wps.length;
@@ -515,7 +526,7 @@
           h(Num, { label: 'Start vel', value: doc.startVel || 0, unit: 'm/s', min: 0, onChange: (v) => actions.setDoc({ startVel: v }) }),
           h(Num, { label: 'Goal vel', value: doc.goalVel || 0, unit: 'm/s', min: 0, onChange: (v) => actions.setDoc({ goalVel: v }) })),
         h('div', { style: { height: '2px' } }),
-        h('div', { className: 'cgroup-h' }, 'Global constraints'),
+        h('div', { className: 'cgroup-h' }, window.PM.robotHardLimits(robot) ? 'Hard limits' : 'Global constraints'),
         h(ConstraintsBody, {
           c: doc.constraints,
           robot,
@@ -705,7 +716,7 @@
         affecting.length === 0
           ? h('div', { className: 'seg-hint', style: { marginTop: '0' } }, 'None.')
           : h('div', { className: 'segranges' }, affecting.map((x) => {
-              const summary = constraintRangeSummary(x.rg, doc.constraints, robot);
+              const summary = constraintRangeSummary(x.rg, pathLimits, robot);
               const label = summary ? summary.text : (x.rg.name || 'Constraint range');
               return h('button', { key: x.ri, className: 'segrange', type: 'button', 'aria-label': 'Open constraint range, ' + (summary ? summary.ariaLabel : label), onClick: () => actions.select('cr', x.ri) },
                 h('span', { className: 'segrange-dot' }), label, summary && x.rg.name ? h('span', { className: 'segrange-nm' }, x.rg.name) : null);
@@ -933,7 +944,7 @@
       icon = 'gauge'; title = 'Constraint Range';
       tag = (loF * len).toFixed(1) + '\u2013' + (hiF * len).toFixed(1) + ' m';
       body = h(React.Fragment, null,
-        h(Num, { label: 'Max velocity', value: rg.maxVel, unit: 'm/s', min: 0, onChange: (v) => actions.setRange(sel.idx, { maxVel: v }) }),
+        h(Num, { label: 'Max velocity', value: rg.maxVel, unit: 'm/s', min: 0, max: pathLimits.maxVel, onChange: (v) => actions.setRange(sel.idx, { maxVel: v }) }),
         h('section', { className: 'range-anchor-editor', 'aria-label': 'Range position lock' },
           h('div', { className: 'fieldlabel' }, 'Position lock'),
           h(Seg, { value: rangeAnchor, ariaLabel: 'Position lock', options: anchorOptions, onChange: (v) => actions.setRangeAnchor(sel.idx, v) }),
@@ -963,12 +974,12 @@
         moreRangeLimits && h(React.Fragment, null,
           h('div', { className: 'cgroup-h' }, 'Translation'),
           h('div', { className: 'grid2' },
-            h(Num, { label: 'Max accel', value: rg.maxAccel, unit: 'm/s\u00b2', min: 0, onChange: (v) => actions.setRange(sel.idx, { maxAccel: v }) }),
-            h(Num, { label: 'Max decel', value: rg.maxDecel, unit: 'm/s\u00b2', min: 0, onChange: (v) => actions.setRange(sel.idx, { maxDecel: v }) })),
+            h(Num, { label: 'Max accel', value: rg.maxAccel, unit: 'm/s\u00b2', min: 0, max: pathLimits.maxAccel, onChange: (v) => actions.setRange(sel.idx, { maxAccel: v }) }),
+            h(Num, { label: 'Max decel', value: rg.maxDecel, unit: 'm/s\u00b2', min: 0, max: pathLimits.maxDecel, onChange: (v) => actions.setRange(sel.idx, { maxDecel: v }) })),
           h('div', { className: 'cgroup-h' }, 'Rotation'),
           h('div', { className: 'grid2' },
-            h(Num, { label: 'Max \u03c9', value: rg.maxAngVel, unit: '\u00b0/s', step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { maxAngVel: v }) }),
-            h(Num, { label: 'Max \u03b1', value: rg.maxAngAccel, unit: '\u00b0/s\u00b2', step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { maxAngAccel: v }) }))),
+            h(Num, { label: 'Max \u03c9', value: rg.maxAngVel, unit: '\u00b0/s', max: pathLimits.maxAngVel, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { maxAngVel: v }) }),
+            h(Num, { label: 'Max \u03b1', value: rg.maxAngAccel, unit: '\u00b0/s\u00b2', max: pathLimits.maxAngAccel, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { maxAngAccel: v }) }))),
         h('label', { className: 'fieldlabel', htmlFor: 'constraint-range-label' }, 'Label'),
         h('input', { id: 'constraint-range-label', className: 'textinput', value: rg.name || '', placeholder: 'e.g. Reef approach', autoComplete: 'off', spellCheck: false, 'data-lpignore': 'true', 'data-1p-ignore': true, onChange: (e) => actions.setRange(sel.idx, { name: e.target.value }) }),
         h('div', { className: 'chint' }, 'Drag endpoints · tightest overlap wins.'),

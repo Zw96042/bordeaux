@@ -703,11 +703,11 @@
     const addRange = useCallback((f0, f1) => commit((d) => {
       if (!d.ranges) d.ranges = [];
       const a = Math.max(0, Math.min(f0, f1)), b = Math.min(1, Math.max(f0, f1));
-      const c = d.constraints;
-      // purely where it was drawn (percent of path), inheriting the global limits
+      const c = window.PM.effectiveConstraints(d.constraints, robot);
+      // purely where it was drawn (percent of path), inheriting the robot limits
       d.ranges.push({ f0: a, f1: b, anchor: 'param', maxVel: c.maxVel, maxAccel: c.maxAccel, maxDecel: (c.maxDecel != null ? c.maxDecel : c.maxAccel), maxAngVel: c.maxAngVel, maxAngAccel: c.maxAngAccel });
       d._selR = d.ranges.length - 1; return d;
-    }), [commit]);
+    }), [commit, robot]);
     const setRange = useCallback((i, patch) => commit((d) => { Object.assign(d.ranges[i], patch); return d; }), [commit]);
     const localRangeEndpoint = (fraction, fractions) => {
       const f = Math.max(0, Math.min(1, fraction));

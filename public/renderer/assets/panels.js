@@ -285,19 +285,21 @@
 
   // ---------------- global-constraint chip bar (top of canvas) — memo §6 ----------------
   function ConstraintBar({ c, robot, onOpen }) {
+    const limits = window.PM.effectiveConstraints(c, robot);
+    const physical = limits !== c;
     const chips = [
-      { k: 'Max V', v: Math.min(c.maxVel, robot.maxSpeed).toFixed(1), u: 'm/s' },
-      { k: 'Max A', v: c.maxAccel.toFixed(1), u: 'm/s\u00b2' },
-      { k: 'Decel', v: (c.maxDecel != null ? c.maxDecel : c.maxAccel).toFixed(1), u: 'm/s\u00b2' },
-      { k: 'Max \u03c9', v: (c.maxAngVel || 0).toFixed(0), u: '\u00b0/s' },
+      { k: 'Max V', v: Math.min(limits.maxVel, robot.maxSpeed).toFixed(1), u: 'm/s' },
+      { k: 'Max A', v: limits.maxAccel.toFixed(1), u: 'm/s\u00b2' },
+      { k: 'Decel', v: (limits.maxDecel != null ? limits.maxDecel : limits.maxAccel).toFixed(1), u: 'm/s\u00b2' },
+      { k: 'Max \u03c9', v: (limits.maxAngVel || 0).toFixed(0), u: '\u00b0/s' },
     ];
-    return h('button', { className: 'cbar', type: 'button', title: 'Edit global constraints in the inspector', onClick: onOpen },
+    return h('button', { className: 'cbar', type: 'button', title: physical ? 'View robot limits' : 'Edit global constraints', onClick: onOpen },
       h('span', { className: 'cbar-ic' }, h(Icon, { name: 'gauge', size: 14 })),
       chips.map((ch, i) => h('span', { key: i, className: 'cbar-chip' },
         h('span', { className: 'cbar-k' }, ch.k),
         h('span', { className: 'cbar-v' }, ch.v),
         h('span', { className: 'cbar-u' }, ch.u))),
-      h('span', { className: 'cbar-edit' }, 'Edit'));
+      h('span', { className: 'cbar-edit' }, physical ? 'Robot' : 'Edit'));
   }
 
   // ---------------- outline: document STRUCTURE only (memo §5 / §7) ----------------

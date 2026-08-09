@@ -291,7 +291,7 @@
   }
 
   function constraintRangeSummary(range, constraints, robot) {
-    const c = constraints || {};
+    const c = window.PM.effectiveConstraints(constraints || {}, robot);
     const velocityBase = Math.min(c.maxVel || Infinity, robot && robot.maxSpeed > 0 ? robot.maxSpeed : Infinity);
     const candidates = [
       { key: 'maxVel', base: velocityBase, order: 0, text: (v) => 'v \u2264 ' + v.toFixed(1) + ' m/s', aria: (v) => 'maximum velocity ' + v.toFixed(1) + ' meters per second' },
