@@ -11,6 +11,7 @@
   const pathId = () => 'path_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
   const markerId = () => 'event_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
   const routineId = () => 'routine_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+  const pathLinkId = () => 'pathlink_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
   const blankRoutine = (name) => ({ id: routineId(), name: name || 'Autonomous Routine', nodes: [] });
   const LV_DEFAULTS = { samplePeriodS: 0.02, minTurnRadiusM: 0.5, bezierTangentMode: 'handles', reversePath: false, zeroVelocity: false, pickupBalls: false, currentLimit: 0, zeroTranslationalVelocity: false, correctAtBeginningOfPath: false };
   const isLabviewPlanner = (id) => id === 'labviewBezier' || id === 'labviewClothoid';
@@ -41,6 +42,7 @@
     });
     if (!routineIds.has(project.activeRoutineId)) project.activeRoutineId = project.routines[0].id;
     project.routine = project.routines.find((routine) => routine.id === project.activeRoutineId) || project.routines[0];
+    project.pathLinks = Array.isArray(project.pathLinks) ? project.pathLinks.filter((link) => link && link.fromPathId && link.toPathId).map((link) => ({ ...link, id: link.id || pathLinkId() })) : [];
     project.plannerId = project.plannerId || 'profiledSpline';
     return project;
   }
@@ -103,6 +105,7 @@
       name: 'Untitled',
       robot: { drive: 'swerve', w: 0.84, l: 0.84, heightM: 0.5, maxSpeed: 5.0 },
       paths: [blankPath('NewPath')],
+      pathLinks: [],
       routines: [routine],
       activeRoutineId: routine.id,
       routine,
@@ -406,7 +409,10 @@
     useEffect(() => { setTimes((t) => (t[doc.id] === derived.prof.totalTime ? t : { ...t, [doc.id]: derived.prof.totalTime })); }, [derived, doc.id]);
 
     // ---- doc mutation ----
-    const writeDoc = useCallback((nd) => { setProject((pr) => { const paths = pr.paths.slice(); paths[activeIdx] = nd; return { ...pr, paths }; }); }, [activeIdx]);
+    const writeDoc = useCallback((nd) => { setProject((pr) => {
+      const paths = pr.paths.slice(), before = paths[activeIdx]; paths[activeIdx] = nd;
+      return window.PathLinks.sync({ ...pr, paths }, nd.id, before);
+    }); }, [activeIdx]);
     const beginHistory = useCallback(() => { hist.current.past.push(clone(docRef.current)); if (hist.current.past.length > 80) hist.current.past.shift(); hist.current.future = []; projectHist.current.future = []; force((x) => x + 1); }, []);
     const commit = useCallback((fn) => { beginHistory(); writeDoc(fn(clone(docRef.current))); }, [beginHistory, writeDoc]);
     const mutate = useCallback((fn) => { writeDoc(fn(clone(docRef.current))); }, [writeDoc]);
@@ -975,6 +981,31 @@
       setProject((pr) => ({ ...pr, paths: [...pr.paths, path] })); resetForPath(index);
       return { index, name, id: path.id };
     };
+    const appendPath = () => {
+      const source = project.paths[activeIdx]; if (!source) return null;
+      const name = uniquePathName('New path'), index = project.paths.length, path = blankPath(name);
+      const start = source.waypoints[source.waypoints.length - 1], angle = (start.theta || 0) * Math.PI / 180;
+      let end = clampWorld({ x: start.x + Math.cos(angle) * 2.8, y: start.y + Math.sin(angle) * 2.8 });
+      if (Math.hypot(end.x - start.x, end.y - start.y) < 0.75) {
+        const towardCenter = Math.atan2(FIELD_H / 2 - start.y, FIELD_W / 2 - start.x);
+        end = clampWorld({ x: start.x + Math.cos(towardCenter) * 2.8, y: start.y + Math.sin(towardCenter) * 2.8 });
+      }
+      path.waypoints = buildWps([{ x: start.x, y: start.y, theta: start.theta || 0 }, { x: end.x, y: end.y, theta: start.theta || 0 }]);
+      if (source.folderId) path.folderId = source.folderId;
+      const link = { id: pathLinkId(), fromPathId: source.id, toPathId: path.id };
+      setProject((pr) => ({ ...pr, paths: [...pr.paths, path], pathLinks: [...(pr.pathLinks || []).filter((item) => item.fromPathId !== source.id), link] }));
+      resetForPath(index); return { index, name, id: path.id };
+    };
+    const setPathLink = (fromPathId, toPathId) => setProject((pr) => {
+      let pathLinks = (pr.pathLinks || []).filter((link) => link.fromPathId !== fromPathId);
+      if (!toPathId || fromPathId === toPathId) return { ...pr, pathLinks };
+      pathLinks = pathLinks.filter((link) => link.toPathId !== toPathId);
+      const paths = pr.paths.slice(), source = paths.find((path) => path.id === fromPathId), targetIndex = paths.findIndex((path) => path.id === toPathId);
+      if (!source || targetIndex < 0) return pr;
+      const target = clone(paths[targetIndex]), end = source.waypoints[source.waypoints.length - 1];
+      target.waypoints[0] = window.PathLinks.copyPose(target.waypoints[0], end); paths[targetIndex] = target;
+      return { ...pr, paths, pathLinks: [...pathLinks, { id: pathLinkId(), fromPathId, toPathId }] };
+    });
     const dupPath = (i) => {
       const source = project.paths[i]; if (!source) return null;
       const name = uniquePathName(source.name + ' copy'), index = i + 1;
@@ -987,7 +1018,7 @@
       routines.forEach((candidate) => window.AUTO.walk(candidate.nodes, (node) => { if (node.type === 'path' && node.ref === target.id) referenced = true; }));
       if (referenced) { alert('“' + target.name + '” is used by an autonomous routine. Remove those routine steps before deleting the path.'); return false; }
       if (!confirm('Delete path “' + target.name + '”? This cannot be undone.')) return false;
-      setProject((pr) => { const paths = pr.paths.filter((_, k) => k !== i); return { ...pr, paths }; });
+      setProject((pr) => { const paths = pr.paths.filter((_, k) => k !== i); return { ...pr, paths, pathLinks: (pr.pathLinks || []).filter((link) => link.fromPathId !== target.id && link.toPathId !== target.id) }; });
       setActiveIdx((a) => Math.max(0, a > i ? a - 1 : a === i ? Math.min(a, project.paths.length - 2) : a));
       setSel({ kind: null, idx: -1 }); setPlayTime(0); setPlaying(false); hist.current = { past: [], future: [] };
       return true;
@@ -1135,7 +1166,6 @@
       addEnd: (type, cat) => setRoutine((r) => { const nn = window.AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return window.AUTO.append(r, nn); }),
       prepend: (type, cat) => setRoutine((r) => { const nn = window.AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return window.AUTO.prepend(r, nn); }),
       setOutcome: (id, br) => setRoutineOutcomes((o) => ({ ...o, [id]: br })),
-      rename: (nm) => setRoutine((r) => ({ ...r, name: nm })),
       openInEditor: (id) => { const idx = project.paths.findIndex((path) => path.id === id); if (idx >= 0) { setActive(idx); setPage('plan'); } },
     }), [routineOutcomes, routine, project.paths]);
     const routineControls = useMemo(() => ({
@@ -1318,7 +1348,7 @@
     const selNode = (page === 'auto' && routineSel) ? window.AUTO.findNode(routine, routineSel) : null;
 
     return h('div', { className: 'app' },
-      h(window.Panels.Toolbar, { project, page, setPage, alliance, setAlliance, onNew: newProject, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExport, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
+      h(window.Panels.Toolbar, { project, page, setPage, alliance, setAlliance, onNew: newProject, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExport, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
         routines, activeRoutineId: routine.id, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine }),
       page === 'robot'
         ? h('main', { className: 'page-main' }, h(window.RobotPage, { robot, setRobot, accent, mcpEnabled, agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
@@ -1363,7 +1393,7 @@
               h(window.Panels.ConstraintBar, { c: doc.constraints, robot, onOpen: () => select(null, -1) }),
               diagOpen && h(window.Panels.PathChecks, { derived, doc, onClose: () => setDiagOpen(false), onPick: pickCheck }),
               h(window.Panels.Transport, { derived, doc, metric, setMetric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen, diagOpen, onToggleDiag: () => setDiagOpen((o) => !o), plannerId: selectedPlannerId }),
-              h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
+              h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen })),
             h('aside', { className: 'rail rail-r' + (inspectorOpen ? '' : ' collapsed'), 'aria-label': 'Path inspector' },
               inspectorOpen
                 ? h(window.ContextInspector, { doc, sel, derived, actions: inspActions, accent, drive: robot.drive, robot, plannerId: selectedPlannerId, javaProject: { ...javaProjectState, link: linkJavaProject, openRecent: openRecentJavaProject, refresh: refreshJavaProject, install: installJavaSupport, build: buildJavaCatalog, cancelBuild: cancelJavaCatalogBuild, export: () => onExportJava('linked') }, onClose: () => setInspectorOpen(false) })
