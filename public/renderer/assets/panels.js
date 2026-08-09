@@ -225,23 +225,22 @@
 
   // ---------------- top bar ----------------
   function PlannerFamily({ plannerId, onChange }) {
-    const value = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid' ? 'labview' : 'java';
-    return h(Seg, { className: 'planner-family', value, ariaLabel: 'Trajectory format', options: [
-      { v: 'java', label: 'Java' },
-      { v: 'labview', label: 'LabVIEW' },
+    const value = plannerId === 'optimizedTrajectory' ? 'optimizedTrajectory' : 'profiledSpline';
+    return h(Seg, { className: 'planner-family', value, ariaLabel: 'Trajectory planner', options: [
+      { v: 'profiledSpline', label: 'Profiled' },
+      { v: 'optimizedTrajectory', label: 'Optimized' },
     ], onChange });
   }
 
   function Toolbar(props) {
     const { project, page, setPage, alliance, setAlliance,
-      onUndo, onRedo, onExport, onExportJava, javaProject, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
+      onUndo, onRedo, onExportJava, javaProject, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
       routines, activeRoutineId, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine } = props;
     const plan = page === 'plan';
-    const labview = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid';
     const javaReady = !!(javaProject && javaProject.catalog && javaProject.catalog.authoritative && javaProject.integration && javaProject.integration.installed && javaProject.integration.supportVersion === javaProject.catalog.supportVersion);
     return h('header', { className: 'toolbar' },
       h('div', { className: 'tb-left' },
-        h('div', { className: 'brand' }, h('img', { className: 'brand-mark', src: 'assets/wrlp-chap-bird-original.svg', alt: '' }), h('span', { className: 'brand-name' }, 'Bordeaux')),
+        h('div', { className: 'brand' }, h('span', { className: 'brand-name' }, 'Bordeaux')),
         h('nav', { className: 'pageswitch', 'aria-label': 'Workspace' },
           h('button', { className: plan ? 'on' : '', type: 'button', 'aria-current': plan ? 'page' : undefined, onClick: () => setPage('plan') }, h(Icon, { name: 'route', size: 15 }), 'Plan'),
           h('button', { className: page === 'auto' ? 'on' : '', type: 'button', 'aria-current': page === 'auto' ? 'page' : undefined, onClick: () => setPage('auto') }, h(Icon, { name: 'layers', size: 15 }), 'Aquitaine'),
@@ -263,10 +262,7 @@
           h('button', { className: 'alliance', type: 'button', onClick: () => setAlliance(alliance === 'blue' ? 'red' : 'blue'), title: 'Switch to ' + (alliance === 'blue' ? 'red' : 'blue') + ' alliance', 'aria-label': 'Alliance view: ' + alliance + '. Switch to ' + (alliance === 'blue' ? 'red' : 'blue') },
             h('span', { className: 'alliance-side blue' + (alliance === 'blue' ? ' on' : '') }, 'B'),
             h('span', { className: 'alliance-side red' + (alliance === 'red' ? ' on' : '') }, 'R'))),
-        plan && h(React.Fragment, null,
-          labview
-            ? h('button', { className: 'exportbtn', type: 'button', title: 'Export the selected path as .bdx', 'aria-label': 'Export .bdx', onClick: onExport }, h(Icon, { name: 'share', size: 15 }), 'Export .bdx')
-            : h('button', { className: 'exportbtn exportjava' + (javaReady ? ' ready' : ''), type: 'button', disabled: !javaReady || !!(javaProject && javaProject.operation), title: javaReady ? 'Export Java trajectory JSON to the linked robot project' : 'Link a Java project, install support, and build its command catalog first', 'aria-label': javaReady ? 'Export Java JSON' : 'Java JSON export unavailable until Java support is ready', onClick: onExportJava }, h(Icon, { name: 'share', size: 15 }), javaProject && javaProject.operation === 'export' ? 'Exporting…' : 'Export JSON'))));
+        plan && h('button', { className: 'exportbtn exportjava' + (javaReady ? ' ready' : ''), type: 'button', disabled: !javaReady || !!(javaProject && javaProject.operation), title: javaReady ? 'Export Java trajectory JSON to the linked robot project' : 'Link a Java project, install support, and build its command catalog first', 'aria-label': javaReady ? 'Export Java JSON' : 'Java JSON export unavailable until Java support is ready', onClick: onExportJava }, h(Icon, { name: 'share', size: 15 }), javaProject && javaProject.operation === 'export' ? 'Exporting…' : 'Export JSON')));
   }
 
   // ---------------- canvas tool rail (left edge) — spatial creation (memo §2) ----------------
@@ -407,7 +403,6 @@
     else if (metric === 'angvel') { const w = ((M.wMax || 0) * R2D).toFixed(0); lo = '-' + w; hi = '+' + w; }
     else { lo = '0'; hi = (M.kMax || 0).toFixed(2); }
     return h('div', { className: 'metricctl' },
-      (plannerId === 'labviewBezier' || plannerId === 'labviewClothoid') && h('span', { className: 'ovapprox', title: 'The canvas mirrors the compatibility math; exported samples remain authoritative.' }, '\u2248'),
       h(Dropdown, { id: 'field-overlay-metric', ariaLabel: 'Field overlay metric', compact: true,
         className: 'metric-dropdown', value: metric,
         items: (window.PM.METRICS || []).map((m) => ({ value: m.id, label: m.label, meta: m.unit || '' })),
@@ -472,12 +467,12 @@
       label: (total * fraction).toFixed(total < 10 ? 2 : 1) + 's',
     }));
 
-    let arr = M.v, vmin = 0, vmax = M.vMax || 1, signed = false, unit = 'm/s', title = 'Velocity';
-    if (metric === 'accel') { arr = M.accel; vmax = M.aMax || 1; vmin = -vmax; signed = true; unit = 'm/s\u00b2'; title = 'Acceleration'; }
-    else if (metric === 'angvel') { arr = (M.omega || []).map((o) => o * R2D); vmax = (M.wMax || 0.01) * R2D; vmin = -vmax; signed = true; unit = '\u00b0/s'; title = 'Angular velocity'; }
-    else if (metric === 'curvature') { arr = M.curv; vmin = 0; vmax = M.kMax || 0.01; unit = '1/m'; title = 'Curvature'; }
+    let arr = graphOpen ? M.v : null, vmin = 0, vmax = M.vMax || 1, signed = false, unit = 'm/s', title = 'Velocity';
+    if (graphOpen && metric === 'accel') { arr = M.accel; vmax = M.aMax || 1; vmin = -vmax; signed = true; unit = 'm/s\u00b2'; title = 'Acceleration'; }
+    else if (graphOpen && metric === 'angvel') { arr = (M.omega || []).map((o) => o * R2D); vmax = (M.wMax || 0.01) * R2D; vmin = -vmax; signed = true; unit = '\u00b0/s'; title = 'Angular velocity'; }
+    else if (graphOpen && metric === 'curvature') { arr = M.curv; vmin = 0; vmax = M.kMax || 0.01; unit = '1/m'; title = 'Curvature'; }
 
-    const jigglePeak = metric === 'velocity' && prof.jiggles
+    const jigglePeak = graphOpen && metric === 'velocity' && prof.jiggles
       ? prof.jiggles.reduce((value, action) => Math.max(value, 4 * action.config.distanceM / action.strokeDuration), 0)
       : 0;
     const peak = Math.max(vmax, jigglePeak);
@@ -524,7 +519,7 @@
     };
 
     return h(React.Fragment, null,
-      h('div', { className: 'velgraph' + (graphOpen ? ' open' : ''), 'aria-hidden': !graphOpen },
+      graphOpen && h('div', { className: 'velgraph open' },
         h('div', { className: 'velgraph-top' },
           h('span', { className: 'velgraph-ttl' }, title + ' profile'),
           h('span', { className: 'velgraph-readout' },

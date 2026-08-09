@@ -139,11 +139,7 @@
     if (node.type === 'path') doc = paths.find((path) => path.id === node.ref);
     else if (node.type === 'function' && node.cat === 'generate' && node.preview) doc = node.preview;
     if (!doc) return null;
-    let effectivePlanner = plannerId;
-    if (plannerId === 'labviewBezier' || plannerId === 'labviewClothoid') {
-      effectivePlanner = window.PM.labviewPlannerForPath(doc, plannerId);
-    }
-    const d = window.PM.derivePath(doc, robot, 56, effectivePlanner);
+    const d = window.PM.derivePath(doc, robot, 56, plannerId);
     return { doc, deriv: d, pts: d.sample.pts, total: d.prof.totalTime || 0 };
   }
 

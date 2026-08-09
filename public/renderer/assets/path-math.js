@@ -77,175 +77,6 @@
     return limits ? { ...constraints, maxVel: limits.maxSpeed, maxAccel: limits.maxAccel, maxDecel: limits.maxAccel, maxCentripetalAccel: limits.maxCornerAccel, maxAngVel: limits.maxAngVel, maxAngAccel: limits.maxAngAccel, maxAngDecel: limits.maxAngAccel } : constraints;
   }
 
-  // ---- rebuilt LabVIEW compatibility geometry ------------------------------
-  // These are browser copies of the shared compatibility planners. Keep their
-  // constants and endpoint derivative formulas aligned with src/shared/math.
-  const LV_EPS = 1e-10, LV_TAU_STEP = 0.001;
-  const lvAdd = (a, b) => ({ x: a.x + b.x, y: a.y + b.y });
-  const lvSub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y });
-  const lvScale = (p, n) => ({ x: p.x * n, y: p.y * n });
-  const lvMag = (p) => Math.hypot(p.x, p.y);
-  function lvFallbackTangent(wps, i) {
-    if (i === 0) return lvSub(wps[1], wps[0]);
-    if (i === wps.length - 1) return lvSub(wps[i], wps[i - 1]);
-    const ld = lvMag(lvSub(wps[i], wps[i - 1])), rd = lvMag(lvSub(wps[i + 1], wps[i]));
-    const dir = lvAdd(lvScale(lvSub(wps[i], wps[i - 1]), 1 / Math.max(ld, LV_EPS)), lvScale(lvSub(wps[i + 1], wps[i]), 1 / Math.max(rd, LV_EPS)));
-    return lvMag(dir) <= LV_EPS ? { x: 0, y: 0 } : lvScale(dir, 0.5 * Math.min(ld, rd) / lvMag(dir));
-  }
-  function lvTangents(wps) {
-    return wps.map((w, i) => {
-      const incoming = w.prevC ? lvScale(lvSub(w, w.prevC), 5) : null;
-      const outgoing = w.nextC ? lvScale(lvSub(w.nextC, w), 5) : null;
-      const hasIn = incoming && lvMag(incoming) > LV_EPS, hasOut = outgoing && lvMag(outgoing) > LV_EPS;
-      if (i === 0 && hasOut) return outgoing;
-      if (i === wps.length - 1 && hasIn) return incoming;
-      if (hasIn && hasOut) { const avg = lvScale(lvAdd(incoming, outgoing), 0.5); if (lvMag(avg) > LV_EPS) return avg; }
-      return hasOut ? outgoing : hasIn ? incoming : lvFallbackTangent(wps, i);
-    });
-  }
-  function lvCubicSecond(a, b, ta, tb) {
-    const p1 = lvAdd(a, lvScale(ta, 1 / 3)), p2 = lvSub(b, lvScale(tb, 1 / 3));
-    return { start: lvScale(lvAdd(lvSub(a, lvScale(p1, 2)), p2), 6), end: lvScale(lvAdd(lvSub(p1, lvScale(p2, 2)), b), 6) };
-  }
-  function lvSecondDerivatives(wps, tangents) {
-    const cubics = [], chords = [];
-    for (let i = 0; i < wps.length - 1; i++) { cubics.push(lvCubicSecond(wps[i], wps[i + 1], tangents[i], tangents[i + 1])); chords.push(lvMag(lvSub(wps[i + 1], wps[i]))); }
-    const out = [cubics[0].start];
-    for (let i = 1; i < wps.length - 1; i++) {
-      const lw = 1 / Math.max(chords[i - 1], LV_EPS), rw = 1 / Math.max(chords[i], LV_EPS);
-      out.push(lvScale(lvAdd(lvScale(cubics[i - 1].end, lw), lvScale(cubics[i].start, rw)), 1 / (lw + rw)));
-    }
-    out.push(cubics[cubics.length - 1].end); return out;
-  }
-  function lvQuinticControls(a, b, ta, tb, aa, ab) {
-    const p1 = lvAdd(a, lvScale(ta, 1 / 5)), p4 = lvSub(b, lvScale(tb, 1 / 5));
-    return [a, p1, lvAdd(lvAdd(lvScale(aa, 1 / 20), lvScale(p1, 2)), lvScale(a, -1)), lvAdd(lvAdd(lvScale(ab, 1 / 20), lvScale(p4, 2)), lvScale(b, -1)), p4, b];
-  }
-  function lvEval(cp, t) {
-    const p = cp.map((v) => ({ ...v }));
-    for (let level = p.length - 1; level > 0; level--) for (let i = 0; i < level; i++) p[i] = { x: lerp(p[i].x, p[i + 1].x, t), y: lerp(p[i].y, p[i + 1].y, t) };
-    return p[0];
-  }
-  function lvDerivativeControls(cp) { const n = cp.length - 1; return cp.slice(0, -1).map((p, i) => lvScale(lvSub(cp[i + 1], p), n)); }
-  function lvBezierPiece(raw, mode, segmentOffset) {
-    const wps = raw.map((w) => ({ x: w.x, y: w.y, prevC: w.prevC, nextC: w.nextC }));
-    if (mode === 'automatic') {
-      wps.forEach((w) => { delete w.prevC; delete w.nextC; });
-      const firstChord = lvMag(lvSub(wps[1], wps[0])), last = wps.length - 1, lastChord = lvMag(lvSub(wps[last], wps[last - 1]));
-      const a0 = (raw[0].theta || 0) * D2R, a1 = (raw[last].theta || 0) * D2R;
-      wps[0].nextC = { x: wps[0].x + Math.cos(a0) * firstChord / 5, y: wps[0].y + Math.sin(a0) * firstChord / 5 };
-      wps[last].prevC = { x: wps[last].x - Math.cos(a1) * lastChord / 5, y: wps[last].y - Math.sin(a1) * lastChord / 5 };
-    }
-    const tangents = lvTangents(wps), seconds = lvSecondDerivatives(wps, tangents), pts = [], steps = 240;
-    for (let seg = 0; seg < wps.length - 1; seg++) {
-      const cp = lvQuinticControls(wps[seg], wps[seg + 1], tangents[seg], tangents[seg + 1], seconds[seg], seconds[seg + 1]);
-      const dcp = lvDerivativeControls(cp), ddcp = lvDerivativeControls(dcp);
-      for (let k = 0; k <= steps; k++) {
-        if (seg && k === 0) continue;
-        const t = k / steps, pos = lvEval(cp, t), d = lvEval(dcp, t), dd = lvEval(ddcp, t), speed2 = d.x * d.x + d.y * d.y;
-        pts.push({ x: pos.x, y: pos.y, seg: segmentOffset + seg, t, heading: Math.atan2(d.y, d.x), curv: speed2 > LV_EPS ? Math.abs(d.x * dd.y - d.y * dd.x) / Math.pow(speed2, 1.5) : 0, s: 0 });
-      }
-    }
-    return pts;
-  }
-  function labviewBezierSample(raw, mode) {
-    const pts = []; let start = 0;
-    for (let end = 1; end < raw.length; end++) {
-      if (!(raw[end].stop || end === raw.length - 1)) continue;
-      const piece = lvBezierPiece(raw.slice(start, end + 1), mode, start);
-      piece.forEach((p, i) => { if (pts.length && i === 0) return; pts.push(p); });
-      start = end;
-    }
-    const sample = lvFinishSample(lvDensify(pts), raw.length - 1);
-    sample.wpIdx = lvNearestWaypointIndices(raw, sample.pts); return sample;
-  }
-
-  function lvUnit(v) { const n = lvMag(v); if (n <= LV_EPS) throw new Error('LabVIEW clothoid waypoints must not overlap'); return lvScale(v, 1 / n); }
-  function lvCross(a, b) { return a.x * b.y - a.y * b.x; }
-  function lvDot(a, b) { return a.x * b.x + a.y * b.y; }
-  function lvRotate(v, a) { const c = Math.cos(a), s = Math.sin(a); return { x: c * v.x - s * v.y, y: s * v.x + c * v.y }; }
-  function lvReflect(v, axisAngle) { const axis = { x: Math.cos(axisAngle), y: Math.sin(axisAngle) }, p = 2 * lvDot(v, axis); return { x: p * axis.x - v.x, y: p * axis.y - v.y }; }
-  function lvCanonicalBlend(turn, radius) {
-    const sign = Math.sign(turn), absTurn = Math.abs(turn), spiralTurn = Math.min(absTurn, Math.PI / 2), halfHeading = spiralTurn / 2;
-    const tauMax = Math.sqrt(halfHeading), sigma = 2 * radius * tauMax, extraArc = absTurn - spiralTurn;
-    const entry = [{ x: 0, y: 0, heading: 0, curvature: 0 }]; let tau = 0, x = 0, y = 0;
-    while (tau < tauMax - Number.EPSILON) {
-      const step = Math.min(LV_TAU_STEP, tauMax - tau), heading = sign * tau * tau;
-      x += sigma * Math.cos(heading) * step; y += sigma * Math.sin(heading) * step; tau += step;
-      entry.push({ x, y, heading: sign * tau * tau, curvature: sign * 2 * tau / sigma });
-    }
-    const local = entry.slice(); let exitStart = entry[entry.length - 1];
-    if (extraArc > 1e-6) {
-      const startHeading = sign * halfHeading, normal = { x: -Math.sin(startHeading) * sign, y: Math.cos(startHeading) * sign };
-      const center = { x: exitStart.x + normal.x * radius, y: exitStart.y + normal.y * radius }, radialStart = Math.atan2(exitStart.y - center.y, exitStart.x - center.x);
-      const count = Math.max(1, Math.ceil(extraArc / Math.max(1e-6, sigma * LV_TAU_STEP / radius)));
-      for (let i = 1; i <= count; i++) { const swept = extraArc * i / count, radial = radialStart + sign * swept; exitStart = { x: center.x + radius * Math.cos(radial), y: center.y + radius * Math.sin(radial), heading: sign * (halfHeading + swept), curvature: sign / radius }; local.push(exitStart); }
-    }
-    let current = exitStart;
-    for (let i = entry.length - 1; i > 0; i--) { const reflected = lvReflect(lvSub(entry[i], entry[i - 1]), turn / 2); current = { x: current.x + reflected.x, y: current.y + reflected.y, heading: turn - entry[i - 1].heading, curvature: entry[i - 1].curvature }; local.push(current); }
-    return local;
-  }
-  function lvCorner(wps, i, radius) {
-    const incoming = lvUnit(lvSub(wps[i], wps[i - 1])), outgoing = lvUnit(lvSub(wps[i + 1], wps[i]));
-    const turn = Math.atan2(lvCross(incoming, outgoing), lvDot(incoming, outgoing)); if (Math.abs(turn) <= 1e-6) return null;
-    if (Math.abs(Math.PI - Math.abs(turn)) <= 1e-6) throw new Error('LabVIEW clothoid cannot reverse 180 degrees');
-    const local = lvCanonicalBlend(turn, radius), end = local[local.length - 1], exitTrim = end.y / Math.sin(turn), entryTrim = end.x - exitTrim * Math.cos(turn);
-    return { incoming, outgoing, incomingHeading: Math.atan2(incoming.y, incoming.x), local, entryTrim, exitTrim, scale: 1 };
-  }
-  function lvClothoidPiece(wps, radius) {
-    wps = wps.filter((w, i) => i === 0 || lvMag(lvSub(w, wps[i - 1])) > LV_EPS);
-    if (wps.length < 2) return wps.length ? [{ x: wps[0].x, y: wps[0].y, heading: 0, curvature: 0 }] : [];
-    const recipes = wps.map((_, i) => i > 0 && i < wps.length - 1 ? lvCorner(wps, i, radius) : null);
-    for (let i = 0; i < wps.length - 1; i++) {
-      const edge = lvMag(lvSub(wps[i + 1], wps[i])), left = i > 0 ? recipes[i] : null, right = i + 1 < wps.length - 1 ? recipes[i + 1] : null;
-      const required = (left ? left.exitTrim * left.scale : 0) + (right ? right.entryTrim * right.scale : 0);
-      if (required > edge && required > LV_EPS) { const reduction = Math.max(0, (edge - LV_EPS) / required); if (left) left.scale *= reduction; if (right) right.scale *= reduction; }
-    }
-    const out = [];
-    const append = (p) => { const prev = out[out.length - 1]; if (!prev || lvMag(lvSub(p, prev)) > LV_EPS) out.push(p); };
-    append({ x: wps[0].x, y: wps[0].y, heading: Math.atan2(wps[1].y - wps[0].y, wps[1].x - wps[0].x), curvature: 0 });
-    for (let i = 1; i < wps.length - 1; i++) {
-      const r = recipes[i]; if (!r) continue;
-      const entry = { x: wps[i].x - r.incoming.x * r.entryTrim * r.scale, y: wps[i].y - r.incoming.y * r.entryTrim * r.scale };
-      append({ ...entry, heading: r.incomingHeading, curvature: 0 });
-      for (let k = 1; k < r.local.length; k++) { const p = r.local[k], v = lvRotate({ x: p.x * r.scale, y: p.y * r.scale }, r.incomingHeading); append({ x: entry.x + v.x, y: entry.y + v.y, heading: r.incomingHeading + p.heading, curvature: r.scale > LV_EPS ? p.curvature / r.scale : 0 }); }
-    }
-    const last = wps.length - 1; append({ x: wps[last].x, y: wps[last].y, heading: Math.atan2(wps[last].y - wps[last - 1].y, wps[last].x - wps[last - 1].x), curvature: 0 });
-    return out;
-  }
-  function labviewClothoidSample(raw, radius) {
-    const pts = []; let start = 0;
-    for (let end = 1; end < raw.length; end++) {
-      if (!(raw[end].stop || end === raw.length - 1)) continue;
-      const piece = lvClothoidPiece(raw.slice(start, end + 1), radius);
-      piece.forEach((p, i) => { if (pts.length && i === 0) return; pts.push({ ...p, curv: Math.abs(p.curvature), seg: Math.min(raw.length - 2, start + Math.max(0, i)), t: 0, s: 0 }); });
-      start = end;
-    }
-    const sample = lvFinishSample(lvDensify(pts), raw.length - 1);
-    sample.wpIdx = lvNearestWaypointIndices(raw, sample.pts); return sample;
-  }
-  function lvNearestWaypointIndices(wps, pts) {
-    let floor = 0;
-    return wps.map((w) => { let best = floor, bestD = Infinity; for (let i = floor; i < pts.length; i++) { const d = (pts[i].x - w.x) ** 2 + (pts[i].y - w.y) ** 2; if (d < bestD) { bestD = d; best = i; } } floor = best; return best; });
-  }
-  function lvDensify(pts, maximumSpacing = 0.02) {
-    if (pts.length < 2) return pts.slice();
-    const out = [{ ...pts[0] }];
-    for (let i = 1; i < pts.length; i++) {
-      const before = pts[i - 1], after = pts[i], count = Math.max(1, Math.ceil(lvMag(lvSub(after, before)) / maximumSpacing));
-      for (let part = 1; part <= count; part++) {
-        const u = part / count;
-        out.push({ ...after, x: lerp(before.x, after.x, u), y: lerp(before.y, after.y, u), heading: before.heading + angWrap(after.heading - before.heading) * u, curv: lerp(before.curv || 0, after.curv || 0, u), s: 0 });
-      }
-    }
-    return out;
-  }
-  function lvFinishSample(pts, segs, wpIdx) {
-    let s = 0; if (pts[0]) pts[0].s = 0;
-    for (let i = 1; i < pts.length; i++) { s += lvMag(lvSub(pts[i], pts[i - 1])); pts[i].s = s; }
-    return { pts, length: s, segs, wpIdx };
-  }
-
   // ---- arc primitive: circle tangent to the start handle, through the endpoint ----
   function arcSetup(p0, p1, c0) {
     let tx = c0.x - p0.x, ty = c0.y - p0.y; let tl = Math.hypot(tx, ty);
@@ -870,13 +701,6 @@
     if (omegaLimit > 0 && omegaPeak > omegaLimit * 1.025)
       checks.push({ f: at(omegaAt), kind: 'constraint', level: 'warning', text: 'Angular velocity exceeds limit \u00b7 ' + (omegaPeak / D2R).toFixed(0) + '\u00b0/s' });
 
-    if (cfg.plannerId === 'labviewClothoid' && cfg.minTurnRadiusM > 0 && curvaturePeak > 1e-6) {
-      const actualRadius = 1 / curvaturePeak;
-      if (actualRadius < cfg.minTurnRadiusM * 0.975) {
-        checks.push({ f: at(curvatureAt), kind: 'geometry', level: 'warning', text: 'Corner spacing cannot maintain the ' + cfg.minTurnRadiusM.toFixed(2) + ' m minimum radius' });
-      }
-    }
-
     if (curvaturePeak > 1e-6 && constraints.maxVel > 0 && constraints.maxAccel > 0) {
       const cornerAcceleration = constraints.maxCentripetalAccel != null ? constraints.maxCentripetalAccel : constraints.maxAccel;
       const curveLimit = Math.sqrt(cornerAcceleration / curvaturePeak);
@@ -1109,7 +933,7 @@
     let actual = tracked[last], omega = tracked.terminalOmega || 0;
     const target = desired[last], errorAtArrival = target - actual;
     if (Math.abs(errorAtArrival) <= 0.05 * D2R && Math.abs(omega) <= 0.05 * D2R) return;
-    let period = doc.labview && doc.labview.samplePeriodS >= 0.001 ? doc.labview.samplePeriodS : Infinity;
+    let period = Infinity;
     for (let i = 1; i < prof.t.length; i++) { const dt = prof.t[i] - prof.t[i - 1]; if (dt > 1e-9) period = Math.min(period, dt); }
     period = isFinite(period) ? Math.max(0.01, Math.min(0.05, period)) : 0.02;
     const active = ranges.filter((range) => 1 >= Math.min(range.f0, range.f1) - 1e-9 && 1 <= Math.max(range.f0, range.f1) + 1e-9);
@@ -1204,28 +1028,11 @@
       robot = { ...robot, maxSpeed: hardLimits.maxSpeed };
       doc = { ...doc, constraints: effectiveConstraints(doc.constraints, robot) };
     }
-    const labview = doc.labview || {};
-    const smp = plannerId === 'labviewBezier'
-      ? labviewBezierSample(doc.waypoints, labview.bezierTangentMode || 'handles')
-      : plannerId === 'labviewClothoid'
-      ? labviewClothoidSample(doc.waypoints, labview.minTurnRadiusM || 0.5)
-      : sample(doc.waypoints, perSeg);
+    const smp = sample(doc.waypoints, perSeg);
     const pts = smp.pts;
     const nWp = doc.waypoints.length;
     const lastI = Math.max(0, pts.length - 1);
     const wpIdx = smp.wpIdx || doc.waypoints.map((_, k) => Math.min(lastI, k * perSeg));
-    if (plannerId === 'labviewClothoid') {
-      // Vertex-blend generation does not naturally emit authored segment IDs.
-      // Rebuild them from the monotonic waypoint boundaries used by the field UI.
-      for (let segment = 0; segment < wpIdx.length - 1; segment++) {
-        const lo = Math.max(0, wpIdx[segment]), hi = Math.max(lo, wpIdx[segment + 1]);
-        const startS = pts[lo] ? pts[lo].s : 0, endS = pts[hi] ? pts[hi].s : startS;
-        for (let i = segment ? lo + 1 : lo; i <= hi && i < pts.length; i++) {
-          pts[i].seg = segment;
-          pts[i].t = endS > startS ? (pts[i].s - startS) / (endS - startS) : 0;
-        }
-      }
-    }
     const total = smp.length || 1;
     const wpFrac = wpIdx.map((i) => (pts.length ? pts[i].s / total : 0));
     const stopIdx = [];
@@ -1282,7 +1089,6 @@
     const mode = allTangent ? 'tank' : 'swerve';
     const dwell = [], turns = [], jiggles = [];
     doc.waypoints.forEach((w, k) => { if (w.stop && w.wait > 0) dwell.push({ idx: wpIdx[k], wait: w.wait }); });
-    const compatibilityPlanner = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid';
     doc.waypoints.forEach((w, k) => { if (w.stop && w.turnInPlace) turns.push({ idx: wpIdx[k], start: k > 0 ? head[Math.max(0, wpIdx[k] - 1)] : head[0], end: w.turnInPlace.headingDeg * D2R, direction: w.turnInPlace.direction, maxAngVel: doc.constraints.maxAngVel, maxAngAccel: Math.min(doc.constraints.maxAngAccel, doc.constraints.maxAngDecel || doc.constraints.maxAngAccel), maxAngJerk: doc.constraints.maxAngJerk }); });
     const endpoint = doc.waypoints[nWp - 1];
     let invalidJiggle = false, unsupportedJiggle = false;
@@ -1294,7 +1100,7 @@
         jiggles.push({ idx: wpIdx[nWp - 1], baseRad, config: endpoint.jiggle });
       } else invalidJiggle = true;
     }
-    const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns, jiggles, freeSpeed: cap, motorMaxSpeed: hardLimits || compatibilityPlanner ? cap : 0 });
+    const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns, jiggles, freeSpeed: cap, motorMaxSpeed: hardLimits ? cap : 0 });
     const trackedHead = headingWithTranslationPriority(doc, robot, pts, prof, head, effRanges, headingTransitions);
     appendTerminalHeadingCatchup(doc, prof, trackedHead, head, effRanges);
     const anchors = mode === 'tank' ? [] : buildAnchors(pts.map((p, i) => ({ f: total > 1e-6 ? p.s / total : 0, rad: trackedHead[i] })));
@@ -1302,7 +1108,6 @@
     const checks = analyze(pts, prof, mtr, robot || {}, {
       constraints: doc.constraints,
       plannerId,
-      minTurnRadiusM: labview.minTurnRadiusM || 0.5,
     });
     doc.waypoints.slice(0, -1).forEach((w, segment) => {
       if (w.segmentHeadingMode !== 'lookAt' || !w.segmentLookAt) return;
@@ -1351,16 +1156,5 @@
     return positions;
   }
 
-  function labviewPlannerForPath(path, fallback) {
-    const type = path.labview && path.labview.trajectoryType;
-    if (type === 'clothoid') return 'labviewClothoid';
-    if (type === 'bezier') return 'labviewBezier';
-    // Legacy LabVIEW projects selected one method globally, independent of segment metadata.
-    if (fallback === 'labviewClothoid' || fallback === 'labviewBezier') return fallback;
-    const authored = path.waypoints.slice(0, -1).map((waypoint) => waypoint.segType).filter(Boolean);
-    if (authored.length && authored.every((segmentType) => segmentType === 'clothoid')) return 'labviewClothoid';
-    return 'labviewBezier';
-  }
-
-  window.PM = { bez, bezD, splitBezier, nearestPointOnSegment, sample, profile, poseAtTime, headingAt, metrics, analyze, metricColor, metricGradient, METRICS, SEGTYPES, buildAnchors, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, angLerp, D2R, R2D, lerp, derivePath, jigglePositions, labviewPlannerForPath, effectiveRanges, featureFraction, remapWaypointRange, waypointFracs, robotHardLimits, effectiveConstraints };
+  window.PM = { bez, bezD, splitBezier, nearestPointOnSegment, sample, profile, poseAtTime, headingAt, metrics, analyze, metricColor, metricGradient, METRICS, SEGTYPES, buildAnchors, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, angLerp, D2R, R2D, lerp, derivePath, jigglePositions, effectiveRanges, featureFraction, remapWaypointRange, waypointFracs, robotHardLimits, effectiveConstraints };
 })();

@@ -31,6 +31,8 @@
     const actionsRef = useRef(actions);
     actionsRef.current = actions;
     const drag = useRef(null);
+    const pendingMove = useRef(null);
+    const moveFrame = useRef(0);
     const lastInspectPress = useRef({ key: null, at: 0 });
     const flip = alliance === 'red';
     const isTank = drive === 'tank';
@@ -319,7 +321,7 @@
       drag.current = { role: 'bg', onPath: role === 'ins', segment: visit && visit.seg, visit, insertWaypoint: e.altKey, start: { cx: e.clientX, cy: e.clientY }, vb0: { ...view }, world, moved: false, mid: e.button === 1 };
     };
 
-    const onMove = (e) => {
+    const applyMove = (e) => {
       const d = drag.current; if (!d) return;
       const world = clientToWorld(e.clientX, e.clientY, d.role !== 'ct');
       if (d.role === 'inspect') {
@@ -369,7 +371,20 @@
       else if (d.role === 're') { const visit = projectVisit(world, d.lastF); const f = visit ? visit.f : window.PM.nearestFraction(world.x, world.y, pts); d.lastF = f; actions.moveRangeHandle(d.idx, 1, f); }
     };
 
+    const flushMove = () => {
+      if (moveFrame.current) cancelAnimationFrame(moveFrame.current);
+      moveFrame.current = 0;
+      const event = pendingMove.current;
+      pendingMove.current = null;
+      if (event) applyMove(event);
+    };
+    const onMove = (event) => {
+      pendingMove.current = { clientX: event.clientX, clientY: event.clientY, shiftKey: event.shiftKey };
+      if (!moveFrame.current) moveFrame.current = requestAnimationFrame(flushMove);
+    };
+
     const onUp = (e) => {
+      flushMove();
       const d = drag.current; drag.current = null;
       setSnap(null);
       try { svgRef.current.releasePointerCapture(e.pointerId); } catch (_) {}
@@ -421,6 +436,16 @@
         }
       }
     };
+
+    const onCancel = (event) => {
+      if (moveFrame.current) cancelAnimationFrame(moveFrame.current);
+      moveFrame.current = 0; pendingMove.current = null; drag.current = null; setSnap(null);
+      try { svgRef.current.releasePointerCapture(event.pointerId); } catch (_) {}
+    };
+    useEffect(() => {
+      window.addEventListener('blur', onCancel);
+      return () => { window.removeEventListener('blur', onCancel); if (moveFrame.current) cancelAnimationFrame(moveFrame.current); };
+    }, []);
 
     const onWheel = (e) => {
       e.preventDefault();
@@ -999,7 +1024,7 @@
 
     return h('svg', {
       ref: svgRef, className: 'fieldsvg', viewBox: vb, preserveAspectRatio: 'xMidYMid meet',
-      onPointerDown: onDown, onPointerMove: onMove, onPointerUp: onUp, onWheel: onWheel, onDoubleClick: onDbl,
+      onPointerDown: onDown, onPointerMove: onMove, onPointerUp: onUp, onPointerCancel: onCancel, onLostPointerCapture: onCancel, onWheel: onWheel, onDoubleClick: onDbl,
       style: { cursor, userSelect: 'none', WebkitUserSelect: 'none', touchAction: 'none' },
       onContextMenu: onCtx, onDragStart: (e) => e.preventDefault(), draggable: false,
     },

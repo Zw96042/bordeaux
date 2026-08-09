@@ -547,6 +547,7 @@ input,select{font-family:inherit}
 .rot90{display:flex;transform:rotate(90deg)}
 
 .app{display:flex;flex-direction:column;height:100%;position:relative}
+.fatal-error{max-width:560px;margin:12vh auto;padding:28px;color:var(--text);background:var(--panel);border:1px solid var(--border);border-radius:8px}.fatal-error h1{font-size:20px;margin:0 0 10px}.fatal-error p{color:var(--muted);margin:0 0 18px}.fatal-error button{min-height:36px;padding:0 14px}.derivation-error{border-color:var(--bad);z-index:12}
 
 /* ============ top bar ============ */
 .toolbar{height:50px;display:flex;align-items:center;gap:12px;padding:0 12px;background:var(--bg-1);border-bottom:1px solid var(--line);flex-shrink:0;z-index:30}

@@ -14,28 +14,11 @@
   const segNorm = (t) => (t === 'line' || t === 'arc' || t === 'clothoid') ? t : 'bezier';
   const wpName = (i, n) => i === 0 ? 'Start' : i === n - 1 ? 'End' : 'Waypoint ' + i;
 
-  function ConstraintsBody({ c, robot, setC, labview, setLabview, plannerId, moreLimits, setMoreLimits, moreBdx, setMoreBdx }) {
-    const labviewPlanner = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid';
+  function ConstraintsBody({ c, robot, setC, moreLimits, setMoreLimits }) {
     const hardLimits = window.PM.robotHardLimits(robot);
     const rotation = moreLimits ? h('div', { className: 'grid2 compact-fields' },
       h(Num, { label: 'Max \u03c9', value: c.maxAngVel, unit: '\u00b0/s', step: 1, precision: 0, onChange: (v) => setC({ maxAngVel: v }) }),
       h(Num, { label: 'Max \u03b1', value: c.maxAngAccel, unit: '\u00b0/s\u00b2', step: 1, precision: 0, onChange: (v) => setC({ maxAngAccel: v }) })) : null;
-    const flags = moreBdx ? h(React.Fragment, null,
-      h(Num, { label: 'Current limit', value: labview.currentLimit || 0, unit: 'A', min: 0, onChange: (v) => setLabview({ currentLimit: v }) }),
-      [['Reverse path', 'reversePath'], ['Zero velocity', 'zeroVelocity'], ['Zero translation', 'zeroTranslationalVelocity'], ['Correct at start', 'correctAtBeginningOfPath'], ['Pickup balls', 'pickupBalls']].map(([label, key]) =>
-        h('div', { className: 'inrow', key }, h('span', { className: 'inrow-l' }, label), h(Toggle, { on: !!labview[key], ariaLabel: label, onChange: (v) => setLabview({ [key]: v }) })))) : null;
-    const compatibility = labviewPlanner ? h(React.Fragment, null,
-      h('div', { className: 'cgroup-h' }, 'LabVIEW'),
-      h('div', { className: 'grid2' },
-        h(Num, { label: 'Sample period', value: (labview.samplePeriodS || 0.02) * 1000, unit: 'ms', min: 1, max: 100, step: 1, precision: 0, onChange: (v) => setLabview({ samplePeriodS: v / 1000 }) }),
-        plannerId === 'labviewClothoid'
-          ? h(Num, { label: 'Min radius', value: labview.minTurnRadiusM || 0.5, unit: 'm', min: 0.05, step: 0.05, precision: 2, onChange: (v) => setLabview({ minTurnRadiusM: v }) })
-          : h('div', null)),
-      plannerId === 'labviewBezier' ? h(React.Fragment, null,
-        h('div', { className: 'fieldlabel' }, 'Tangents'),
-        h(Seg, { value: labview.bezierTangentMode || 'handles', options: [{ v: 'handles', label: 'Handles' }, { v: 'automatic', label: 'Automatic' }], onChange: (v) => setLabview({ bezierTangentMode: v }) })) : null,
-      h('button', { className: 'morebtn' + (moreBdx ? ' on' : ''), type: 'button', 'aria-expanded': moreBdx, onClick: () => setMoreBdx(!moreBdx) }, h('span', null, 'Advanced .bdx flags'), h(Icon, { name: 'chevron', size: 13 })),
-      flags) : null;
     return h(React.Fragment, null,
       hardLimits
         ? h(React.Fragment, null,
@@ -54,8 +37,7 @@
               h(Num, { label: 'Max decel', value: c.maxDecel != null ? c.maxDecel : c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxDecel: v }) }),
               h(Num, { label: 'Corner accel', value: c.maxCentripetalAccel != null ? c.maxCentripetalAccel : c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxCentripetalAccel: v }) })),
             h('button', { className: 'morebtn' + (moreLimits ? ' on' : ''), type: 'button', 'aria-expanded': moreLimits, onClick: () => setMoreLimits(!moreLimits) }, h('span', null, moreLimits ? 'Fewer limits' : 'Rotation limits'), h(Icon, { name: 'chevron', size: 13 })),
-            rotation),
-      compatibility);
+            rotation));
   }
 
   function Stat3(items) {
@@ -463,7 +445,6 @@
     const { doc, sel, derived, actions, drive, robot, plannerId, javaProject, onClose } = props;
     const [moreLimits, setMoreLimits] = React.useState(false);
     const [moreRangeLimits, setMoreRangeLimits] = React.useState(false);
-    const [moreBdx, setMoreBdx] = React.useState(false);
     const [jiggleDistance, setJiggleDistance] = React.useState(JIGGLE_DEFAULTS.distanceM);
     const [jiggleStrokes, setJiggleStrokes] = React.useState(JIGGLE_DEFAULTS.strokes);
     const [jiggleStart, setJiggleStart] = React.useState(JIGGLE_DEFAULTS.startDeg);
@@ -473,10 +454,9 @@
     const wps = doc.waypoints;
     const pathLimits = window.PM.effectiveConstraints(doc.constraints, robot);
     const isTank = drive === 'tank';
-    const isLabviewPlanner = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid';
     const n = wps.length;
     const headingMode = isTank ? 'tangent' : (doc.headingMode || 'targets');
-    const handlesEffective = plannerId !== 'labviewClothoid' && !(plannerId === 'labviewBezier' && doc.labview?.bezierTangentMode === 'automatic');
+    const handlesEffective = true;
     const endpointJiggle = wps[n - 1] && wps[n - 1].jiggle;
 
     React.useEffect(() => {
@@ -531,13 +511,8 @@
           c: doc.constraints,
           robot,
           setC: actions.setConstraint,
-          labview: doc.labview || {},
-          plannerId,
           moreLimits,
           setMoreLimits,
-          moreBdx,
-          setMoreBdx,
-          setLabview: (patch) => actions.setDoc({ labview: { samplePeriodS: 0.02, minTurnRadiusM: 0.5, bezierTangentMode: 'handles', reversePath: false, zeroVelocity: false, pickupBalls: false, currentLimit: 0, zeroTranslationalVelocity: false, correctAtBeginningOfPath: false, ...(doc.labview || {}), ...patch } }),
         }));
     }
 
@@ -682,10 +657,8 @@
           { v: isFinite(minR) ? minR.toFixed(2) + 'm' : '\u221e', k: 'Min radius', color: isFinite(minR) && minR < 0.7 ? 'var(--bad)' : null },
           { v: dur.toFixed(2) + 's', k: 'Duration' },
         ]),
-        h('div', { className: 'fieldlabel' }, isLabviewPlanner ? 'LabVIEW trajectory' : 'Path type'),
-        isLabviewPlanner
-          ? h(Seg, { value: plannerId === 'labviewClothoid' ? 'clothoid' : 'bezier', options: [{ v: 'bezier', label: 'Bezier' }, { v: 'clothoid', label: 'Clothoid' }], ariaLabel: 'LabVIEW trajectory type', onChange: actions.setLabviewTrajectoryType })
-          : h(Seg, { value: st, options: window.PM.SEGTYPES.map((type) => ({ v: type.id, label: type.label, title: type.hint })), ariaLabel: 'Path type', onChange: (v) => actions.setSegMeta(i, { segType: v }) }),
+        h('div', { className: 'fieldlabel' }, 'Path type'),
+        h(Seg, { value: st, options: window.PM.SEGTYPES.map((type) => ({ v: type.id, label: type.label, title: type.hint })), ariaLabel: 'Path type', onChange: (v) => actions.setSegMeta(i, { segType: v }) }),
         h('div', { className: 'fieldlabel' }, 'Timing'),
         h(Seg, { value: wps[i].segmentFollowMode || 'inherit', ariaLabel: 'Segment follow mode', options: [
           { v: 'inherit', label: 'Default', title: 'Use the path default' },

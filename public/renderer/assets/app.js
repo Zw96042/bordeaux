@@ -13,18 +13,13 @@
   const routineId = () => 'routine_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
   const pathLinkId = () => 'pathlink_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
   const blankRoutine = (name) => ({ id: routineId(), name: name || 'Autonomous Routine', nodes: [] });
-  const LV_DEFAULTS = { samplePeriodS: 0.02, minTurnRadiusM: 0.5, bezierTangentMode: 'handles', reversePath: false, zeroVelocity: false, pickupBalls: false, currentLimit: 0, zeroTranslationalVelocity: false, correctAtBeginningOfPath: false };
-  const isLabviewPlanner = (id) => id === 'labviewBezier' || id === 'labviewClothoid';
-  const labviewPlannerForPath = window.PM.labviewPlannerForPath;
-
   function normalizeProject(raw) {
     const project = clone(raw);
     const used = new Set();
     (project.paths || []).forEach((p) => {
       if (!p.id) { do { p.id = pathId(); } while (used.has(p.id)); }
       used.add(p.id);
-      const trajectoryType = labviewPlannerForPath(p, project.plannerId) === 'labviewClothoid' ? 'clothoid' : 'bezier';
-      p.labview = { ...LV_DEFAULTS, ...(p.labview || {}), trajectoryType };
+      delete p.labview;
       if (Array.isArray(p.waypoints)) p.waypoints = buildWps(p.waypoints);
       (p.markers || []).forEach((marker) => { if (!marker.id) marker.id = markerId(); });
     });
@@ -43,7 +38,7 @@
     if (!routineIds.has(project.activeRoutineId)) project.activeRoutineId = project.routines[0].id;
     project.routine = project.routines.find((routine) => routine.id === project.activeRoutineId) || project.routines[0];
     project.pathLinks = Array.isArray(project.pathLinks) ? project.pathLinks.filter((link) => link && link.fromPathId && link.toPathId).map((link) => ({ ...link, id: link.id || pathLinkId() })) : [];
-    project.plannerId = project.plannerId || 'profiledSpline';
+    project.plannerId = project.plannerId === 'optimizedTrajectory' ? 'optimizedTrajectory' : 'profiledSpline';
     return project;
   }
 
@@ -94,22 +89,23 @@
       constraints: { ...DEF_CONS },
       headingMode: 'targets',
       startVel: 0, goalVel: 0,
-      labview: { ...LV_DEFAULTS, trajectoryType: 'bezier' },
     };
   }
 
   function freshProject() {
     const routine = blankRoutine();
+    const path = blankPath('NewPath');
     return {
       schemaVersion: '1.0',
       name: 'Untitled',
       robot: { drive: 'swerve', w: 0.84, l: 0.84, heightM: 0.5, maxSpeed: 5.0 },
-      paths: [blankPath('NewPath')],
+      paths: [path],
       pathLinks: [],
       routines: [routine],
       activeRoutineId: routine.id,
       routine,
       plannerId: 'profiledSpline',
+      editor: { activePathId: path.id },
     };
   }
 
@@ -156,35 +152,9 @@
     const [agentSessionId] = useState(() => 'session_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)));
     const agentRevision = useRef(-1);
     const [javaProjectState, setJavaProjectState] = useState({ status: 'unlinked', operation: null, catalog: null, integration: null, error: '', notice: '', bookmarkId: null, recentProjects: [] });
+    const javaRestoreGeneration = useRef(0);
     const skipDirty = useRef(true);
     const keyboardNavigation = useRef(false);
-
-    useEffect(() => {
-      const splash = document.getElementById('boot-splash');
-      if (!splash) return;
-      const appRoot = document.getElementById('root');
-      const reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      const runner = splash.querySelector('.boot-splash-inner');
-      const runnerWidth = runner ? runner.getBoundingClientRect().width : 360;
-      const travelPx = window.innerWidth / 2 + runnerWidth / 2;
-      const strideMs = 460;
-      const strideDistancePx = Math.max(1, runnerWidth * 1.7);
-      const strideCount = Math.max(1, Math.min(3, Math.ceil(travelPx / strideDistancePx)));
-      const runMs = strideCount * strideMs;
-      const curtainMs = 280;
-      splash.style.setProperty('--boot-run', runMs + 'ms');
-      splash.style.setProperty('--boot-curtain', curtainMs + 'ms');
-      let removeTimer;
-      const revealApp = () => {
-        splash.remove();
-        if (appRoot) { appRoot.inert = false; appRoot.removeAttribute('inert'); }
-      };
-      const fadeTimer = window.setTimeout(() => {
-        splash.classList.add('boot-splash-ready');
-        removeTimer = window.setTimeout(revealApp, reducedMotion ? 0 : runMs + curtainMs + 40);
-      }, reducedMotion ? 0 : strideMs / 2);
-      return () => { window.clearTimeout(fadeTimer); if (removeTimer) window.clearTimeout(removeTimer); if (appRoot) { appRoot.inert = false; appRoot.removeAttribute('inert'); } };
-    }, []);
 
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.listRecentJavaProjects !== 'function') return;
@@ -218,6 +188,11 @@
         bookmarkId: result.bookmarkId,
         recentProjects: result.recentProjects || [],
       });
+      if (result.bookmarkId) {
+        setProject((current) => current.editor && current.editor.javaProjectBookmarkId === result.bookmarkId
+          ? current
+          : { ...current, editor: { ...(current.editor || {}), javaProjectBookmarkId: result.bookmarkId } });
+      }
     }, []);
 
     const linkJavaProject = useCallback(async () => {
@@ -225,65 +200,82 @@
         setJavaProjectState((current) => ({ ...current, status: 'error', error: 'Java project discovery is available in the Bordeaux desktop app.' }));
         return;
       }
-      setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', error: '', notice: '' }));
+      const generation = ++javaRestoreGeneration.current;
+      setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', catalog: null, integration: null, bookmarkId: null, error: '', notice: '' }));
       try {
         const result = await window.bordeauxAPI.linkJavaProject();
+        if (javaRestoreGeneration.current !== generation) return;
         if (!result) {
           setJavaProjectState((current) => ({ ...current, status: current.catalog ? 'ready' : 'unlinked', operation: null, error: '' }));
           return;
         }
         applyJavaProjectConnection(result);
       } catch (error) {
-        setJavaProjectState((current) => ({ ...current, status: current.catalog ? 'ready' : 'error', operation: null, error: error && error.message ? error.message : String(error) }));
+        if (javaRestoreGeneration.current !== generation) return;
+        setJavaProjectState((current) => ({ ...current, status: 'error', operation: null, catalog: null, integration: null, bookmarkId: null, error: error && error.message ? error.message : String(error) }));
       }
     }, [applyJavaProjectConnection]);
 
-    const openRecentJavaProject = useCallback(async (id) => {
+    const openRecentJavaProject = useCallback(async (id, expectedGeneration) => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.openRecentJavaProject !== 'function') return;
-      setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', error: '', notice: '' }));
+      const generation = expectedGeneration == null ? ++javaRestoreGeneration.current : expectedGeneration;
+      setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', catalog: null, integration: null, bookmarkId: null, error: '', notice: '' }));
       try {
-        applyJavaProjectConnection(await window.bordeauxAPI.openRecentJavaProject(id));
+        const result = await window.bordeauxAPI.openRecentJavaProject(id);
+        if (javaRestoreGeneration.current !== generation) return;
+        applyJavaProjectConnection(result);
       } catch (error) {
-        setJavaProjectState((current) => ({ ...current, status: current.catalog ? 'ready' : 'error', operation: null, error: error && error.message ? error.message : String(error) }));
+        if (javaRestoreGeneration.current !== generation) return;
+        setJavaProjectState((current) => ({ ...current, status: 'error', operation: null, catalog: null, integration: null, bookmarkId: null, error: error && error.message ? error.message : String(error) }));
       }
     }, [applyJavaProjectConnection]);
 
     const refreshJavaProject = useCallback(async () => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.refreshJavaProject !== 'function') return;
+      const generation = javaRestoreGeneration.current;
       setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', error: '', notice: '' }));
       try {
-        applyJavaProjectConnection(await window.bordeauxAPI.refreshJavaProject());
+        const result = await window.bordeauxAPI.refreshJavaProject();
+        if (javaRestoreGeneration.current !== generation) return;
+        applyJavaProjectConnection(result);
       } catch (error) {
+        if (javaRestoreGeneration.current !== generation) return;
         setJavaProjectState((current) => ({ ...current, status: current.catalog ? 'stale' : 'error', operation: null, error: error && error.message ? error.message : String(error) }));
       }
     }, [applyJavaProjectConnection]);
 
     const installJavaSupport = useCallback(async () => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.installJavaSupport !== 'function') return;
+      const generation = javaRestoreGeneration.current;
       setJavaProjectState((current) => ({ ...current, operation: 'install', error: '', notice: '' }));
       try {
         const result = await window.bordeauxAPI.installJavaSupport();
+        if (javaRestoreGeneration.current !== generation) return;
         if (result) {
           applyJavaProjectConnection(result);
           setJavaProjectState((current) => ({ ...current, notice: 'Support installed. Annotate command factories, follow .bordeaux/INTEGRATION.md for RobotContainer wiring, then build the catalog.' }));
         }
         else setJavaProjectState((current) => ({ ...current, operation: null }));
       } catch (error) {
+        if (javaRestoreGeneration.current !== generation) return;
         setJavaProjectState((current) => ({ ...current, operation: null, error: error && error.message ? error.message : String(error) }));
       }
     }, [applyJavaProjectConnection]);
 
     const buildJavaCatalog = useCallback(async () => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.buildJavaCatalog !== 'function') return;
+      const generation = javaRestoreGeneration.current;
       setJavaProjectState((current) => ({ ...current, operation: 'build', error: '', notice: '' }));
       try {
         const result = await window.bordeauxAPI.buildJavaCatalog();
+        if (javaRestoreGeneration.current !== generation) return;
         if (result) {
           applyJavaProjectConnection(result);
           setJavaProjectState((current) => ({ ...current, notice: 'Generated command catalog built and loaded.' }));
         }
         else setJavaProjectState((current) => ({ ...current, operation: null }));
       } catch (error) {
+        if (javaRestoreGeneration.current !== generation) return;
         setJavaProjectState((current) => ({ ...current, operation: null, status: current.catalog ? 'stale' : 'error', error: error && error.message ? error.message : String(error) }));
       }
     }, [applyJavaProjectConnection]);
@@ -321,13 +313,20 @@
     const accent = ACCENT;
 
     const doc = project.paths[activeIdx];
-    const selectedPlannerId = isLabviewPlanner(plannerId) ? labviewPlannerForPath(doc, plannerId) : plannerId;
+    const selectedPlannerId = plannerId;
     const docRef = useRef(doc); docRef.current = doc;
     const hist = useRef({ past: [], future: [] });
     const routineHist = useRef({ past: [], future: [] });
     const projectHist = useRef({ past: [], future: [] });
     const autosaveRevision = useRef(0);
+    const lastDerived = useRef(null);
     const [, force] = useState(0);
+
+    useEffect(() => {
+      const activePathId = project.paths[activeIdx] && project.paths[activeIdx].id;
+      if (!activePathId || (project.editor && project.editor.activePathId === activePathId)) return;
+      setProject((current) => ({ ...current, editor: { ...(current.editor || {}), activePathId } }));
+    }, [activeIdx, project.paths, project.editor && project.editor.activePathId]);
 
     useEffect(() => {
       if (skipDirty.current) skipDirty.current = false;
@@ -346,22 +345,30 @@
     }, [project, plannerId]);
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.publishAgentSession !== 'function') return;
-      agentRevision.current += 1;
-      const revision = agentRevision.current;
-      window.bordeauxAPI.publishAgentSession({
-        sessionId: agentSessionId,
-        revision,
-        project: clone(project),
-        plannerId: selectedPlannerId,
-        activePathId: doc.id,
-        allianceView: alliance,
-        fieldPack: { id: '2026-rebuilt', revision: '2026-manual-tu19-welded-4' },
-      });
-      setAgentProposal((current) => {
-        if (!current || current.status !== 'ready' || current.baseRevision === revision) return current;
-        window.bordeauxAPI.updateAgentProposalStatus(current.id, 'stale');
-        return { ...current, status: 'stale' };
-      });
+      let published = false;
+      const publish = () => {
+        if (published) return;
+        published = true;
+        agentRevision.current += 1;
+        const revision = agentRevision.current;
+        window.bordeauxAPI.publishAgentSession({
+          sessionId: agentSessionId,
+          revision,
+          project: clone(project),
+          plannerId: selectedPlannerId,
+          activePathId: doc.id,
+          allianceView: alliance,
+          fieldPack: { id: '2026-rebuilt', revision: '2026-manual-tu19-welded-4' },
+        });
+        setAgentProposal((current) => {
+          if (!current || current.status !== 'ready' || current.baseRevision === revision) return current;
+          window.bordeauxAPI.updateAgentProposalStatus(current.id, 'stale');
+          return { ...current, status: 'stale' };
+        });
+      };
+      const timer = window.setTimeout(publish, 150);
+      window.addEventListener('pointerup', publish, { once: true });
+      return () => { window.clearTimeout(timer); window.removeEventListener('pointerup', publish); };
     }, [project, selectedPlannerId, alliance, activeIdx, agentSessionId, doc.id]);
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.onAgentProposal !== 'function') return;
@@ -382,10 +389,7 @@
       };
       const unsubscribe = window.bordeauxAPI.onAgentProposal(receiveProposal);
       if (typeof window.bordeauxAPI.getActiveAgentProposal === 'function') {
-        const restoreProposal = () => Promise.resolve(window.bordeauxAPI.getActiveAgentProposal()).then(receiveProposal).catch(() => undefined);
-        restoreProposal();
-        const restoreTimer = window.setInterval(restoreProposal, 1000);
-        return () => { active = false; window.clearInterval(restoreTimer); unsubscribe(); };
+        Promise.resolve(window.bordeauxAPI.getActiveAgentProposal()).then(receiveProposal).catch(() => undefined);
       }
       return () => { active = false; unsubscribe(); };
     }, [agentSessionId]);
@@ -403,7 +407,13 @@
     }, []);
 
     // ---- derived path data ----
-    const derived = useMemo(() => window.PM.derivePath(doc, robot, PERSEG, selectedPlannerId), [doc, robot, selectedPlannerId]);
+    const derivation = useMemo(() => {
+      try { return { value: window.PM.derivePath(doc, robot, PERSEG, selectedPlannerId), error: null }; }
+      catch (error) { return { value: null, error }; }
+    }, [doc, robot, selectedPlannerId]);
+    if (derivation.value) lastDerived.current = derivation.value;
+    if (!lastDerived.current) throw derivation.error || new Error('Could not derive the active path');
+    const derived = derivation.value || lastDerived.current;
 
     useEffect(() => { setTimes((t) => (t[doc.id] === derived.prof.totalTime ? t : { ...t, [doc.id]: derived.prof.totalTime })); }, [derived, doc.id]);
 
@@ -529,13 +539,10 @@
 
     const addWaypoint = useCallback((p, segmentHint, onPath, selectedVisit) => {
       const prepared = prepareWaypointInsertion(p, segmentHint, onPath, selectedVisit);
-      const compatibility = isLabviewPlanner(selectedPlannerId);
-      if (compatibility || prepared.previewRequired) {
+      if (prepared.previewRequired) {
         try {
           const previewDerived = window.PM.derivePath(prepared.doc, robot, PERSEG, selectedPlannerId);
-          const message = compatibility
-            ? (selectedPlannerId === 'labviewClothoid' ? 'A new clothoid vertex rebuilds the neighboring turn.' : 'Compatibility geometry changes are shown before they are applied.')
-            : 'Splitting this ' + prepared.segmentType + ' may rebuild its geometry. Review the dashed path first.';
+          const message = 'Splitting this ' + prepared.segmentType + ' may rebuild its geometry. Review the dashed path first.';
           setWaypointPreview({ ...prepared, derived: previewDerived, plannerId: selectedPlannerId, message });
         } catch (error) {
           console.error('Could not preview waypoint insertion:', error);
@@ -583,13 +590,10 @@
       remapWaypointRanges(candidate, Array.from({ length: oldCount }, (_, index) => index));
       candidate._selAfter = oldCount;
 
-      const compatibility = isLabviewPlanner(selectedPlannerId);
-      if (compatibility || segmentType === 'clothoid') {
+      if (segmentType === 'clothoid') {
         try {
           const previewDerived = window.PM.derivePath(candidate, robot, PERSEG, selectedPlannerId);
-          const message = compatibility
-            ? 'The new endpoint and compatibility geometry are shown before they are applied.'
-            : 'The new clothoid join may rebuild the previous turn. Review the dashed path first.';
+          const message = 'The new clothoid join may rebuild the previous turn. Review the dashed path first.';
           setWaypointPreview({ doc: candidate, index: oldCount, derived: previewDerived, plannerId: selectedPlannerId, message, actionLabel: 'Place endpoint' });
         } catch (error) {
           console.error('Could not preview waypoint placement:', error);
@@ -772,10 +776,6 @@
     // ---- segment + waypoint structural ops (memo §3 / §4 / §7 / §8) ----
     const PX = { X0: 397, X1: 3502, Y0: 97, Y1: 1486 };
     const setSegMeta = useCallback((i, patch) => commit((d) => { Object.assign(d.waypoints[i], patch); return d; }), [commit]);
-    const setLabviewTrajectoryType = useCallback((trajectoryType) => commit((d) => {
-      d.labview = { ...LV_DEFAULTS, ...(d.labview || {}), trajectoryType };
-      return d;
-    }), [commit]);
     const setSegmentHeadingMode = useCallback((i, mode) => commit((d) => {
       const w = d.waypoints[i], next = d.waypoints[i + 1];
       if (mode === 'inherit') delete w.segmentHeadingMode;
@@ -943,7 +943,7 @@
     }, [addWaypoint, derived, doc.waypoints.length]);
     const inspActions = { setWp, toggleStop, toggleTheta, setHandleLen, delWp, setTarget, delTarget, setMarker, delMarker, setRange, setRangeAnchor, delRange, setConstraint, setDoc, rename, select, setTool,
       addTargetMid, addMarkerMid, addRangeMid,
-      setSegMeta, setLabviewTrajectoryType, setSegmentHeadingMode, setHeadingTransition, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, reorderWp, insertWp,
+      setSegMeta, setSegmentHeadingMode, setHeadingTransition, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, reorderWp, insertWp,
       setStop, setWait, setTurnInPlace, setTurnInPlaceMeta, setHeadingMode, toggleDriveBackward,
       openInspector: () => setInspectorOpen(true) };
     const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginHistory,
@@ -1075,8 +1075,7 @@
     const agentProposalPreviews = useMemo(() => agentCandidates.flatMap((candidate) => {
       if (!candidate.path) return [];
       try {
-        const candidatePlanner = isLabviewPlanner(plannerId) ? labviewPlannerForPath(candidate.path, plannerId) : plannerId;
-        return [{ id: candidate.id, label: candidate.label, selected: candidate.id === (agentCandidate && agentCandidate.id), valid: candidate.valid !== false, derived: window.PM.derivePath(candidate.path, robot, PERSEG, candidatePlanner) }];
+        return [{ id: candidate.id, label: candidate.label, selected: candidate.id === (agentCandidate && agentCandidate.id), valid: candidate.valid !== false, derived: window.PM.derivePath(candidate.path, robot, PERSEG, plannerId) }];
       }
       catch (_) { return []; }
     }), [agentProposal, agentCandidateId, robot, plannerId]);
@@ -1128,7 +1127,13 @@
     const seek = (t) => { setPlaying(false); setPlayTime(Math.max(0, Math.min(total, t))); };
 
     // ---- routine run engine ----
-    const run = useMemo(() => window.AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId), [routine, project.paths, robot, routineOutcomes, plannerId]);
+    const lastRun = useRef({ steps: [], total: 0 });
+    const run = useMemo(() => {
+      if (page !== 'auto') return lastRun.current;
+      const nextRun = window.AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId);
+      lastRun.current = nextRun;
+      return nextRun;
+    }, [page, routine, project.paths, robot, routineOutcomes, plannerId]);
     useEffect(() => {
       if (page !== 'auto' || !routinePlaying) return;
       let raf, last = performance.now();
@@ -1177,23 +1182,28 @@
       return { x: cx - nw / 2, y: cy - nh / 2, w: nw, h: nh };
     }), []);
     const zoomPct = Math.round(FIT.w / view.w * 100);
-    const setPlannerFamily = useCallback((family) => {
-      setPlannerId(family === 'labview' ? labviewPlannerForPath(docRef.current, plannerId) : 'profiledSpline');
-    }, [plannerId]);
+    const setPlannerFamily = useCallback((nextPlannerId) => {
+      setPlannerId(nextPlannerId === 'optimizedTrajectory' ? 'optimizedTrajectory' : 'profiledSpline');
+    }, []);
 
     // ---- desktop project workflow ----
     const canReplaceProject = useCallback(() => !dirty || confirm('Discard unsaved changes to this project?'), [dirty]);
     const loadProject = useCallback((incoming) => {
       const next = normalizeProject(incoming);
+      const javaGeneration = ++javaRestoreGeneration.current;
+      const requestedPathId = next.editor && next.editor.activePathId;
+      const requestedPathIndex = requestedPathId ? next.paths.findIndex((path) => path.id === requestedPathId) : -1;
       skipDirty.current = true;
       setProject(next);
       setPlannerId(next.plannerId || 'profiledSpline');
-      setActiveIdx(0); setSel({ kind: null, idx: -1 }); setRoutineSel(null);
+      setActiveIdx(requestedPathIndex >= 0 ? requestedPathIndex : 0); setSel({ kind: null, idx: -1 }); setRoutineSel(null);
       hist.current = { past: [], future: [] };
       routineHist.current = { past: [], future: [] };
       projectHist.current = { past: [], future: [] };
       setDirty(false);
-    }, []);
+      setJavaProjectState((current) => ({ ...current, status: 'unlinked', operation: null, catalog: null, integration: null, bookmarkId: null, error: '', notice: '' }));
+      if (next.editor && next.editor.javaProjectBookmarkId) void openRecentJavaProject(next.editor.javaProjectBookmarkId, javaGeneration);
+    }, [openRecentJavaProject]);
     useEffect(() => {
       let active = true;
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.restoreLastProject !== 'function') return undefined;
@@ -1257,7 +1267,6 @@
         else if (command === 'open-recent') void openProject(payload);
         else if (command === 'save-project') void saveProject(false);
         else if (command === 'save-project-as') void saveProject(true);
-        else if (command === 'export-bdx') onExport();
         else if (command === 'export-java') void onExportJava('linked');
         else if (command === 'export-java-save-as') void onExportJava('saveAs');
         else if (command === 'java-link') void linkJavaProject();
@@ -1267,24 +1276,9 @@
       });
     }, [newProject, openProject, saveProject, project, routine, plannerId, onExportJava, linkJavaProject, installJavaSupport, buildJavaCatalog, cancelJavaCatalogBuild]);
 
-    // ---- export ----
-    const onExport = () => {
-      if (window.bordeauxAPI && typeof window.bordeauxAPI.exportBdx === 'function') {
-        window.bordeauxAPI.exportBdx({ schemaVersion: '1.0', ...project, routine, plannerId: selectedPlannerId }, doc.id).catch((err) => {
-          console.error('BDX export failed:', err);
-          alert('BDX export failed: ' + (err && err.message ? err.message : err));
-        });
-        return;
-      }
-      const out = { version: '2.0', name: doc.name, robot: project.robot, ...doc };
-      const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
-      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = doc.name + '.path'; a.click();
-    };
-
     // ---- keyboard ----
     useEffect(() => {
       const onKey = (e) => {
-        if (document.getElementById('boot-splash')) return;
         const matches = e.target.matches && e.target.matches.bind(e.target);
         if (e.key === 'Tab') { keyboardNavigation.current = true; return; }
         const nativeKeyboardControl = keyboardNavigation.current && matches && matches('button,select,input[type="range"]');
@@ -1336,7 +1330,7 @@
     const selNode = (page === 'auto' && routineSel) ? window.AUTO.findNode(routine, routineSel) : null;
 
     return h('div', { className: 'app' },
-      h(window.Panels.Toolbar, { project, page, setPage, alliance, setAlliance, onNew: newProject, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExport, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
+      h(window.Panels.Toolbar, { project, page, setPage, alliance, setAlliance, onNew: newProject, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
         routines, activeRoutineId: routine.id, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine }),
       page === 'robot'
         ? h('main', { className: 'page-main' }, h(window.RobotPage, { robot, setRobot, accent, mcpEnabled, agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
@@ -1355,7 +1349,10 @@
               h(window.Panels.Outline, { open: outlineOpen, setOpen: setOutlineOpen, doc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot })),
             h('div', { className: 'fieldcol' },
               h(window.Panels.ToolRail, { tool, setTool }),
-              h(window.FieldView, { doc, derived, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, playTime, playing, actions: fieldActions, onSelPos, showHandles: selectedPlannerId !== 'labviewClothoid' && !(selectedPlannerId === 'labviewBezier' && doc.labview && doc.labview.bezierTangentMode === 'automatic') }),
+              derivation.error && h('div', { className: 'insert-preview derivation-error', role: 'alert' },
+                h('div', { className: 'insert-preview-copy' }, h('b', null, 'Path preview unavailable'), h('span', null, derivation.error.message || String(derivation.error))),
+                h('span', null, 'Showing the last valid preview. Undo or edit the selected geometry.')),
+              h(window.FieldView, { doc, derived, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, playTime, playing, actions: fieldActions, onSelPos, showHandles: true }),
               tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
               waypointPreview && h('div', { className: 'insert-preview', role: 'region', 'aria-label': 'Preview waypoint insertion' },
                 h('div', { className: 'insert-preview-copy' },
@@ -1396,5 +1393,17 @@
     return '';
   }
 
-  ReactDOM.createRoot(document.getElementById('root')).render(h(App));
+  class AppErrorBoundary extends React.Component {
+    constructor(props) { super(props); this.state = { error: null }; }
+    static getDerivedStateFromError(error) { return { error }; }
+    render() {
+      if (!this.state.error) return this.props.children;
+      return h('main', { className: 'fatal-error', role: 'alert' },
+        h('h1', null, 'Bordeaux could not render this project'),
+        h('p', null, this.state.error.message || String(this.state.error)),
+        h('button', { type: 'button', onClick: () => window.location.reload() }, 'Reload project'));
+    }
+  }
+
+  ReactDOM.createRoot(document.getElementById('root')).render(h(AppErrorBoundary, null, h(App)));
 })();
