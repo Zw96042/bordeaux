@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Bordeaux wine glass</title>
+  <desc id="desc">A simple glass of red wine in the Bordeaux palette.</desc>
+  <defs>
+    <linearGradient id="wine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#b95770"/>
+      <stop offset="1" stop-color="#702238"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f5efe6" stop-opacity=".16"/>
+      <stop offset="1" stop-color="#c8c1bc" stop-opacity=".04"/>
+    </linearGradient>
+  </defs>
+
+  <path d="M286 216C299 432 365 558 512 582C659 558 725 432 738 216Z" fill="url(#glass)" stroke="#ebe4da" stroke-width="22" stroke-linejoin="round"/>
+  <path d="M332 374C430 347 594 347 692 374C675 492 616 556 512 574C408 556 349 492 332 374Z" fill="url(#wine)"/>
+  <path d="M332 374C430 347 594 347 692 374C594 402 430 402 332 374Z" fill="#c9677e"/>
+  <ellipse cx="512" cy="216" rx="226" ry="31" fill="#1b1a1f" fill-opacity=".72" stroke="#f1ebe2" stroke-width="22"/>
+  <path d="M337 259C350 352 372 422 413 481" fill="none" stroke="#fffaf1" stroke-opacity=".64" stroke-width="20" stroke-linecap="round"/>
+  <path d="M512 582V755" fill="none" stroke="#ebe4da" stroke-width="24" stroke-linecap="round"/>
+  <path d="M350 817C402 779 459 762 512 762C565 762 622 779 674 817Z" fill="url(#glass)" stroke="#ebe4da" stroke-width="22" stroke-linejoin="round"/>
+</svg>

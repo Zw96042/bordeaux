@@ -10,8 +10,8 @@
       "layers": [
         {
           "fill": "none",
-          "image-name": "chap-bird.png",
-          "name": "WRLP Chap",
+          "image-name": "wine-glass.png",
+          "name": "Bordeaux Wine Glass",
           "position": {
             "scale": 1.0,
             "translation-in-points": [0, 0]

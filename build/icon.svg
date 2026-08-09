@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
-  <title id="title">Bordeaux Chap</title>
-  <desc id="desc">The complete WRLP Chap mascot in a restrained Bordeaux palette.</desc>
+  <title id="title">Bordeaux wine glass</title>
+  <desc id="desc">A filled wine glass on a dark Bordeaux tile.</desc>
   <defs>
     <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#17181c"/>
@@ -11,5 +11,5 @@
   </defs>
   <rect x="44" y="44" width="936" height="936" rx="208" fill="url(#tile)"/>
   <rect x="53" y="53" width="918" height="918" rx="199" fill="none" stroke="#ccc9c1" stroke-opacity=".10" stroke-width="18"/>
-  <image x="0" y="225" width="1024" height="614" preserveAspectRatio="xMidYMid meet" href="icon-assets/chap-bird.svg" xlink:href="icon-assets/chap-bird.svg"/>
+  <image x="0" y="0" width="1024" height="1024" href="icon-assets/wine-glass.svg" xlink:href="icon-assets/wine-glass.svg"/>
 </svg>
