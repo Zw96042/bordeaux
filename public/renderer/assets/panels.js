@@ -8,7 +8,7 @@
   const R2D = 180 / Math.PI;
 
   // ---------------- path manager ----------------
-  function PathLibrary({ project, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times }) {
+  function PathLibrary({ project, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times }) {
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState('');
     const [collapsed, setCollapsed] = useState({});
@@ -86,7 +86,11 @@
       h('input', { id: 'path-library-name', ref: editRef, value: draft, autoComplete: 'off', spellCheck: false, 'aria-invalid': !!error, 'aria-describedby': error ? 'path-library-name-error' : undefined, onChange: (e) => { setDraft(e.target.value); setError(''); } }),
       h('button', { type: 'submit' }, 'Save'), h('button', { type: 'button', onClick: finishEdit }, 'Cancel'),
       error && h('span', { id: 'path-library-name-error', className: 'pathlib-error', role: 'status' }, error));
-    const pathActions = (path, index) => h('div', { id: 'path-actions-' + path.id, className: 'pathlib-actionmenu', role: 'group', 'aria-label': path.name + ' actions' },
+    const pathActions = (path, index) => {
+      const outgoing = (project.pathLinks || []).find((link) => link.fromPathId === path.id);
+      const incoming = (project.pathLinks || []).find((link) => link.toPathId === path.id);
+      const source = incoming && project.paths.find((candidate) => candidate.id === incoming.fromPathId);
+      return h('div', { id: 'path-actions-' + path.id, className: 'pathlib-actionmenu', role: 'group', 'aria-label': path.name + ' actions' },
       h('div', { className: 'pathlib-actionrow' },
         h('button', { type: 'button', onClick: () => beginEdit('path', path.id, path.name) }, h(Icon, { name: 'edit', size: 13 }), h('span', null, 'Rename')),
         h('button', { type: 'button', onClick: () => { dupPath(index); setMenu(null); } }, h(Icon, { name: 'copy', size: 13 }), h('span', null, 'Duplicate')),
@@ -95,7 +99,15 @@
         h(Dropdown, { id: 'move-path-' + path.id, ariaLabel: 'Move ' + path.name + ' to folder', compact: true,
           className: 'pathlib-folder-dropdown', value: path.folderId || '',
           items: [{ value: '', label: 'Unfiled' }, ...folders.map((folder) => ({ value: folder.id, label: folder.name }))],
-          onChange: (value) => { movePathToFolder(index, value); setMenu(null); } })));
+          onChange: (value) => { movePathToFolder(index, value); setMenu(null); } })),
+      h('div', { className: 'pathlib-move' }, h(Icon, { name: 'route', size: 14 }), h('span', null, 'End to'),
+        h(Dropdown, { id: 'link-path-' + path.id, ariaLabel: 'Link end of ' + path.name, compact: true,
+          className: 'pathlib-folder-dropdown', value: outgoing ? outgoing.toPathId : '',
+          items: [{ value: '', label: 'Not linked' }, ...project.paths.filter((candidate) => candidate.id !== path.id).map((candidate) => ({ value: candidate.id, label: candidate.name }))],
+          onChange: (value) => setPathLink(path.id, value) })),
+      incoming && h('div', { className: 'pathlib-linknote' }, h(Icon, { name: 'route', size: 13 }), 'Start from ' + (source ? source.name : 'another path'),
+        h('button', { type: 'button', onClick: () => setPathLink(incoming.fromPathId, '') }, 'Unlink')));
+    };
     const pathRow = (path, index, showFolder) => editing && editing.kind === 'path' && editing.id === path.id
       ? h('div', { key: path.id, className: 'pathlib-editrow' }, editForm())
       : h('div', { key: path.id, className: 'pathlib-item' },
@@ -134,7 +146,10 @@
         h('button', { className: 'pathlib-scrim', type: 'button', tabIndex: -1, 'aria-label': 'Close path library', onClick: close }),
         h('aside', { ref: panelRef, className: 'pathlib-panel', role: 'dialog', 'aria-modal': true, 'aria-label': 'Path library', tabIndex: -1, onKeyDown: trapFocus },
           h('div', { className: 'pathlib-head' }, h('div', null, h(Icon, { name: 'folder', size: 15 }), h('strong', null, 'Path library'), h('span', null, project.paths.length)), h('button', { type: 'button', 'aria-label': 'Close path library', onClick: close }, h(Icon, { name: 'x', size: 15 }))),
-          h('div', { className: 'pathlib-create' }, h('button', { className: 'primary', type: 'button', onClick: () => addPath() }, h(Icon, { name: 'plus', size: 14 }), 'New path'), h('button', { type: 'button', onClick: () => { const folder = addPathFolder(); if (folder) beginEdit('folder', folder.id, folder.name); } }, h(Icon, { name: 'folder', size: 14 }), 'New folder')),
+          h('div', { className: 'pathlib-create' },
+            h('button', { className: 'primary', type: 'button', onClick: () => addPath() }, h(Icon, { name: 'plus', size: 14 }), 'New path'),
+            h('button', { type: 'button', onClick: appendPath }, h(Icon, { name: 'route', size: 14 }), 'Append'),
+            h('button', { type: 'button', onClick: () => { const folder = addPathFolder(); if (folder) beginEdit('folder', folder.id, folder.name); } }, h(Icon, { name: 'folder', size: 14 }), 'Folder')),
           h('label', { className: 'sr-only', htmlFor: 'path-library-search' }, 'Search paths and folders'),
           h('div', { className: 'pathlib-searchwrap' }, h(Icon, { name: 'search', size: 14 }), h('input', { id: 'path-library-search', ref: searchRef, className: 'pathlib-search', type: 'search', 'aria-label': 'Search paths and folders', autoComplete: 'off', spellCheck: false, placeholder: 'Search paths and folders', value: query, onChange: (e) => { setMenu(null); setQuery(e.target.value); } })),
           h('div', { className: 'pathlib-scroll' }, needle ? (results.length ? results.map((row) => pathRow(row.path, row.index, true)) : h('div', { className: 'pathlib-empty pathlib-emptysearch' }, h('strong', null, 'No matching paths'), h('span', null, 'Try a different name or folder.'))) : [folders.map(group), group(null)]))));
@@ -219,7 +234,7 @@
 
   function Toolbar(props) {
     const { project, page, setPage, alliance, setAlliance,
-      onUndo, onRedo, onExport, onExportJava, javaProject, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
+      onUndo, onRedo, onExport, onExportJava, javaProject, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
       routines, activeRoutineId, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine } = props;
     const plan = page === 'plan';
     const labview = plannerId === 'labviewBezier' || plannerId === 'labviewClothoid';
@@ -229,9 +244,9 @@
         h('div', { className: 'brand' }, h('img', { className: 'brand-mark', src: 'assets/wrlp-chap-bird-original.svg', alt: '' }), h('span', { className: 'brand-name' }, 'Bordeaux')),
         h('nav', { className: 'pageswitch', 'aria-label': 'Workspace' },
           h('button', { className: plan ? 'on' : '', type: 'button', 'aria-current': plan ? 'page' : undefined, onClick: () => setPage('plan') }, h(Icon, { name: 'route', size: 15 }), 'Plan'),
-          h('button', { className: page === 'auto' ? 'on' : '', type: 'button', 'aria-current': page === 'auto' ? 'page' : undefined, onClick: () => setPage('auto') }, h(Icon, { name: 'layers', size: 15 }), 'Acquatine'),
+          h('button', { className: page === 'auto' ? 'on' : '', type: 'button', 'aria-current': page === 'auto' ? 'page' : undefined, onClick: () => setPage('auto') }, h(Icon, { name: 'layers', size: 15 }), 'Aquitaine'),
           h('button', { className: page === 'robot' ? 'on' : '', type: 'button', 'aria-current': page === 'robot' ? 'page' : undefined, onClick: () => setPage('robot') }, h(Icon, { name: 'car', size: 15 }), 'Robot')),
-        plan && h(PathLibrary, { project, activeIdx, setActive, addPath, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times }),
+        plan && h(PathLibrary, { project, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times }),
         page === 'auto' && h(RoutineLibrary, { routines, activeRoutineId, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine })),
 
       h('div', { className: 'tb-right' },
@@ -605,8 +620,8 @@
   }
 
   // ---------------- zoom / view controls ----------------
-  function ViewControls({ zoomPct, zoomBy, onFit, showGrid, setShowGrid }) {
-    return h('div', { className: 'viewctl' },
+  function ViewControls({ zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen }) {
+    return h('div', { className: 'viewctl' + (graphOpen ? ' graph-open' : '') },
       h('button', { className: 'vc-btn', type: 'button', title: 'Zoom out', 'aria-label': 'Zoom out', onClick: () => zoomBy(1.18) }, h(Icon, { name: 'zoomout', size: 16 })),
       h('button', { className: 'vc-pct', type: 'button', title: 'Fit field  (F)', onClick: onFit }, zoomPct + '%'),
       h('button', { className: 'vc-btn', type: 'button', title: 'Zoom in', 'aria-label': 'Zoom in', onClick: () => zoomBy(1 / 1.18) }, h(Icon, { name: 'zoomin', size: 16 })),
