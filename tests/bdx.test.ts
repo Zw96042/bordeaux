@@ -553,6 +553,10 @@ describe("canonical shipped renderer", () => {
     const styles = fs.readFileSync(path.join(process.cwd(), "public/renderer/styles.css"), "utf8");
     const panels = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/panels.js"), "utf8");
     expect(styles).toContain(".metricctl{height:100%;display:flex;align-items:center");
+    expect(styles).toContain(".transport.graph-open{height:248px}");
+    expect(styles).not.toContain(".viewctl.graph-open");
+    expect(panels).toContain("className: 'velgraph' + (graphOpen ? ' open' : '')");
+    expect(panels).toContain("tabIndex: graphOpen ? 0 : -1");
     expect(styles).toContain(".metric-dropdown{width:82px}");
     expect(panels).toContain("function MetricControl(");
     expect(panels).toContain("h(MetricControl, { metric, setMetric, derived");

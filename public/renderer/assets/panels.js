@@ -554,14 +554,14 @@
     };
 
     return h(React.Fragment, null,
-      graphOpen && h('div', { className: 'velgraph' },
+      h('div', { className: 'velgraph' + (graphOpen ? ' open' : ''), 'aria-hidden': !graphOpen },
         h('div', { className: 'velgraph-top' },
           h('span', { className: 'velgraph-ttl' }, title + ' profile'),
           h('span', { className: 'velgraph-readout' },
             h('b', null, currentValue.toFixed(metric === 'angvel' ? 0 : metric === 'curvature' ? 2 : 1) + ' ' + unit),
             h('span', null, 'Peak ' + peak.toFixed(metric === 'angvel' ? 0 : metric === 'curvature' ? 2 : 1) + ' ' + unit))),
         h('div', { className: 'velgraph-plot' },
-          h('svg', { ref: graphRef, className: 'velgraph-svg', viewBox: `0 0 ${GW} ${GH}`, preserveAspectRatio: 'none', onPointerDown: onGraphDown, tabIndex: 0, role: 'slider', 'aria-label': title + ' graph playback position', 'aria-valuemin': 0, 'aria-valuemax': Math.round(total * 1000), 'aria-valuenow': Math.round(playTime * 1000), onKeyDown: (e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); seek(Math.max(0, Math.min(total, playTime + (e.key === 'ArrowRight' ? 1 : -1) * Math.max(0.02, total / 100)))); } else if (e.key === 'Home') { e.preventDefault(); seek(0); } else if (e.key === 'End') { e.preventDefault(); seek(total); } } },
+          h('svg', { ref: graphRef, className: 'velgraph-svg', viewBox: `0 0 ${GW} ${GH}`, preserveAspectRatio: 'none', onPointerDown: onGraphDown, tabIndex: graphOpen ? 0 : -1, role: 'slider', 'aria-label': title + ' graph playback position', 'aria-valuemin': 0, 'aria-valuemax': Math.round(total * 1000), 'aria-valuenow': Math.round(playTime * 1000), onKeyDown: (e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); seek(Math.max(0, Math.min(total, playTime + (e.key === 'ArrowRight' ? 1 : -1) * Math.max(0.02, total / 100)))); } else if (e.key === 'Home') { e.preventDefault(); seek(0); } else if (e.key === 'End') { e.preventDefault(); seek(total); } } },
             h('defs', null,
               h('linearGradient', { id: 'telemetry-fill', x1: '0', y1: '0', x2: '0', y2: '1' },
                 h('stop', { offset: '0%', stopColor: 'var(--accent)', stopOpacity: 0.24 }),
@@ -574,7 +574,7 @@
             h('line', { x1: playX, x2: playX, y1: padT, y2: GH - padB, stroke: '#fff', strokeOpacity: 0.45, strokeWidth: 1, vectorEffect: 'non-scaling-stroke' }),
             h('circle', { cx: playX, cy: playY, r: 4, fill: '#fff', stroke: 'var(--accent)', strokeWidth: 2, vectorEffect: 'non-scaling-stroke' })),
           h('div', { className: 'velgraph-time' }, h('span', null, '0s'), h('span', null, (total / 2).toFixed(1) + 's'), h('span', null, total.toFixed(1) + 's')))),
-      h('div', { className: 'transport' },
+      h('div', { className: 'transport' + (graphOpen ? ' graph-open' : '') },
         h('div', { className: 'timeline-toolbar' },
           h('div', { className: 'transport-controls' },
             h('button', { className: 'tbtn', type: 'button', onClick: restart, title: 'Restart', 'aria-label': 'Restart trajectory playback' }, h(Icon, { name: 'rewind', size: 14 })),
@@ -620,8 +620,8 @@
   }
 
   // ---------------- zoom / view controls ----------------
-  function ViewControls({ zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen }) {
-    return h('div', { className: 'viewctl' + (graphOpen ? ' graph-open' : '') },
+  function ViewControls({ zoomPct, zoomBy, onFit, showGrid, setShowGrid }) {
+    return h('div', { className: 'viewctl' },
       h('button', { className: 'vc-btn', type: 'button', title: 'Zoom out', 'aria-label': 'Zoom out', onClick: () => zoomBy(1.18) }, h(Icon, { name: 'zoomout', size: 16 })),
       h('button', { className: 'vc-pct', type: 'button', title: 'Fit field  (F)', onClick: onFit }, zoomPct + '%'),
       h('button', { className: 'vc-btn', type: 'button', title: 'Zoom in', 'aria-label': 'Zoom in', onClick: () => zoomBy(1 / 1.18) }, h(Icon, { name: 'zoomin', size: 16 })),
