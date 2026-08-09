@@ -1,4 +1,4 @@
-import { createMarkerId, createPathId, createPathLinkId, createRoutineId, DEFAULT_LABVIEW_OPTIONS } from "./defaults";
+import { createMarkerId, createPathId, createPathLinkId, createRoutineId } from "./defaults";
 import type { BordeauxProject, RoutineNode } from "../types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -36,16 +36,17 @@ function normalizeWaypoint(raw: unknown, index: number, count: number): unknown 
   return waypoint;
 }
 
-function normalizeNodes(nodes: unknown, paths: Array<{ id: string }>): RoutineNode[] {
+function normalizeNodes(nodes: unknown, paths: Array<{ id: string }>, depth = 0): RoutineNode[] {
   if (!Array.isArray(nodes)) return [];
+  if (depth > 64) return nodes as RoutineNode[];
   return nodes.map((raw) => {
     if (!raw || typeof raw !== "object") return raw as RoutineNode;
     const node = { ...raw } as Record<string, unknown>;
     if (node.type === "path") {
       if (typeof node.ref === "number") node.ref = paths[node.ref]?.id ?? "";
     } else if (node.type === "decision") {
-      node.then = normalizeNodes(node.then, paths);
-      node.else = normalizeNodes(node.else, paths);
+      node.then = normalizeNodes(node.then, paths, depth + 1);
+      node.else = normalizeNodes(node.else, paths, depth + 1);
     }
     return node as unknown as RoutineNode;
   });
@@ -64,9 +65,7 @@ export function normalizeProject(value: unknown): unknown {
     while (!path.id && used.has(id)) id = createPathId();
     used.add(id);
     path.id = id;
-    path.labview = isRecord(path.labview)
-      ? { ...DEFAULT_LABVIEW_OPTIONS, ...path.labview }
-      : { ...DEFAULT_LABVIEW_OPTIONS };
+    delete path.labview;
     if (Array.isArray(path.waypoints)) {
       path.waypoints = path.waypoints.map((waypoint, index, waypoints) => normalizeWaypoint(waypoint, index, waypoints.length));
     }
@@ -102,5 +101,6 @@ export function normalizeProject(value: unknown): unknown {
     return { ...raw, id: typeof raw.id === "string" && raw.id.trim() ? raw.id : createPathLinkId() };
   }) : [];
 
-  return { ...source, paths, pathLinks, routines, activeRoutineId, routine: activeRoutine } as unknown as BordeauxProject;
+  const plannerId = source.plannerId === "optimizedTrajectory" ? "optimizedTrajectory" : "profiledSpline";
+  return { ...source, paths, pathLinks, routines, activeRoutineId, routine: activeRoutine, plannerId } as unknown as BordeauxProject;
 }

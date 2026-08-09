@@ -4,18 +4,19 @@ import { randomUUID } from "node:crypto";
 import type { BordeauxProject } from "../shared/types";
 import { decodeProjectFile, encodeProjectFile } from "../shared/project/fileFormat";
 import type { DecodedProjectFile } from "../shared/project/fileFormat";
-import { decodeLabviewBdxProject } from "../shared/project/labviewImport";
 
 const writeQueues = new Map<string, Promise<void>>();
+const MAX_PROJECT_FILE_BYTES = 16 * 1024 * 1024;
 
 export function parseProject(contents: string): BordeauxProject {
   return decodeProjectFile(contents).project;
 }
 
 export async function readProject(filePath: string): Promise<DecodedProjectFile> {
-  const contents = await fs.readFile(filePath);
-  if (path.extname(filePath).toLowerCase() === ".bdx") return decodeLabviewBdxProject(contents, filePath);
-  return decodeProjectFile(contents.toString("utf8"));
+  const stat = await fs.lstat(filePath);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Bordeaux project must be a regular file");
+  if (stat.size > MAX_PROJECT_FILE_BYTES) throw new Error("Bordeaux project exceeds the 16 MiB size limit");
+  return decodeProjectFile(await fs.readFile(filePath, "utf8"));
 }
 
 export function saveTargetForOpenedProject(filePath: string, decoded: DecodedProjectFile): string | null {

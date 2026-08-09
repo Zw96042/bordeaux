@@ -10,7 +10,7 @@
   "paths": [
     {
       "id": "path_example",
-      "name": "NewPath",
+      "name": "NewPath1",
       "waypoints": [
         {
           "linked": true,
@@ -112,23 +112,311 @@
       "headingMode": "targets",
       "startVel": 0,
       "goalVel": 0,
-      "exportable": true,
-      "labview": {
-        "samplePeriodS": 0.02,
-        "minTurnRadiusM": 0.5,
-        "bezierTangentMode": "handles",
-        "reversePath": false,
-        "zeroVelocity": false,
-        "pickupBalls": false,
-        "currentLimit": 0,
-        "zeroTranslationalVelocity": false,
-        "correctAtBeginningOfPath": false
-      }
+      "exportable": true
+    },
+    {
+      "id": "path_c172acaa-d672-496c-9382-51c148efb37f",
+      "name": "LeftAuto1",
+      "waypoints": [
+        {
+          "linked": true,
+          "thetaOn": true,
+          "theta": 0,
+          "stop": false,
+          "x": 5.04222423510467,
+          "y": 7.567291460799347,
+          "prevC": {
+            "x": 4.25822423510467,
+            "y": 7.567291460799347
+          },
+          "nextC": {
+            "x": 5.826224235104671,
+            "y": 7.567291460799347
+          },
+          "segmentHeadingMode": "tangent"
+        },
+        {
+          "linked": true,
+          "thetaOn": true,
+          "theta": 0,
+          "stop": false,
+          "x": 9.325205594083384,
+          "y": 5.287801890692495,
+          "prevC": {
+            "x": 9.342231623569317,
+            "y": 7.878055614441008
+          },
+          "nextC": {
+            "x": 9.312572438135316,
+            "y": 3.3658576544149907
+          },
+          "segType": "bezier",
+          "segmentHeadingMode": "tangent",
+          "corner": false
+        },
+        {
+          "linked": true,
+          "thetaOn": true,
+          "theta": 0,
+          "stop": false,
+          "x": 6.147343218001459,
+          "y": 5.327098836878206,
+          "prevC": {
+            "x": 7.205673577615489,
+            "y": 5.33324173050531
+          },
+          "nextC": {
+            "x": 5.304564380941996,
+            "y": 5.322207074395726
+          },
+          "segType": "bezier",
+          "segmentHeadingMode": "targets",
+          "corner": false,
+          "headingTransition": {
+            "placement": "after",
+            "rotationPriority": "translation",
+            "distanceM": 0.75
+          }
+        },
+        {
+          "linked": true,
+          "thetaOn": true,
+          "theta": -41,
+          "stop": false,
+          "x": 3.581065084352355,
+          "y": 5.339468715198096,
+          "prevC": {
+            "x": 4.423857513031317,
+            "y": 5.338458914771193
+          },
+          "nextC": {
+            "x": 2.738272655673393,
+            "y": 5.340478515625
+          }
+        }
+      ],
+      "targets": [],
+      "markers": [],
+      "ranges": [],
+      "constraints": {
+        "maxVel": 4.2,
+        "maxAccel": 6.5,
+        "maxDecel": 6.5,
+        "maxAngVel": 540,
+        "maxAngAccel": 720,
+        "maxAngDecel": 720,
+        "maxJerk": 0,
+        "maxAngJerk": 0
+      },
+      "headingMode": "targets",
+      "startVel": 0,
+      "goalVel": 0
+    },
+    {
+      "id": "path_e60cdf10-13b3-47d7-b45c-422de31ebbe7",
+      "name": "LeftAuto2",
+      "waypoints": [
+        {
+          "linked": true,
+          "thetaOn": true,
+          "theta": -41,
+          "stop": false,
+          "x": 3.581065084352355,
+          "y": 5.339468715198096,
+          "prevC": {
+            "x": 2.989372773457702,
+            "y": 5.853818993926654
+          },
+          "nextC": {
+            "x": 2.5998220188110155,
+            "y": 6.197864180826471
+          },
+          "segmentHeadingMode": "lookAt",
+          "segmentLookAt": {
+            "x": 5.216716597159319,
+            "y": 3.993602884972327
+          }
+        },
+        {
+          "linked": true,
+          "thetaOn": true,
+          "theta": 2.0382657526648167,
+          "stop": false,
+          "x": 3.9615519819029283,
+          "y": 7.436356983423748,
+          "prevC": {
+            "x": 3.071616099599939,
+            "y": 7.459918521625691
+          },
+          "nextC": {
+            "x": 5.548085121345798,
+            "y": 7.394352652643313
+          },
+          "segType": "bezier",
+          "segmentHeadingMode": "tangent",
+          "segmentLookAt": {
+            "x": 5.216716597159319,
+            "y": 3.993602884972327
+          },
+          "corner": false,
+          "headingTransition": {
+            "placement": "after",
+            "rotationPriority": "translation",
+            "distanceM": 0.75
+          }
+        },
+        {
+          "linked": true,
+          "thetaOn": true,
+          "theta": 2.0382657526648167,
+          "stop": false,
+          "x": 8.337645605626006,
+          "y": 5.422859690326336,
+          "prevC": {
+            "x": 8.329278002497231,
+            "y": 7.585972414877708
+          },
+          "nextC": {
+            "x": 9.795769266744665,
+            "y": 4.796180222623206
+          }
+        }
+      ],
+      "targets": [],
+      "markers": [],
+      "ranges": [],
+      "constraints": {
+        "maxVel": 4.2,
+        "maxAccel": 6.5,
+        "maxDecel": 6.5,
+        "maxAngVel": 540,
+        "maxAngAccel": 720,
+        "maxAngDecel": 720,
+        "maxJerk": 0,
+        "maxAngJerk": 0
+      },
+      "headingMode": "targets",
+      "startVel": 0,
+      "goalVel": 0
     }
   ],
   "routine": {
     "name": "Autonomous Routine",
-    "nodes": []
+    "nodes": [
+      {
+        "id": "p_1",
+        "type": "path",
+        "ref": "path_c172acaa-d672-496c-9382-51c148efb37f"
+      },
+      {
+        "id": "d_3",
+        "type": "decision",
+        "cond": "vision.targetVisible",
+        "thenLabel": "Yes",
+        "elseLabel": "No",
+        "then": [
+          {
+            "id": "c_4",
+            "type": "function",
+            "cat": "command",
+            "title": "Set output",
+            "invocation": {
+              "commandId": "example.set-output",
+              "arguments": {
+                "request": {
+                  "output": 0.35,
+                  "signal": "READY"
+                }
+              }
+            }
+          }
+        ],
+        "else": [
+          {
+            "id": "c_5",
+            "type": "function",
+            "cat": "command",
+            "title": "Set status",
+            "invocation": {
+              "commandId": "example.set-status",
+              "arguments": {
+                "signal": "SCORE"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "p_2",
+        "type": "path",
+        "ref": "path_e60cdf10-13b3-47d7-b45c-422de31ebbe7"
+      }
+    ],
+    "id": "routine_740109f1-344e-42d0-9fb5-0eece8d4c4ce"
   },
-  "plannerId": "profiledSpline"
+  "plannerId": "profiledSpline",
+  "pathLinks": [
+    {
+      "id": "pathlink_2c0e45ca-a81f-44ad-9db7-b698d1cb8964",
+      "fromPathId": "path_c172acaa-d672-496c-9382-51c148efb37f",
+      "toPathId": "path_e60cdf10-13b3-47d7-b45c-422de31ebbe7"
+    }
+  ],
+  "routines": [
+    {
+      "name": "Autonomous Routine",
+      "nodes": [
+        {
+          "id": "p_1",
+          "type": "path",
+          "ref": "path_c172acaa-d672-496c-9382-51c148efb37f"
+        },
+        {
+          "id": "d_3",
+          "type": "decision",
+          "cond": "vision.targetVisible",
+          "thenLabel": "Yes",
+          "elseLabel": "No",
+          "then": [
+            {
+              "id": "c_4",
+              "type": "function",
+              "cat": "command",
+              "title": "Set output",
+              "invocation": {
+                "commandId": "example.set-output",
+                "arguments": {
+                  "request": {
+                    "output": 0.35,
+                    "signal": "READY"
+                  }
+                }
+              }
+            }
+          ],
+          "else": [
+            {
+              "id": "c_5",
+              "type": "function",
+              "cat": "command",
+              "title": "Set status",
+              "invocation": {
+                "commandId": "example.set-status",
+                "arguments": {
+                  "signal": "SCORE"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "p_2",
+          "type": "path",
+          "ref": "path_e60cdf10-13b3-47d7-b45c-422de31ebbe7"
+        }
+      ],
+      "id": "routine_740109f1-344e-42d0-9fb5-0eece8d4c4ce"
+    }
+  ],
+  "activeRoutineId": "routine_740109f1-344e-42d0-9fb5-0eece8d4c4ce"
 }

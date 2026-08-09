@@ -10,7 +10,6 @@ contextBridge.exposeInMainWorld("bordeauxAPI", {
   newProject: () => ipcRenderer.invoke("project:new"),
   saveProject: (project: BordeauxProject, saveAs = false) => ipcRenderer.invoke("project:save", project, saveAs),
   autosaveProject: (project: BordeauxProject) => ipcRenderer.invoke("project:autosave", project),
-  exportBdx: (project: BordeauxProject, pathId?: string) => ipcRenderer.invoke("project:exportBdx", project, pathId),
   exportJava: (project: BordeauxProject, destination: "linked" | "saveAs" = "linked") => ipcRenderer.invoke("project:exportJava", project, destination),
   validateProject: (project: BordeauxProject) => ipcRenderer.invoke("project:validate", project),
   listRecentJavaProjects: () => ipcRenderer.invoke("javaProject:listRecent"),

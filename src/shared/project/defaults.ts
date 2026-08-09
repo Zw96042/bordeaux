@@ -2,7 +2,6 @@ import { PM } from "../math/pm";
 import { FIELD_H, FIELD_W, clampWorldPoint } from "../math/fieldBounds";
 import type {
   BordeauxProject,
-  LabviewPathOptions,
   PathConstraints,
   PathDoc,
   SegmentType,
@@ -21,18 +20,6 @@ export const DEFAULT_CONSTRAINTS: PathConstraints = {
   maxJerk: 0,
   maxAngJerk: 0,
 };
-
-export const DEFAULT_LABVIEW_OPTIONS = {
-  samplePeriodS: 0.02,
-  minTurnRadiusM: 0.5,
-  bezierTangentMode: "handles",
-  reversePath: false,
-  zeroVelocity: false,
-  pickupBalls: false,
-  currentLimit: 0,
-  zeroTranslationalVelocity: false,
-  correctAtBeginningOfPath: false,
-} satisfies LabviewPathOptions;
 
 export function createPathId(): string {
   return `path_${globalThis.crypto.randomUUID()}`;
@@ -101,7 +88,6 @@ export function blankPath(name = "NewPath"): PathDoc {
     startVel: 0,
     goalVel: 0,
     exportable: true,
-    labview: clone(DEFAULT_LABVIEW_OPTIONS),
   };
 }
 
@@ -111,14 +97,16 @@ export function createDemoProject(): BordeauxProject {
     name: "Autonomous Routine",
     nodes: [],
   };
+  const path = blankPath("NewPath");
   return {
     schemaVersion: "1.0",
     name: "Untitled",
     robot: { drive: "swerve", w: 0.84, l: 0.84, heightM: 0.5, maxSpeed: 5.0 },
-    paths: [blankPath("NewPath")],
+    paths: [path],
     pathLinks: [],
     routines: [routine],
     activeRoutineId: routine.id,
     routine,
+    editor: { activePathId: path.id },
   };
 }

@@ -119,14 +119,4 @@ describe("robot footprint geometry", () => {
     ]));
   });
 
-  it("validates the per-path LabVIEW trajectory type", () => {
-    const project = createDemoProject();
-    project.paths[0].labview = { ...project.paths[0].labview, trajectoryType: "clothoid" };
-    expect(validateProject(project).ok).toBe(true);
-
-    project.paths[0].labview.trajectoryType = "arc" as "clothoid";
-    expect(validateProject(project).issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: "$.paths[0].labview.trajectoryType" }),
-    ]));
-  });
 });

@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildBdxExport } from "../src/shared/export/bdx";
-import { buildLabviewBdx } from "../src/shared/export/labviewBdx";
 import { createDemoProject } from "../src/shared/project/defaults";
 import type { BordeauxProject, JavaCommandCatalog, JavaCommandDescriptor } from "../src/shared/types";
 import { validateProject } from "../src/shared/validation";
@@ -43,21 +42,6 @@ describe("Java command marker invocations", () => {
       "$.paths[0].markers[0].invocation.commandId",
       "$.paths[0].markers[0].invocation.arguments.nested.value",
     ]));
-  });
-
-  it("keeps Java invocation metadata out of the LabVIEW binary contract", () => {
-    const project = createDemoProject();
-    const before = buildLabviewBdx(project).buffer;
-    project.paths[0].markers = [{
-      f: 0.5,
-      name: "score",
-      invocation: {
-        commandId: "frc.robot.Superstructure#score",
-        arguments: { target: { level: "L4" } },
-      },
-    }];
-
-    expect(buildLabviewBdx(project).buffer).toEqual(before);
   });
 
   it("keeps a pending action intent editable but blocks Java export", () => {

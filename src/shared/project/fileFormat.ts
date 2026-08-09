@@ -7,8 +7,7 @@ export const CURRENT_PROJECT_SCHEMA_VERSION = "1.0" as const;
 export type ProjectSourceFormat =
   | "bordeaux-project-1.0"
   | "unversioned-project"
-  | "browser-path-2.0"
-  | "labview-bdx-4.4";
+  | "browser-path-2.0";
 
 export interface DecodedProjectFile {
   project: BordeauxProject;
@@ -22,13 +21,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function hasNumericRoutineReference(nodes: unknown): boolean {
+function hasNumericRoutineReference(nodes: unknown, depth = 0): boolean {
   if (!Array.isArray(nodes)) return false;
+  if (depth > 64) return false;
   return nodes.some((node) => {
     if (!isRecord(node)) return false;
     if (node.type === "path") return typeof node.ref === "number";
     if (node.type === "decision") {
-      return hasNumericRoutineReference(node.then) || hasNumericRoutineReference(node.else);
+      return hasNumericRoutineReference(node.then, depth + 1) || hasNumericRoutineReference(node.else, depth + 1);
     }
     return false;
   });

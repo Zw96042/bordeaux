@@ -3,6 +3,12 @@ import { FIELD_H, FIELD_W } from "./math/fieldBounds";
 
 type RecordValue = Record<string, unknown>;
 
+const MAX_PROJECT_PATHS = 1_024;
+const MAX_PATH_ITEMS = 4_096;
+const MAX_PROJECT_ROUTINES = 1_024;
+const MAX_ROUTINE_NODES = 100_000;
+const MAX_ROUTINE_DEPTH = 64;
+
 function issue(path: string, message: string, severity: "error" | "warning" = "error"): ValidationIssue {
   return { path, message, severity };
 }
@@ -173,16 +179,34 @@ function validateCommandArgumentValue(issues: ValidationIssue[], value: unknown,
   issues.push(issue(path, "Command arguments must contain only JSON-compatible values"));
 }
 
-function validateRoutineNodes(issues: ValidationIssue[], value: unknown, path: string, pathIds: Set<string>, nodeIds: Set<string>) {
+function validateRoutineNodes(
+  issues: ValidationIssue[],
+  value: unknown,
+  path: string,
+  pathIds: Set<string>,
+  nodeIds: Set<string>,
+  state = { count: 0 },
+  depth = 0,
+) {
   if (!Array.isArray(value)) {
     issues.push(issue(path, "Routine nodes must be an array"));
     return;
   }
-  value.forEach((node, index) => {
+  if (depth > MAX_ROUTINE_DEPTH) {
+    issues.push(issue(path, `Routine nesting cannot exceed ${MAX_ROUTINE_DEPTH} levels`));
+    return;
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    if (state.count >= MAX_ROUTINE_NODES) {
+      issues.push(issue(path, `Routine cannot exceed ${MAX_ROUTINE_NODES} nodes`));
+      return;
+    }
+    state.count += 1;
+    const node = value[index];
     const base = `${path}[${index}]`;
     if (!isRecord(node)) {
       issues.push(issue(base, "Routine node must be an object"));
-      return;
+      continue;
     }
     if (typeof node.id !== "string" || !node.id.trim()) issues.push(issue(`${base}.id`, "Routine node ID is required"));
     else if (nodeIds.has(node.id)) issues.push(issue(`${base}.id`, "Routine node IDs must be unique"));
@@ -190,14 +214,14 @@ function validateRoutineNodes(issues: ValidationIssue[], value: unknown, path: s
 
     if (node.type === "path") {
       if (typeof node.ref !== "string" || !pathIds.has(node.ref)) issues.push(issue(`${base}.ref`, "Routine path reference must match a path ID"));
-      return;
+      continue;
     }
     if (node.type === "decision") {
       if (typeof node.cond !== "string") issues.push(issue(`${base}.cond`, "Decision condition is required"));
       if (typeof node.thenLabel !== "string" || typeof node.elseLabel !== "string") issues.push(issue(base, "Decision branch labels are required"));
-      validateRoutineNodes(issues, node.then, `${base}.then`, pathIds, nodeIds);
-      validateRoutineNodes(issues, node.else, `${base}.else`, pathIds, nodeIds);
-      return;
+      validateRoutineNodes(issues, node.then, `${base}.then`, pathIds, nodeIds, state, depth + 1);
+      validateRoutineNodes(issues, node.else, `${base}.else`, pathIds, nodeIds, state, depth + 1);
+      continue;
     }
     if (node.type !== "function") {
       issues.push(issue(`${base}.type`, "Routine node type is invalid"));
@@ -205,7 +229,7 @@ function validateRoutineNodes(issues: ValidationIssue[], value: unknown, path: s
     }
     if (!["command", "terminate", "sequence", "generate", "velocity"].includes(String(node.cat))) issues.push(issue(`${base}.cat`, "Routine function category is invalid"));
     validateOptionalFinite(issues, node.scale, `${base}.scale`, "Velocity scale", { nonnegative: true });
-  });
+  }
 }
 
 function validateProjectInner(project: unknown): ValidationResult {
@@ -214,8 +238,8 @@ function validateProjectInner(project: unknown): ValidationResult {
 
   if (project.schemaVersion !== "1.0") issues.push(issue("$.schemaVersion", "Schema version must be 1.0"));
   if (typeof project.name !== "string" || !project.name.trim()) issues.push(issue("$.name", "Project name is required"));
-  if (project.plannerId !== undefined && !["profiledSpline", "optimizedTrajectory", "labviewBezier", "labviewClothoid"].includes(String(project.plannerId))) {
-    issues.push(issue("$.plannerId", "Planner must be profiledSpline, optimizedTrajectory, labviewBezier, or labviewClothoid"));
+  if (project.plannerId !== undefined && !["profiledSpline", "optimizedTrajectory"].includes(String(project.plannerId))) {
+    issues.push(issue("$.plannerId", "Planner must be profiledSpline or optimizedTrajectory"));
   }
 
   if (!isRecord(project.robot)) {
@@ -268,6 +292,8 @@ function validateProjectInner(project: unknown): ValidationResult {
     issues.push(issue("$.paths", "Project paths must be an array"));
   } else if (project.paths.length === 0) {
     issues.push(issue("$.paths", "Project must contain at least one path"));
+  } else if (project.paths.length > MAX_PROJECT_PATHS) {
+    issues.push(issue("$.paths", `Project cannot contain more than ${MAX_PROJECT_PATHS} paths`));
   } else {
     project.paths.forEach((path, pi) => {
       const base = `$.paths[${pi}]`;
@@ -280,6 +306,8 @@ function validateProjectInner(project: unknown): ValidationResult {
       else pathIds.add(path.id);
       if (typeof path.name !== "string" || !path.name.trim()) issues.push(issue(`${base}.name`, "Path name is required"));
       if (path.folderId !== undefined && (typeof path.folderId !== "string" || !folderIds.has(path.folderId))) issues.push(issue(`${base}.folderId`, "Path folder does not exist"));
+      if (path.driveBackward !== undefined && typeof path.driveBackward !== "boolean") issues.push(issue(`${base}.driveBackward`, "Drive backward must be true or false"));
+      if (path.exportable !== undefined && typeof path.exportable !== "boolean") issues.push(issue(`${base}.exportable`, "Exportable must be true or false"));
       if (path.headingMode !== undefined && !["manual", "tangent", "targets"].includes(String(path.headingMode))) issues.push(issue(`${base}.headingMode`, "Heading mode is invalid"));
       if (path.followMode !== undefined && !["time", "position"].includes(String(path.followMode))) issues.push(issue(`${base}.followMode`, "Follow mode must be time or position"));
       validateFinite(issues, path.startVel, `${base}.startVel`, "Start velocity", { nonnegative: true });
@@ -287,6 +315,8 @@ function validateProjectInner(project: unknown): ValidationResult {
 
       if (!Array.isArray(path.waypoints)) {
         issues.push(issue(`${base}.waypoints`, "Waypoints must be an array"));
+      } else if (path.waypoints.length > MAX_PATH_ITEMS) {
+        issues.push(issue(`${base}.waypoints`, `Path cannot contain more than ${MAX_PATH_ITEMS} waypoints`));
       } else {
         const waypointCount = path.waypoints.length;
         if (waypointCount < 2) issues.push(issue(`${base}.waypoints`, "Path must contain at least two waypoints"));
@@ -302,6 +332,10 @@ function validateProjectInner(project: unknown): ValidationResult {
             issues.push(issue(wpBase, "Waypoint must stay inside the FRC field bounds"));
           }
           validateFinite(issues, waypoint.theta, `${wpBase}.theta`, "Waypoint heading");
+          (["thetaOn", "linked", "stop"] as const).forEach((key) => {
+            if (typeof waypoint[key] !== "boolean") issues.push(issue(`${wpBase}.${key}`, `${key} must be true or false`));
+          });
+          if (waypoint.corner !== undefined && typeof waypoint.corner !== "boolean") issues.push(issue(`${wpBase}.corner`, "Corner must be true or false"));
           validateOptionalFinite(issues, waypoint.wait, `${wpBase}.wait`, "Waypoint wait", { nonnegative: true });
           validatePoint(issues, waypoint.prevC, `${wpBase}.prevC`, "Previous control handle");
           validatePoint(issues, waypoint.nextC, `${wpBase}.nextC`, "Next control handle");
@@ -396,8 +430,11 @@ function validateProjectInner(project: unknown): ValidationResult {
       }
 
       const collections: Array<[string, unknown]> = [["targets", path.targets], ["markers", path.markers], ["ranges", path.ranges]];
-      collections.forEach(([name, value]) => { if (!Array.isArray(value)) issues.push(issue(`${base}.${name}`, `${name[0].toUpperCase()}${name.slice(1)} must be an array`)); });
-      if (Array.isArray(path.targets)) path.targets.forEach((target, i) => {
+      collections.forEach(([name, value]) => {
+        if (!Array.isArray(value)) issues.push(issue(`${base}.${name}`, `${name[0].toUpperCase()}${name.slice(1)} must be an array`));
+        else if (value.length > MAX_PATH_ITEMS) issues.push(issue(`${base}.${name}`, `Path cannot contain more than ${MAX_PATH_ITEMS} ${name}`));
+      });
+      if (Array.isArray(path.targets) && path.targets.length <= MAX_PATH_ITEMS) path.targets.forEach((target, i) => {
         const targetBase = `${base}.targets[${i}]`;
         if (!isRecord(target)) return issues.push(issue(targetBase, "Rotation target must be an object"));
         validateFinite(issues, target.f, `${targetBase}.f`, "Target fraction");
@@ -406,7 +443,7 @@ function validateProjectInner(project: unknown): ValidationResult {
         validateOptionalFinite(issues, target.d, `${targetBase}.d`, "Target distance", { nonnegative: true });
         if (finite(target.f) && (target.f < 0 || target.f > 1)) issues.push(issue(`${targetBase}.f`, "Target fraction must be between 0 and 1"));
       });
-      if (Array.isArray(path.markers)) path.markers.forEach((marker, i) => {
+      if (Array.isArray(path.markers) && path.markers.length <= MAX_PATH_ITEMS) path.markers.forEach((marker, i) => {
         const markerBase = `${base}.markers[${i}]`;
         if (!isRecord(marker)) return issues.push(issue(markerBase, "Marker must be an object"));
         if (marker.id !== undefined) {
@@ -461,7 +498,7 @@ function validateProjectInner(project: unknown): ValidationResult {
           }
         }
       });
-      if (Array.isArray(path.ranges)) path.ranges.forEach((range, i) => {
+      if (Array.isArray(path.ranges) && path.ranges.length <= MAX_PATH_ITEMS) path.ranges.forEach((range, i) => {
         const rangeBase = `${base}.ranges[${i}]`;
         if (!isRecord(range)) return issues.push(issue(rangeBase, "Constraint range must be an object"));
         if (!["param", "dist", "wp"].includes(String(range.anchor))) issues.push(issue(`${rangeBase}.anchor`, "Constraint range anchor is invalid"));
@@ -495,32 +532,19 @@ function validateProjectInner(project: unknown): ValidationResult {
         validateOptionalFinite(issues, constraints.maxCentripetalAccel, `${base}.constraints.maxCentripetalAccel`, "maxCentripetalAccel", { positive: true });
         ["maxAngDecel", "maxJerk", "maxAngJerk"].forEach((key) => validateOptionalFinite(issues, constraints[key], `${base}.constraints.${key}`, key, { nonnegative: true }));
       }
-      if (path.labview !== undefined) {
-        if (!isRecord(path.labview)) {
-          issues.push(issue(`${base}.labview`, "LabVIEW compatibility settings must be an object"));
-        } else {
-          const labview = path.labview;
-          if (labview.trajectoryType !== undefined && labview.trajectoryType !== "bezier" && labview.trajectoryType !== "clothoid") {
-            issues.push(issue(`${base}.labview.trajectoryType`, "LabVIEW trajectory type must be Bezier or clothoid"));
-          }
-          validateOptionalFinite(issues, labview.samplePeriodS, `${base}.labview.samplePeriodS`, "LabVIEW sample period", { positive: true });
-          validateOptionalFinite(issues, labview.minTurnRadiusM, `${base}.labview.minTurnRadiusM`, "LabVIEW minimum turn radius", { positive: true });
-          if (finite(labview.samplePeriodS) && (labview.samplePeriodS < 0.001 || labview.samplePeriodS > 0.1)) {
-            issues.push(issue(`${base}.labview.samplePeriodS`, "LabVIEW sample period must be between 0.001 and 0.1 seconds"));
-          }
-          if (labview.bezierTangentMode !== undefined && labview.bezierTangentMode !== "handles" && labview.bezierTangentMode !== "automatic") {
-            issues.push(issue(`${base}.labview.bezierTangentMode`, "LabVIEW Bezier tangent mode must be handles or automatic"));
-          }
-          validateOptionalFinite(issues, labview.currentLimit, `${base}.labview.currentLimit`, "LabVIEW current limit", { nonnegative: true });
-          validateOptionalFinite(issues, labview.stoopidFastMps, `${base}.labview.stoopidFastMps`, "LabVIEW StoopidFast velocity", { positive: true });
-          ["reversePath", "zeroVelocity", "pickupBalls", "zeroTranslationalVelocity", "correctAtBeginningOfPath"].forEach((key) => {
-            if (labview[key] !== undefined && typeof labview[key] !== "boolean") {
-              issues.push(issue(`${base}.labview.${key}`, `LabVIEW ${key} must be true or false`));
-            }
-          });
-        }
-      }
     });
+  }
+
+  if (project.editor !== undefined) {
+    if (!isRecord(project.editor)) issues.push(issue("$.editor", "Editor state must be an object"));
+    else {
+      if (project.editor.activePathId !== undefined && (typeof project.editor.activePathId !== "string" || !pathIds.has(project.editor.activePathId))) {
+        issues.push(issue("$.editor.activePathId", "Active path must reference a project path"));
+      }
+      if (project.editor.javaProjectBookmarkId !== undefined && (typeof project.editor.javaProjectBookmarkId !== "string" || !/^[a-f0-9]{20}$/.test(project.editor.javaProjectBookmarkId))) {
+        issues.push(issue("$.editor.javaProjectBookmarkId", "Java project bookmark is invalid"));
+      }
+    }
   }
 
   if (project.pathLinks !== undefined) {
@@ -549,6 +573,7 @@ function validateProjectInner(project: unknown): ValidationResult {
   };
   if (project.routines !== undefined) {
     if (!Array.isArray(project.routines) || project.routines.length === 0) issues.push(issue("$.routines", "Project routines must be a non-empty array"));
+    else if (project.routines.length > MAX_PROJECT_ROUTINES) issues.push(issue("$.routines", `Project cannot contain more than ${MAX_PROJECT_ROUTINES} routines`));
     else {
       const routineIds = new Set<string>();
       project.routines.forEach((routine, index) => {

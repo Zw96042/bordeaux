@@ -445,21 +445,6 @@ function analyzeGeneratedPath(
     });
   });
 
-  if (plannerId === "labviewBezier" || plannerId === "labviewClothoid") {
-    const motorViolation = samples.reduce<{ index: number; measured: number; limit: number; ratio: number } | undefined>((worst, sample, index) => {
-      if (index === 0 || sample.accelerationMps2 <= 0) return worst;
-      const active = metricLimit(path, sample, samples.at(-1)?.s ?? 0, waypointDistances, "acceleration").limit ?? path.constraints.maxAccel;
-      const limit = active * Math.max(0, Math.min(1, 1 - Math.abs(samples[index - 1].velocityMps) / project.robot.maxSpeed));
-      if (sample.accelerationMps2 <= limit + Math.max(EPSILON, active * 1e-3)) return worst;
-      const candidate = { index, measured: sample.accelerationMps2, limit, ratio: sample.accelerationMps2 / Math.max(limit, EPSILON) };
-      return !worst || candidate.ratio > worst.ratio ? candidate : worst;
-    }, undefined);
-    if (motorViolation) {
-      retainedIndices.add(motorViolation.index);
-      findings.push({ id: "constraint:motor-envelope", severity: "error", kind: "constraint", metric: "acceleration", measured: motorViolation.measured, limit: motorViolation.limit, unit: "m/s²", sample: sampleReference(path, samples, motorViolation.index), sourcePath: "robot.maxSpeed", message: `Acceleration reaches ${motorViolation.measured.toFixed(3)} m/s² above the ${motorViolation.limit.toFixed(3)} m/s² motor free-speed envelope.` });
-    }
-  }
-
   const clearance = minimumPathClearance(project, samples);
   if (clearance < minimumClearanceM) {
     const closestIndex = samples.reduce((bestIndex, sample, index) => {

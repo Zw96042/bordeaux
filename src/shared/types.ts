@@ -313,28 +313,11 @@ export interface PathDoc {
   startVel: number;
   goalVel: number;
   exportable?: boolean;
-  labview?: LabviewPathOptions;
 }
 
 export interface PathFolder {
   id: string;
   name: string;
-}
-
-export interface LabviewPathOptions {
-  /** Compatibility geometry used for this path while the LabVIEW family is active. */
-  trajectoryType?: "bezier" | "clothoid";
-  samplePeriodS?: number;
-  minTurnRadiusM?: number;
-  bezierTangentMode?: "handles" | "automatic";
-  reversePath?: boolean;
-  zeroVelocity?: boolean;
-  pickupBalls?: boolean;
-  currentLimit?: number;
-  zeroTranslationalVelocity?: boolean;
-  correctAtBeginningOfPath?: boolean;
-  /** LabVIEW's independent linear velocity ceiling. Defaults to maxVel when omitted. */
-  stoopidFastMps?: number;
 }
 
 export interface PathConstraints {
@@ -417,6 +400,12 @@ export interface PathEndpointLink {
   toPathId: string;
 }
 
+/** Durable editor context which is safe to ignore on another machine. */
+export interface ProjectEditorState {
+  activePathId?: string;
+  javaProjectBookmarkId?: string;
+}
+
 export interface BordeauxProject {
   schemaVersion: string;
   name: string;
@@ -431,6 +420,7 @@ export interface BordeauxProject {
   routine?: AutonomousRoutine;
   plannerId?: TrajectoryPlannerId;
   strategy?: ProjectStrategyOverlay;
+  editor?: ProjectEditorState;
 }
 
 export interface ProjectFile {
@@ -459,7 +449,7 @@ export interface ValidationResult {
   issues: ValidationIssue[];
 }
 
-export type TrajectoryPlannerId = "profiledSpline" | "optimizedTrajectory" | "labviewBezier" | "labviewClothoid";
+export type TrajectoryPlannerId = "profiledSpline" | "optimizedTrajectory";
 
 export interface PlannerInput {
   path: PathDoc;

@@ -2,8 +2,8 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu } from "electron";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { buildLabviewBdx } from "../shared/export/labviewBdx";
-import { buildJavaTrajectory, javaTrajectoryFileName } from "../shared/export/javaTrajectory";
+import { Worker } from "node:worker_threads";
+import { javaTrajectoryFileName, type BuiltJavaTrajectory } from "../shared/export/javaTrajectory";
 import type { BordeauxProject, JavaCommandCatalog, JavaIntegrationStatus } from "../shared/types";
 import type { AgentSessionSnapshot } from "../shared/agent/types";
 import { validateProject } from "../shared/validation";
@@ -41,17 +41,48 @@ let recentFiles: string[] = [];
 let currentProjectPath: string | null = null;
 let dirty = false;
 let allowClose = false;
+
+function buildJavaTrajectoryOffThread(project: BordeauxProject, catalog: JavaCommandCatalog): Promise<BuiltJavaTrajectory> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(path.join(__dirname, "javaTrajectoryWorker.js"));
+    let settled = false;
+    const finish = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      void worker.terminate();
+      action();
+    };
+    worker.once("message", (message: { ok: true; built: BuiltJavaTrajectory } | { ok: false; error: string }) => {
+      if (message.ok) finish(() => resolve(message.built));
+      else finish(() => reject(new Error(message.error)));
+    });
+    worker.once("error", (error) => finish(() => reject(error)));
+    worker.once("exit", (code) => {
+      if (!settled && code !== 0) finish(() => reject(new Error(`Java trajectory worker stopped with exit code ${code}`)));
+    });
+    worker.postMessage({ project, catalog });
+  });
+}
 let smokeCloseGuardTriggered = false;
 let linkedJavaProjectPath: string | null = null;
 let linkedJavaProjectBookmarkId: string | null = null;
 let linkedJavaCatalog: JavaCommandCatalog | null = null;
 let linkedJavaIntegration: JavaIntegrationStatus | null = null;
+let javaConnectionGeneration = 0;
 let javaProjectBookmarks: JavaProjectBookmark[] = [];
 const smokeDirectory = process.env.BORDEAUX_SMOKE_DIRECTORY;
 const mcpStdioMode = process.argv.includes("--mcp-stdio");
 const enableMcpAccessOnLaunch = process.argv.includes("--enable-mcp-access");
 let agentBridge: AgentBridgeServer | null = null;
 const proposalReceipts = new Map<string, { resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+
+function clearLinkedJavaProject(): void {
+  javaConnectionGeneration += 1;
+  linkedJavaProjectPath = null;
+  linkedJavaProjectBookmarkId = null;
+  linkedJavaCatalog = null;
+  linkedJavaIntegration = null;
+}
 
 function rejectProposalReceipts(message: string): void {
   for (const receipt of proposalReceipts.values()) {
@@ -116,19 +147,20 @@ function javaSupportArtifactsDirectory(): string {
   return app.isPackaged ? path.join(process.resourcesPath, "java") : path.resolve(__dirname, "../../java/dist");
 }
 
-async function rememberLinkedJavaProject(projectPath: string, projectName: string): Promise<string | undefined> {
+async function rememberLinkedJavaProject(projectPath: string, projectName: string): Promise<{ bookmarkId: string; warning?: string }> {
   javaProjectBookmarks = rememberJavaProject(javaProjectBookmarks, projectPath, projectName);
-  linkedJavaProjectBookmarkId = javaProjectBookmarks[0].id;
+  const bookmarkId = javaProjectBookmarks[0].id;
   try {
     await writeJavaProjectBookmarks(javaProjectBookmarksFile(), javaProjectBookmarks);
-    return undefined;
+    return { bookmarkId };
   } catch (error) {
     console.warn("Could not save Java project bookmarks:", error);
-    return "The project is linked for this session, but Bordeaux could not save it to Recent projects.";
+    return { bookmarkId, warning: "The project is linked for this session, but Bordeaux could not save it to Recent projects." };
   }
 }
 
 async function connectJavaProject(projectPath: string) {
+  const generation = ++javaConnectionGeneration;
   const canonicalPath = await fs.promises.realpath(projectPath);
   const catalog = await discoverJavaProject(canonicalPath);
   let integration: JavaIntegrationStatus;
@@ -145,16 +177,18 @@ async function connectJavaProject(projectPath: string) {
     };
     integrationWarning = error instanceof Error ? error.message : String(error);
   }
+  const remembered = await rememberLinkedJavaProject(canonicalPath, catalog.projectName);
+  if (generation !== javaConnectionGeneration) throw new Error("Java project connection was superseded by another project");
   linkedJavaProjectPath = canonicalPath;
+  linkedJavaProjectBookmarkId = remembered.bookmarkId;
   linkedJavaCatalog = catalog;
   linkedJavaIntegration = integration;
-  const warning = await rememberLinkedJavaProject(canonicalPath, catalog.projectName);
   return {
     catalog,
     integration,
-    bookmarkId: linkedJavaProjectBookmarkId!,
+    bookmarkId: remembered.bookmarkId,
     recentProjects: summarizeJavaProjectBookmarks(javaProjectBookmarks),
-    ...((warning || integrationWarning) ? { warning: [warning, integrationWarning].filter(Boolean).join(" ") } : {}),
+    ...((remembered.warning || integrationWarning) ? { warning: [remembered.warning, integrationWarning].filter(Boolean).join(" ") } : {}),
   };
 }
 
@@ -213,7 +247,10 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 720,
     title: "Bordeaux",
-    ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const } : {}),
+    ...(process.platform === "darwin" ? {
+      titleBarStyle: "hiddenInset" as const,
+      trafficLightPosition: { x: 14, y: 18 },
+    } : {}),
     backgroundColor: "#12151b",
     show: false,
     webPreferences: {
@@ -268,17 +305,11 @@ function createWindow() {
     allowClose = false;
   });
 
-  void window.webContents.session.clearCache().finally(() => {
-    if (!window.isDestroyed()) void window.loadFile(path.join(__dirname, "../../public/renderer/index.html"));
-  });
+  void window.loadFile(path.join(__dirname, "../../public/renderer/index.html"));
 
   if (process.env.BORDEAUX_SMOKE_TEST === "1") {
     window.webContents.once("did-finish-load", async () => {
       const result: any = await window.webContents.executeJavaScript(`(async () => {
-        for (let attempt = 0; attempt < 50 && document.documentElement.dataset.chapLoader === 'loading'; attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        const chapLoader = document.documentElement.dataset.chapLoader;
         const unnamedOnPage = () => {
           const controls = [...document.querySelectorAll('button,input,select,textarea,[role="button"]')];
           const name = (el) => el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.getAttribute('title') || el.labels?.[0]?.textContent || (el.matches('button,[role="button"]') ? el.textContent : '');
@@ -308,6 +339,10 @@ function createWindow() {
         const builtJavaConnection = await window.bordeauxAPI.buildJavaCatalog();
         const recentJavaProjects = await window.bordeauxAPI.listRecentJavaProjects();
         const reopenedJavaConnection = await window.bordeauxAPI.openRecentJavaProject(recentJavaProjects[0].id);
+        const secondPath = structuredClone(project.paths[0]);
+        secondPath.id = 'path_smoke_second'; secondPath.name = 'Smoke second';
+        secondPath.markers = [];
+        const persistedProject = { ...project, paths: [...project.paths, secondPath], editor: { activePathId: secondPath.id, javaProjectBookmarkId: recentJavaProjects[0].id } };
         [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === 'Plan')?.click();
         await new Promise((resolve) => setTimeout(resolve, 0));
         document.querySelector('button[aria-label="Add event marker"]')?.click();
@@ -419,12 +454,15 @@ function createWindow() {
         const eventMarkerAutosave = markerAutosave.project.paths[0].markers.length === 2
           && markerAutosave.project.paths[0].markers[1].name === 'event2';
         await window.bordeauxAPI.newProject();
-        const javaExported = await window.bordeauxAPI.exportJava(project, 'linked');
-        const saved = await window.bordeauxAPI.saveProject(project, true);
+        let staleJavaExportRejected = false;
+        try { await window.bordeauxAPI.exportJava(persistedProject, 'linked'); }
+        catch (error) { staleJavaExportRejected = String(error && error.message || error).includes('Link a Java robot project'); }
+        await window.bordeauxAPI.openRecentJavaProject(recentJavaProjects[0].id);
+        const javaExported = await window.bordeauxAPI.exportJava(persistedProject, 'linked');
+        const saved = await window.bordeauxAPI.saveProject(persistedProject, true);
         const restored = await window.bordeauxAPI.restoreLastProject();
         await window.bordeauxAPI.newProject();
         const opened = await window.bordeauxAPI.openProject();
-        const exported = await window.bordeauxAPI.exportBdx(opened.project);
         [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === 'Aquitaine')?.click();
         await new Promise((resolve) => setTimeout(resolve, 0));
         document.querySelector('.routinelib .pathsw-btn')?.click();
@@ -443,16 +481,17 @@ function createWindow() {
         const multiRoutineUi = routineLibraryOpened && newRoutineSelected && routineDuplicateSelected;
         window.bordeauxAPI.setDirty(true);
         const probe = document.createElement('script'); probe.textContent = 'window.__bordeauxInlineScriptRan = true'; document.head.appendChild(probe);
-        return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, chapLoader, validation: validation.ok, motorPreset, eventMarkerAutosave, multiRoutineUi, javaDiscovery: javaConnection.catalog.projectName === 'SmokeRobot' && javaConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), javaInstalled: installedJavaConnection.integration.installed, javaBuilt: builtJavaConnection.catalog.authoritative === true && builtJavaConnection.catalog.catalogHash === reopenedJavaConnection.catalog.catalogHash, javaRecent: recentJavaProjects.length === 1 && reopenedJavaConnection.catalog.projectName === 'SmokeRobot', javaUi, javaExported: javaExported.exported && javaExported.eventCount === 1, restored: restored.project.name === project.name, roundTrip: saved.saved && opened.project.name === project.name && opened.project.routine.nodes[0].ref === 'path_smoke', exported: exported.exported, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
+        const editorRestored = opened.project.editor?.activePathId === secondPath.id && opened.project.editor?.javaProjectBookmarkId === recentJavaProjects[0].id;
+        return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, validation: validation.ok, motorPreset, eventMarkerAutosave, multiRoutineUi, javaDiscovery: javaConnection.catalog.projectName === 'SmokeRobot' && javaConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), javaInstalled: installedJavaConnection.integration.installed, javaBuilt: builtJavaConnection.catalog.authoritative === true && builtJavaConnection.catalog.catalogHash === reopenedJavaConnection.catalog.catalogHash, javaRecent: recentJavaProjects.length === 1 && reopenedJavaConnection.catalog.projectName === 'SmokeRobot', javaUi, staleJavaExportRejected, javaExported: javaExported.exported && javaExported.eventCount === 1, restored: restored.project.name === persistedProject.name, roundTrip: saved.saved && opened.project.name === persistedProject.name && opened.project.routine.nodes[0].ref === 'path_smoke', editorRestored, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
       })()`);
       await new Promise((resolve) => setTimeout(resolve, 50));
       window.close();
       await new Promise((resolve) => setTimeout(resolve, 50));
-      const filesWritten = smokeDirectory ? fs.existsSync(path.join(smokeDirectory, "project.bordeaux.json")) && fs.existsSync(path.join(smokeDirectory, "export.bdx")) && fs.existsSync(path.join(smokeDirectory, "java-project", "src", "main", "deploy", "bordeaux", "Smoke-edited.bordeaux.json")) : false;
+      const filesWritten = smokeDirectory ? fs.existsSync(path.join(smokeDirectory, "project.bordeaux.json")) && fs.existsSync(path.join(smokeDirectory, "java-project", "src", "main", "deploy", "bordeaux", "Smoke-edited.bordeaux.json")) : false;
       result.filesWritten = filesWritten;
       result.closeGuard = smokeCloseGuardTriggered && !window.isDestroyed();
       console.log(`BORDEAUX_SMOKE_OK ${JSON.stringify(result)}`);
-      const passed = result.api && result.root && result.unnamed.length === 0 && result.main > 0 && result.nav > 0 && result.chapLoader === "rigged" && result.validation && result.motorPreset && result.eventMarkerAutosave && result.multiRoutineUi && result.javaDiscovery && result.javaInstalled && result.javaBuilt && result.javaRecent && result.javaUi.markerInspector && result.javaUi.linkAction && result.javaUi.commandEnabled && result.javaUi.commandOptions === 4 && result.javaUi.searchHiddenForSmallCatalog && result.javaUi.recentHiddenForSingleProject && result.javaUi.cancelSwitch && result.javaUi.parameter && result.javaUi.jsonShapeRejected && result.javaUi.jsonShapeAccepted && result.javaUi.longRangeRejected && result.javaUi.exactInteger && result.javaUi.largeEnumPicker && result.javaUi.accessible && result.javaExported && result.restored && result.roundTrip && result.exported && result.nodeGlobalsBlocked && result.popupBlocked && result.inlineScriptBlocked && result.filesWritten && result.closeGuard;
+      const passed = result.api && result.root && result.unnamed.length === 0 && result.main > 0 && result.nav > 0 && result.validation && result.motorPreset && result.eventMarkerAutosave && result.multiRoutineUi && result.javaDiscovery && result.javaInstalled && result.javaBuilt && result.javaRecent && result.javaUi.markerInspector && result.javaUi.linkAction && result.javaUi.commandEnabled && result.javaUi.commandOptions === 4 && result.javaUi.searchHiddenForSmallCatalog && result.javaUi.recentHiddenForSingleProject && result.javaUi.cancelSwitch && result.javaUi.parameter && result.javaUi.jsonShapeRejected && result.javaUi.jsonShapeAccepted && result.javaUi.longRangeRejected && result.javaUi.exactInteger && result.javaUi.largeEnumPicker && result.javaUi.accessible && result.staleJavaExportRejected && result.javaExported && result.restored && result.roundTrip && result.editorRestored && result.nodeGlobalsBlocked && result.popupBlocked && result.inlineScriptBlocked && result.filesWritten && result.closeGuard;
       allowClose = true;
       app.exit(passed ? 0 : 1);
     });
@@ -484,8 +523,7 @@ function buildMenu() {
         { label: "Save", accelerator: "CmdOrCtrl+S", click: () => sendCommand("save-project") },
         { label: "Save As...", accelerator: "CmdOrCtrl+Shift+S", click: () => sendCommand("save-project-as") },
         { type: "separator" },
-        { label: "Export .bdx...", accelerator: "CmdOrCtrl+E", click: () => sendCommand("export-bdx") },
-        { label: "Export Java Trajectory…", accelerator: "CmdOrCtrl+Shift+E", click: () => sendCommand("export-java") },
+        { label: "Export Java Trajectory…", accelerator: "CmdOrCtrl+E", click: () => sendCommand("export-java") },
         { type: "separator" },
         process.platform === "darwin" ? { role: "close" } : { role: "quit" },
       ],
@@ -544,6 +582,7 @@ function buildMenu() {
 async function openProjectFile(filePath: string) {
   const decoded = await readProject(filePath);
   const { project } = decoded;
+  clearLinkedJavaProject();
   await rememberFile(filePath, saveTargetForOpenedProject(filePath, decoded));
   dirty = false;
   return { project };
@@ -551,7 +590,7 @@ async function openProjectFile(filePath: string) {
 
 handle("project:open", async () => {
   if (smokeDirectory) return openProjectFile(path.join(smokeDirectory, "project.bordeaux.json"));
-  const result = await dialog.showOpenDialog(mainWindow!, { title: "Open Bordeaux Project or Path", properties: ["openFile"], filters: [{ name: "Bordeaux Project or LabVIEW Path", extensions: ["json", "path", "bdx"] }] });
+  const result = await dialog.showOpenDialog(mainWindow!, { title: "Open Bordeaux Project or Path", properties: ["openFile"], filters: [{ name: "Bordeaux Project", extensions: ["json", "path"] }] });
   if (result.canceled || !result.filePaths[0]) return null;
   return openProjectFile(result.filePaths[0]);
 });
@@ -574,6 +613,7 @@ handle("project:restoreLast", async () => {
 handle("project:new", () => {
   currentProjectPath = null;
   dirty = false;
+  clearLinkedJavaProject();
 });
 
 handle("project:save", async (_event, project, rawSaveAs) => {
@@ -609,25 +649,30 @@ handle("project:autosave", async (_event, project) => {
   }
 });
 
-handle("project:exportBdx", async (_event, project, rawPathId) => {
-  const exportData = buildLabviewBdx(project as BordeauxProject, typeof rawPathId === "string" ? rawPathId : undefined);
-  if (smokeDirectory) {
-    const target = path.join(smokeDirectory, "export.bdx");
-    await writeBufferAtomically(target, exportData.buffer);
-    return { exported: true };
-  }
-  const result = await dialog.showSaveDialog(mainWindow!, { title: "Export Bordeaux Path", defaultPath: `${exportData.pathName || "trajectory"}.bdx`, filters: [{ name: "Bordeaux Trajectory Export", extensions: ["bdx"] }] });
-  if (result.canceled || !result.filePath) return { canceled: true };
-  await writeBufferAtomically(result.filePath, exportData.buffer);
-  return { exported: true };
-});
-
 handle("project:exportJava", async (_event, rawProject, rawDestination) => {
   if (!linkedJavaProjectPath || !linkedJavaCatalog || !linkedJavaIntegration) throw new Error("Link a Java robot project before exporting robot JSON");
-  if (!linkedJavaIntegration.installed) throw new Error("Install Bordeaux Java support in the linked robot project before exporting");
-  if (linkedJavaIntegration.supportVersion !== linkedJavaCatalog.supportVersion) throw new Error("Installed Java support and the generated catalog do not match; reinstall support and rebuild the catalog");
+  const connectionGeneration = javaConnectionGeneration;
+  const projectRoot = linkedJavaProjectPath;
+  const bookmarkId = linkedJavaProjectBookmarkId;
+  const catalog = linkedJavaCatalog;
+  const integration = linkedJavaIntegration;
+  const assertConnectionUnchanged = () => {
+    if (javaConnectionGeneration !== connectionGeneration
+      || linkedJavaProjectPath !== projectRoot
+      || linkedJavaProjectBookmarkId !== bookmarkId
+      || linkedJavaCatalog !== catalog) {
+      throw new Error("The linked Java project changed during export; review the project and export again");
+    }
+  };
+  if (!integration.installed) throw new Error("Install Bordeaux Java support in the linked robot project before exporting");
+  if (integration.supportVersion !== catalog.supportVersion) throw new Error("Installed Java support and the generated catalog do not match; reinstall support and rebuild the catalog");
+  const submittedBookmarkId = (rawProject as BordeauxProject).editor?.javaProjectBookmarkId;
+  if (!submittedBookmarkId || submittedBookmarkId !== bookmarkId) {
+    throw new Error("The linked Java project does not match this Bordeaux project; relink it before exporting");
+  }
   const destination = rawDestination === "saveAs" ? "saveAs" : "linked";
-  const built = buildJavaTrajectory(rawProject as BordeauxProject, linkedJavaCatalog);
+  const built = await buildJavaTrajectoryOffThread(rawProject as BordeauxProject, catalog);
+  assertConnectionUnchanged();
   let target: string;
   let relativePath: string;
   if (destination === "saveAs") {
@@ -644,8 +689,8 @@ handle("project:exportJava", async (_event, rawProject, rawDestination) => {
     }
     relativePath = path.basename(target);
   } else {
-    target = await assertSafeJavaExportTarget(linkedJavaProjectPath, javaTrajectoryFileName((rawProject as BordeauxProject).name));
-    relativePath = path.relative(linkedJavaProjectPath, target);
+    target = await assertSafeJavaExportTarget(projectRoot, javaTrajectoryFileName((rawProject as BordeauxProject).name));
+    relativePath = path.relative(projectRoot, target);
     const targetSnapshot = await javaExportTargetSnapshot(target);
     if (!smokeDirectory) {
       const result = await dialog.showMessageBox(mainWindow!, {
@@ -658,10 +703,12 @@ handle("project:exportJava", async (_event, rawProject, rawDestination) => {
         cancelId: 0,
       });
       if (result.response !== 1) return { canceled: true };
-      target = await assertSafeJavaExportTarget(linkedJavaProjectPath, path.basename(target));
+      assertConnectionUnchanged();
+      target = await assertSafeJavaExportTarget(projectRoot, path.basename(target));
       if (await javaExportTargetSnapshot(target) !== targetSnapshot) throw new Error("Java export target changed while the preview was open; review and export again");
     }
   }
+  assertConnectionUnchanged();
   await writeBufferAtomically(target, Buffer.from(built.contents, "utf8"));
   return { exported: true, relativePath, pathCount: built.pathCount, eventCount: built.eventCount, sha256: built.sha256 };
 });
@@ -681,6 +728,7 @@ handle("javaProject:link", async () => {
     if (result.canceled || !result.filePaths[0]) return null;
     selectedPath = result.filePaths[0];
   }
+  clearLinkedJavaProject();
   try {
     return await connectJavaProject(selectedPath);
   } catch (error) {
@@ -691,6 +739,7 @@ handle("javaProject:openRecent", async (_event, rawId) => {
   if (typeof rawId !== "string" || rawId.length > 64) throw new Error("Recent Java project selection is invalid");
   const bookmark = javaProjectBookmarks.find((item) => item.id === rawId);
   if (!bookmark) throw new Error("Recent Java project is no longer available");
+  clearLinkedJavaProject();
   try {
     return await connectJavaProject(bookmark.projectPath);
   } catch (error) {
