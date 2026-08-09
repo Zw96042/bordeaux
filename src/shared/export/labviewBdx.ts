@@ -1,6 +1,7 @@
 import { buildBdxExport } from "./bdx";
 import { LABVIEW_BDX_MAX_TRAJECTORY_POINTS, LABVIEW_BDX_MAX_WAYPOINTS } from "./labviewBdxReader";
 import type { BdxPath, BordeauxProject, PathDoc, TrajectorySample } from "../types";
+import { effectivePathConstraints, robotHardLimits } from "../robotLimits";
 
 const BDX_VERSION = "4.4";
 const FEET_PER_METER = 3.280839895013123;
@@ -237,10 +238,11 @@ export interface LabviewBdxResult {
 
 /** Encode the active path using the field order written by LabVIEW Bordeaux's Versioned Write.vi. */
 export function buildLabviewBdx(project: BordeauxProject, pathId?: string): LabviewBdxResult {
-  const source = pathId
+  const authored = pathId
     ? project.paths.find((path) => path.id === pathId && path.exportable !== false)
     : project.paths.find((path) => path.exportable !== false);
-  if (!source) throw new Error(pathId ? "The selected path is not exportable" : "The project has no exportable paths");
+  if (!authored) throw new Error(pathId ? "The selected path is not exportable" : "The project has no exportable paths");
+  const source = { ...authored, constraints: effectivePathConstraints(authored.constraints, project.robot) };
   if (source.waypoints.slice(0, -1).some((waypoint) => (waypoint.segmentFollowMode ?? source.followMode ?? "time") === "position")) {
     throw new Error("LabVIEW .bdx cannot encode position-based following; use Java JSON or change every segment to Time");
   }
@@ -269,7 +271,7 @@ export function buildLabviewBdx(project: BordeauxProject, pathId?: string): Labv
   writer.boolean(Boolean(source.labview?.reversePath));
   const trajectory = writeTrajectory(writer, selected, kind, samplePeriodS);
   writer.u32(0); // Commands in
-  const endpointVelocityLimit = Math.min(source.constraints.maxVel, project.robot.maxSpeed);
+  const endpointVelocityLimit = Math.min(source.constraints.maxVel, robotHardLimits(project.robot)?.maxSpeedMps ?? project.robot.maxSpeed);
   const initialVelocityFps = (source.waypoints[0].stop ? 0 : Math.min(source.startVel, endpointVelocityLimit)) * FEET_PER_METER;
   const finalVelocityFps = (source.waypoints.at(-1)!.stop ? 0 : Math.min(source.goalVel, endpointVelocityLimit)) * FEET_PER_METER;
   writeLimits(writer, source, samplePeriodS, initialVelocityFps, finalVelocityFps);

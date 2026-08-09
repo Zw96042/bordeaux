@@ -5,6 +5,7 @@ import { profiledSplinePlanner } from "./profiledSpline";
 import { labviewBezierPlanner, labviewClothoidPlanner } from "./labviewCompatible";
 import { applyStationaryActions } from "./stationaryActions";
 import { applyRotationPriority } from "./rotationPriority";
+import { effectivePathConstraints, robotHardLimits } from "../robotLimits";
 
 export const planners: Record<TrajectoryPlannerId, TrajectoryPlanner> = {
   profiledSpline: profiledSplinePlanner,
@@ -18,18 +19,23 @@ export function getPlanner(id: TrajectoryPlannerId): TrajectoryPlanner {
   return {
     id: planner.id,
     generate(input) {
-      const hasStationaryPause = input.path.waypoints.some((waypoint) => waypoint.turnInPlace || (waypoint.wait ?? 0) > 0);
+      const hardLimits = robotHardLimits(input.robot);
+      const robot = hardLimits ? { ...input.robot, maxSpeed: hardLimits.maxSpeedMps } : input.robot;
+      const constraints = effectivePathConstraints(input.path.constraints, robot);
+      const path = constraints === input.path.constraints ? input.path : { ...input.path, constraints };
+      const physicalInput = path === input.path && robot === input.robot ? input : { ...input, path, robot };
+      const hasStationaryPause = path.waypoints.some((waypoint) => waypoint.turnInPlace || (waypoint.wait ?? 0) > 0);
       const planningInput = hasStationaryPause
         ? {
-            ...input,
+            ...physicalInput,
             path: {
-              ...input.path,
-              waypoints: input.path.waypoints.map((waypoint) => (waypoint.wait ?? 0) > 0 ? { ...waypoint, wait: 0 } : waypoint),
+              ...path,
+              waypoints: path.waypoints.map((waypoint) => (waypoint.wait ?? 0) > 0 ? { ...waypoint, wait: 0 } : waypoint),
             },
           }
-        : input;
+        : physicalInput;
       const generated = planner.generate(planningInput);
-      return applyStationaryActions(input.path, applyRotationPriority(input.path, generated, input.robot), input.robot);
+      return applyStationaryActions(path, applyRotationPriority(path, generated, robot), robot);
     },
   };
 }

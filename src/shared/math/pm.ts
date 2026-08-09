@@ -822,7 +822,8 @@
     const dwell = [], turns = [];
     doc.waypoints.forEach((w, k) => { if (w.stop && w.wait > 0) dwell.push({ idx: wpIdx[k], wait: w.wait }); });
     if (!(options && options.skipStationaryActions)) doc.waypoints.forEach((w, k) => { if (w.stop && w.turnInPlace) turns.push({ idx: wpIdx[k], start: k > 0 ? head[Math.max(0, wpIdx[k] - 1)] : head[0], end: w.turnInPlace.headingDeg * D2R, direction: w.turnInPlace.direction, maxAngVel: doc.constraints.maxAngVel, maxAngAccel: Math.min(doc.constraints.maxAngAccel, doc.constraints.maxAngDecel || doc.constraints.maxAngAccel), maxAngJerk: doc.constraints.maxAngJerk }); });
-    const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns });
+    const physicalModel = robot?.driveModel?.motorMaxTorqueNm > 0 && robot?.driveModel?.massKg > 0;
+    const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns, motorMaxSpeed: physicalModel ? cap : 0 });
     const mtr = metrics(pts, prof, anchors, mode);
     const warnings = analyze(pts, prof, mtr, robot || {});
     doc.waypoints.slice(0, -1).forEach((w, segment) => {

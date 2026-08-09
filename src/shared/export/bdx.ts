@@ -9,6 +9,7 @@ import type {
   ValidationIssue,
 } from "../types";
 import { validateProject } from "../validation";
+import { robotHardLimits } from "../robotLimits";
 
 export interface BdxExportOptions {
   planner?: TrajectoryPlannerId;
@@ -48,6 +49,7 @@ export function buildBdxExport(project: BordeauxProject, options: BdxExportOptio
   });
   assertFiniteValue(project.routine, "routine");
 
+  const hardLimits = robotHardLimits(project.robot);
   return {
     schemaVersion: "1.1",
     generator: "bordeaux",
@@ -64,7 +66,7 @@ export function buildBdxExport(project: BordeauxProject, options: BdxExportOptio
       lengthM: project.robot.l,
       ...(project.robot.heightM === undefined ? {} : { heightM: project.robot.heightM }),
       ...(project.robot.footprint === undefined ? {} : { footprint: clone(project.robot.footprint) }),
-      maxSpeedMps: project.robot.maxSpeed,
+      maxSpeedMps: hardLimits?.maxSpeedMps ?? project.robot.maxSpeed,
     },
     paths,
     routine: project.routine ?? null,
