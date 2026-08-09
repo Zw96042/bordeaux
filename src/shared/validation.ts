@@ -512,6 +512,25 @@ function validateProjectInner(project: unknown): ValidationResult {
     });
   }
 
+  if (project.pathLinks !== undefined) {
+    const linkIds = new Set<string>(), sources = new Set<string>(), targets = new Set<string>();
+    if (!Array.isArray(project.pathLinks)) issues.push(issue("$.pathLinks", "Path links must be an array"));
+    else project.pathLinks.forEach((link, index) => {
+      const base = `$.pathLinks[${index}]`;
+      if (!isRecord(link)) { issues.push(issue(base, "Path link must be an object")); return; }
+      if (typeof link.id !== "string" || !link.id.trim()) issues.push(issue(`${base}.id`, "Path link ID is required"));
+      else if (linkIds.has(link.id)) issues.push(issue(`${base}.id`, "Path link IDs must be unique"));
+      else linkIds.add(link.id);
+      if (typeof link.fromPathId !== "string" || !pathIds.has(link.fromPathId)) issues.push(issue(`${base}.fromPathId`, "Linked source path does not exist"));
+      else if (sources.has(link.fromPathId)) issues.push(issue(`${base}.fromPathId`, "A path end can have only one link"));
+      else sources.add(link.fromPathId);
+      if (typeof link.toPathId !== "string" || !pathIds.has(link.toPathId)) issues.push(issue(`${base}.toPathId`, "Linked target path does not exist"));
+      else if (targets.has(link.toPathId)) issues.push(issue(`${base}.toPathId`, "A path start can have only one link"));
+      else targets.add(link.toPathId);
+      if (link.fromPathId === link.toPathId) issues.push(issue(base, "A path cannot link to itself"));
+    });
+  }
+
   const validateRoutine = (routine: unknown, base: string) => {
     if (!isRecord(routine)) { issues.push(issue(base, "Routine must be an object")); return; }
     if (typeof routine.name !== "string" || !routine.name.trim()) issues.push(issue(`${base}.name`, "Routine name is required"));

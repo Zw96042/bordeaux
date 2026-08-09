@@ -1,4 +1,4 @@
-import { createMarkerId, createPathId, createRoutineId, DEFAULT_LABVIEW_OPTIONS } from "./defaults";
+import { createMarkerId, createPathId, createPathLinkId, createRoutineId, DEFAULT_LABVIEW_OPTIONS } from "./defaults";
 import type { BordeauxProject, RoutineNode } from "../types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -97,5 +97,10 @@ export function normalizeProject(value: unknown): unknown {
   const activeRoutine = routines.find((item) => isRecord(item) && item.id === requestedRoutineId) ?? routines[0];
   const activeRoutineId = isRecord(activeRoutine) && typeof activeRoutine.id === "string" ? activeRoutine.id : undefined;
 
-  return { ...source, paths, routines, activeRoutineId, routine: activeRoutine } as unknown as BordeauxProject;
+  const pathLinks = Array.isArray(source.pathLinks) ? source.pathLinks.map((raw) => {
+    if (!isRecord(raw)) return raw;
+    return { ...raw, id: typeof raw.id === "string" && raw.id.trim() ? raw.id : createPathLinkId() };
+  }) : [];
+
+  return { ...source, paths, pathLinks, routines, activeRoutineId, routine: activeRoutine } as unknown as BordeauxProject;
 }

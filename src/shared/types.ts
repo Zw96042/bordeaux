@@ -402,12 +402,20 @@ export interface ProjectStrategyOverlay {
   actionBindings?: StrategyActionBinding[];
 }
 
+export interface PathEndpointLink {
+  id: string;
+  fromPathId: string;
+  toPathId: string;
+}
+
 export interface BordeauxProject {
   schemaVersion: string;
   name: string;
   robot: RobotConfig;
   paths: PathDoc[];
   pathFolders?: PathFolder[];
+  /** Keeps one path's end pose synchronized with another path's start pose. */
+  pathLinks?: PathEndpointLink[];
   routines?: AutonomousRoutine[];
   activeRoutineId?: string;
   /** Active-routine compatibility view for older projects and exporters. */

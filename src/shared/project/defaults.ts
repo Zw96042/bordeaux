@@ -46,6 +46,10 @@ export function createRoutineId(): string {
   return `routine_${globalThis.crypto.randomUUID()}`;
 }
 
+export function createPathLinkId(): string {
+  return `pathlink_${globalThis.crypto.randomUUID()}`;
+}
+
 type RawWaypoint = Partial<Waypoint> & {
   x: number;
   y: number;
@@ -112,6 +116,7 @@ export function createDemoProject(): BordeauxProject {
     name: "Untitled",
     robot: { drive: "swerve", w: 0.84, l: 0.84, heightM: 0.5, maxSpeed: 5.0 },
     paths: [blankPath("NewPath")],
+    pathLinks: [],
     routines: [routine],
     activeRoutineId: routine.id,
     routine,
