@@ -7,6 +7,9 @@ interface Point { x: number; y: number }
 interface HeadingAnchor { f: number; rad: number }
 
 interface RendererWindow {
+  PathLinks?: {
+    sync(project: any, changedId: string, before: any): any;
+  };
   PM?: {
     bez(p0: Point, c0: Point, c1: Point, p1: Point, t: number): Point;
     splitBezier(p0: Point, c0: Point, c1: Point, p1: Point, t: number): {
@@ -33,6 +36,13 @@ interface RendererWindow {
   };
 }
 
+function rendererPathLinks() {
+  const window: RendererWindow = {};
+  const source = fs.readFileSync(new URL("../public/renderer/assets/path-links.js", import.meta.url), "utf8");
+  vm.runInNewContext(source, { window, JSON });
+  return window.PathLinks!;
+}
+
 function rendererMath() {
   const window: RendererWindow = {};
   const source = fs.readFileSync(new URL("../public/renderer/assets/path-math.js", import.meta.url), "utf8");
@@ -50,6 +60,38 @@ function rendererUi() {
 }
 
 describe("renderer compatibility preview", () => {
+  it("synchronizes linked endpoints in either edit direction", () => {
+    const project = createDemoProject();
+    const second = structuredClone(project.paths[0]);
+    second.id = "path_second";
+    second.name = "Second";
+    project.paths.push(second);
+    project.pathLinks = [{ id: "pathlink_one", fromPathId: project.paths[0].id, toPathId: second.id }];
+
+    const beforeFirst = structuredClone(project.paths[0]);
+    const targetHandleOffset = second.waypoints[0].nextC.x - second.waypoints[0].x;
+    const firstEnd = project.paths[0].waypoints.at(-1)!;
+    firstEnd.x += 1;
+    firstEnd.y += 0.5;
+    let synced = rendererPathLinks().sync(project, project.paths[0].id, beforeFirst);
+    expect(synced.paths[1].waypoints[0]).toMatchObject({ x: firstEnd.x, y: firstEnd.y });
+    expect(synced.paths[1].waypoints[0].nextC.x - synced.paths[1].waypoints[0].x).toBeCloseTo(targetHandleOffset);
+
+    const beforeSecond = structuredClone(synced.paths[1]);
+    synced.paths[1].waypoints[0].theta = 90;
+    synced.paths[1].waypoints[0].x -= 0.4;
+    synced = rendererPathLinks().sync(synced, second.id, beforeSecond);
+    expect(synced.paths[0].waypoints.at(-1)).toMatchObject({ x: synced.paths[1].waypoints[0].x, theta: 90 });
+  });
+
+  it("offers append and removable endpoint-link controls in the path library", () => {
+    const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
+    expect(panels).toContain("'Append'");
+    expect(panels).toContain("'End to'");
+    expect(panels).toContain("'Not linked'");
+    expect(panels).toContain("'Unlink'");
+  });
+
   it("preserves the global method when migrating legacy LabVIEW paths", () => {
     const path = createDemoProject().paths[0];
     path.waypoints.slice(0, -1).forEach((waypoint) => { waypoint.segType = "bezier"; });
@@ -763,7 +805,7 @@ describe("renderer compatibility preview", () => {
     expect(math).toContain("opts.headingTransitions || []");
     expect(math).toContain("function headingTransitionGoals");
     expect(math).toContain("smoothHeadingTransitions(rawHead, segmentLaws, transitionBreaks, wpIdx, pts, doc.waypoints, transitionGoals)");
-    expect(inspector).toContain("Transition into this segment");
+    expect(inspector).toContain("Heading blend");
     expect(inspector).toContain("Heading transition timing priority");
     expect(inspector).toContain("Blend distance");
     expect(inspector).toContain("Keep tangent");
@@ -877,12 +919,12 @@ describe("renderer compatibility preview", () => {
     expect(app).toContain("const moveSegmentLookAt");
     expect(inspector).toContain("'Turn in place'");
     expect(inspector).toContain("'Endpoint jiggle'");
-    expect(inspector).toContain("'Requested time may lengthen to respect path limits.'");
+    expect(inspector).toContain("'Limits may extend the time.'");
     expect(inspector).toContain("const JIGGLE_DEFAULTS = { distanceM: 0.03, strokes: 8, startDeg: 45, stepDeg: -45, strokeTimeS: 0.08 }");
     expect(math).toContain("opts.jiggles");
     expect(math).toContain("feasibleJiggleStrokeDuration");
     expect(math).toContain("jiggle.strokeDuration");
-    expect(inspector).toContain("{ v: 'lookAt', label: 'Track point' }");
+    expect(inspector).toContain("{ v: 'lookAt', label: 'Look at' }");
     expect(field).toContain("'data-role': 'look'");
     expect(field).toContain("actions.moveSegmentLookAt");
     expect(field).toContain("const waypointHeadingDeg = (index)");

@@ -160,6 +160,22 @@ describe("project defaults and validation", () => {
     expect(parsed.paths[0].waypoints[0].segmentFollowMode).toBe("time");
   });
 
+  it("round-trips and validates path endpoint links", () => {
+    const project = createDemoProject();
+    const next = blankPath("Next");
+    project.paths.push(next);
+    project.pathLinks = [{ id: "pathlink_next", fromPathId: project.paths[0].id, toPathId: next.id }];
+
+    expect(parseProject(JSON.stringify(project)).pathLinks).toEqual(project.pathLinks);
+    expect(validateProject(project).ok).toBe(true);
+
+    project.pathLinks.push({ id: "pathlink_duplicate", fromPathId: project.paths[0].id, toPathId: "missing" });
+    expect(validateProject(project).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "$.pathLinks[1].fromPathId" }),
+      expect.objectContaining({ path: "$.pathLinks[1].toPathId" }),
+    ]));
+  });
+
   it("round-trips conditional position event schedules", () => {
     const project = createDemoProject();
     project.paths[0].markers = [{
@@ -562,7 +578,7 @@ describe("canonical shipped renderer", () => {
     expect(inspector).toContain("ariaLabel: 'Default path follow mode'");
     expect(inspector).toContain("ariaLabel: 'Segment follow mode'");
     expect(inspector).toContain("segmentFollowMode: v === 'inherit' ? undefined : v");
-    expect(inspector).toContain("Java JSON only");
+    expect(inspector).toContain("Advance from measured field position");
   });
 
   it("authors conditional repeated command schedules", () => {
@@ -579,7 +595,7 @@ describe("canonical shipped renderer", () => {
     const panels = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/panels.js"), "utf8");
     const app = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/app.js"), "utf8");
     expect(model).toContain("label: 'Command'");
-    expect(panels).toContain("'Acquatine'");
+    expect(panels).toContain("'Aquitaine'");
     expect(app).not.toContain("h(window.Panels.RoutineLegend");
     expect(inspector).toContain("id: 'routine-command'");
     expect(inspector).toContain("id: 'routine-condition'");
