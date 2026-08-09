@@ -7,10 +7,10 @@
   // Published 12 V free speeds from the manufacturers' product documentation.
   const DRIVE_MOTORS = [
     { value: 'custom', label: 'Custom motor', meta: 'Enter its published free speed' },
-    { value: 'rev-neo', label: 'REV NEO V1.1', meta: '5,676 RPM', rpm: 5676 },
-    { value: 'rev-vortex', label: 'REV NEO Vortex', meta: '6,784 RPM', rpm: 6784 },
-    { value: 'ctre-kraken-x60', label: 'CTRE Kraken X60', meta: '6,000 RPM', rpm: 6000 },
-    { value: 'ctre-falcon-500', label: 'CTRE Falcon 500', meta: '6,380 RPM', rpm: 6380 },
+    { value: 'rev-neo', label: 'REV NEO V1.1', meta: '5,676 RPM', rpm: 5676, torque: 2.6 },
+    { value: 'rev-vortex', label: 'REV NEO Vortex', meta: '6,784 RPM', rpm: 6784, torque: 3.6 },
+    { value: 'ctre-kraken-x60', label: 'CTRE Kraken X60', meta: '6,000 RPM', rpm: 6000, torque: 7.09 },
+    { value: 'ctre-falcon-500', label: 'CTRE Falcon 500', meta: '6,380 RPM', rpm: 6380, torque: 4.69 },
   ];
 
   const footprintFor = (shape, w, l, preset) => {
@@ -114,13 +114,22 @@
     const m2ft = (m) => m * 3.28084;
     const planning = robot.planning || {};
     const fallbackRatio = 6.75, fallbackWheelDiameterM = 0.1016;
-    const driveModel = robot.driveModel || {
+    const fallbackDriveModel = {
       motorId: 'custom',
       motorFreeRpm: robot.maxSpeed * 60 * fallbackRatio / (Math.PI * fallbackWheelDiameterM),
+      motorMaxTorqueNm: 2.6,
+      motorCount: 4,
       gearRatio: fallbackRatio,
       wheelDiameterM: fallbackWheelDiameterM,
+      massKg: 54,
+      moiKgM2: 54 * (robot.l * robot.l + robot.w * robot.w) / 12,
+      wheelbaseM: Math.max(0.2, robot.l - 0.18),
+      trackwidthM: Math.max(0.2, robot.w - 0.18),
+      wheelFrictionCoefficient: 1.2,
     };
+    const driveModel = { ...fallbackDriveModel, ...(robot.driveModel || {}) };
     const chassisFreeSpeed = (model) => model.motorFreeRpm / 60 * Math.PI * model.wheelDiameterM / model.gearRatio;
+    const hardLimits = window.PM.robotHardLimits(robot);
     const setDriveModel = (patch) => {
       const next = { ...driveModel, ...patch };
       if (![next.motorFreeRpm, next.gearRatio, next.wheelDiameterM].every((value) => Number.isFinite(value) && value > 0)) return;
@@ -130,6 +139,18 @@
         : planning;
       setRobot({ driveModel: next, maxSpeed, ...(nextPlanning !== planning ? { planning: nextPlanning } : {}) });
     };
+    const driveFields = [
+      { label: 'Motor free speed', value: driveModel.motorFreeRpm, unit: 'RPM', min: 100, max: 30000, precision: 0, step: 25, onChange: (value) => setDriveModel({ motorId: 'custom', motorFreeRpm: value }) },
+      { label: 'Motor torque limit', value: driveModel.motorMaxTorqueNm, unit: 'N·m', min: 0.1, max: 20, precision: 2, step: 0.05, onChange: (value) => setDriveModel({ motorId: 'custom', motorMaxTorqueNm: value }) },
+      { label: 'Drive reduction', value: driveModel.gearRatio, unit: ':1', min: 0.1, max: 50, precision: 2, step: 0.05, onChange: (value) => setDriveModel({ gearRatio: value }) },
+      { label: 'Wheel diameter', value: driveModel.wheelDiameterM, unit: 'm', min: 0.02, max: 0.5, precision: 4, step: 0.001, onChange: (value) => setDriveModel({ wheelDiameterM: value }) },
+      { label: 'Drive motors', value: driveModel.motorCount, min: 2, max: 12, precision: 0, step: 1, onChange: (value) => setDriveModel({ motorCount: Math.round(value) }) },
+      { label: 'Mass', value: driveModel.massKg, unit: 'kg', min: 5, max: 100, precision: 1, step: 0.5, onChange: (value) => setDriveModel({ massKg: value }) },
+      { label: 'Moment of inertia', value: driveModel.moiKgM2, unit: 'kg·m²', min: 0.1, max: 50, precision: 2, step: 0.1, onChange: (value) => setDriveModel({ moiKgM2: value }) },
+      { label: 'Wheelbase', value: driveModel.wheelbaseM, unit: 'm', min: 0.1, max: robot.l, precision: 3, step: 0.01, onChange: (value) => setDriveModel({ wheelbaseM: value }) },
+      { label: 'Trackwidth', value: driveModel.trackwidthM, unit: 'm', min: 0.1, max: robot.w, precision: 3, step: 0.01, onChange: (value) => setDriveModel({ trackwidthM: value }) },
+      { label: 'Wheel friction', value: driveModel.wheelFrictionCoefficient, unit: 'μ', min: 0.1, max: 3, precision: 2, step: 0.05, onChange: (value) => setDriveModel({ wheelFrictionCoefficient: value }) },
+    ];
     const intake = planning.intake;
     const shooter = planning.shooter;
     const setPlanning = (patch) => setRobot({ planning: { ...planning, ...patch } });
@@ -290,22 +311,14 @@
             h('div', { className: 'rp-sec' },
               h('div', { className: 'rp-sech' }, 'Performance'),
               h(Dropdown, { id: 'robot-drive-motor', label: 'Drive motor', value: driveModel.motorId, items: DRIVE_MOTORS,
-                onChange: (motorId) => { const preset = DRIVE_MOTORS.find((motor) => motor.value === motorId); setDriveModel({ motorId, ...(preset && preset.rpm ? { motorFreeRpm: preset.rpm } : {}) }); } }),
+                onChange: (motorId) => { const preset = DRIVE_MOTORS.find((motor) => motor.value === motorId); setDriveModel({ motorId, ...(preset && preset.rpm ? { motorFreeRpm: preset.rpm, motorMaxTorqueNm: preset.torque } : {}) }); } }),
               h('div', { className: 'rp-two rp-drive-model' },
-                h('div', { className: 'rp-field' },
-                  h('div', { className: 'rp-flabel' }, 'Motor free speed'),
-                  h(BigNum, { label: 'Motor free speed', value: driveModel.motorFreeRpm, unit: 'RPM', min: 100, max: 30000, precision: 0, step: 25, onChange: (value) => setDriveModel({ motorId: 'custom', motorFreeRpm: value }) })),
-                h('div', { className: 'rp-field' },
-                  h('div', { className: 'rp-flabel' }, 'Drive reduction'),
-                  h(BigNum, { label: 'Drive gear reduction', value: driveModel.gearRatio, unit: ':1', min: 0.1, max: 50, precision: 2, step: 0.05, onChange: (value) => setDriveModel({ gearRatio: value }) })),
-                h('div', { className: 'rp-field' },
-                  h('div', { className: 'rp-flabel' }, 'Wheel diameter'),
-                  h(BigNum, { label: 'Drive wheel diameter', value: driveModel.wheelDiameterM, unit: 'm', min: 0.02, max: 0.5, precision: 4, step: 0.001, onChange: (value) => setDriveModel({ wheelDiameterM: value }) })),
-                h('div', { className: 'rp-drive-result' },
-                  h('span', null, 'Free chassis speed'),
-                  h('strong', null, robot.maxSpeed.toFixed(2), h('small', null, ' m/s')),
-                  h('small', null, m2ft(robot.maxSpeed).toFixed(1) + ' ft/s'))),
-              h('div', { className: 'rp-note' }, h(Icon, { name: 'info', size: 14 }), 'Feeds the planner\u2019s torque-speed envelope.'))),
+                driveFields.map((field) => h('div', { className: 'rp-field', key: field.label }, h('div', { className: 'rp-flabel' }, field.label), h(BigNum, field)))),
+              !hardLimits && h('button', { className: 'rp-add-profile', type: 'button', onClick: () => setDriveModel({}) }, 'Use physical limits'),
+              hardLimits && h('div', { className: 'rp-hard-limits' },
+                [['Top speed', hardLimits.maxSpeed.toFixed(2), 'm/s'], ['Linear accel', hardLimits.maxAccel.toFixed(2), 'm/s²'], ['Corner accel', hardLimits.maxCornerAccel.toFixed(2), 'm/s²'], ['Angular speed', hardLimits.maxAngVel.toFixed(0), '°/s']].map(([label, value, unit]) =>
+                  h('div', { className: 'rp-drive-result', key: label }, h('span', null, label), h('strong', null, value, h('small', null, ' ' + unit))))),
+              h('div', { className: 'rp-note' }, h(Icon, { name: 'info', size: 14 }), 'Robot limits. Path ranges only tighten them.'))),
 
             mcpEnabled && h('div', { className: 'rp-sec rp-agent' },
               h('div', { className: 'rp-sech' }, 'Agent planning profile'),
