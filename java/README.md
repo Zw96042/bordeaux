@@ -7,13 +7,14 @@ This Java 17 bundle provides the robot-side half of Bordeaux commands for WPILib
 - `annotations`: source-retained `@BordeauxCommand` and `@BordeauxParam` annotations.
 - `processor`: an aggregating annotation processor that validates authored factories and generates both `META-INF/bordeaux/commands.json` and direct-call `dev.bordeaux.generated.BordeauxGeneratedBindings`.
 - `runtime`: a bounded `bordeaux-trajectory/1.0` reader, generated registry API, exact argument conversion, and a jitter-safe WPILib command event runner.
-- `gradle-plugin`: installs the three Java artifacts, the stable catalog-ID compiler option, and the fixed `bordeauxCatalog` task in a GradleRIO project.
+
+The desktop app's **Install Java Support** action is the one supported integration path. It copies the runtime and processor jars into the linked robot project, adds one managed Gradle script, and creates the fixed `bordeauxCatalog` task. A separately published Gradle plugin is intentionally not maintained.
 
 Factories must be public methods on public provider types and return `edu.wpi.first.wpilibj2.command.Command`. Non-static providers are explicit constructor dependencies of the generated bindings, keeping subsystem ownership in `RobotContainer`. Supported authored values are numeric/boolean primitives and wrappers, strings, enums, exact `long`/`BigInteger`/`BigDecimal`, arrays, collections, string-key maps, optionals, records, and public Jackson-deserializable objects with mutable public data fields plus a public no-argument constructor. `char`/`Character`, unsupported, recursive, or opaque shapes fail compilation.
 
 Call `BordeauxBindings.generated(provider1, provider2, ...)` to construct the generated registry. Provider order does not matter. This fixed bootstrap avoids importing a class emitted during the processor's final aggregation round, while the generated class still owns direct typed calls and compiled catalog identity.
 
-See [`../examples/bordeaux-template-robot`](../examples/bordeaux-template-robot) for a complete GradleRIO project and [`examples`](examples) for the smaller integration snippets. The fixed `bordeauxCatalog` task copies the processor resource to `build/bordeaux/catalog-v1.json`, which is the only generated project file the app reads.
+See [`../examples/bordeaux-template-robot`](../examples/bordeaux-template-robot) for a complete GradleRIO project and [`examples`](examples) for integration snippets. The fixed `bordeauxCatalog` task copies the processor resource to `build/bordeaux/catalog-v1.json`, which is the only generated project file the app reads.
 
 ## Catalog identity
 
@@ -41,7 +42,5 @@ From this directory:
 ```
 
 `build` also writes the two installer artifacts expected by the desktop app: `dist/bordeaux-runtime.jar` and `dist/bordeaux-processor.jar`. Both include the source-retained annotation classes so the app's two-file Gradle installation works without a third annotations artifact; Jackson and WPILib remain supplied by the GradleRIO project.
-
-For local integration before a release, run `./gradlew publishToMavenLocal` and expose `mavenLocal()` in the robot project's plugin-management and dependency repositories.
 
 The only non-WPILib library declared directly is Jackson Databind 2.18.3, which WPILib already uses for JSON data. The explicit API gives the standalone runtime deterministic resource-limit behavior. The processor remains dependency-free, and top-level `Optional<T>` arguments are converted without an extra Jackson module.
