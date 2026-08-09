@@ -1,5 +1,5 @@
 // Bordeaux — chrome: top bar, path switcher, tool rail, outline, constraint chip bar,
-// metric overlay, path-check drawer, telemetry/transport, view controls.
+// metric overlay, telemetry/transport, view controls.
 // Needs React + window.UI + window.PM. Exports window.Panels
 (function () {
   const { useRef, useState, useEffect, useMemo } = React;
@@ -395,11 +395,8 @@
   }
 
   // ---------------- compact metric control for the timeline toolbar ----------------
-  function MetricControl({ metric, setMetric, derived, diagOpen, onToggleDiag, plannerId }) {
+  function MetricControl({ metric, setMetric, derived, plannerId }) {
     const M = derived.metrics || {};
-    const checks = derived.checks || [];
-    const issues = checks.filter((check) => check.level !== 'note');
-    const notes = checks.filter((check) => check.level === 'note');
     const grad = window.PM.metricGradient(metric);
     const def = (window.PM.METRICS || []).find((m) => m.id === metric) || {};
     let lo = '0', hi = '0';
@@ -407,7 +404,6 @@
     else if (metric === 'accel') { const a = (M.aMax || 0).toFixed(1); lo = '-' + a; hi = '+' + a; }
     else if (metric === 'angvel') { const w = ((M.wMax || 0) * R2D).toFixed(0); lo = '-' + w; hi = '+' + w; }
     else { lo = '0'; hi = (M.kMax || 0).toFixed(2); }
-    const errors = issues.filter((check) => check.level === 'error').length;
     return h('div', { className: 'metricctl' },
       (plannerId === 'labviewBezier' || plannerId === 'labviewClothoid') && h('span', { className: 'ovapprox', title: 'The canvas mirrors the compatibility math; exported samples remain authoritative.' }, '\u2248'),
       h(Dropdown, { id: 'field-overlay-metric', ariaLabel: 'Field overlay metric', compact: true,
@@ -415,39 +411,11 @@
         items: (window.PM.METRICS || []).map((m) => ({ value: m.id, label: m.label, meta: m.unit || '' })),
         onChange: setMetric }),
       h('span', { className: 'metric-swatch', style: { background: grad }, 'aria-hidden': true }),
-      h('span', { className: 'metric-range', 'aria-hidden': true }, lo + '\u2013' + hi + ' ' + (def.unit || '')),
-      checks.length > 0 && h('button', { className: 'ovsafety ' + (issues.length ? (errors ? 'bad' : 'warn') : 'note') + (diagOpen ? ' open' : ''), type: 'button', onClick: onToggleDiag, title: 'Open path checks' },
-          h('span', { className: 'ovsafety-dot' }),
-          h('span', null, issues.length
-            ? issues.length + (issues.length > 1 ? ' issues' : ' issue')
-            : notes.length + (notes.length > 1 ? ' notes' : ' note'))));
-  }
-
-  // ---------------- path checks drawer ----------------
-  function PathChecks({ derived, doc, onClose, onPick }) {
-    const checks = derived.checks || [];
-    const issueCount = checks.filter((check) => check.level !== 'note').length;
-    const n = doc.waypoints.length;
-    const segName = (s) => (s === 0 ? 'Start' : 'WP' + s) + ' \u2192 ' + (s + 1 === n - 1 ? 'End' : 'WP' + (s + 1));
-    return h('div', { className: 'diag' },
-      h('div', { className: 'diag-hd' },
-        h('span', { className: 'diag-t' }, 'Path checks'),
-        h('span', { className: 'diag-c' }, issueCount ? issueCount : checks.length),
-        h('button', { className: 'ctxinsp-x', type: 'button', title: 'Close', 'aria-label': 'Close path checks', onClick: onClose }, h(Icon, { name: 'x', size: 14 }))),
-      h('div', { className: 'diag-scroll' },
-        checks.length === 0
-          ? h('div', { className: 'diag-empty' }, h(Icon, { name: 'check', size: 16 }), 'No constraint violations detected.')
-          : checks.map((check, i) => h('div', { key: i, className: 'diag-row ' + check.level },
-              h('button', { className: 'diag-main', type: 'button', onClick: () => onPick(check) },
-                h('span', { className: 'diag-sev ' + check.level }),
-                h('div', { className: 'diag-body' },
-                  h('div', { className: 'diag-txt' }, check.text),
-                  h('div', { className: 'diag-loc' }, (check.level === 'note' ? 'Performance note \u00b7 ' : 'Constraint check \u00b7 ') + segName(check.seg))),
-                h('span', { className: 'diag-pin' }, h(Icon, { name: 'pin', size: 13 })))))));
+      h('span', { className: 'metric-range', 'aria-hidden': true }, lo + '\u2013' + hi + ' ' + (def.unit || '')));
   }
 
   // ---------------- telemetry graph + transport ----------------
-  function Transport({ derived, doc, metric, setMetric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen, diagOpen, onToggleDiag, plannerId }) {
+  function Transport({ derived, doc, metric, setMetric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen, plannerId }) {
     const total = derived.prof.totalTime || 0.001;
     const pct = Math.max(0, Math.min(1, playTime / total));
     const scrubStep = Math.min(0.02, total);
@@ -587,7 +555,7 @@
             h('span', { className: 'timecode-unit' }, 's')),
           featureCount > 0 && h('span', { className: 'timeline-summary', 'aria-hidden': true }, featureSummary),
           h('div', { className: 'transport-meta' },
-            h(MetricControl, { metric, setMetric, derived, diagOpen, onToggleDiag, plannerId }),
+            h(MetricControl, { metric, setMetric, derived, plannerId }),
             h('div', { className: 'roi', title: 'Path length' }, h('span', { className: 'roi-v' }, (derived.totalDistance || derived.sample.length).toFixed(2)), h('span', { className: 'roi-u' }, 'm')),
             h(IconBtn, { icon: 'gauge', active: graphOpen, onClick: () => setGraphOpen(!graphOpen), title: 'Telemetry graph' }))),
         h('div', { className: 'timeline-editor' },
@@ -654,5 +622,5 @@
         running ? 'Executing' : 'Staged', h('span', { className: 'rlegend-nowt' }, fmt(time) + ' / ' + fmt(run.total))));
   }
 
-  window.Panels = { Toolbar, ToolRail, ConstraintBar, Outline, PathChecks, Transport, ViewControls, RoutineLegend };
+  window.Panels = { Toolbar, ToolRail, ConstraintBar, Outline, Transport, ViewControls, RoutineLegend };
 })();

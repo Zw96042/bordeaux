@@ -21,6 +21,7 @@ interface RendererWindow {
     nearestVisits(wx: number, wy: number, samples: Array<Point & { s: number; seg: number; t: number; heading: number }>, options?: { tolerance?: number; clusterDistance?: number }): Array<Point & { s: number; f: number; seg: number; t: number; distance: number }>;
     headingAt(fraction: number, anchors: HeadingAnchor[]): number;
     poseAtTime(time: number, points: Array<{ x: number; y: number; s: number; heading: number }>, profile: unknown, anchors: HeadingAnchor[], mode: string, reverse: boolean): { heading: number; speed: number };
+    profile(points: Array<{ s: number; curv: number }>, constraints: Record<string, number>, startVelocity: number, endVelocity: number): { v: number[] };
     derivePath(path: unknown, robot: unknown, perSegment: number, plannerId: string): {
       sample: { pts: Array<{ x: number; y: number; s: number; heading: number; seg: number; t: number }>; length: number };
       prof: { totalTime: number; t: number[]; jiggles?: Array<{ strokeDuration: number }> };
@@ -574,14 +575,24 @@ describe("renderer compatibility preview", () => {
     }
   });
 
-  it("keeps path checks informational until a repair can be validated", () => {
+  it("keeps corner-speed control in constraints and omits the path-check drawer", () => {
     const panels = fs.readFileSync(new URL("../public/renderer/assets/panels.js", import.meta.url), "utf8");
     const app = fs.readFileSync(new URL("../public/renderer/assets/app.js", import.meta.url), "utf8");
+    const inspector = fs.readFileSync(new URL("../public/renderer/assets/context-inspector.js", import.meta.url), "utf8");
 
-    expect(panels).toContain("Path checks");
-    expect(panels).not.toContain("diag-fixes");
-    expect(app).not.toContain("Cap velocity on this stretch");
-    expect(app).not.toContain("Insert a waypoint here");
+    expect(inspector).toContain("Corner accel");
+    expect(panels).not.toContain("Path checks");
+    expect(panels).not.toContain("PathChecks");
+    expect(app).not.toContain("diagOpen");
+  });
+
+  it("previews the independent corner acceleration limit", () => {
+    const math = rendererMath();
+    const points = [{ s: 0, curv: 0 }, { s: 1, curv: 1 }, { s: 2, curv: 0 }];
+    const base = { maxVel: 4, maxAccel: 1, maxDecel: 1, maxAngVel: 540, maxAngAccel: 720 };
+
+    expect(math.profile(points, base, 3, 3).v[1]).toBeCloseTo(1, 6);
+    expect(math.profile(points, { ...base, maxCentripetalAccel: 4 }, 3, 3).v[1]).toBeCloseTo(2, 6);
   });
 
   it("keeps Select mode non-destructive and previews compatibility insertions", () => {

@@ -146,7 +146,6 @@
     const [selPos, setSelPos] = useState(null);
     const [metric, setMetric] = useState('velocity');
     const [tool, setTool] = useState('select');
-    const [diagOpen, setDiagOpen] = useState(false);
     const [waypointPreview, setWaypointPreview] = useState(null);
     const [headMenu, setHeadMenu] = useState(null);
     const [plannerId, setPlannerId] = useState('profiledSpline');
@@ -942,17 +941,6 @@
       const hi = derived.wpFrac && Number.isFinite(derived.wpFrac[i + 1]) ? derived.wpFrac[i + 1] : (i + 1) / Math.max(1, doc.waypoints.length - 1);
       addWaypoint(window.PM.pointAtFraction((lo + hi) / 2, pts), i, true);
     }, [addWaypoint, derived, doc.waypoints.length]);
-    const zoomToFraction = useCallback((f) => {
-      const pts = derived.sample.pts; if (!pts || pts.length < 2) return;
-      const p = window.PM.pointAtFraction(f, pts);
-      const sx = (PX.X1 - PX.X0) / FIELD_W, sy = (PX.Y1 - PX.Y0) / FIELD_H;
-      const q = alliance === 'red' ? { x: FIELD_W - p.x, y: FIELD_H - p.y } : p;
-      const cx = PX.X0 + q.x * sx, cy = PX.Y1 - q.y * sy;
-      const nw = IMG_W * 0.42, nh = nw * (IMG_H / IMG_W);
-      setView({ x: cx - nw / 2, y: cy - nh / 2, w: nw, h: nh });
-    }, [derived, alliance]);
-    const pickCheck = useCallback((check) => { select('seg', check.seg); zoomToFraction(check.f); setDiagOpen(true); }, [select, zoomToFraction]);
-
     const inspActions = { setWp, toggleStop, toggleTheta, setHandleLen, delWp, setTarget, delTarget, setMarker, delMarker, setRange, setRangeAnchor, delRange, setConstraint, setDoc, rename, select, setTool,
       addTargetMid, addMarkerMid, addRangeMid,
       setSegMeta, setLabviewTrajectoryType, setSegmentHeadingMode, setHeadingTransition, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, reorderWp, insertWp,
@@ -1336,7 +1324,7 @@
         }
         if (k === 'g') setShowGrid((s) => !s);
         else if (k === 'f') setView(FIT);
-        else if (e.key === 'Escape') { setTool('select'); setHeadMenu(null); setDiagOpen(false); setWaypointPreview(null); select(null, -1); }
+        else if (e.key === 'Escape') { setTool('select'); setHeadMenu(null); setWaypointPreview(null); select(null, -1); }
         else if ((e.key === 'Backspace' || e.key === 'Delete') && sel.kind) {
           if (sel.kind === 'wp') delWp(sel.idx); else if (sel.kind === 'rt') delTarget(sel.idx); else if (sel.kind === 'em') delMarker(sel.idx); else if (sel.kind === 'cr') delRange(sel.idx);
         }
@@ -1391,8 +1379,7 @@
                   agentProposal.status === 'ready' && h('button', { type: 'button', onClick: rejectAgentProposal }, 'Reject'),
                   agentProposal.status === 'ready' && h('button', { className: 'primary', type: 'button', disabled: !agentCandidate || agentCandidate.valid === false || (agentProposal.blockingIssues && agentProposal.blockingIssues.length > 0), onClick: applyAgentProposal }, agentProposal.operation === 'replace' ? 'Apply repair' : 'Add path'))),
               h(window.Panels.ConstraintBar, { c: doc.constraints, robot, onOpen: () => select(null, -1) }),
-              diagOpen && h(window.Panels.PathChecks, { derived, doc, onClose: () => setDiagOpen(false), onPick: pickCheck }),
-              h(window.Panels.Transport, { derived, doc, metric, setMetric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen, diagOpen, onToggleDiag: () => setDiagOpen((o) => !o), plannerId: selectedPlannerId }),
+              h(window.Panels.Transport, { derived, doc, metric, setMetric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen, plannerId: selectedPlannerId }),
               h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen })),
             h('aside', { className: 'rail rail-r' + (inspectorOpen ? '' : ' collapsed'), 'aria-label': 'Path inspector' },
               inspectorOpen
