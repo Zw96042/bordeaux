@@ -285,7 +285,7 @@ function createWindow() {
           return controls.filter((el) => !String(name(el) || '').trim()).map((el) => el.className);
         };
         const unnamed = [...unnamedOnPage()];
-        for (const page of ['Acquatine', 'Robot']) {
+        for (const page of ['Aquitaine', 'Robot']) {
           [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === page)?.click();
           await new Promise((resolve) => setTimeout(resolve, 0));
           unnamed.push(...unnamedOnPage());
@@ -425,7 +425,7 @@ function createWindow() {
         await window.bordeauxAPI.newProject();
         const opened = await window.bordeauxAPI.openProject();
         const exported = await window.bordeauxAPI.exportBdx(opened.project);
-        [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === 'Acquatine')?.click();
+        [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === 'Aquitaine')?.click();
         await new Promise((resolve) => setTimeout(resolve, 0));
         document.querySelector('.routinelib .pathsw-btn')?.click();
         await new Promise((resolve) => setTimeout(resolve, 0));

@@ -150,9 +150,7 @@
 
   function EmptyState({ acq }) {
     return h('div', { className: 'rt-empty' },
-      h('div', { className: 'rt-empty-ic' }, h(Icon, { name: 'layers', size: 22 })),
-      h('div', { className: 'rt-empty-t' }, 'Build your routine'),
-      h('div', { className: 'rt-empty-d' }, 'Add paths, decisions, and runtime functions in execution order.'),
+      h('div', { className: 'rt-empty-t' }, 'No steps yet'),
       h(AddStep, { variant: 'end', label: 'Add first step', onPick: (t, c) => acq.addEnd(t, c) }));
   }
 
@@ -160,31 +158,13 @@
     const { routine, run, paths, selId, onSelect, acq, time, running } = props;
     const dnd = useDnd(acq);
     const [collapsed, setCollapsed] = useState(() => new Set());
-    const [renaming, setRenaming] = useState(false);
-    const [nameDraft, setNameDraft] = useState(routine.name);
-    const commitName = () => {
-      const next = nameDraft.trim();
-      if (next && next !== routine.name) acq.rename(next);
-      setRenaming(false);
-    };
     const toggleCollapse = (id) => setCollapsed((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
     const activeIdx = run.steps.length ? A.stepAt(run, time) : -1;
     const activeId = (running && activeIdx >= 0) ? run.steps[activeIdx].node.id : null;
     const firedIds = new Set();
     run.steps.forEach((s) => { if (s.t1 <= time + 1e-6) firedIds.add(s.node.id); });
-    const nSteps = A.countSteps(routine);
-
     return h('div', { className: 'rt-panel' + (dnd.drag ? ' dragging' : '') },
-      h('div', { className: 'rt-hd' },
-        renaming
-          ? h('form', { className: 'rt-rename', onSubmit: (event) => { event.preventDefault(); commitName(); } },
-              h('input', { className: 'rt-name', autoFocus: true, 'aria-label': 'Routine name', value: nameDraft, spellCheck: false, onChange: (event) => setNameDraft(event.target.value), onBlur: commitName }))
-          : h('button', { className: 'rt-selector', type: 'button', title: 'Rename routine', onClick: () => { setNameDraft(routine.name); setRenaming(true); } },
-              h('span', { className: 'rt-selector-ic' }, h(Icon, { name: 'layers', size: 15 })),
-              h('span', { className: 'rt-titlecol' }, h('strong', null, routine.name), h('small', null, nSteps + (nSteps === 1 ? ' step' : ' steps') + ' · ' + fmt(run.total))),
-              h(Icon, { name: 'edit', size: 13 }))),
-
       h('div', { className: 'rt-scroll' },
         routine.nodes.length === 0
           ? h(EmptyState, { acq })
