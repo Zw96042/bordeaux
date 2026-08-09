@@ -148,14 +148,14 @@ html, body { font-synthesis: none; }
   transition: clip-path 180ms cubic-bezier(.65, 0, .35, 1), opacity 180ms cubic-bezier(.65, 0, .35, 1), visibility 0s linear 180ms;
 }
 .velgraph.open { opacity: 1; clip-path: inset(0); visibility: visible; pointer-events: auto; transition: clip-path 180ms cubic-bezier(.65, 0, .35, 1), opacity 180ms cubic-bezier(.65, 0, .35, 1), visibility 0s; }
-.velgraph-top { min-height: 20px; margin-bottom: 3px !important; }
+.velgraph-top { min-height: 20px; margin-bottom: 3px !important; padding: 0 14px; }
 .velgraph-ttl { color: var(--txt) !important; font-size: 11.5px !important; font-weight: 550 !important; letter-spacing: .01em !important; text-transform: none !important; }
 .velgraph-readout { display: flex; align-items: baseline; gap: 10px; font-family: var(--mono); font-size: 10px; }
 .velgraph-readout b { color: var(--txt); font-size: 11px; font-weight: 600; }
 .velgraph-readout span { color: var(--txt-3); }
 .velgraph-plot { position: relative; gap: 0 !important; }
 .velgraph-svg { border-radius: 0; outline: none !important; }
-.velgraph-time { position: absolute; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-between; color: var(--txt-3); font-family: var(--mono); font-size: 8.5px; pointer-events: none; }
+.velgraph-time { position: absolute; left: 14px; right: 14px; bottom: 0; display: flex; justify-content: space-between; color: var(--txt-3); font-family: var(--mono); font-size: 8.5px; pointer-events: none; }
 @media (max-width: 1360px) {
   .app > .toolbar { gap: 8px; padding-inline: 8px; }
   .toolbar .tb-left { gap: 8px; }

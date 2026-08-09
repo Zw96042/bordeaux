@@ -558,6 +558,8 @@ describe("canonical shipped renderer", () => {
     expect(styles).toContain(".stage-plan .viewctl.graph-open{transform:translateY(-154px)}");
     expect(styles).toContain("clip-path: inset(100% 0 0 0);");
     expect(styles).toContain("padding: 10px 0 7px !important;");
+    expect(styles).toContain(".velgraph-top { min-height: 20px; margin-bottom: 3px !important; padding: 0 14px; }");
+    expect(styles).toContain(".velgraph-time { position: absolute; left: 14px; right: 14px;");
     expect(panels).toContain("padL = 0, padR = 0");
     expect(panels).toContain("className: 'velgraph' + (graphOpen ? ' open' : '')");
     expect(panels).toContain("tabIndex: graphOpen ? 0 : -1");
