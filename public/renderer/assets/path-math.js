@@ -51,6 +51,31 @@
   function angWrap(a) { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; }
   function angLerp(a, b, t) { return a + angWrap(b - a) * t; }
   const D2R = Math.PI / 180, R2D = 180 / Math.PI;
+  function robotHardLimits(robot) {
+    const m = robot && robot.driveModel;
+    if (!m) return null;
+    const values = [m.motorFreeRpm, m.motorMaxTorqueNm, m.motorCount, m.gearRatio, m.wheelDiameterM, m.massKg, m.moiKgM2, m.wheelbaseM, m.trackwidthM, m.wheelFrictionCoefficient];
+    if (!values.every((value) => Number.isFinite(value) && value > 0)) return null;
+    const radius = m.wheelDiameterM / 2;
+    const maxSpeed = m.motorFreeRpm / 60 * Math.PI * m.wheelDiameterM / m.gearRatio;
+    const motorAccel = m.motorCount * m.motorMaxTorqueNm * m.gearRatio / (radius * m.massKg);
+    const tractionAccel = m.wheelFrictionCoefficient * 9.80665;
+    const maxAccel = Math.min(motorAccel, tractionAccel);
+    const moduleRadius = robot.drive === 'tank' ? m.trackwidthM / 2 : Math.hypot(m.wheelbaseM / 2, m.trackwidthM / 2);
+    return {
+      maxSpeed,
+      maxAccel,
+      maxCornerAccel: tractionAccel,
+      maxAngVel: maxSpeed / moduleRadius * R2D,
+      maxAngAccel: maxAccel * m.massKg * moduleRadius / m.moiKgM2 * R2D,
+      motorAccel,
+      tractionAccel,
+    };
+  }
+  function effectiveConstraints(constraints, robot) {
+    const limits = robotHardLimits(robot);
+    return limits ? { ...constraints, maxVel: limits.maxSpeed, maxAccel: limits.maxAccel, maxDecel: limits.maxAccel, maxCentripetalAccel: limits.maxCornerAccel, maxAngVel: limits.maxAngVel, maxAngAccel: limits.maxAngAccel, maxAngDecel: limits.maxAngAccel } : constraints;
+  }
 
   // ---- rebuilt LabVIEW compatibility geometry ------------------------------
   // These are browser copies of the shared compatibility planners. Keep their
@@ -1174,6 +1199,11 @@
   // ---- one-call derivation: everything the field + panels need for a path ----
   function derivePath(doc, robot, perSeg, plannerId) {
     perSeg = perSeg || 56;
+    const hardLimits = robotHardLimits(robot);
+    if (hardLimits) {
+      robot = { ...robot, maxSpeed: hardLimits.maxSpeed };
+      doc = { ...doc, constraints: effectiveConstraints(doc.constraints, robot) };
+    }
     const labview = doc.labview || {};
     const smp = plannerId === 'labviewBezier'
       ? labviewBezierSample(doc.waypoints, labview.bezierTangentMode || 'handles')
@@ -1264,7 +1294,7 @@
         jiggles.push({ idx: wpIdx[nWp - 1], baseRad, config: endpoint.jiggle });
       } else invalidJiggle = true;
     }
-    const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns, jiggles, freeSpeed: cap, motorMaxSpeed: compatibilityPlanner ? cap : 0 });
+    const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns, jiggles, freeSpeed: cap, motorMaxSpeed: hardLimits || compatibilityPlanner ? cap : 0 });
     const trackedHead = headingWithTranslationPriority(doc, robot, pts, prof, head, effRanges, headingTransitions);
     appendTerminalHeadingCatchup(doc, prof, trackedHead, head, effRanges);
     const anchors = mode === 'tank' ? [] : buildAnchors(pts.map((p, i) => ({ f: total > 1e-6 ? p.s / total : 0, rad: trackedHead[i] })));
@@ -1332,5 +1362,5 @@
     return 'labviewBezier';
   }
 
-  window.PM = { bez, bezD, splitBezier, nearestPointOnSegment, sample, profile, poseAtTime, headingAt, metrics, analyze, metricColor, metricGradient, METRICS, SEGTYPES, buildAnchors, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, angLerp, D2R, R2D, lerp, derivePath, jigglePositions, labviewPlannerForPath, effectiveRanges, featureFraction, remapWaypointRange, waypointFracs };
+  window.PM = { bez, bezD, splitBezier, nearestPointOnSegment, sample, profile, poseAtTime, headingAt, metrics, analyze, metricColor, metricGradient, METRICS, SEGTYPES, buildAnchors, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, angLerp, D2R, R2D, lerp, derivePath, jigglePositions, labviewPlannerForPath, effectiveRanges, featureFraction, remapWaypointRange, waypointFracs, robotHardLimits, effectiveConstraints };
 })();

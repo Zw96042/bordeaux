@@ -31,6 +31,8 @@ interface RendererWindow {
       checks: Array<{ level: "error" | "warning" | "note"; text: string }>;
     };
     labviewPlannerForPath(path: unknown, fallback?: string): "labviewBezier" | "labviewClothoid";
+    robotHardLimits(robot: unknown): { maxSpeed: number; maxAccel: number; maxCornerAccel: number; maxAngVel: number; maxAngAccel: number } | null;
+    effectiveConstraints(constraints: object, robot: unknown): Record<string, number>;
   };
   UI?: {
     constraintRangeSummary(range: Record<string, number>, constraints: Record<string, number>, robot: { maxSpeed: number }): { text: string; ariaLabel: string; key: string } | null;
@@ -52,7 +54,7 @@ function rendererMath() {
 }
 
 function rendererUi() {
-  const window: RendererWindow = {};
+  const window: RendererWindow = { PM: { effectiveConstraints: (constraints: object) => constraints as Record<string, number> } as unknown as RendererWindow["PM"] };
   const noop = () => undefined;
   const React = { useState: noop, useRef: noop, useEffect: noop, useId: () => "id", createElement: noop };
   const source = fs.readFileSync(new URL("../public/renderer/assets/ui-primitives.js", import.meta.url), "utf8");
@@ -593,6 +595,19 @@ describe("renderer compatibility preview", () => {
 
     expect(math.profile(points, base, 3, 3).v[1]).toBeCloseTo(1, 6);
     expect(math.profile(points, { ...base, maxCentripetalAccel: 4 }, 3, 3).v[1]).toBeCloseTo(2, 6);
+  });
+
+  it("mirrors the robot-derived hard limits in the browser preview", () => {
+    const math = rendererMath();
+    const project = createDemoProject();
+    project.robot.driveModel = { motorId: "test", motorFreeRpm: 6000, motorMaxTorqueNm: 1, motorCount: 4, gearRatio: 10, wheelDiameterM: 0.1, massKg: 40, moiKgM2: 10, wheelbaseM: 0.6, trackwidthM: 0.8, wheelFrictionCoefficient: 0.5 };
+    const limits = math.robotHardLimits(project.robot)!;
+    const effective = math.effectiveConstraints(project.paths[0].constraints, project.robot);
+
+    expect(limits.maxSpeed).toBeCloseTo(Math.PI, 9);
+    expect(limits.maxAccel).toBeCloseTo(4.903325, 9);
+    expect(effective.maxVel).toBeCloseTo(limits.maxSpeed, 9);
+    expect(effective.maxCentripetalAccel).toBeCloseTo(limits.maxCornerAccel, 9);
   });
 
   it("keeps Select mode non-destructive and previews compatibility insertions", () => {
