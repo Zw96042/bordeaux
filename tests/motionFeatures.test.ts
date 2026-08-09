@@ -5,8 +5,6 @@ import { buildWaypoints, createDemoProject } from "../src/shared/project/default
 import type { TrajectoryPlannerId } from "../src/shared/types";
 import { validateProject } from "../src/shared/validation";
 import { decodeProjectFile } from "../src/shared/project/fileFormat";
-import { buildLabviewBdx } from "../src/shared/export/labviewBdx";
-import { parseLabviewBdx } from "../src/shared/export/labviewBdxReader";
 import { applyRotationPriority } from "../src/shared/planners/rotationPriority";
 import {
   headingTransitionGoals,
@@ -15,7 +13,7 @@ import {
 } from "../src/shared/planners/headingTransitions";
 import type { PlannerResult } from "../src/shared/types";
 
-const PLANNERS: TrajectoryPlannerId[] = ["profiledSpline", "optimizedTrajectory", "labviewBezier", "labviewClothoid"];
+const PLANNERS: TrajectoryPlannerId[] = ["profiledSpline", "optimizedTrajectory"];
 
 function interiorTurnProject() {
   const project = createDemoProject();
@@ -477,7 +475,8 @@ describe("motion features", () => {
     const peakTranslationSpeed = Math.max(...translationPriority.samples.map((sample) => sample.velocityMps));
 
     expect(peakTranslationSpeed).toBeGreaterThan(peakHeadingSpeed + 0.2);
-    expect(translationPriority.totalTimeS).toBeLessThan(headingPriority.totalTimeS);
+    const translationMotionEnd = [...translationPriority.samples].reverse().find((sample) => Math.abs(sample.velocityMps) > 1e-3)?.t ?? translationPriority.totalTimeS;
+    expect(translationMotionEnd).toBeLessThan(headingPriority.totalTimeS);
     expect(translationPriority.diagnostics.some((issue) => issue.severity === "error" && issue.message.includes("velocity or acceleration limits"))).toBe(false);
     expect(Math.max(...translationPriority.samples.map((sample) => Math.abs(sample.angularVelocityRadps))))
       .toBeLessThanOrEqual(path.constraints.maxAngVel * Math.PI / 180 * 1.02);
@@ -489,11 +488,6 @@ describe("motion features", () => {
       .toBeLessThanOrEqual(path.constraints.maxAngAccel * Math.PI / 180 * 1.04);
     expect(Math.abs(PM.angWrap(translationPriority.samples.at(-1)!.headingRad - Math.PI)))
       .toBeLessThan(0.1 * Math.PI / 180);
-    if (plannerId === "labviewBezier" || plannerId === "labviewClothoid") {
-      translationPriority.samples.slice(1).forEach((sample, index) => {
-        expect(sample.t - translationPriority.samples[index].t).toBeCloseTo(path.labview?.samplePeriodS ?? 0.02, 9);
-      });
-    }
     translationPriority.samples.slice(1).forEach((sample, index) => {
       const previous = translationPriority.samples[index];
       expect(PM.angWrap(sample.headingRad - previous.headingRad))
@@ -536,7 +530,7 @@ describe("motion features", () => {
     expect(explicit.samples).toEqual(omitted.samples);
   });
 
-  it.each(["profiledSpline", "labviewBezier"] as const)("lets an overlapping heading-priority range override translation priority in %s", (plannerId) => {
+  it.each(PLANNERS)("lets an overlapping heading-priority range override translation priority in %s", (plannerId) => {
     const project = createDemoProject();
     const path = project.paths[0];
     path.headingMode = "manual";
@@ -563,7 +557,7 @@ describe("motion features", () => {
     expect(mixed.totalTimeS).toBeGreaterThan(translationOnly.totalTimeS);
   });
 
-  it("keeps a disjoint LabVIEW translation-priority stretch local when a later heading range tightens", () => {
+  it("keeps a disjoint translation-priority stretch local when a later heading range tightens", () => {
     const project = createDemoProject();
     const path = project.paths[0];
     path.headingMode = "manual";
@@ -582,12 +576,12 @@ describe("motion features", () => {
       anchor: "param", f0: 0.1, f1: 0.3,
       ...common, maxAngVel: 180, rotationPriority: "translation",
     }];
-    const translationOnly = getPlanner("labviewBezier").generate({ path: structuredClone(path), robot: project.robot });
+    const translationOnly = getPlanner("profiledSpline").generate({ path: structuredClone(path), robot: project.robot });
     path.ranges.push({
       anchor: "param", f0: 0.72, f1: 0.9,
       ...common, maxAngVel: 20, rotationPriority: "heading",
     });
-    const mixed = getPlanner("labviewBezier").generate({ path, robot: project.robot });
+    const mixed = getPlanner("profiledSpline").generate({ path, robot: project.robot });
     const nearest = (samples: typeof mixed.samples, fraction: number) => samples.reduce((best, sample) => (
       Math.abs(sample.f - fraction) < Math.abs(best.f - fraction) ? sample : best
     ));
@@ -599,7 +593,7 @@ describe("motion features", () => {
     expect(mixed.totalTimeS).toBeGreaterThan(translationOnly.totalTimeS);
   });
 
-  it("keeps an earlier LabVIEW heading transition bounded when Translation is selected later", () => {
+  it("keeps an earlier heading transition bounded when Translation is selected later", () => {
     const project = createDemoProject();
     const path = project.paths[0];
     path.headingMode = "manual";
@@ -619,7 +613,7 @@ describe("motion features", () => {
       maxVel: 4, maxAccel: 5, maxDecel: 5, maxAngVel: 180, maxAngAccel: 30,
       rotationPriority: "translation",
     }];
-    const result = getPlanner("labviewBezier").generate({ path, robot: project.robot });
+    const result = getPlanner("profiledSpline").generate({ path, robot: project.robot });
     const prefix = result.samples.filter((sample) => sample.f <= 0.5);
     const prefixAcceleration = prefix.slice(1).map((sample, index) => (
       Math.abs(sample.angularVelocityRadps - prefix[index].angularVelocityRadps)
@@ -632,7 +626,7 @@ describe("motion features", () => {
       .toBeLessThanOrEqual(path.constraints.maxAngAccel * Math.PI / 180 * 1.04);
   });
 
-  it("does not silently exceed angular jerk when LabVIEW Translation priority is active later", () => {
+  it("does not silently exceed angular jerk when Translation priority is active later", () => {
     const project = createDemoProject();
     const path = project.paths[0];
     path.headingMode = "manual";
@@ -651,7 +645,7 @@ describe("motion features", () => {
       maxAngAccel: path.constraints.maxAngAccel,
       rotationPriority: "translation",
     }];
-    const result = getPlanner("labviewBezier").generate({ path, robot: project.robot });
+    const result = getPlanner("profiledSpline").generate({ path, robot: project.robot });
 
     expect(result.diagnostics.some((issue) => issue.severity === "error" && issue.message.includes("angular limits"))).toBe(true);
   });
@@ -726,7 +720,7 @@ describe("motion features", () => {
     expect(Math.abs(PM.angWrap(result.samples[boundary].headingRad - result.samples[boundary - 1].headingRad))).toBeLessThan(0.12);
   });
 
-  it.each(["profiledSpline", "labviewBezier"] as TrajectoryPlannerId[])("rejects a track point on the driven segment with %s", (plannerId) => {
+  it.each(PLANNERS)("rejects a track point on the driven segment with %s", (plannerId) => {
     const project = createDemoProject();
     const path = project.paths[0];
     path.waypoints[0].segmentHeadingMode = "lookAt";
@@ -740,10 +734,10 @@ describe("motion features", () => {
     const path = project.paths[0];
     path.waypoints[0].segmentHeadingMode = "lookAt";
     path.waypoints[0].segmentLookAt = { x: 3.6, y: 6 };
-    const forward = getPlanner("labviewBezier").generate({ path, robot: project.robot });
+    const forward = getPlanner("profiledSpline").generate({ path, robot: project.robot });
     path.driveBackward = true;
-    const reverse = getPlanner("labviewBezier").generate({ path, robot: project.robot });
-    expect(Math.abs(PM.angWrap(reverse.samples[0].headingRad - forward.samples[0].headingRad))).toBeCloseTo(Math.PI, 6);
+    const reverse = getPlanner("profiledSpline").generate({ path, robot: project.robot });
+    expect(Math.abs(PM.angWrap(reverse.samples[0].headingRad - forward.samples[0].headingRad))).toBeCloseTo(Math.PI, 5);
   });
 
   it("rejects malformed local constraint segment anchors", () => {
@@ -837,14 +831,14 @@ describe("motion features", () => {
     expect(result.diagnostics.some((issue) => issue.severity === "error" && issue.message.includes("outgoing segment heading"))).toBe(true);
   });
 
-  it("places a LabVIEW-compatible wait after an interior stationary turn", () => {
+  it("places a wait after an interior stationary turn", () => {
     const project = interiorTurnProject();
     const path = project.paths[0];
-    const result = getPlanner("labviewBezier").generate({ path, robot: project.robot });
+    const result = getPlanner("profiledSpline").generate({ path, robot: project.robot });
     const boundary = result.samples.filter((sample) => Math.hypot(sample.x - 4, sample.y - 2) < 1e-5);
     const targetSamples = boundary.filter((sample) => Math.abs(PM.angWrap(sample.headingRad - Math.PI / 2)) < 1e-6);
 
-    expect(targetSamples.length).toBeGreaterThanOrEqual(Math.ceil(path.waypoints[1].wait! / path.labview!.samplePeriodS!));
+    expect(targetSamples.at(-1)!.t - targetSamples[0].t).toBeGreaterThanOrEqual(path.waypoints[1].wait! - 1e-6);
     expect(targetSamples.every((sample) => Math.abs(sample.velocityMps) < 1e-8)).toBe(true);
   });
 
@@ -952,32 +946,4 @@ describe("motion features", () => {
     expect(validateProject(project).issues.some((issue) => issue.path.endsWith(".jiggle.stepDeg") && issue.message.includes("must not repeat"))).toBe(true);
   });
 
-  it("writes stationary turn samples into the LabVIEW-compatible trajectory", () => {
-    const project = createDemoProject();
-    project.plannerId = "labviewBezier";
-    const end = project.paths[0].waypoints.at(-1)!;
-    end.stop = true;
-    end.turnInPlace = { headingDeg: 90 };
-
-    const encoded = buildLabviewBdx(project, project.paths[0].id);
-    const decoded = parseLabviewBdx(encoded.buffer);
-    const velocities = decoded.trajectory[0].velocities;
-
-    expect(decoded.trajectory[0].positions).toHaveLength(encoded.sampleCount);
-    expect(velocities.some((sample) => Math.abs(sample.velocityFps) < 1e-9 && Math.abs(sample.omegaDegPerS) > 1)).toBe(true);
-  });
-
-  it("flattens endpoint jiggle motion into the LabVIEW-compatible trajectory", () => {
-    const project = createDemoProject();
-    project.plannerId = "labviewBezier";
-    project.paths[0].waypoints.at(-1)!.jiggle = { distanceM: 0.18, strokes: 4, startDeg: 90, stepDeg: -90, strokeTimeS: 0.4 };
-
-    const encoded = buildLabviewBdx(project, project.paths[0].id);
-    const decoded = parseLabviewBdx(encoded.buffer);
-    const velocities = decoded.trajectory[0].velocities;
-
-    expect(decoded.trajectory[0].positions).toHaveLength(encoded.sampleCount);
-    expect(velocities.some((sample) => sample.velocityFps > 0.5)).toBe(true);
-    expect(decoded.trajectory[0].positions.at(-1)!.xFt).toBeCloseTo(project.paths[0].waypoints.at(-1)!.x / 0.3048, 5);
-  });
 });

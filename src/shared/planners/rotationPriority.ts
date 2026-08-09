@@ -1,11 +1,11 @@
 import type { ConstraintRange, PathDoc, PlannerResult, RobotConfig, TrajectorySample } from "../types";
-import { LABVIEW_BDX_MAX_TRAJECTORY_POINTS } from "../export/labviewBdxReader";
 import { headingTransitionWindows, segmentHeadingLaws, type HeadingTransitionWindow } from "./headingTransitions";
+import { MAX_TRAJECTORY_SAMPLES } from "./limits";
 
 const EPSILON = 1e-9;
 const DEG = Math.PI / 180;
 
-type EffectiveRange = ConstraintRange & { start: number; end: number };
+export type EffectiveRange = ConstraintRange & { start: number; end: number };
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
@@ -36,7 +36,7 @@ function waypointFractions(path: PathDoc, samples: readonly TrajectorySample[]):
   });
 }
 
-function effectiveRanges(path: PathDoc, samples: readonly TrajectorySample[], totalDistance: number): EffectiveRange[] {
+export function effectiveRanges(path: PathDoc, samples: readonly TrajectorySample[], totalDistance: number): EffectiveRange[] {
   const waypointF = waypointFractions(path, samples);
   return (path.ranges ?? []).map((range) => {
     let start = range.f0;
@@ -57,7 +57,7 @@ function effectiveRanges(path: PathDoc, samples: readonly TrajectorySample[], to
   });
 }
 
-function activeRanges(ranges: readonly EffectiveRange[], fraction: number): EffectiveRange[] {
+export function activeRanges(ranges: readonly EffectiveRange[], fraction: number): EffectiveRange[] {
   return ranges.filter((range) => fraction >= range.start - EPSILON && fraction <= range.end + EPSILON);
 }
 
@@ -118,19 +118,21 @@ function trackedStep(
   actual: number,
   omega: number,
   desiredNow: number,
-  desiredBefore: number,
   limits: ReturnType<typeof angularLimits>,
   dt: number,
+  brakingDt = dt,
 ): { actual: number; omega: number } {
   const error = desiredNow - actual;
-  const desiredOmega = clamp((desiredNow - desiredBefore) / dt, -limits.velocity, limits.velocity);
   // A pure error/dt target keeps accelerating until the heading is reached,
   // which carries angular momentum through the target and creates a visible
   // overshoot/reversal. Cap the catch-up component by the speed that can
   // still brake inside the remaining error, including a one-tick margin for
   // the fixed-period semi-implicit integration used by the planners.
-  const brakingOmega = Math.max(0, Math.sqrt(2 * limits.deceleration * Math.abs(error)) - limits.deceleration * dt);
-  let targetOmega = clamp(desiredOmega + Math.sign(error) * brakingOmega, -limits.velocity, limits.velocity);
+  const brakingOmega = Math.max(0, Math.sqrt(2 * limits.deceleration * Math.abs(error)) - limits.deceleration * brakingDt);
+  // The remaining heading error already includes this tick's desired motion.
+  // Adding desiredOmega again can carry momentum past a target just as its
+  // authored law settles. Use the braking-safe speed as the complete target.
+  let targetOmega = Math.sign(error) * Math.min(limits.velocity, brakingOmega);
   const exactOmega = error / dt;
   const exactRate = Math.sign(exactOmega) !== 0 && Math.sign(omega) !== 0 && Math.sign(exactOmega) !== Math.sign(omega)
     ? Math.min(limits.acceleration, limits.deceleration)
@@ -142,8 +144,7 @@ function trackedStep(
   return { actual: actual + nextOmega * dt, omega: nextOmega };
 }
 
-function samplePeriod(path: PathDoc, samples: readonly TrajectorySample[]): number {
-  if (path.labview?.samplePeriodS && path.labview.samplePeriodS >= 0.001) return path.labview.samplePeriodS;
+function samplePeriod(samples: readonly TrajectorySample[]): number {
   let best = Infinity;
   for (let index = 1; index < samples.length; index += 1) {
     const dt = samples[index].t - samples[index - 1].t;
@@ -238,7 +239,8 @@ export function applyRotationPriority(path: PathDoc, result: PlannerResult, robo
     }
 
     const limits = intervalAngularLimits(path, ranges, samples[index - 1].f, samples[index].f);
-    ({ actual, omega } = trackedStep(actual, omega, desired[index], desired[index - 1], limits, dt));
+    const nextDt = index + 1 < samples.length ? samples[index + 1].t - samples[index].t : dt;
+    ({ actual, omega } = trackedStep(actual, omega, desired[index], limits, dt, Math.max(dt, nextDt)));
 
     samples[index].headingRad = actual;
     samples[index].angularVelocityRadps = omega;
@@ -246,15 +248,15 @@ export function applyRotationPriority(path: PathDoc, result: PlannerResult, robo
 
   const diagnostics = [...result.diagnostics];
   const target = desired.at(-1)!;
-  const period = samplePeriod(path, samples);
+  const period = samplePeriod(samples);
   const last = samples.at(-1)!;
   if (Math.abs(last.velocityMps) <= 1e-3) {
     const limits = angularLimits(path, ranges, 1);
     while (Math.abs(target - actual) > 0.05 * DEG || Math.abs(omega) > 0.05 * DEG) {
-      if (samples.length >= LABVIEW_BDX_MAX_TRAJECTORY_POINTS) {
-        throw new Error(`Heading catch-up requires more than ${LABVIEW_BDX_MAX_TRAJECTORY_POINTS} samples`);
+      if (samples.length >= MAX_TRAJECTORY_SAMPLES) {
+        throw new Error(`Heading catch-up requires more than ${MAX_TRAJECTORY_SAMPLES} samples`);
       }
-      ({ actual, omega } = trackedStep(actual, omega, target, target, limits, period));
+      ({ actual, omega } = trackedStep(actual, omega, target, limits, period));
       samples.push({
         ...samples.at(-1)!,
         i: samples.length,
