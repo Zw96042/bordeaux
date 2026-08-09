@@ -513,7 +513,7 @@
     const peak = Math.max(vmax, jigglePeak);
     vmax = Math.max(0.01, peak * 1.1);
     if (signed) vmin = -vmax;
-    const GW = 1000, GH = 132, padL = 4, padR = 4, padT = 10, padB = 20;
+    const GW = 1000, GH = 132, padL = 0, padR = 0, padT = 10, padB = 20;
     const span = Math.max(1e-6, vmax - vmin);
     const yOf = (val) => padT + (1 - (val - vmin) / span) * (GH - padT - padB);
     const zeroY = yOf(0);
