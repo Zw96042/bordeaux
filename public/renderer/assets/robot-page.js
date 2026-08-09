@@ -243,6 +243,17 @@
       const preset = { ...trapezoidPreset, [key]: Math.max(0.05, Math.min(robot.w, value)) };
       setRobot({ footprintPreset: preset, footprint: footprintFor('trapezoid', robot.w, robot.l, preset) });
     };
+    const customVerticesEditor = shape === 'custom' && h('div', { className: 'rp-vertices rp-preview-vertices' },
+      h('div', { className: 'rp-vertexhead' }, h('span', null, 'Custom convex vertices'), h('span', null, '+X forward · +Y left')),
+      footprint.map((point, index) => h('div', { className: 'rp-vertex' + (selectedVertex === index ? ' selected' : ''), key: index, onClick: () => setSelectedVertex(index) },
+        h('span', null, index + 1),
+        h('label', null, 'X', h('input', { type: 'number', step: 0.01, value: point.x, 'aria-label': `Vertex ${index + 1} X`, onChange: (event) => updateVertex(index, 'x', Number(event.target.value)) })),
+        h('label', null, 'Y', h('input', { type: 'number', step: 0.01, value: point.y, 'aria-label': `Vertex ${index + 1} Y`, onChange: (event) => updateVertex(index, 'y', Number(event.target.value)) })),
+        h('button', { type: 'button', disabled: footprint.length <= 3, 'aria-label': `Remove vertex ${index + 1}`, onClick: () => setVertices(footprint.filter((_, pointIndex) => pointIndex !== index)) }, '\u00d7'))),
+      h('button', { className: 'rp-addvertex', type: 'button', disabled: footprint.length >= 16, onClick: () => addVertex() }, 'Add vertex on longest edge'),
+      h('div', { className: 'rp-note' + (footprintValid ? '' : ' invalid'), role: footprintValid ? undefined : 'status' }, footprintValid
+        ? 'Drag points in the preview or enter exact coordinates.'
+        : 'Keep the footprint convex, inside the robot dimensions, and around its center point.'));
 
     return h('div', { className: 'robotpage' },
       h('div', { className: 'rp-wrap' },
@@ -291,18 +302,7 @@
                   h('div', { className: 'rp-field' }, h('div', { className: 'rp-flabel' }, 'Front width'),
                     h(BigNum, { label: 'Trapezoid front width', value: trapezoidPreset.frontWidthM, unit: 'm', min: 0.05, max: robot.w, onChange: (value) => setTrapezoidWidth('frontWidthM', value) })),
                   h('div', { className: 'rp-field' }, h('div', { className: 'rp-flabel' }, 'Rear width'),
-                    h(BigNum, { label: 'Trapezoid rear width', value: trapezoidPreset.rearWidthM, unit: 'm', min: 0.05, max: robot.w, onChange: (value) => setTrapezoidWidth('rearWidthM', value) }))),
-                shape === 'custom' && h('div', { className: 'rp-vertices' },
-                  h('div', { className: 'rp-vertexhead' }, h('span', null, 'Custom convex vertices'), h('span', null, '+X forward · +Y left')),
-                  footprint.map((point, index) => h('div', { className: 'rp-vertex' + (selectedVertex === index ? ' selected' : ''), key: index, onClick: () => setSelectedVertex(index) },
-                    h('span', null, index + 1),
-                    h('label', null, 'X', h('input', { type: 'number', step: 0.01, value: point.x, 'aria-label': `Vertex ${index + 1} X`, onChange: (event) => updateVertex(index, 'x', Number(event.target.value)) })),
-                    h('label', null, 'Y', h('input', { type: 'number', step: 0.01, value: point.y, 'aria-label': `Vertex ${index + 1} Y`, onChange: (event) => updateVertex(index, 'y', Number(event.target.value)) })),
-                    h('button', { type: 'button', disabled: footprint.length <= 3, 'aria-label': `Remove vertex ${index + 1}`, onClick: () => setVertices(footprint.filter((_, pointIndex) => pointIndex !== index)) }, '\u00d7'))),
-                  h('button', { className: 'rp-addvertex', type: 'button', disabled: footprint.length >= 16, onClick: () => addVertex() }, 'Add vertex on longest edge'),
-                  h('div', { className: 'rp-note' + (footprintValid ? '' : ' invalid'), role: footprintValid ? undefined : 'status' }, footprintValid
-                    ? 'Drag points in the preview, double-click an edge to add one, or use these fields for exact coordinates.'
-                    : 'Keep the footprint convex, inside the robot dimensions, and around its center point. Move or remove a vertex before leaving Robot.'))),
+                    h(BigNum, { label: 'Trapezoid rear width', value: trapezoidPreset.rearWidthM, unit: 'm', min: 0.05, max: robot.w, onChange: (value) => setTrapezoidWidth('rearWidthM', value) })))),
               h('div', { className: 'rp-field' },
                 h('div', { className: 'rp-flabel' }, 'Height', h('small', null, typeof robot.heightM === 'number' ? m2ft(robot.heightM).toFixed(2) + ' ft' : 'required for TRENCH checks')),
                 h(BigNum, { label: 'Robot height', value: robot.heightM, unit: 'm', min: 0.1, max: 2.5, onChange: (v) => setRobot({ heightM: v }) })),
@@ -399,7 +399,8 @@
                 h('div', { className: 'rr' }, h('div', { className: 'rrv' }, isSwerve ? 'Swerve' : 'Tank'), h('div', { className: 'rru' }, 'drive')),
                 h('div', { className: 'rr' }, h('div', { className: 'rrv' }, footprintArea.toFixed(2)), h('div', { className: 'rru' }, 'm\u00b2 footprint')),
                 h('div', { className: 'rr' }, h('div', { className: 'rrv' }, typeof robot.heightM === 'number' ? robot.heightM.toFixed(2) : '—'), h('div', { className: 'rru' }, 'm high')),
-                h('div', { className: 'rr' }, h('div', { className: 'rrv' }, robot.maxSpeed.toFixed(1)), h('div', { className: 'rru' }, 'm/s top'))))))));
+                h('div', { className: 'rr' }, h('div', { className: 'rrv' }, robot.maxSpeed.toFixed(1)), h('div', { className: 'rru' }, 'm/s top')))),
+            customVerticesEditor))));
   }
 
   window.RobotPage = RobotPage;
