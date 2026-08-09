@@ -163,6 +163,42 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void streamsPathsWhilePreservingIdPrecedenceOverAnEarlierNameMatch() {
+        BordeauxPathEvents path = read("""
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
+                 "catalog":{"schemaVersion":"1.0","catalogId":"test-robot","supportVersion":"0.1.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "paths":[
+                   {"id":"other","name":"auto","totalTimeS":1,"samples":[],"events":[]},
+                   {"id":"auto","name":"Selected by ID","totalTimeS":2,"samples":[],"events":[]}]}
+                """);
+
+        assertEquals("Selected by ID", path.name());
+        assertEquals(2, path.totalTimeS());
+    }
+
+    @Test
+    void rejectsDocumentsAboveRobotSafeByteAndSampleCeilings() {
+        String oversizedBytes = """
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux","padding":"%s",
+                 "catalog":{"schemaVersion":"1.0","catalogId":"test-robot","supportVersion":"0.1.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "paths":[{"id":"auto","name":"Auto","totalTimeS":1,"samples":[],"events":[]}]}
+                """.formatted("x".repeat(BordeauxTrajectoryReader.MAX_BYTES));
+        BordeauxRuntimeException byteLimit = assertThrows(BordeauxRuntimeException.class,
+                () -> read(oversizedBytes));
+        assertTrue(byteLimit.getMessage().contains("byte limit"));
+
+        String oversizedSamples = "{},".repeat(BordeauxTrajectoryReader.MAX_SAMPLES) + "{}";
+        String sampleDocument = """
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
+                 "catalog":{"schemaVersion":"1.0","catalogId":"test-robot","supportVersion":"0.1.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "paths":[{"id":"auto","name":"Auto","totalTimeS":1,"samples":[%s],"events":[]}]}
+                """.formatted(oversizedSamples);
+        BordeauxRuntimeException sampleLimit = assertThrows(BordeauxRuntimeException.class,
+                () -> read(sampleDocument));
+        assertTrue(sampleLimit.getMessage().contains("sample limit"));
+    }
+
+    @Test
     void readsStrictBetweenPathRoutineTree() {
         BordeauxPathEvents path = readWithRoutine("""
                 {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
