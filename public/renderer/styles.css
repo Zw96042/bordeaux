@@ -47,11 +47,11 @@ html, body { font-synthesis: none; }
   letter-spacing: .02em;
   white-space: nowrap;
 }
-.ctxinsp, .outline, .diag, .rt-panel, .stepinsp {
+.ctxinsp, .outline, .rt-panel, .stepinsp {
   border-color: var(--panel-border-strong) !important;
 }
 .ctxinsp-body, .outline-scroll { scrollbar-width: thin; }
-.featempty, .diag-empty {
+.featempty {
   color: color-mix(in srgb, var(--txt-2) 88%, white);
   background: rgba(255,255,255,0.032);
   border: 1px dashed rgba(255,255,255,0.11);
@@ -89,7 +89,7 @@ html, body { font-synthesis: none; }
   outline: 2px solid oklch(0.72 0.10 255 / .82) !important;
   outline-offset: 1px;
 }
-.toolrail, .cbar, .transport, .viewctl, .diag, .ctxmenu {
+.toolrail, .cbar, .transport, .viewctl, .ctxmenu {
   box-shadow: var(--polish-elevation) !important;
 }
 .toolrail, .cbar, .transport, .viewctl, .rt-transport {
@@ -175,7 +175,6 @@ html, body { font-synthesis: none; }
     max-width: none;
   }
   .fieldcol .viewctl { right: 12px; bottom: 106px; }
-  .fieldcol .diag { left: 12px; bottom: 230px; width: min(316px, calc(100% - 24px)); }
   .fieldcol .cbar-chip { padding-inline: 8px; }
 }
 @container (max-width: 420px) {
@@ -208,7 +207,6 @@ html, body { font-synthesis: none; }
   .fieldcol .plannerdiag span { margin-left: auto; }
   .fieldcol .plannerdiag em { display: none; }
   .fieldcol .viewctl { bottom: 272px; }
-  .fieldcol .diag { bottom: 250px; max-height: 150px; }
   .fieldcol .transport-meta,
   .fieldcol .timeline-summary,
   .fieldcol .timeline-title { display: none; }
@@ -748,15 +746,6 @@ input,select{font-family:inherit}
 .metric-dropdown{width:82px}.metric-dropdown.dropdown.compact .cmd-picker-trigger{height:25px;gap:3px;padding-inline:5px;background:transparent;border-color:transparent}
 .metric-swatch{width:38px;height:6px;border-radius:4px;border:1px solid rgb(255 255 255 / .08);flex-shrink:0}
 .metric-range{color:var(--txt-3);font:8.5px var(--mono);white-space:nowrap}
-.ovsafety{display:flex;align-items:center;gap:5px;min-height:27px;margin:0;padding:0 4px;border:0;font-size:10.5px;color:var(--txt-2);line-height:1.3;white-space:nowrap}
-.ovsafety-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;background:var(--txt-3)}
-.ovsafety.ok .ovsafety-dot{background:var(--good)}
-.ovsafety.warn .ovsafety-dot{background:var(--warn)}
-.ovsafety.bad .ovsafety-dot{background:var(--bad)}
-.ovsafety.note .ovsafety-dot{background:var(--txt-3)}
-.ovsafety.note{color:var(--txt-3)}
-.ovsafety.ok{color:var(--txt-3)}
-.ovsafety-tip{flex-basis:100%;font-family:var(--mono);font-size:9.5px;color:var(--txt-3);padding-left:14px}
 
 /* ============ docked trajectory timeline ============ */
 .transport{position:absolute;left:0;right:0;bottom:0;height:94px;display:grid;grid-template-rows:34px 60px;align-content:end;min-width:0;background:color-mix(in srgb,var(--hud-surface) 96%,black);backdrop-filter:blur(14px);border:0;border-top:1px solid var(--line-2);border-radius:0!important;box-shadow:0 -10px 28px rgb(0 0 0 / .24)!important;z-index:25;isolation:isolate;transition:height 180ms cubic-bezier(.65,0,.35,1)}
@@ -1220,7 +1209,7 @@ input,select{font-family:inherit}
 .acq-genpath{animation:acqmarch 1.1s linear infinite}
 @media (prefers-reduced-motion:reduce){.acq-genpath{animation:none}}
 
-/* ============ v2 interaction rework — tool rail, chip bar, path checks, behavior ============ */
+/* ============ v2 interaction rework — tool rail, chip bar, behavior ============ */
 /* canvas tool rail (memo §2) */
 .toolrail{position:absolute;left:14px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:4px;padding:5px;background:var(--panel);backdrop-filter:blur(12px);border:1px solid var(--line-2);border-radius:11px;box-shadow:var(--shadow);z-index:24}
 .toolrail-b{position:relative;width:38px;height:38px;display:flex;align-items:center;justify-content:center;border-radius:8px;color:var(--txt-2)}
@@ -1297,33 +1286,6 @@ input,select{font-family:inherit}
 .facebtn{flex:1;height:28px;border-radius:6px;border:1px solid var(--line-2);background:var(--bg-2);color:var(--txt-2);font-size:10.5px;font-weight:500}
 .facebtn:hover:not(:disabled){border-color:var(--accent-line);color:var(--accent)}
 .facebtn:disabled{opacity:.38;cursor:not-allowed}
-
-/* clickable safety row → path checks */
-.ovsafety{width:auto;text-align:left;cursor:pointer}
-.ovsafety:hover{color:var(--txt)}
-.ovsafety.ok{cursor:default}
-
-/* path-check drawer */
-.diag{position:absolute;left:16px;bottom:84px;width:316px;max-height:min(54vh,460px);display:flex;flex-direction:column;background:var(--panel);backdrop-filter:blur(12px);border:1px solid var(--line-2);border-radius:10px;box-shadow:var(--shadow);z-index:26;overflow:hidden}
-.diag-hd{display:flex;align-items:center;gap:9px;padding:10px 8px 10px 13px;border-bottom:1px solid var(--line);flex-shrink:0}
-.diag-t{font-size:12px;font-weight:600;flex:1}
-.diag-c{font-family:var(--mono);font-size:11px;color:var(--txt-2);background:var(--bg-3);padding:2px 8px;border-radius:10px}
-.diag-scroll{overflow-y:auto;padding:8px}
-.diag-empty{display:flex;align-items:center;gap:9px;font-size:11.5px;color:var(--txt-3);padding:14px 8px;line-height:1.45}
-.diag-empty svg{color:var(--good);flex-shrink:0}
-.diag-row{border:1px solid var(--line);border-radius:8px;margin-bottom:7px;overflow:hidden;background:var(--bg-1)}
-.diag-row:last-child{margin-bottom:0}
-.diag-main{display:flex;align-items:center;gap:10px;width:100%;padding:9px 10px;text-align:left;color:var(--txt)}
-.diag-main:hover{background:var(--bg-2)}
-.diag-sev{width:8px;height:8px;border-radius:2px;flex-shrink:0}
-.diag-sev.error{background:var(--bad)}
-.diag-sev.warning{background:var(--warn)}
-.diag-sev.note{border-radius:50%;background:var(--txt-3)}
-.diag-body{flex:1;min-width:0}
-.diag-txt{font-size:11.5px;font-weight:600;color:var(--txt)}
-.diag-loc{font-family:var(--mono);font-size:9.5px;color:var(--txt-3);margin-top:2px}
-.diag-pin{display:flex;color:var(--txt-3);flex-shrink:0}
-.diag-main:hover .diag-pin{color:var(--accent)}
 
 /* context menu (heading right-click — memo §7) */
 .ctxmenu{position:fixed;z-index:200;min-width:184px;background:var(--bg-2);border:1px solid var(--line-2);border-radius:9px;box-shadow:var(--shadow);padding:5px}
