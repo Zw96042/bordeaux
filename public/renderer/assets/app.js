@@ -1393,7 +1393,7 @@
               h(window.Panels.ConstraintBar, { c: doc.constraints, robot, onOpen: () => select(null, -1) }),
               diagOpen && h(window.Panels.PathChecks, { derived, doc, onClose: () => setDiagOpen(false), onPick: pickCheck }),
               h(window.Panels.Transport, { derived, doc, metric, setMetric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen, diagOpen, onToggleDiag: () => setDiagOpen((o) => !o), plannerId: selectedPlannerId }),
-              h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
+              h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen })),
             h('aside', { className: 'rail rail-r' + (inspectorOpen ? '' : ' collapsed'), 'aria-label': 'Path inspector' },
               inspectorOpen
                 ? h(window.ContextInspector, { doc, sel, derived, actions: inspActions, accent, drive: robot.drive, robot, plannerId: selectedPlannerId, javaProject: { ...javaProjectState, link: linkJavaProject, openRecent: openRecentJavaProject, refresh: refreshJavaProject, install: installJavaSupport, build: buildJavaCatalog, cancelBuild: cancelJavaCatalogBuild, export: () => onExportJava('linked') }, onClose: () => setInspectorOpen(false) })

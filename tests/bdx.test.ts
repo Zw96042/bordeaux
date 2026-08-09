@@ -552,11 +552,14 @@ describe("canonical shipped renderer", () => {
   it("renders the field metric legend inside the timeline toolbar", () => {
     const styles = fs.readFileSync(path.join(process.cwd(), "public/renderer/styles.css"), "utf8");
     const panels = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/panels.js"), "utf8");
+    const app = fs.readFileSync(path.join(process.cwd(), "public/renderer/assets/app.js"), "utf8");
     expect(styles).toContain(".metricctl{height:100%;display:flex;align-items:center");
     expect(styles).toContain(".transport.graph-open{height:248px}");
-    expect(styles).not.toContain(".viewctl.graph-open");
+    expect(styles).toContain(".stage-plan .viewctl.graph-open{transform:translateY(-154px)}");
+    expect(styles).toContain("clip-path: inset(100% 0 0 0);");
     expect(panels).toContain("className: 'velgraph' + (graphOpen ? ' open' : '')");
     expect(panels).toContain("tabIndex: graphOpen ? 0 : -1");
+    expect(app).toContain("plannerId: selectedPlannerId }),\n              h(window.Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen }))");
     expect(styles).toContain(".metric-dropdown{width:82px}");
     expect(panels).toContain("function MetricControl(");
     expect(panels).toContain("h(MetricControl, { metric, setMetric, derived");

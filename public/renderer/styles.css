@@ -141,11 +141,13 @@ html, body { font-synthesis: none; }
   backdrop-filter: none !important;
   z-index: 26 !important;
   opacity: 0;
+  clip-path: inset(100% 0 0 0);
   visibility: hidden;
   pointer-events: none;
-  transition: opacity 120ms ease-in, visibility 0s linear 120ms;
+  will-change: clip-path, opacity;
+  transition: clip-path 180ms cubic-bezier(.65, 0, .35, 1), opacity 180ms cubic-bezier(.65, 0, .35, 1), visibility 0s linear 180ms;
 }
-.velgraph.open { opacity: 1; visibility: visible; pointer-events: auto; transition: opacity 160ms ease-out 40ms, visibility 0s; }
+.velgraph.open { opacity: 1; clip-path: inset(0); visibility: visible; pointer-events: auto; transition: clip-path 180ms cubic-bezier(.65, 0, .35, 1), opacity 180ms cubic-bezier(.65, 0, .35, 1), visibility 0s; }
 .velgraph-top { min-height: 20px; margin-bottom: 3px !important; }
 .velgraph-ttl { color: var(--txt) !important; font-size: 11.5px !important; font-weight: 550 !important; letter-spacing: .01em !important; text-transform: none !important; }
 .velgraph-readout { display: flex; align-items: baseline; gap: 10px; font-family: var(--mono); font-size: 10px; }
@@ -809,7 +811,7 @@ input,select{font-family:inherit}
 .velgraph-svg{flex:1;height:100%;cursor:pointer}
 
 /* ============ view controls (bottom-right) ============ */
-.viewctl{position:absolute;right:16px;bottom:110px;display:flex;align-items:center;gap:1px;height:36px;padding:0 4px;background:var(--panel);backdrop-filter:blur(12px);border:1px solid var(--line-2);border-radius:8px;box-shadow:var(--shadow);z-index:27}
+.viewctl{position:absolute;right:16px;bottom:110px;display:flex;align-items:center;gap:1px;height:36px;padding:0 4px;background:var(--panel);backdrop-filter:blur(12px);border:1px solid var(--line-2);border-radius:8px;box-shadow:var(--shadow);z-index:27;will-change:transform;transition:transform 180ms cubic-bezier(.65,0,.35,1)}
 .vc-btn{width:30px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:var(--txt-2)}
 .vc-btn:hover{background:var(--bg-3);color:var(--txt)}
 .vc-btn.active{background:var(--accent-soft);color:var(--accent)}
@@ -1178,6 +1180,8 @@ input,select{font-family:inherit}
 .rt-timeline-toolbar{display:flex;align-items:center;min-width:0;border-bottom:1px solid var(--line);padding:0 10px}.rt-tp-ctl{gap:3px}.rt-tp-btn{width:28px;height:26px}.rt-tp-btn.play{width:30px}.rt-timeline-title{margin-left:8px;color:var(--txt-3);font-size:8.5px;font-weight:650;letter-spacing:.65px;text-transform:uppercase}.rt-timeline-time{margin-left:10px;color:var(--txt);font:10.5px var(--mono)}.rt-timeline-time small{color:var(--txt-3);font:inherit}.rt-timeline-summary{margin-left:10px;color:var(--txt-3);font-size:9.5px}.rt-timeline-step{margin-left:auto;color:var(--txt);font:11px var(--mono)}.rt-timeline-step small{color:var(--txt-3);font:inherit}
 .rt-timeline-editor{position:relative;min-width:0;overflow:hidden}.rt-timeline-track{position:absolute;left:10px;right:10px;top:21px;height:2px;border-radius:2px;background:var(--bg-4)}.rt-timeline-span{position:absolute;top:16px;height:12px;min-width:2px;border-radius:2px;background:color-mix(in srgb,var(--step-color) 44%,transparent);border-left:2px solid var(--step-color);pointer-events:none}.rt-timeline-event{position:absolute;top:15px;width:8px;height:8px;border:1.5px solid var(--warn);background:var(--bg-1);transform:translate(-50%,50%) rotate(45deg);pointer-events:none}.rt-timeline-editor .rt-tp-scrub{position:absolute;inset:0;width:100%;height:100%;margin:0;padding:0;opacity:0;cursor:pointer}.rt-timeline-editor::after{content:'';position:absolute;left:calc(10px + (100% - 20px) * var(--routine-progress,0));top:11px;width:1px;height:23px;background:#fff;pointer-events:none}
 .stage-auto .viewctl{bottom:92px}
+.stage-plan .viewctl.graph-open{transform:translateY(-154px)}
+@container (max-width:420px){.stage-plan .viewctl.graph-open{transform:none}}
 .rt-empty{align-items:stretch;padding:16px 12px;text-align:left}.rt-empty-t{padding:0 2px 6px;color:var(--txt-3);font-size:11px;font-weight:550}.rt-empty .rt-addwrap{padding:0}
 
 /* ---- drag-reorder grip + drop indicators ---- */

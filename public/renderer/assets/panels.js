@@ -620,8 +620,8 @@
   }
 
   // ---------------- zoom / view controls ----------------
-  function ViewControls({ zoomPct, zoomBy, onFit, showGrid, setShowGrid }) {
-    return h('div', { className: 'viewctl' },
+  function ViewControls({ zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen }) {
+    return h('div', { className: 'viewctl' + (graphOpen ? ' graph-open' : '') },
       h('button', { className: 'vc-btn', type: 'button', title: 'Zoom out', 'aria-label': 'Zoom out', onClick: () => zoomBy(1.18) }, h(Icon, { name: 'zoomout', size: 16 })),
       h('button', { className: 'vc-pct', type: 'button', title: 'Fit field  (F)', onClick: onFit }, zoomPct + '%'),
       h('button', { className: 'vc-btn', type: 'button', title: 'Zoom in', 'aria-label': 'Zoom in', onClick: () => zoomBy(1 / 1.18) }, h(Icon, { name: 'zoomin', size: 16 })),
