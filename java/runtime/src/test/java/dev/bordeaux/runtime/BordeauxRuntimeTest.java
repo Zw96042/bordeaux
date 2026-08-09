@@ -267,6 +267,37 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void positionFollowingKeepsTheEarliestMonotonicVisitAtSelfOverlaps() {
+        List<BordeauxSample> samples = List.of(
+                sample(0, 0, 0), sample(1, 0.2, 1), sample(2, 0.4, 0),
+                sample(3, 0.6, 2), sample(4, 0.8, 3), sample(5, 1, 0), sample(6, 1.2, 4));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "overlap", "Overlap", 1.2, CATALOG_ID, HASH, List.of(), samples,
+                List.of(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 6)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(3, follower.update(0.02, 1, 0).index());
+        assertEquals(4, follower.update(0.02, 0, 0).index());
+    }
+
+    @Test
+    void positionFollowingDoesNotScanEveryRemainingSamplePerUpdate() {
+        List<BordeauxSample> samples = new ArrayList<>();
+        for (int index = 0; index < 50_000; index++) {
+            double x = index / 100.0;
+            samples.add(new BordeauxSample(index, index * 0.02, x, index / 49_999.0, x, 0, 0, 1));
+        }
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "long", "Long", 1_000, CATALOG_ID, HASH, List.of(), samples,
+                List.of(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, samples.size() - 1)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(25_002, follower.update(0.02, 250, 0).index());
+        assertTrue(follower.lastSearchSamples() < 200,
+                "spatial lookup should inspect a bounded subset of a long path");
+    }
+
+    @Test
     void cancelsOnlyCommandsWhoseInvocationOptsIntoPathOwnership() {
         BordeauxPathEvents path = read("""
                 {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
