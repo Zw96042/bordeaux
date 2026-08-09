@@ -144,5 +144,5 @@ Use a screen-pixel tolerance so selection does not change with zoom.
 - Rotation targets and event markers remain attached to the chosen visit during placement and dragging.
 - Selected coincident waypoints and tangents remain draggable.
 - Selection remains deterministic across zoom levels.
-- Existing project files and `.bdx` export require no schema change for phases 1–3.
+- Existing project files and Java trajectory export require no schema change for phases 1–3.
 - Simple non-overlapping paths retain the current one-click workflow with no extra UI.
