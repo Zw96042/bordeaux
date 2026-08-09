@@ -250,7 +250,7 @@
         h('div', { className: 'rp-sub' }, 'Project-wide dimensions and drivetrain limits.'),
         h('div', { className: 'rp-grid' },
           // ---- left column: controls ----
-          h('div', { className: 'rp-col' },
+          h('div', { className: 'rp-col rp-controls' },
             h('div', { className: 'rp-sec' },
               h('div', { className: 'rp-sech' }, 'Drivetrain'),
               h('div', { className: 'rp-drive' },
