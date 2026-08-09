@@ -4,25 +4,30 @@
   "private": true,
   "productName": "Bordeaux",
   "author": "FRC Team 2468",
-  "description": "Desktop trajectory authoring and .bdx export app for FRC paths.",
+  "description": "Lightweight desktop trajectory authoring and Java integration for FRC paths.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
     "dev": "npm run build && electron dist-electron/electron/main.js",
     "build": "npm run verify:renderer && npm run build:java && npm run build:electron",
     "build:java": "node scripts/build-java.mjs build",
-    "build:electron": "tsc -p tsconfig.electron.json",
+    "build:electron": "tsc -p tsconfig.electron.build.json",
     "test": "vitest run",
     "test:java": "node scripts/build-java.mjs test",
-    "test:java-integration": "npm run build && node scripts/java-project-integration.mjs",
-    "test:smoke": "npm run build && node scripts/electron-smoke.mjs",
+    "test:java-integration": "npm run build && npm run test:java-integration:built",
+    "test:java-integration:built": "node scripts/java-project-integration.mjs",
+    "test:smoke": "npm run build && npm run test:smoke:built",
+    "test:smoke:built": "node scripts/electron-smoke.mjs",
     "verify:renderer": "node scripts/verify-renderer.mjs",
-    "typecheck": "tsc --noEmit && npm run build:electron -- --pretty false",
+    "verify:package": "node scripts/verify-package.mjs",
+    "verify:release-tag": "node scripts/verify-release-tag.mjs",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit --pretty false",
     "package:dir": "npm run build && electron-builder --dir",
     "package:mac": "npm run build && electron-builder --mac --arm64 --x64",
     "package:mac:ci": "npm run build && electron-builder --mac --arm64 --x64 --config.mac.icon=build/icon.icns",
     "package:win": "npm run build && electron-builder --win --x64"
   },
   "devDependencies": {
+    "@electron/asar": "3.4.1",
     "@modelcontextprotocol/client": "2.0.0",
     "@types/node": "^22.10.2",
     "electron": "^43.3.0",
@@ -43,7 +48,24 @@
     },
     "files": [
       "dist-electron/**/*",
-      "public/renderer/**/*"
+      "public/renderer/**/*",
+      "!**/*.map",
+      "!**/*.d.ts",
+      "!**/*.d.mts",
+      "!**/*.d.cts",
+      "!**/*.ts",
+      "!**/*.tsx",
+      "!**/*.mts",
+      "!**/*.cts",
+      "!**/test/**",
+      "!**/tests/**",
+      "!**/__tests__/**",
+      "!**/*.test.*",
+      "!**/*.spec.*",
+      "!public/renderer/assets/*.development.js"
+    ],
+    "electronLanguages": [
+      "en-US"
     ],
     "extraResources": [
       {

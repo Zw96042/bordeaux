@@ -7,10 +7,10 @@ Bordeaux uses electron-builder. Packaging includes the compiled Electron main/pr
 - `build/Bordeaux.icon` is the editable Icon Composer source used for the macOS app bundle.
 - `build/icon.svg` is the platform-neutral composition rendered to `build/icon.png` for Windows.
 - `build/icon.icns` is the flattened DMG and CI fallback.
-- `build/icon-assets/chap-bird.svg` is WRLP's complete `public/chap/bird.svg`, with only its color classes changed.
-- `build/icon-assets/chap-bird-foreground.svg` frames that source on the square Icon Composer canvas.
+- `build/icon-assets/wine-glass.svg` is the shared vector mark.
+- `build/icon-assets/wine-glass-foreground.svg` frames that mark on the square Icon Composer canvas.
 
-The mark uses WRLP's full Chap directly with a muted wine, slate, and warm-neutral palette. Keep the foreground and platform icons in sync when revising it; do not redraw or alter the source paths. Validate the Icon Composer source with:
+The mark uses a red-wine gradient and warm glass outline against Bordeaux's graphite tile. Keep the foreground and platform icons in sync when revising it. Validate the Icon Composer source with:
 
 ```sh
 /Applications/Icon\ Composer.app/Contents/Executables/ictool build/Bordeaux.icon \
@@ -30,4 +30,4 @@ This produces arm64 and x64 DMG/ZIP artifacts in `release/`. The local macOS pac
 
 Run `npm run package:win` on Windows to produce both an installable NSIS setup executable and a portable executable. Cross-building those targets from macOS requires Wine, so the repository's `Package desktop apps` workflow builds Windows artifacts on a Windows runner instead.
 
-Do not advertise project or `.bdx` file associations until main-process startup handles OS open-file events and command-line paths.
+Do not advertise project file associations until main-process startup handles OS open-file events and command-line paths.
