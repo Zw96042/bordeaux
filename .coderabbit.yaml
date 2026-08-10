@@ -1,0 +1,100 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: en-US
+early_access: false
+tone_instructions: >-
+  Be concise and actionable. Prioritize correctness, regressions, security,
+  compatibility, and maintainability. Avoid broad refactors and comments about
+  code that is unrelated to the pull request.
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  review_details: false
+  in_progress_fortune: false
+  poem: false
+  collapse_walkthrough: true
+
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    ignore_title_keywords:
+      - "[WIP]"
+      - DO NOT REVIEW
+
+  path_filters:
+    - "!dist/**"
+    - "!dist-electron/**"
+    - "!dist-renderer/**"
+    - "!release/**"
+    - "!release-*/**"
+    - "!java/**/build/**"
+    - "!java/dist/**"
+    - "!**/*.jar"
+    - "!**/*.icns"
+    - "!**/*.mp4"
+    - "!**/*.png"
+    - "!**/*.webm"
+    - "!**/*.woff2"
+
+  path_instructions:
+    - path: "src/shared/**"
+      instructions: >-
+        Treat planner math, validation, file normalization, and export formats as
+        compatibility-sensitive. Check numeric bounds and non-finite values, and
+        require regression coverage for behavior changes. Preserve compatibility
+        with existing .bordeaux.json projects and bordeaux-trajectory/1.0 output.
+    - path: "src/electron/**"
+      instructions: >-
+        Check Electron process boundaries, IPC and filesystem input validation,
+        cleanup of processes and listeners, and errors presented to the renderer.
+    - path: "src/renderer/**"
+      instructions: >-
+        Check React state and effect lifecycles, keyboard and pointer interaction,
+        accessibility, and loading, empty, error, disabled, and long-content states.
+    - path: "java/**"
+      instructions: >-
+        Preserve Java 17 and GradleRIO compatibility. Check annotation processing,
+        generated-code determinism, runtime API compatibility, and bounded parsing
+        of data produced by the desktop app.
+    - path: ".github/workflows/**"
+      instructions: >-
+        Check least-privilege permissions, untrusted pull-request input, secret
+        handling, action versioning, and cross-platform packaging or release impact.
+    - path: "scripts/**"
+      instructions: >-
+        Check cross-platform behavior, failure propagation, path handling, external
+        process boundaries, and consistency with package.json and CI workflows.
+    - path: "tests/**"
+      instructions: >-
+        Prefer behavior-focused regression tests with meaningful failure cases and
+        boundary coverage; flag assertions that merely mirror implementation details.
+
+  pre_merge_checks:
+    title:
+      mode: warning
+      requirements: >-
+        Use "type: Concise description" with one of feat, fix, refactor, build,
+        chore, docs, test, perf, ci, style, or revert.
+    description:
+      mode: warning
+
+  tools:
+    github-checks:
+      enabled: true
+      timeout_ms: 300000
+    actionlint:
+      enabled: true
+    gitleaks:
+      enabled: true
+    osvScanner:
+      enabled: true
+    zizmor:
+      enabled: true
+
+chat:
+  auto_reply: true
+  art: false
