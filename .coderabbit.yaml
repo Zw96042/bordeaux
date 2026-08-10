@@ -84,8 +84,8 @@ reviews:
 
   tools:
     github-checks:
-      enabled: true
-      timeout_ms: 300000
+      # GitHub Actions reports independently; waiting here left reviews queued.
+      enabled: false
     actionlint:
       enabled: true
     gitleaks:
