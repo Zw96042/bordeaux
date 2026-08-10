@@ -151,10 +151,11 @@
   function densePoses(derived) {
     const points = derived.sample.pts, headings = derived.metrics.head;
     if (!points.length) return [];
-    const poses = [{ x: points[0].x, y: points[0].y, headingRad: headings[0] || 0 }];
+    const reverseOffset = derived.rev ? Math.PI : 0;
+    const poses = [{ x: points[0].x, y: points[0].y, headingRad: (headings[0] || 0) + reverseOffset }];
     for (let index = 1; index < points.length; index += 1) {
       const first = poses[poses.length - 1];
-      const second = { x: points[index].x, y: points[index].y, headingRad: headings[index] || 0 };
+      const second = { x: points[index].x, y: points[index].y, headingRad: (headings[index] || 0) + reverseOffset };
       const steps = Math.max(1, Math.ceil(Math.max(
         Math.hypot(second.x - first.x, second.y - first.y) / 0.08,
         Math.abs(wrap(second.headingRad - first.headingRad)) / (6 * Math.PI / 180),
