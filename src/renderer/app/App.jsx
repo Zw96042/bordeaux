@@ -113,6 +113,11 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     return true;
   }
 
+  function currentPathLength(derivation) {
+    const length = derivation?.current ? derivation.value?.sample?.length : null;
+    return Number.isFinite(length) ? length : null;
+  }
+
   function selectedAgentProposalPreview(snapshot, candidate, request, plannerId) {
     if (snapshot.status !== 'ready' || !candidate?.path || snapshot.key !== request
       || snapshot.path !== candidate.path || snapshot.value?.planner !== plannerId) return [];
@@ -792,6 +797,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const derived = derivation.value || PENDING_PATH_PREVIEW;
     const derivationDoc = derivation.path || doc;
     const derivationCurrent = derivation.current;
+    const reverseDistance = currentPathLength(derivation);
 
     useEffect(() => {
       if (!derivationCurrent) return;
@@ -1268,8 +1274,8 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       d.waypoints[0].thetaOn = true; d.waypoints[d.waypoints.length - 1].thetaOn = true;
       d._selAfter = i + 1; return d;
     }), [commit]);
-    const reversePath = useCallback(() => commit((d) => {
-      const totalDistance = derivationCurrent ? derived.sample.length : PM.pathLength(d.waypoints, PERSEG);
+    const reversePath = useCallback(() => reverseDistance == null ? undefined : commit((d) => {
+      const totalDistance = reverseDistance;
       const endpointJiggle = d.waypoints[d.waypoints.length - 1].jiggle ? { ...d.waypoints[d.waypoints.length - 1].jiggle } : null;
       const oldSeg = d.waypoints.map((w) => w.segType);
       const oldHeading = d.waypoints.map((w) => w.segmentHeadingMode);
@@ -1319,7 +1325,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       const sv = d.startVel, gv = d.goalVel; d.startVel = gv; d.goalVel = sv;
       if (endpointJiggle) d.goalVel = 0;
       w[0].thetaOn = true; w[n - 1].thetaOn = true; return d;
-    }), [commit, derivationCurrent, derived.sample.length]);
+    }), [commit, reverseDistance]);
     const reorderWp = useCallback((from, to) => commit((d) => {
       const w = d.waypoints; if (to < 0 || to >= w.length || from === to) return d;
       const endpointJiggle = w[w.length - 1].jiggle ? { ...w[w.length - 1].jiggle } : null;
@@ -1346,7 +1352,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }, [addWaypoint, derived, doc.waypoints.length]);
     const inspActions = { setWp, toggleTheta, setHandleLen, delWp, setTarget, delTarget, setMarker, delMarker, setRange, setRangeAnchor, delRange, setConstraint, setDoc, select, setTool,
       addTargetMid, addMarkerMid, addRangeMid,
-      setSegMeta, setSegmentHeadingMode, setHeadingTransition, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, reorderWp, insertWp,
+      setSegMeta, setSegmentHeadingMode, setHeadingTransition, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, canReversePath: reverseDistance != null, reorderWp, insertWp,
       setStop, setWait, setTurnInPlace, setTurnInPlaceMeta, setHeadingMode, toggleDriveBackward,
       openInspector: () => setInspectorOpen(true) };
     const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, applyBrush, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginEdit, finishEdit, cancelEdit,
@@ -1863,4 +1869,4 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }
   }
 
-export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, agentProposalPreviewResult, applyBrushDraft, canApplyAgentProposalCandidate, duplicatePathForLibrary, pathPreviewResult, remapBrushSelection, requestRoutinePreview, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, syncBrushSelection, waypointPreviewResult };
+export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, agentProposalPreviewResult, applyBrushDraft, canApplyAgentProposalCandidate, currentPathLength, duplicatePathForLibrary, pathPreviewResult, remapBrushSelection, requestRoutinePreview, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, syncBrushSelection, waypointPreviewResult };
