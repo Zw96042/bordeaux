@@ -7,6 +7,7 @@ import type { AgentRequest, AgentSessionService } from "./agentSession";
 
 const MAX_MESSAGE_BYTES = 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 30_000;
+let bridgeLifecycle: Promise<void> = Promise.resolve();
 
 export interface AgentRuntimeDescriptor {
   schemaVersion: 1;
@@ -89,15 +90,16 @@ export class AgentBridgeServer {
   private server: net.Server | null = null;
   private descriptor: AgentRuntimeDescriptor | null = null;
   private readonly sockets = new Set<net.Socket>();
-  private lifecycle: Promise<void> = Promise.resolve();
 
   constructor(private readonly userData: string, private readonly sessions: AgentSessionService) {}
 
   get enabled(): boolean { return this.server !== null; }
 
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.lifecycle.then(operation, operation);
-    this.lifecycle = result.then(() => undefined, () => undefined);
+    // The desktop lock guarantees one process; the shared queue also prevents
+    // stale server objects in that process from racing descriptor publication.
+    const result = bridgeLifecycle.then(operation, operation);
+    bridgeLifecycle = result.then(() => undefined, () => undefined);
     return result;
   }
 
@@ -148,6 +150,8 @@ export class AgentBridgeServer {
       this.descriptor = descriptor;
       return descriptor;
     } catch (error) {
+      for (const socket of this.sockets) socket.destroy();
+      this.sockets.clear();
       if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
       await fs.promises.rm(temporary, { force: true });
       if (process.platform !== "win32") await fs.promises.rm(endpoint, { force: true });
