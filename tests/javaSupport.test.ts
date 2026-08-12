@@ -120,6 +120,17 @@ describe("Java support installation and trusted catalog builds", () => {
     await expect(inspectJavaSupport(project, sourceCatalog(), artifacts)).resolves.toMatchObject({ installed: false });
   });
 
+  it("distinguishes missing Java artifacts from invalid ones", async () => {
+    const missing = await fixture();
+    await fs.rm(path.join(missing.artifacts, "bordeaux-runtime.jar"));
+    await expect(prepareJavaSupportInstall(missing.project, missing.artifacts)).rejects.toThrow(/artifacts are missing/);
+
+    const invalid = await fixture();
+    await fs.rm(path.join(invalid.artifacts, "bordeaux-runtime.jar"));
+    await fs.mkdir(path.join(invalid.artifacts, "bordeaux-runtime.jar"));
+    await expect(prepareJavaSupportInstall(invalid.project, invalid.artifacts)).rejects.toThrow(/must be a regular file/);
+  });
+
   it("runs only the fixed wrapper task and redacts the project path", async () => {
     const { project } = await fixture();
     const result = await runJavaCatalogBuild(project);

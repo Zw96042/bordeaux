@@ -238,6 +238,7 @@ export async function prepareJavaSupportInstall(projectRoot: string, artifactsDi
       readBoundedRegularFile(processorPath, MAX_ARTIFACT_BYTES, "Bordeaux processor artifact"),
     ]);
   } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     throw new Error("Bundled Bordeaux Java support artifacts are missing; rebuild or reinstall the desktop app", { cause: error });
   }
   const next = withManagedBlock(buildContents, managedBlock(build.name));
