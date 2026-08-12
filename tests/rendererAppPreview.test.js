@@ -62,12 +62,14 @@ describe("renderer app path preview lifecycle", () => {
   it("shows only the selected candidate after its exact worker result arrives", () => {
     const selected = { id: "candidate_a", label: "Candidate A", valid: true, path: { id: "path_a" } };
     const stale = { id: "candidate_b", label: "Candidate B", valid: true, path: { id: "path_b" } };
-    const derived = { sample: { pts: [{ x: 1, y: 1 }, { x: 2, y: 2 }] } };
+    const plannerId = "profiledSpline";
+    const derived = { planner: plannerId, sample: { pts: [{ x: 1, y: 1 }, { x: 2, y: 2 }] } };
     const request = {};
 
-    expect(selectedAgentProposalPreview({ key: request, path: stale.path, value: derived }, selected, request)).toEqual([]);
-    expect(selectedAgentProposalPreview({ key: {}, path: selected.path, value: derived }, selected, request)).toEqual([]);
-    expect(selectedAgentProposalPreview({ key: request, path: selected.path, value: derived }, selected, request)).toEqual([{
+    expect(selectedAgentProposalPreview({ key: request, path: stale.path, value: derived }, selected, request, plannerId)).toEqual([]);
+    expect(selectedAgentProposalPreview({ key: {}, path: selected.path, value: derived }, selected, request, plannerId)).toEqual([]);
+    expect(selectedAgentProposalPreview({ key: request, path: selected.path, value: { ...derived, planner: "optimizedTrajectory" } }, selected, request, plannerId)).toEqual([]);
+    expect(selectedAgentProposalPreview({ key: request, path: selected.path, value: derived }, selected, request, plannerId)).toEqual([{
       id: selected.id,
       label: selected.label,
       selected: true,
