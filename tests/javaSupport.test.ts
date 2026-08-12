@@ -108,6 +108,18 @@ describe("Java support installation and trusted catalog builds", () => {
     await expect(prepareJavaSupportInstall(linked.project, linked.artifacts)).rejects.toThrow(/regular directory/);
   });
 
+  it("bounds project-controlled files before Java support inspection reads them", async () => {
+    const { project, artifacts } = await fixture();
+    const buildFile = path.join(project, "build.gradle");
+    await fs.writeFile(buildFile, Buffer.alloc(2 * 1024 * 1024 + 1, 0x20));
+    await expect(inspectJavaSupport(project, sourceCatalog(), artifacts)).rejects.toThrow(/2097152-byte limit/);
+
+    await fs.writeFile(buildFile, "plugins { id 'edu.wpi.first.GradleRIO' version '2026.2.2' }\n");
+    await fs.mkdir(path.join(project, ".bordeaux"));
+    await fs.writeFile(path.join(project, ".bordeaux/install.json"), Buffer.alloc(64 * 1024 + 1, 0x20));
+    await expect(inspectJavaSupport(project, sourceCatalog(), artifacts)).resolves.toMatchObject({ installed: false });
+  });
+
   it("runs only the fixed wrapper task and redacts the project path", async () => {
     const { project } = await fixture();
     const result = await runJavaCatalogBuild(project);
