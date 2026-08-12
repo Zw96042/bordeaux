@@ -80,6 +80,7 @@ class BordeauxProcessorTest {
         String bindings = Files.readString(result.generated().resolve(
                 "dev/bordeaux/generated/BordeauxGeneratedBindings.java"));
         assertTrue(bindings.contains("private final frc.robot.Actions provider0"));
+        assertTrue(bindings.contains("args -> {\n      args.requireLong(\"sequence\""));
         assertTrue(bindings.contains("provider0.score("));
         assertTrue(bindings.contains("args.requireLong(\"sequence\", \"0\", \"9223372036854775807\")"));
         assertTrue(bindings.contains("CATALOG_ID = \"test-robot\""));
