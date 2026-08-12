@@ -29,7 +29,7 @@ interface InstallPreview {
 }
 
 let activeBuild: { child: ChildProcessWithoutNullStreams; canceled: boolean; killGraceMs: number } | null = null;
-let buildAdmission: symbol | null = null;
+let buildAdmission: { canceled: boolean } | null = null;
 const killEscalations = new WeakMap<ChildProcessWithoutNullStreams, NodeJS.Timeout>();
 
 function sha256(value: Uint8Array | string): string {
@@ -321,7 +321,9 @@ function forceStopBuild(child: ChildProcessWithoutNullStreams): void {
 }
 
 export function cancelJavaCatalogBuild(force = false): boolean {
-  if (!activeBuild) return false;
+  if (!buildAdmission) return false;
+  buildAdmission.canceled = true;
+  if (!activeBuild) return true;
   activeBuild.canceled = true;
   if (force) forceStopBuild(activeBuild.child);
   else stopBuild(activeBuild.child, activeBuild.killGraceMs);
@@ -334,11 +336,13 @@ export function windowsGradleCommand(wrapper: string, args: readonly string[]): 
   return `"${wrapper}" ${args.join(" ")}`;
 }
 
-async function runAdmittedJavaCatalogBuild(projectRoot: string, limits: { timeoutMs?: number; outputBytes?: number; killGraceMs?: number }): Promise<{ output: string }> {
+async function runAdmittedJavaCatalogBuild(projectRoot: string, limits: { timeoutMs?: number; outputBytes?: number; killGraceMs?: number }, admission: { canceled: boolean }): Promise<{ output: string }> {
   const canonicalRoot = await fs.realpath(projectRoot);
+  if (admission.canceled) throw new Error("Java catalog build was canceled");
   const wrapperName = process.platform === "win32" ? "gradlew.bat" : "gradlew";
   const wrapper = path.join(canonicalRoot, wrapperName);
   if (!(await regularFile(wrapper))) throw new Error(`Linked project does not have a regular ${wrapperName} wrapper`);
+  if (admission.canceled) throw new Error("Java catalog build was canceled");
   const fixedArgs = ["bordeauxCatalog", "--no-daemon", "--console=plain"];
   const child = process.platform === "win32"
     ? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", windowsGradleCommand(wrapper, fixedArgs)], {
@@ -399,9 +403,9 @@ async function runAdmittedJavaCatalogBuild(projectRoot: string, limits: { timeou
 
 export async function runJavaCatalogBuild(projectRoot: string, limits: { timeoutMs?: number; outputBytes?: number; killGraceMs?: number } = {}): Promise<{ output: string }> {
   if (buildAdmission) throw new Error("A Java catalog build is already running");
-  const admission = Symbol("java-catalog-build");
+  const admission = { canceled: false };
   buildAdmission = admission;
-  try { return await runAdmittedJavaCatalogBuild(projectRoot, limits); }
+  try { return await runAdmittedJavaCatalogBuild(projectRoot, limits, admission); }
   finally { if (buildAdmission === admission) buildAdmission = null; }
 }
 
