@@ -463,6 +463,15 @@ function createWindow() {
         const editInput = (input, value) => {
           input.focus(); setInputValue.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true }));
         };
+        const settleFocusedInput = async (input, value) => {
+          if (!input) return false;
+          for (let attempt = 0; attempt < 5; attempt++) {
+            editInput(input, value);
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+            if (document.activeElement === input && input.value === value) return true;
+          }
+          return false;
+        };
         const waitFor = async (read) => {
           for (let attempt = 0; attempt < 200; attempt++) {
             const value = read();
@@ -530,9 +539,7 @@ function createWindow() {
           await new Promise((resolve) => setTimeout(resolve, 0));
         }
         const numEscapeCanceled = numInput?.value !== '1.25';
-        if (numInput) editInput(numInput, '1.25');
-        await new Promise((resolve) => requestAnimationFrame(resolve));
-        const numDraftReady = numInput?.value === '1.25' && document.activeElement === numInput;
+        const numDraftReady = await settleFocusedInput(numInput, '1.25');
         const numMenuSent = await runMenuStage('save-num');
         await new Promise((resolve) => setTimeout(resolve, 100));
         let numSaved;
@@ -632,9 +639,7 @@ function createWindow() {
           await new Promise((resolve) => setTimeout(resolve, 0));
         }
         const numberParameter = document.getElementById('event-command-param-count');
-        if (numberParameter) editInput(numberParameter, '7');
-        await new Promise((resolve) => requestAnimationFrame(resolve));
-        const commandDraftReady = numberParameter?.value === '7' && document.activeElement === numberParameter;
+        const commandDraftReady = await settleFocusedInput(numberParameter, '7');
         const commandMenuSent = await runMenuStage('save-command');
         await new Promise((resolve) => setTimeout(resolve, 100));
         let commandSaved;
