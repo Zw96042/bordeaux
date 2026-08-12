@@ -10,7 +10,9 @@ function referencedPaths(routine, paths, outcomes) {
       collect((outcomes?.[node.id] || 'then') === 'else' ? node.else : node.then);
       return;
     }
-    const path = node.type === 'path' ? byId.get(node.ref) : node.cat === 'generate' ? node.preview : null;
+    // Generated previews remain embedded on their routine node. Mixing them into
+    // this authored-path lookup lets a preview with the same ID shadow the path.
+    const path = node.type === 'path' ? byId.get(node.ref) : null;
     if (path && !seen.has(path)) { seen.add(path); referenced.push(path); }
   });
   collect(routine?.nodes);
