@@ -384,7 +384,8 @@
     const rotLimited = new Array(n).fill(0);
     const head = opts.heading;
     const Wmax = (c.maxAngVel || 0) * Math.PI / 180;
-    const Aang = (c.maxAngAccel || 0) * Math.PI / 180;
+    const Aaccel = (c.maxAngAccel || 0) * Math.PI / 180;
+    const Adecel = (c.maxAngDecel || c.maxAngAccel || 0) * Math.PI / 180;
     if (head && head.length === n && Wmax > 1e-4) {
       const g = new Array(n).fill(0), dth = new Array(n).fill(0);
       for (let i = 1; i < n; i++) { const ds = pts[i].s - pts[i - 1].s; const dd = angWrap(head[i] - head[i - 1]); dth[i] = Math.abs(dd); g[i] = ds > 1e-6 ? dd / ds : 0; }
@@ -392,9 +393,9 @@
       const w = new Array(n);
       for (let i = 0; i < n; i++) w[i] = Math.min(Wmax, rangeAngV[i]);
       stopSet.forEach(idx => { if (idx >= 0 && idx < n) w[idx] = 0; });
-      if (Aang > 1e-4) {
-        for (let i = 1; i < n; i++) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i - 1] * w[i - 1] + 2 * Math.min(Aang, rangeAngA[i]) * dth[i])));
-        for (let i = n - 2; i >= 0; i--) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i + 1] * w[i + 1] + 2 * Math.min(Aang, rangeAngA[i + 1]) * dth[i + 1])));
+      if (Aaccel > 1e-4 || Adecel > 1e-4) {
+        for (let i = 1; i < n; i++) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i - 1] * w[i - 1] + 2 * Math.min(Aaccel, rangeAngA[i]) * dth[i])));
+        for (let i = n - 2; i >= 0; i--) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i + 1] * w[i + 1] + 2 * Math.min(Adecel, rangeAngA[i + 1]) * dth[i + 1])));
       }
       for (let i = 1; i < n; i++) { const gi = Math.abs(g[i]); if (!translationPriority[i] && gi > 1e-4) { const vr = w[i] / gi, rangeVr = rangeAngV[i] / gi; if (Math.min(vr, rangeVr) < Math.max(v[i - 1], v[i]) - 0.05) rotLimited[i] = 1; v[i - 1] = Math.min(v[i - 1], rangeVr); v[i] = Math.min(v[i], vr, rangeVr); } }
     }
@@ -413,8 +414,7 @@
     }
     // Enforce angular acceleration in generated timing instead of manufacturing
     // visible velocity constraint ranges around ordinary moving turns.
-    if (head && head.length === n && Aang > 1e-4) {
-      const angularBudget = (first, second) => Math.min(Aang, rangeAngA[first], rangeAngA[second]) * 0.8;
+    if (head && head.length === n && (Aaccel > 1e-4 || Adecel > 1e-4)) {
       const intervalDt = (index, candidate, candidateIndex) => {
         const ds = pts[index].s - pts[index - 1].s;
         const before = candidateIndex === index - 1 ? candidate : v[index - 1];
@@ -424,13 +424,35 @@
       const intervalOmega = (index, candidate, candidateIndex) => {
         if (index <= 0 || index >= n) return 0;
         const dt = intervalDt(index, candidate, candidateIndex);
-        return dt > 1e-9 ? Math.abs(angWrap(head[index] - head[index - 1])) / dt : 0;
+        return dt > 1e-9 ? angWrap(head[index] - head[index - 1]) / dt : 0;
       };
-      const capInterval = (interval, referenceInterval, variableIndex, referenceDtInterval) => {
-        const referenceOmega = intervalOmega(referenceInterval, v[variableIndex], -1);
-        const allowed = (candidate) => intervalOmega(interval, candidate, variableIndex) <= referenceOmega + angularBudget(interval, referenceInterval) * intervalDt(referenceDtInterval, candidate, variableIndex) + 1e-9;
+      const angularBudget = (previousOmega, currentOmega, first, second) => {
+        const reversing = Math.sign(previousOmega) !== 0 && Math.sign(currentOmega) !== 0 && Math.sign(previousOmega) !== Math.sign(currentOmega);
+        const accelerating = Math.abs(currentOmega) > Math.abs(previousOmega);
+        const global = reversing ? Math.min(Aaccel, Adecel) : accelerating ? Aaccel : Adecel;
+        return Math.min(global, rangeAngA[first], rangeAngA[second]) * 0.8;
+      };
+      const capInterval = (previousInterval, currentInterval, variableInterval, variableIndex) => {
+        const allowed = (candidate) => {
+          const previousOmega = intervalOmega(previousInterval, candidate, variableInterval === previousInterval ? variableIndex : -1);
+          const currentOmega = intervalOmega(currentInterval, candidate, variableInterval === currentInterval ? variableIndex : -1);
+          return Math.abs(currentOmega - previousOmega) <= angularBudget(previousOmega, currentOmega, previousInterval, currentInterval)
+            * intervalDt(currentInterval, candidate, variableIndex) + 1e-9;
+        };
         if (allowed(v[variableIndex])) return false;
         let low = 0, high = v[variableIndex];
+        let left = low, right = high;
+        const difference = (candidate) => {
+          const previousOmega = intervalOmega(previousInterval, candidate, variableInterval === previousInterval ? variableIndex : -1);
+          const currentOmega = intervalOmega(currentInterval, candidate, variableInterval === currentInterval ? variableIndex : -1);
+          return Math.abs(currentOmega - previousOmega);
+        };
+        for (let iteration = 0; iteration < 24; iteration++) {
+          const first = left + (right - left) / 3, second = right - (right - left) / 3;
+          if (difference(first) <= difference(second)) right = second; else left = first;
+        }
+        low = (left + right) / 2;
+        if (!allowed(low)) { v[variableIndex] = low; return true; }
         for (let iteration = 0; iteration < 28; iteration++) {
           const candidate = (low + high) / 2;
           if (allowed(candidate)) low = candidate; else high = candidate;
@@ -443,10 +465,19 @@
       for (let pass = 0; pass < 20; pass++) {
         let changed = false;
         for (let interval = 2; interval < n; interval++) {
-          if (!stopped.has(interval - 1) && !translationInterval(interval)) changed = capInterval(interval, interval - 1, interval, interval) || changed;
+          const previousOmega = intervalOmega(interval - 1, v[interval], -1), currentOmega = intervalOmega(interval, v[interval], -1);
+          const reversing = Math.sign(previousOmega) !== 0 && Math.sign(currentOmega) !== 0 && Math.sign(previousOmega) !== Math.sign(currentOmega);
+          if (!stopped.has(interval - 1) && !translationInterval(interval) && (reversing || Math.abs(currentOmega) > Math.abs(previousOmega))) {
+            changed = capInterval(interval - 1, interval, interval, interval) || changed;
+          }
         }
         for (let interval = n - 2; interval >= 1; interval--) {
-          if (!stopped.has(interval) && !translationInterval(interval - 1) && !translationInterval(interval) && !translationInterval(interval + 1)) changed = capInterval(interval, interval + 1, interval - 1, interval + 1) || changed;
+          const previousOmega = intervalOmega(interval, v[interval - 1], -1), currentOmega = intervalOmega(interval + 1, v[interval - 1], -1);
+          const reversing = Math.sign(previousOmega) !== 0 && Math.sign(currentOmega) !== 0 && Math.sign(previousOmega) !== Math.sign(currentOmega);
+          if (!stopped.has(interval) && !translationInterval(interval - 1) && !translationInterval(interval) && !translationInterval(interval + 1)
+            && (reversing || Math.abs(currentOmega) < Math.abs(previousOmega))) {
+            changed = capInterval(interval, interval + 1, interval, interval - 1) || changed;
+          }
         }
         for (let i = 1; i < n; i++) {
           const ds = pts[i].s - pts[i - 1].s;
@@ -587,7 +618,8 @@
     const s = lerp(a.s, b.s, u);
     const f = pts[n - 1].s > 1e-6 ? s / pts[n - 1].s : 0;
     let heading;
-    if (mode === 'tank') heading = Math.atan2(b.y - a.y, b.x - a.x);
+    if (Number.isFinite(a.plannedHeading) && Number.isFinite(b.plannedHeading)) heading = angLerp(a.plannedHeading, b.plannedHeading, u);
+    else if (mode === 'tank') heading = Math.atan2(b.y - a.y, b.x - a.x);
     else heading = headingAt(f, anchors);
     if (rev) heading += Math.PI;
     const speed = lerp(prof.v[i - 1], prof.v[i], u);
@@ -1180,7 +1212,7 @@
     const mtr = metrics(pts, prof, anchors, mode);
     const checks = analyze(pts, prof, mtr, {
       constraints: doc.constraints,
-      plannerId,
+      plannerId: 'profiledSpline',
     });
     doc.waypoints.slice(0, -1).forEach((w, segment) => {
       if (w.segmentHeadingMode !== 'lookAt' || !w.segmentLookAt) return;
@@ -1208,7 +1240,7 @@
       for (let i = 0; i < wpFrac.length - 1; i++) { if (check.f >= wpFrac[i] - 1e-4) seg = i; }
       check.seg = Math.max(0, Math.min(doc.waypoints.length - 2, seg));
     });
-    return { sample: smp, prof, totalDistance: smp.length + (prof.actionDistance || 0), anchors, metrics: mtr, checks, wpFrac, wpIdx, mode, effRanges, headingMode, rev: !!doc.driveBackward };
+    return { sample: smp, prof, totalDistance: smp.length + (prof.actionDistance || 0), anchors, metrics: mtr, checks, wpFrac, wpIdx, mode, effRanges, headingMode, rev: !!doc.driveBackward, playback: null, markers: [], planner: 'profiledSpline' };
   }
 
   function jigglePositions(anchor, baseRad, options, bounds = { w: 17.548, h: 8.052 }) {

@@ -123,6 +123,20 @@ describe("renderer path preview scheduler", () => {
     expect(transport).not.toContainEqual(expect.objectContaining({ source: "worker" }));
   });
 
+  it("reports optimized worker failure instead of publishing a profiled direct fallback", async () => {
+    let directCalls = 0;
+    const preview = previewModule().create({
+      workerFactory: () => { throw new Error("worker unavailable"); },
+      derive: () => { directCalls += 1; return { planner: "profiledSpline" }; },
+    });
+
+    const revision = preview.request({ path: {}, robot: {}, plannerId: "optimizedTrajectory", quality: "final" });
+    await Promise.resolve();
+
+    expect(directCalls).toBe(0);
+    expect(preview.getSnapshot()).toMatchObject({ status: "error", revision });
+  });
+
   it("summarizes timed worker transport without per-job events", () => {
     const bus = benchmarkEventBus("observe");
     const worker = new FakeWorker();
