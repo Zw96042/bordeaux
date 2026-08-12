@@ -47,4 +47,28 @@ describe("renderer routine model", () => {
     expect(AUTO.findNode(removed, command.id)).toBeNull();
     expect(validateProject({ ...loaded, routines: [removed] })).toEqual({ ok: true, issues: [] });
   });
+
+  it("reuses an injected path derivation for repeated routine references", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    const routine = {
+      ...project.routines[0],
+      nodes: [
+        { id: "first", type: "path", ref: path.id },
+        { id: "second", type: "path", ref: path.id },
+      ],
+    };
+    let calls = 0;
+    const derive = () => {
+      calls += 1;
+      return {
+        sample: { pts: [{ x: 0, y: 0 }, { x: 1, y: 0 }], length: 1 },
+        prof: { totalTime: 2 },
+      };
+    };
+
+    const run = AUTO.buildRun(routine, project.paths, project.robot, {}, project.plannerId, derive);
+    expect(calls).toBe(1);
+    expect(run).toMatchObject({ total: 4, segs: [{ nodeId: "first" }, { nodeId: "second" }] });
+  });
 });

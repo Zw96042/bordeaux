@@ -1,70 +1,5 @@
-import { enforceAngularTiming } from "../../shared/planners/angularConstraints";
-import { optimizePlannerMotion } from "../../shared/planners/optimizationCore";
-import { finalizePlannerMotion } from "../../shared/planners/pipeline";
-import { PM } from "../lib/pathMath";
-
-const round = (value, places = 4) => Number(value.toFixed(places));
-
-function markerFraction(marker, distance) {
-  return marker.anchor === 'dist' && distance > 1e-9
-    ? Math.max(0, Math.min(1, (marker.d != null ? marker.d : marker.f * distance) / distance))
-    : marker.f;
-}
-
-function profiledResult(input, derived) {
-  const points = derived.sample.pts || [];
-  const metrics = derived.metrics || {};
-  const times = derived.prof.t || [];
-  const distance = derived.sample.length || 0;
-  const samples = points.map((point, index) => ({
-    i: index,
-    t: round(times[index] || 0),
-    s: round(point.s || 0),
-    f: round(distance > 1e-9 ? (point.s || 0) / distance : 0, 5),
-    x: round(point.x || 0),
-    y: round(point.y || 0),
-    headingRad: round((metrics.head[index] ?? point.heading ?? 0) + (derived.rev ? Math.PI : 0), 5),
-    velocityMps: round(metrics.v[index] || 0),
-    accelerationMps2: round(metrics.accel[index] || 0),
-    angularVelocityRadps: round(metrics.omega[index] || 0, 5),
-    curvatureInvM: round(metrics.curv[index] ?? point.curv ?? 0, 5),
-  }));
-  const markers = (input.path.markers || []).map((marker, index) => ({
-    id: marker.id != null ? marker.id : input.path.id + ':event:' + index,
-    name: marker.name,
-    command: marker.cmd != null ? marker.cmd : null,
-    ...(marker.invocation ? { invocation: marker.invocation } : {}),
-    group: marker.group != null ? marker.group : null,
-    timeS: 0,
-    fraction: round(markerFraction(marker, distance), 5),
-  }));
-  return enforceAngularTiming(input.path, {
-    planner: 'profiledSpline',
-    totalTimeS: round(derived.prof.totalTime || 0),
-    totalDistanceM: round(distance),
-    samples,
-    markers,
-    diagnostics: [],
-  });
-}
-
-function prepareInput(path, robot, samplesPerSegment) {
-  const hardLimits = PM.robotHardLimits(robot);
-  const physicalRobot = hardLimits ? { ...robot, maxSpeed: hardLimits.maxSpeed } : robot;
-  const constraints = PM.effectiveConstraints(path.constraints, physicalRobot);
-  const physicalPath = constraints === path.constraints ? path : { ...path, constraints };
-  const planningPath = physicalPath.waypoints.some((waypoint) => waypoint.turnInPlace || (waypoint.stop && (waypoint.wait || 0) > 0))
-    ? {
-        ...physicalPath,
-        waypoints: physicalPath.waypoints.map((waypoint) => waypoint.stop && (waypoint.wait || 0) > 0 ? { ...waypoint, wait: 0 } : waypoint),
-      }
-    : physicalPath;
-  return {
-    path: physicalPath,
-    robot: physicalRobot,
-    planningInput: { path: planningPath, robot: physicalRobot, samplesPerSegment },
-  };
-}
+import { getPlanner } from "../../shared/planners";
+import { PM } from "../../shared/math/pm";
 
 function buildAnchors(entries) {
   const anchors = (entries || []).filter((entry) => entry && Number.isFinite(entry.f) && Number.isFinite(entry.rad))
@@ -76,7 +11,7 @@ function buildAnchors(entries) {
   return anchors;
 }
 
-function optimizedPlayback(result, geometryPoints, reverse) {
+function plannerPlayback(result, geometryPoints, reverse) {
   const samples = result.samples || [];
   const points = samples.map((sample) => ({
     x: sample.x,
@@ -108,7 +43,11 @@ function optimizedPlayback(result, geometryPoints, reverse) {
   const geometryIndices = [];
   let cursor = 0;
   geometryPoints.forEach((point) => {
-    while (cursor < samples.length && Math.hypot(samples[cursor].x - point.x, samples[cursor].y - point.y) > 0.001) cursor++;
+    while (cursor < samples.length && (
+      Math.abs(samples[cursor].x - point.x) > 0.0001
+      || Math.abs(samples[cursor].y - point.y) > 0.0001
+      || Math.abs(samples[cursor].s - point.s) > 0.0001
+    )) cursor++;
     geometryIndices.push(Math.min(cursor, Math.max(0, samples.length - 1)));
     if (cursor < samples.length - 1) cursor++;
   });
@@ -118,8 +57,8 @@ function optimizedPlayback(result, geometryPoints, reverse) {
       pts: points,
       prof,
       metrics,
-      anchors: buildAnchors(points.map((point) => ({ f: point.f, rad: point.plannedHeading }))),
-      rev: false,
+      anchors: buildAnchors(points.map((point) => ({ f: point.f, rad: point.heading }))),
+      rev: reverse,
     },
     prof: { ...prof, t: mapped(prof.t), v: mapped(prof.v) },
     metrics: Object.assign({}, metrics, {
@@ -133,25 +72,39 @@ function optimizedPlayback(result, geometryPoints, reverse) {
   };
 }
 
-export function deriveOptimizedPreview(path, robot, samplesPerSegment) {
-  const prepared = prepareInput(path, robot, samplesPerSegment);
-  const derived = PM.derivePath(prepared.planningInput.path, prepared.planningInput.robot, samplesPerSegment, 'profiledSpline');
-  const base = profiledResult(prepared.planningInput, derived);
-  if (base.samples.length < 2) {
-    throw new Error('Profiled spline did not produce enough samples for optimization.');
+export function derivePlannerPreview(path, robot, samplesPerSegment, plannerId) {
+  const result = getPlanner(plannerId).generate({ path, robot, samplesPerSegment });
+  if (result.planner !== plannerId) {
+    throw new Error(result.optimization?.fallbackReason
+      || result.diagnostics.find((issue) => issue.message.includes('fell back'))?.message
+      || `${plannerId} did not produce a final trajectory.`);
   }
-  const generated = optimizePlannerMotion(prepared.planningInput, base);
-  const result = finalizePlannerMotion(prepared.path, prepared.robot, generated);
-  const shared = optimizedPlayback(result, derived.sample.pts, !!prepared.path.driveBackward);
-  const checks = [...derived.checks];
-  result.diagnostics.forEach((issue) => checks.push({ f: 0, kind: 'planner', level: issue.severity, text: issue.message, seg: 0 }));
+  const sample = PM.sample(path.waypoints, samplesPerSegment);
+  const lastIndex = Math.max(0, sample.pts.length - 1);
+  const wpIdx = path.waypoints.map((_, index) => Math.min(lastIndex, index * samplesPerSegment));
+  const total = sample.length || 1;
+  const wpFrac = wpIdx.map((index) => sample.pts.length ? sample.pts[index].s / total : 0);
+  const headingMode = robot?.drive === 'tank' ? 'tangent' : (path.headingMode || 'targets');
+  const mode = path.waypoints.slice(0, -1).every((waypoint) => (
+    robot?.drive === 'tank' || (waypoint.segmentHeadingMode || headingMode) === 'tangent'
+  )) ? 'tank' : 'swerve';
+  const shared = plannerPlayback(result, sample.pts, !!path.driveBackward);
+  const checks = result.diagnostics.map((issue) => ({
+    f: 0, kind: 'planner', level: issue.severity, text: issue.message, seg: 0,
+  }));
   return {
-    ...derived,
+    sample,
     prof: shared.prof,
     totalDistance: result.totalDistanceM,
     anchors: shared.anchors,
     metrics: shared.metrics,
     checks,
+    wpFrac,
+    wpIdx,
+    mode,
+    effRanges: PM.effectiveRanges(path, sample),
+    headingMode,
+    rev: !!path.driveBackward,
     playback: shared.playback,
     markers: result.markers,
     planner: result.planner,

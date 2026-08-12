@@ -1,4 +1,5 @@
 import { PM } from "./pathMath";
+import { buildRoutineRun } from "./routineRun";
 import { createRoutineNodeId } from "../../shared/project/ids";
 
 // Autonomous Routine — autonomous routine model + run engine (no React).
@@ -86,60 +87,8 @@ import { createRoutineNodeId } from "../../shared/project/ids";
   function findNode(routine, id) { let hit = null; walk(routine.nodes, (n) => { if (n.id === id) hit = n; }); return hit; }
   function countSteps(routine) { let n = 0; walk(routine.nodes, () => n++); return n; }
 
-  // ---- derive a path-bearing node into a field trajectory ----
-  function derivePathNode(node, paths, robot, plannerId) {
-    let doc = null;
-    if (node.type === 'path') doc = paths.find((path) => path.id === node.ref);
-    else if (node.type === 'function' && node.cat === 'generate' && node.preview) doc = node.preview;
-    if (!doc) return null;
-    const d = PM.derivePath(doc, robot, 56, plannerId);
-    return { doc, deriv: d, pts: d.playback ? d.playback.pts : d.sample.pts, total: (d.playback ? d.playback.prof : d.prof).totalTime || 0 };
-  }
-
-  const EVENT_DWELL = 0.45; // seconds a non-driving function holds for, in the run
-
-  // ---- flatten a routine into an executed step list given decision outcomes ----
-  function buildRun(routine, paths, robot, outcomes, plannerId) {
-    outcomes = outcomes || {};
-    const flat = [];
-    const collect = (nodes) => {
-      (nodes || []).forEach((n) => {
-        if (n.type === 'decision') {
-          flat.push({ node: n, kind: 'decision' });
-          const out = outcomes[n.id] || 'then';
-          collect(out === 'else' ? n.else : n.then);
-        } else if (n.type === 'path') {
-          flat.push({ node: n, kind: 'path' });
-        } else if (n.cat === 'generate' && n.preview) {
-          flat.push({ node: n, kind: 'gen' });
-        } else {
-          flat.push({ node: n, kind: 'event' });
-        }
-      });
-    };
-    collect(routine.nodes);
-
-    let t = 0, pIdx = 0; const steps = []; const segs = []; let lastPose = null;
-    flat.forEach((it) => {
-      if (it.kind === 'path' || it.kind === 'gen') {
-        const dp = derivePathNode(it.node, paths, robot, plannerId);
-        if (!dp || dp.pts.length < 2) { steps.push({ ...it, t0: t, t1: t, dur: 0 }); return; }
-        const t0 = t, dur = dp.total, t1 = t + dur;
-        pIdx += 1;
-        const idxLabel = String(pIdx).padStart(2, '0');
-        const label = it.node.type === 'path' ? dp.doc.name : (it.node.funcRef || 'Generated');
-        segs.push({ nodeId: it.node.id, kind: it.kind, label, idxLabel, pts: dp.pts, t0, t1, deriv: dp.deriv, doc: dp.doc });
-        steps.push({ ...it, t0, t1, dur, segIdx: segs.length - 1, idxLabel, label, dist: dp.deriv.sample.length });
-        lastPose = dp.pts[dp.pts.length - 1];
-        t = t1;
-      } else if (it.kind === 'event') {
-        steps.push({ ...it, t0: t, t1: t + EVENT_DWELL, dur: EVENT_DWELL, pose: lastPose });
-        t += EVENT_DWELL;
-      } else { // decision — instant
-        steps.push({ ...it, t0: t, t1: t, dur: 0 });
-      }
-    });
-    return { steps, segs, total: t };
+  function buildRun(routine, paths, robot, outcomes, plannerId, derivePath = PM.derivePath) {
+    return buildRoutineRun(routine, paths, robot, outcomes, plannerId, derivePath);
   }
 
   // ---- pose along the run at time ----
