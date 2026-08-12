@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { directPreviewWork, directWorkIsSafe } from "../src/renderer/assets/direct-preview-work";
 import { loadRendererExport } from "./helpers/loadRendererExport";
 
 interface WorkerJob { id: number; quality: "interactive" | "final"; perSegment: number }
@@ -38,7 +39,15 @@ function previewModule(context: Record<string, unknown> = {}) {
     samplesForQuality(quality: string): number;
     directPreviewIsSafe(path: unknown, perSegment: number): boolean;
   }>(new URL("../src/renderer/assets/path-preview.js", import.meta.url), "PathPreview", {
-    context: { performance, queueMicrotask, setTimeout, clearTimeout, ...context },
+    context: {
+      performance,
+      queueMicrotask,
+      setTimeout,
+      clearTimeout,
+      directPreviewWork,
+      directWorkIsSafe,
+      ...context,
+    },
     replacements: [[
       "return new Worker(new URL('./path-preview-worker.js', import.meta.url), { type: 'module' });",
       "return config.workerFactory();",

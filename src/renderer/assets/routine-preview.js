@@ -1,5 +1,5 @@
 import { effectivePathConstraints } from "../../shared/robotLimits";
-import { PathPreview } from "./path-preview";
+import { directPreviewWork } from "./direct-preview-work";
 
 // A run retains several arrays per derived sample and then clones that result
 // back to the UI. Bound both derivation work and the result graph independently.
@@ -62,7 +62,7 @@ function directRoutineWork(routine, paths, perSegment = 56, outcomes = {}) {
       : node.type === 'function' && node.cat === 'generate' ? node.preview : null;
     if (!path || unique.has(path)) return;
     unique.add(path);
-    total += PathPreview.directPreviewWork(path, perSegment);
+    total += directPreviewWork(path, perSegment);
   });
   return total;
 }
