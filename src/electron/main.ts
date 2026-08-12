@@ -571,13 +571,13 @@ function createWindow() {
         });
         document.querySelector('button[aria-label="Add event marker"]')?.click();
         await new Promise((resolve) => setTimeout(resolve, 0));
-        const linkButton = document.querySelector('button[aria-label="Choose Java project"]')
-          || [...document.querySelectorAll('.cmd-primary-action')].find((button) => button.textContent.trim() === 'Choose Java project');
+        const linkButton = await waitFor(() => document.querySelector('button[aria-label="Choose Java project"]')
+          || [...document.querySelectorAll('.cmd-primary-action')].find((button) => button.textContent.trim() === 'Choose Java project'));
         linkButton?.click();
-        for (let attempt = 0; attempt < 50 && document.getElementById('event-marker-command')?.disabled; attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        const commandPicker = document.getElementById('event-marker-command');
+        const commandPicker = await waitFor(() => {
+          const picker = document.getElementById('event-marker-command');
+          return picker && !picker.disabled ? picker : null;
+        });
         commandPicker?.click();
         for (let attempt = 0; attempt < 50 && !document.querySelector('#event-marker-command-listbox [role="option"]'); attempt++) {
           await new Promise((resolve) => setTimeout(resolve, 10));
@@ -589,8 +589,8 @@ function createWindow() {
           smokeCommandOption.click();
           await new Promise((resolve) => setTimeout(resolve, 0));
         }
-        const jsonParameter = document.getElementById('event-command-param-tags');
-        const exactIntegerParameter = document.getElementById('event-command-param-sequence');
+        const jsonParameter = await waitFor(() => document.getElementById('event-command-param-tags'));
+        const exactIntegerParameter = await waitFor(() => document.getElementById('event-command-param-sequence'));
         const smokeParametersPresent = Boolean(document.getElementById('event-command-param-count') && jsonParameter && exactIntegerParameter);
         const setTextAreaValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
         if (jsonParameter) {
@@ -641,8 +641,7 @@ function createWindow() {
         const largeEnumCommandOption = [...document.querySelectorAll('#event-marker-command-listbox [role="option"]')]
           .find((option) => option.getAttribute('data-value') === 'frc.robot.LargeEnumCommand');
         largeEnumCommandOption?.click();
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        const largeEnumPicker = document.getElementById('event-command-param-mode');
+        const largeEnumPicker = await waitFor(() => document.getElementById('event-command-param-mode'));
         largeEnumPicker?.click();
         for (let attempt = 0; attempt < 50 && !document.querySelector('#event-command-param-mode-listbox [role="option"]'); attempt++) {
           await new Promise((resolve) => setTimeout(resolve, 10));
@@ -655,10 +654,10 @@ function createWindow() {
           largeEnumSearch.dispatchEvent(new Event('input', { bubbles: true }));
           await new Promise((resolve) => setTimeout(resolve, 0));
         }
-        const largeEnumChoice = [...document.querySelectorAll('#event-command-param-mode-listbox [role="option"]')]
-          .find((option) => option.getAttribute('data-value') === 'MODE_150');
+        const largeEnumChoice = await waitFor(() => [...document.querySelectorAll('#event-command-param-mode-listbox [role="option"]')]
+          .find((option) => option.getAttribute('data-value') === 'MODE_150'));
         largeEnumChoice?.click();
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await waitFor(() => document.getElementById('event-command-param-mode-value')?.textContent === 'MODE_150');
         const javaUi = {
           markerInspector: Boolean(document.querySelector('.cmd-project')),
           linkAction: Boolean(linkButton),
