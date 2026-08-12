@@ -50,6 +50,8 @@ let allowClose = false;
 let appUpdates: AppUpdateController | null = null;
 let updateCheckTimer: NodeJS.Timeout | null = null;
 let backgroundShutdownPromise: Promise<void> | null = null;
+let backgroundServicesReadyForExit = false;
+let finalQuitInProgress = false;
 
 function buildJavaTrajectoryOffThread(project: BordeauxProject, catalog: JavaCommandCatalog): Promise<BuiltJavaTrajectory> {
   return new Promise((resolve, reject) => {
@@ -210,6 +212,7 @@ function createAppUpdateController(): AppUpdateController {
     prepareToInstall: async () => {
       await stopBackgroundServices();
       if (dirty) throw new Error("The project changed while Bordeaux was preparing the update. Save or discard it, then try again.");
+      backgroundServicesReadyForExit = true;
       allowClose = true;
     },
     warn: (message, error) => console.warn(message, error),
@@ -448,7 +451,7 @@ function createWindow() {
         smokeDraftCommandRunning = true;
         void window.webContents.executeJavaScript("window.__bordeauxSmokeDraftStage || ''").then((stage) => {
           if (stage === "save-big" || stage === "save-num" || stage === "save-command" || stage === "save-close-base") sendCommand("save-project");
-          else if (stage === "close-draft") window.close();
+          else if (stage === "close-draft") app.quit();
           else return;
           return window.webContents.executeJavaScript(`window.__bordeauxSmokeDraftStage = ${JSON.stringify(String(stage) + "-sent")}`);
         }).catch(() => undefined).finally(() => { smokeDraftCommandRunning = false; });
@@ -723,9 +726,17 @@ function createWindow() {
       const filesWritten = smokeDirectory ? fs.existsSync(path.join(smokeDirectory, "project.bordeaux.json")) && fs.existsSync(path.join(smokeDirectory, "java-project", "src", "main", "deploy", "bordeaux", "Smoke-edited.bordeaux.json")) : false;
       result.filesWritten = filesWritten;
       result.closeGuard = smokeCloseGuardTriggered && !window.isDestroyed();
+      try {
+        const session = await new AgentBridgeClient(app.getPath("userData")).request({ method: "inspect_session" }) as { sessionId?: string };
+        result.mcpAfterCanceledQuit = typeof session.sessionId === "string";
+      } catch {
+        result.mcpAfterCanceledQuit = false;
+      }
       console.log(`BORDEAUX_SMOKE_OK ${JSON.stringify(result)}`);
-      const passed = result.api && result.root && result.unnamed.length === 0 && result.main > 0 && result.nav > 0 && result.validation && result.motorPreset && result.eventMarkerAutosave && result.multiRoutineUi && result.draftBigSaved && result.draftNumSaved && result.draftCommandSaved && result.closeDraftDirty && result.javaDiscovery && result.javaInstalled && result.javaBuilt && result.javaRecent && result.javaUi.markerInspector && result.javaUi.linkAction && result.javaUi.commandEnabled && result.javaUi.commandOptions === 4 && result.javaUi.searchHiddenForSmallCatalog && result.javaUi.recentHiddenForSingleProject && result.javaUi.cancelSwitch && result.javaUi.parameter && result.javaUi.jsonShapeRejected && result.javaUi.jsonShapeAccepted && result.javaUi.longRangeRejected && result.javaUi.exactInteger && result.javaUi.largeEnumPicker && result.javaUi.accessible && result.staleJavaExportRejected && result.javaExported && result.restored && result.roundTrip && result.editorRestored && result.nodeGlobalsBlocked && result.popupBlocked && result.inlineScriptBlocked && result.filesWritten && result.closeGuard;
+      const passed = result.api && result.root && result.unnamed.length === 0 && result.main > 0 && result.nav > 0 && result.validation && result.motorPreset && result.eventMarkerAutosave && result.multiRoutineUi && result.draftBigSaved && result.draftNumSaved && result.draftCommandSaved && result.closeDraftDirty && result.javaDiscovery && result.javaInstalled && result.javaBuilt && result.javaRecent && result.javaUi.markerInspector && result.javaUi.linkAction && result.javaUi.commandEnabled && result.javaUi.commandOptions === 4 && result.javaUi.searchHiddenForSmallCatalog && result.javaUi.recentHiddenForSingleProject && result.javaUi.cancelSwitch && result.javaUi.parameter && result.javaUi.jsonShapeRejected && result.javaUi.jsonShapeAccepted && result.javaUi.longRangeRejected && result.javaUi.exactInteger && result.javaUi.largeEnumPicker && result.javaUi.accessible && result.staleJavaExportRejected && result.javaExported && result.restored && result.roundTrip && result.editorRestored && result.nodeGlobalsBlocked && result.popupBlocked && result.inlineScriptBlocked && result.filesWritten && result.closeGuard && result.mcpAfterCanceledQuit;
       allowClose = true;
+      await stopBackgroundServices().catch((error) => console.warn("Could not stop Bordeaux smoke services cleanly:", error));
+      backgroundServicesReadyForExit = true;
       app.exit(passed ? 0 : 1);
     });
   }
@@ -1119,7 +1130,18 @@ if (ownsDesktopInstance) app.whenReady().then(async () => {
 app.on("before-quit", () => {
   if (updateCheckTimer) clearTimeout(updateCheckTimer);
   updateCheckTimer = null;
-  void stopBackgroundServices().catch((error) => console.warn("Could not stop Bordeaux background services cleanly:", error));
+});
+app.on("will-quit", (event) => {
+  if (backgroundServicesReadyForExit) return;
+  event.preventDefault();
+  if (finalQuitInProgress) return;
+  finalQuitInProgress = true;
+  void stopBackgroundServices().catch((error) => {
+    console.warn("Could not stop Bordeaux background services cleanly:", error);
+  }).finally(() => {
+    backgroundServicesReadyForExit = true;
+    app.quit();
+  });
 });
 app.on("web-contents-created", (_event, contents) => contents.on("will-attach-webview", (event) => event.preventDefault()));
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });

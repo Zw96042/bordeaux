@@ -77,7 +77,7 @@ public final class IdleCommand extends CommandBase {}
   await fs.writeFile(path.join(smokeDirectory, "java-project", "gradlew.bat"), windowsWrapper);
 
   const packagedExecutable = process.env.BORDEAUX_SMOKE_EXECUTABLE;
-  const child = spawn(packagedExecutable || electron, packagedExecutable ? [] : ["dist-electron/electron/main.js"], {
+  const child = spawn(packagedExecutable || electron, packagedExecutable ? ["--enable-mcp-access"] : ["dist-electron/electron/main.js", "--enable-mcp-access"], {
     cwd: process.cwd(),
     env: { ...process.env, BORDEAUX_SMOKE_TEST: "1", BORDEAUX_SMOKE_DIRECTORY: smokeDirectory },
     stdio: ["ignore", "pipe", "pipe"],
