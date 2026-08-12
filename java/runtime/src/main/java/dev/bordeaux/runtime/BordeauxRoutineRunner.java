@@ -162,12 +162,15 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
     }
 
     private void collectPathIds(List<BordeauxRoutineNode> nodes, Set<String> pathIds) {
-        for (BordeauxRoutineNode node : nodes) {
+        Deque<BordeauxRoutineNode> remaining = new ArrayDeque<>();
+        prepend(remaining, nodes);
+        while (!remaining.isEmpty()) {
+            BordeauxRoutineNode node = remaining.removeFirst();
             if (node instanceof BordeauxRoutineNode.Path path) {
                 pathIds.add(path.pathId());
             } else if (node instanceof BordeauxRoutineNode.Decision decision) {
-                collectPathIds(decision.whenTrue(), pathIds);
-                collectPathIds(decision.whenFalse(), pathIds);
+                prepend(remaining, decision.whenFalse());
+                prepend(remaining, decision.whenTrue());
             }
         }
     }
