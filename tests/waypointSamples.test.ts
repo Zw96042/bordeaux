@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PM } from "../src/shared/math/pm";
 import { getPlanner } from "../src/shared/planners";
+import { enforceAngularTiming } from "../src/shared/planners/angularConstraints";
 import { orderedWaypointSampleIndices } from "../src/shared/planners/waypointSamples";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
 import type { PathDoc, TrajectorySample } from "../src/shared/types";
@@ -61,6 +62,45 @@ describe("shared path indices", () => {
     ];
     for (const fraction of [-0.1, 0, 0.1, 0.2, 0.20001, 0.6, 0.75, 0.9, 1, 1.1]) {
       expect(PM.headingAt(fraction, anchors)).toBe(legacyHeadingAt(fraction, anchors));
+    }
+  });
+
+  it("does not rescan every trajectory sample for each turn boundary", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints(Array.from({ length: 128 }, (_, index) => ({
+      x: 1 + index * 0.1,
+      y: 4,
+      stop: true,
+      turnInPlace: { headingDeg: 0, direction: "shortest" as const },
+    })));
+    const samples: TrajectorySample[] = path.waypoints.map((waypoint, index) => ({
+      i: index,
+      t: index * 0.02,
+      s: index * 0.1,
+      f: index / (path.waypoints.length - 1),
+      x: waypoint.x,
+      y: waypoint.y,
+      headingRad: 0,
+      velocityMps: 0,
+      accelerationMps2: 0,
+      angularVelocityRadps: 0,
+      curvatureInvM: 0,
+    }));
+    const result = {
+      planner: "profiledSpline" as const,
+      totalTimeS: samples.at(-1)!.t,
+      totalDistanceM: samples.at(-1)!.s,
+      samples,
+      markers: [],
+      diagnostics: [],
+    };
+    const hypot = vi.spyOn(Math, "hypot");
+    try {
+      expect(enforceAngularTiming(path, result)).toBe(result);
+      expect(hypot.mock.calls.length).toBeLessThan(path.waypoints.length * 4);
+    } finally {
+      hypot.mockRestore();
     }
   });
 });
