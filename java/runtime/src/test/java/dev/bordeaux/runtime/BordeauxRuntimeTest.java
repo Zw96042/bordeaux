@@ -300,6 +300,59 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void legacyRoutineMethodsFailFastForCommandWaitsButKeepTrueCompletionEmpty() throws Exception {
+        ObjectNode arguments = (ObjectNode) MAPPER.readTree("{}");
+        RecordingScheduler scheduler = new RecordingScheduler();
+        List<String> created = new ArrayList<>();
+        BordeauxCommandRegistry commands = registry(created, "collect");
+
+        BordeauxRoutine startsWithCommand = new BordeauxRoutine("Command first", List.of(
+                new BordeauxRoutineNode.Command("collect", "collect", arguments),
+                new BordeauxRoutineNode.Path("path", "path-a")));
+        BordeauxRoutineRunner startRunner = new BordeauxRoutineRunner(new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), startsWithCommand),
+                commands, BordeauxConditionRegistry.empty(), scheduler);
+
+        BordeauxRuntimeException startFailure = assertThrows(BordeauxRuntimeException.class, startRunner::start);
+        assertTrue(startFailure.getMessage().contains("startTransition()"));
+        assertTrue(startFailure.getMessage().contains("completePathTransition(...)"));
+        assertTrue(startFailure.getMessage().contains("periodic()"));
+        assertEquals(BordeauxRoutineRunner.Status.READY, startRunner.status());
+        assertTrue(created.isEmpty());
+        assertTrue(scheduler.scheduled.isEmpty());
+
+        BordeauxRoutine pathThenCommand = new BordeauxRoutine("Command second", List.of(
+                new BordeauxRoutineNode.Path("path", "path-a"),
+                new BordeauxRoutineNode.Command("collect", "collect", arguments)));
+        BordeauxRoutineRunner completeRunner = new BordeauxRoutineRunner(new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), pathThenCommand),
+                commands, BordeauxConditionRegistry.empty(), scheduler);
+
+        assertEquals("path-a", completeRunner.start().orElseThrow());
+        BordeauxRuntimeException completeFailure = assertThrows(BordeauxRuntimeException.class,
+                () -> completeRunner.completePath("path-a"));
+        assertTrue(completeFailure.getMessage().contains("completePathTransition(...)"));
+        assertEquals(BordeauxRoutineRunner.Status.PATH_ACTIVE, completeRunner.status());
+        assertTrue(created.isEmpty());
+        assertTrue(scheduler.scheduled.isEmpty());
+
+        BordeauxRoutine pathOnly = new BordeauxRoutine("Path only", List.of(
+                new BordeauxRoutineNode.Path("path", "path-a")));
+        BordeauxRoutineRunner finishedRunner = new BordeauxRoutineRunner(new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), pathOnly),
+                commands, BordeauxConditionRegistry.empty(), scheduler);
+        assertEquals("path-a", finishedRunner.start().orElseThrow());
+        assertTrue(finishedRunner.completePath("path-a").isEmpty());
+        assertEquals(BordeauxRoutineRunner.Status.COMPLETE, finishedRunner.status());
+
+        BordeauxRoutineRunner emptyRunner = new BordeauxRoutineRunner(new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(),
+                new BordeauxRoutine("Empty", List.of())), commands, BordeauxConditionRegistry.empty(), scheduler);
+        assertTrue(emptyRunner.start().isEmpty());
+        assertEquals(BordeauxRoutineRunner.Status.COMPLETE, emptyRunner.status());
+    }
+
+    @Test
     void cancelsActiveRoutineCommandOnResetStopAndClose() throws Exception {
         ObjectNode arguments = (ObjectNode) MAPPER.readTree("{}");
         BordeauxRoutine routine = new BordeauxRoutine("Command lifecycle", List.of(
@@ -313,20 +366,20 @@ class BordeauxRuntimeTest {
                 BordeauxConditionRegistry.empty(), scheduler);
 
         runner.start();
-        runner.completePath("path-a");
+        runner.completePathTransition("path-a");
         Command resetCommand = scheduler.scheduled.get(0);
         runner.reset();
         assertEquals(BordeauxRoutineRunner.Status.READY, runner.status());
 
         runner.start();
-        runner.completePath("path-a");
+        runner.completePathTransition("path-a");
         Command stopCommand = scheduler.scheduled.get(1);
         runner.stop();
         assertEquals(BordeauxRoutineRunner.Status.STOPPED, runner.status());
 
         runner.reset();
         runner.start();
-        runner.completePath("path-a");
+        runner.completePathTransition("path-a");
         Command closeCommand = scheduler.scheduled.get(2);
         runner.close();
 
