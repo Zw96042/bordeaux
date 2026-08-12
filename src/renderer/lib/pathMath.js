@@ -1085,6 +1085,42 @@
     return Math.max(0, Math.min(1, raw));
   }
 
+  function reversePathAnchors(doc, totalDistance) {
+    const total = Math.max(0, Number(totalDistance) || 0);
+    const fraction = (value) => Math.max(0, Math.min(1, Number(value) || 0));
+    const distance = (value, fallbackFraction) => Math.max(0, Math.min(total,
+      Number.isFinite(Number(value)) ? Number(value) : fraction(fallbackFraction) * total));
+    const reverseFeature = (feature) => {
+      const originalFraction = fraction(feature.f);
+      if (feature.anchor === 'dist') {
+        feature.d = total - distance(feature.d, originalFraction);
+        feature.f = total > 1e-9 ? feature.d / total : 1 - originalFraction;
+      } else feature.f = 1 - originalFraction;
+    };
+    (doc.targets || []).forEach(reverseFeature);
+    (doc.markers || []).forEach(reverseFeature);
+    (doc.ranges || []).forEach((range) => {
+      if (range.anchor === 'wp') return;
+      const originalStart = fraction(range.f0), originalEnd = fraction(range.f1);
+      if (range.anchor === 'dist') {
+        const originalStartDistance = distance(range.d0, originalStart);
+        const originalEndDistance = distance(range.d1, originalEnd);
+        range.d0 = total - originalEndDistance;
+        range.d1 = total - originalStartDistance;
+        range.f0 = total > 1e-9 ? range.d0 / total : 1 - originalEnd;
+        range.f1 = total > 1e-9 ? range.d1 / total : 1 - originalStart;
+      } else {
+        range.f0 = 1 - originalEnd;
+        range.f1 = 1 - originalStart;
+      }
+    });
+    return doc;
+  }
+
+  function pathLength(waypoints, perSegment) {
+    return sample(waypoints, perSegment || 56).length;
+  }
+
   function remapWaypointRange(range, oldToNew, removedIndex, newCount) {
     if (!range || range.anchor !== 'wp') return range;
     const next = { ...range };
@@ -1261,4 +1297,4 @@
     return positions;
   }
 
-export const PM = { splitBezier, nearestPointOnSegment, poseAtTime, headingAt, metricColor, metricGradient, METRICS, SEGTYPES, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, derivePath, jigglePositions, featureFraction, remapWaypointRange, waypointFracs, robotHardLimits, effectiveConstraints, indexIntervalPolicies };
+export const PM = { splitBezier, nearestPointOnSegment, poseAtTime, headingAt, metricColor, metricGradient, METRICS, SEGTYPES, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, derivePath, jigglePositions, featureFraction, reversePathAnchors, pathLength, remapWaypointRange, waypointFracs, robotHardLimits, effectiveConstraints, indexIntervalPolicies };
