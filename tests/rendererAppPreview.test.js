@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { App } from "../src/renderer/app/App";
+import { App, routinePreviewResult } from "../src/renderer/app/App";
 import { PathPreview } from "../src/renderer/assets/path-preview";
 import { PM } from "../src/renderer/lib/pathMath";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
@@ -20,6 +20,29 @@ describe("renderer app path preview lifecycle", () => {
     } finally {
       derivePath.mockRestore();
     }
+  });
+
+  it("never presents a routine run derived from stale inputs", () => {
+    const currentRequest = {};
+    const staleRequest = {};
+    const staleRun = { steps: [{ id: "old" }], segs: [], total: 4 };
+
+    expect(routinePreviewResult({ path: staleRequest, value: staleRun }, currentRequest, true)).toMatchObject({
+      run: { steps: [], segs: [], total: 0 },
+      pending: true,
+      error: null,
+    });
+    expect(routinePreviewResult({ path: currentRequest, value: staleRun }, currentRequest, true)).toMatchObject({
+      run: staleRun,
+      pending: false,
+      error: null,
+    });
+    const error = { message: "routine failed" };
+    expect(routinePreviewResult({ errorPath: currentRequest, error }, currentRequest, true)).toMatchObject({
+      run: { steps: [], segs: [], total: 0 },
+      pending: false,
+      error,
+    });
   });
 
   it("renders a pending state for an initially heavy path without deriving during render", () => {

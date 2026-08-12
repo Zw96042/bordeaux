@@ -12,11 +12,26 @@ function routinePreview() {
 }
 
 describe("routine preview worker", () => {
-  it("counts unique path work when deciding whether direct fallback is safe", () => {
+  it("sends only paths referenced by the active routine", () => {
+    const referenced = { id: "path_a" };
+    const unrelated = { id: "path_b", payload: "large" };
+    const routine = { nodes: [{ id: "decision", type: "decision", then: [{ id: "node_a", type: "path", ref: referenced.id }], else: [{ id: "node_b", type: "path", ref: unrelated.id }] }] };
+
+    expect(routinePreview().referencedPaths(routine, [unrelated, referenced], { decision: "then" })).toEqual([referenced]);
+  });
+
+  it("counts unique path and routine assembly work before direct fallback", () => {
     const path = { id: "path_a" };
     const routine = { nodes: Array.from({ length: 100 }, (_, index) => ({ id: `node_${index}`, type: "path", ref: path.id })) };
 
-    expect(routinePreview().directRoutineWork(routine, [path])).toBe(250);
+    expect(routinePreview().directRoutineWork(routine, [path])).toBe(1 + 100 * 16 + 250);
+  });
+
+  it("rejects a huge repeated routine even when it references one cheap path", () => {
+    const path = { id: "path_a" };
+    const routine = { nodes: Array.from({ length: 100_000 }, (_, index) => ({ id: `node_${index}`, type: "path", ref: path.id })) };
+
+    expect(routinePreview().directRoutineWork(routine, [path])).toBeGreaterThan(100_000);
   });
 
   it("returns a routine run without changing worker response contracts", () => {
