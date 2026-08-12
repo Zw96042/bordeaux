@@ -4,7 +4,7 @@ import { PM } from "../src/shared/math/pm";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
 import { getPlanner } from "../src/shared/planners";
 // @ts-expect-error The renderer worker is shipped as an untyped JavaScript module.
-import { processPathPreviewJob } from "../src/renderer/assets/path-preview-worker";
+import { processPathPreviewJob, processRoutinePreviewJob } from "../src/renderer/assets/path-preview-worker";
 import { loadRendererExport } from "./helpers/loadRendererExport";
 
 interface Point {
@@ -37,6 +37,37 @@ function rendererPreview(path: unknown, robot: unknown, plannerId: string) {
   const result = processPathPreviewJob({ id: 1, quality: "final", path, robot, plannerId, perSegment: 56 });
   if (result.error) throw new Error(result.error.message);
   return result.value as ReturnType<ReturnType<typeof rendererMath>["derivePath"]>;
+}
+
+function expectPlannerPreviewParity(path: any, robot: any, plannerId: "profiledSpline" | "optimizedTrajectory", name: string) {
+  const expected = getPlanner(plannerId).generate({ path, robot, samplesPerSegment: 56 });
+  const actual = rendererPreview(path, robot, plannerId) as any;
+  const playback = actual.playback;
+  expect(actual.planner, name).toBe(expected.planner);
+  expect(actual.totalDistance, name).toBe(expected.totalDistanceM);
+  expect(actual.prof.totalTime, name).toBe(expected.totalTimeS);
+  expect(playback?.rev, name).toBe(Boolean(path.driveBackward));
+  expect(playback?.pts, name).toEqual(expected.samples.map((sample) => ({
+    x: sample.x,
+    y: sample.y,
+    s: sample.s,
+    f: sample.f,
+    heading: sample.headingRad - (path.driveBackward ? Math.PI : 0),
+    plannedHeading: sample.headingRad,
+    curv: sample.curvatureInvM,
+  })));
+  expect(playback?.prof, name).toMatchObject({
+    t: expected.samples.map((sample) => sample.t),
+    v: expected.samples.map((sample) => sample.velocityMps),
+    totalTime: expected.totalTimeS,
+  });
+  expect(playback?.metrics, name).toMatchObject({
+    accel: expected.samples.map((sample) => sample.accelerationMps2),
+    omega: expected.samples.map((sample) => sample.angularVelocityRadps),
+    curv: expected.samples.map((sample) => sample.curvatureInvM),
+  });
+  expect(actual.markers, name).toEqual(expected.markers);
+  return expected;
 }
 
 function rendererPathLinks() {
@@ -152,6 +183,122 @@ describe("renderer application", () => {
       expect(actual.playback?.metrics.curv, name).toEqual(expected.samples.map((sample) => sample.curvatureInvM));
       expect(actual.markers, name).toEqual(expected.markers);
     }
+  });
+
+  it.each(["profiledSpline", "optimizedTrajectory"] as const)("matches shared %s output with a physical drive model", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.waypoints = buildWaypoints([
+      { x: 0.6, y: 3.1, theta: -139, thetaOn: true },
+      { x: 3.2667, y: 5, theta: -121, thetaOn: true },
+      { x: 5.9333, y: 6.35, theta: -79, thetaOn: true },
+      { x: 8.6, y: 5.25, theta: 122, thetaOn: true },
+      { x: 11.2667, y: 5.24, theta: 179, thetaOn: true },
+      { x: 13.9333, y: 1.72, theta: -89, thetaOn: true },
+      { x: 16.6, y: 4.5, theta: 173, thetaOn: true },
+    ]);
+    path.waypoints[0].stop = true;
+    path.waypoints.at(-1)!.stop = true;
+    path.constraints = {
+      ...path.constraints,
+      maxVel: 2.727,
+      maxAccel: 8.218,
+      maxDecel: 7.549,
+      maxAngVel: 531,
+      maxAngAccel: 929,
+      maxAngDecel: 157,
+    };
+    project.robot.driveModel = {
+      motorId: "custom",
+      motorFreeRpm: 6000,
+      motorMaxTorqueNm: 3,
+      motorCount: 4,
+      gearRatio: 6,
+      wheelDiameterM: 0.1,
+      massKg: 55,
+      moiKgM2: 5,
+      wheelbaseM: 0.6,
+      trackwidthM: 0.55,
+      wheelFrictionCoefficient: 1.1,
+    };
+
+    const expected = expectPlannerPreviewParity(path, project.robot, plannerId, "physical drive model");
+    if (plannerId === "optimizedTrajectory") {
+      expect(expected.totalTimeS).toBe(5.5556);
+      expect(expected.samples[166].velocityMps).toBe(3.8555);
+    }
+  });
+
+  it.each(["profiledSpline", "optimizedTrajectory"] as const)("matches shared %s output with ranges, wait, and turn", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, theta: 0, thetaOn: true },
+      { x: 4, y: 5, theta: 90, thetaOn: true },
+      { x: 9, y: 2, theta: 180, thetaOn: true },
+      { x: 15, y: 6, theta: 270, thetaOn: true },
+    ]);
+    path.waypoints[1].stop = true;
+    path.waypoints[1].wait = 0.37;
+    path.waypoints.at(-1)!.stop = true;
+    path.waypoints.at(-1)!.wait = 0.23;
+    path.waypoints.at(-1)!.turnInPlace = { headingDeg: 45, direction: "shortest" };
+    path.ranges = [
+      { anchor: "param", f0: 0.08, f1: 0.46, maxVel: 1.4, maxAccel: 1.1, maxDecel: 0.9, maxAngVel: 110, maxAngAccel: 180 },
+      { anchor: "wp", f0: 0, f1: 1, w0: 1, t0: 0.25, w1: 2, t1: 0.8, maxVel: 1.8, maxAccel: 1.4, maxDecel: 1.2, maxAngVel: 140, maxAngAccel: 220 },
+    ];
+    path.markers = [
+      { id: "before", f: 0.3, name: "Before" },
+      { id: "after", anchor: "dist", d: 8, f: 0.7, name: "After" },
+    ];
+
+    expectPlannerPreviewParity(path, project.robot, plannerId, "compound range/wait/turn");
+  });
+
+  it("uses the authoritative planner adapter for optimized routine paths", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    project.routines[0].nodes = [{ id: "path_node", type: "path", ref: path.id }];
+
+    const result = processRoutinePreviewJob({
+      id: 2,
+      routine: project.routines[0],
+      paths: project.paths,
+      robot: project.robot,
+      outcomes: {},
+      plannerId: "optimizedTrajectory",
+    });
+    if (result.error) throw new Error(result.error.message);
+    const direct = rendererPreview(path, project.robot, "optimizedTrajectory") as any;
+    expect(result.value.segs[0].deriv.playback).toEqual(direct.playback);
+  });
+
+  it("reports optimized planner fallback instead of publishing profiled motion", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([{ x: 1, y: 1 }]);
+
+    const result = processPathPreviewJob({
+      id: 3,
+      quality: "final",
+      path,
+      robot: project.robot,
+      plannerId: "optimizedTrajectory",
+      perSegment: 56,
+    });
+    expect(result.value).toBeUndefined();
+    expect(result.error?.message).toMatch(/enough samples|did not produce/);
+  });
+
+  it("keeps routine assembly independent from either planner engine", () => {
+    const worker = fs.readFileSync(new URL("../src/renderer/assets/path-preview-worker.js", import.meta.url), "utf8");
+    const routineRun = fs.readFileSync(new URL("../src/renderer/lib/routineRun.js", import.meta.url), "utf8");
+    expect(worker).toContain('from "../lib/routineRun"');
+    expect(worker).not.toContain("routineModel");
+    expect(routineRun).not.toContain("pathMath");
+    expect(routineRun).not.toContain("shared/math");
   });
 
   it("loads React through the typed renderer module entry without compatibility globals", () => {
