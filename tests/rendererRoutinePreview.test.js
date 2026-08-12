@@ -12,7 +12,7 @@ function routinePreview() {
   return loadRendererExport(new URL("../src/renderer/assets/routine-preview.js", import.meta.url), "RoutinePreview", {
     context: {
       AUTO: { walk(nodes, visit) { nodes.forEach(visit); } },
-      PathPreview: { directPreviewWork: () => 250 },
+      directPreviewWork: () => 250,
     },
   });
 }
