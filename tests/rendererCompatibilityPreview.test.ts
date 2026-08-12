@@ -2,17 +2,41 @@ import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { PM } from "../src/shared/math/pm";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
+import { getPlanner } from "../src/shared/planners";
+// @ts-expect-error The renderer worker is shipped as an untyped JavaScript module.
+import { processPathPreviewJob } from "../src/renderer/assets/path-preview-worker";
 import { loadRendererExport } from "./helpers/loadRendererExport";
 
-interface Point { x: number; y: number }
+interface Point {
+  x: number;
+  y: number;
+  s: number;
+  f?: number;
+  heading?: number;
+  plannedHeading?: number;
+  curv?: number;
+}
 
 function rendererMath() {
   return loadRendererExport<{
     derivePath(path: unknown, robot: unknown, perSegment: number, plannerId: string): {
       sample: { pts: Array<Point & { s: number }>; length: number };
       prof: { totalTime: number };
+      metrics: { v: number[]; accel: number[]; omega: number[]; curv: number[] };
+      markers?: Array<{ timeS: number; fraction: number }>;
+      playback?: {
+        pts: Point[];
+        prof: { t: number[]; v: number[]; totalTime: number };
+        metrics: { accel: number[]; omega: number[]; curv: number[] };
+      };
     };
   }>(new URL("../src/renderer/lib/pathMath.js", import.meta.url), "PM", { context: { console } });
+}
+
+function rendererPreview(path: unknown, robot: unknown, plannerId: string) {
+  const result = processPathPreviewJob({ id: 1, quality: "final", path, robot, plannerId, perSegment: 56 });
+  if (result.error) throw new Error(result.error.message);
+  return result.value as ReturnType<ReturnType<typeof rendererMath>["derivePath"]>;
 }
 
 function rendererPathLinks() {
@@ -26,7 +50,7 @@ describe("renderer application", () => {
   it("derives finite previews with each maintained planner", () => {
     const project = createDemoProject();
     for (const planner of ["profiledSpline", "optimizedTrajectory"]) {
-      const preview = rendererMath().derivePath(project.paths[0], project.robot, 56, planner);
+      const preview = rendererPreview(project.paths[0], project.robot, planner);
       expect(preview.sample.pts.length).toBeGreaterThan(2);
       expect(preview.sample.pts.every((point) => Number.isFinite(point.x + point.y + point.s))).toBe(true);
       expect(preview.sample.length).toBeGreaterThan(0);
@@ -50,6 +74,84 @@ describe("renderer application", () => {
       expect(shared[index * samplesPerSegment]).toMatchObject({ x: waypoint.x, y: waypoint.y });
       expect(renderer[index * samplesPerSegment]).toMatchObject({ x: waypoint.x, y: waypoint.y });
     });
+  });
+
+  it("uses shared optimized timing, velocities, playback, and marker times", () => {
+    const project = createDemoProject();
+    project.plannerId = "optimizedTrajectory";
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints = {
+      ...path.constraints,
+      maxVel: 4.2,
+      maxAccel: 2,
+      maxDecel: 2,
+      maxAngVel: 180,
+      maxAngAccel: 720,
+      maxAngDecel: 720,
+    };
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, theta: 0, thetaOn: true },
+      { x: 4, y: 5, theta: 90, thetaOn: true },
+      { x: 9, y: 2, theta: 180, thetaOn: true },
+      { x: 15, y: 6, theta: 270, thetaOn: true },
+    ]);
+    path.markers = [{ id: "score", f: 0.63, name: "Score" }];
+    const shared = getPlanner("optimizedTrajectory").generate({ path, robot: project.robot, samplesPerSegment: 56 });
+    const preview = rendererPreview(path, project.robot, "optimizedTrajectory");
+    expect(Math.abs(shared.totalTimeS - getPlanner("profiledSpline").generate({ path, robot: project.robot }).totalTimeS)).toBeGreaterThan(0.1);
+    expect(preview.prof.totalTime).toBe(shared.totalTimeS);
+    expect(preview.playback?.pts).toEqual(shared.samples.map((sample) => ({
+      x: sample.x,
+      y: sample.y,
+      s: sample.s,
+      f: sample.f,
+      heading: sample.headingRad,
+      plannedHeading: sample.headingRad,
+      curv: sample.curvatureInvM,
+    })));
+    expect(preview.playback?.prof).toMatchObject({
+      t: shared.samples.map((sample) => sample.t),
+      v: shared.samples.map((sample) => sample.velocityMps),
+      totalTime: shared.totalTimeS,
+    });
+    expect(preview.playback?.metrics).toMatchObject({
+      accel: shared.samples.map((sample) => sample.accelerationMps2),
+      omega: shared.samples.map((sample) => sample.angularVelocityRadps),
+      curv: shared.samples.map((sample) => sample.curvatureInvM),
+    });
+    expect(preview.markers).toEqual(shared.markers);
+
+    for (const [name, mutate] of [
+      ["reverse", (candidate: typeof path) => { candidate.driveBackward = true; }],
+      ["range", (candidate: typeof path) => { candidate.ranges = [{ anchor: "param", f0: 0.2, f1: 0.8, maxVel: 1.1, maxAccel: 0.8, maxDecel: 0.7, maxAngVel: 180, maxAngAccel: 720 }]; }],
+      ["angular", (candidate: typeof path) => { candidate.constraints.maxAngVel = 30; candidate.constraints.maxAngAccel = 30; candidate.constraints.maxAngDecel = 20; }],
+      ["wait", (candidate: typeof path) => { candidate.waypoints[1].stop = true; candidate.waypoints[1].wait = 1; }],
+      ["turn", (candidate: typeof path) => { candidate.waypoints.at(-1)!.stop = true; candidate.waypoints.at(-1)!.turnInPlace = { headingDeg: 45, direction: "shortest" }; }],
+      ["jiggle", (candidate: typeof path) => { candidate.waypoints.at(-1)!.stop = true; candidate.waypoints.at(-1)!.jiggle = { distanceM: 0.2, strokes: 2, startDeg: 0, stepDeg: 90, strokeTimeS: 0.4 }; }],
+      ["translation priority", (candidate: typeof path) => { candidate.ranges = [{ anchor: "param", f0: 0.2, f1: 0.8, maxVel: 4.2, maxAccel: 2, maxDecel: 2, maxAngVel: 180, maxAngAccel: 720, rotationPriority: "translation" }]; }],
+    ] as const) {
+      const candidate = structuredClone(path);
+      mutate(candidate);
+      const expected = getPlanner("optimizedTrajectory").generate({ path: candidate, robot: project.robot, samplesPerSegment: 56 });
+      const actual = rendererPreview(candidate, project.robot, "optimizedTrajectory");
+      expect(actual.prof.totalTime, name).toBe(expected.totalTimeS);
+      expect(actual.playback?.pts, name).toEqual(expected.samples.map((sample) => ({
+        x: sample.x,
+        y: sample.y,
+        s: sample.s,
+        f: sample.f,
+        heading: sample.headingRad - (candidate.driveBackward ? Math.PI : 0),
+        plannedHeading: sample.headingRad,
+        curv: sample.curvatureInvM,
+      })));
+      expect(actual.playback?.prof.t, name).toEqual(expected.samples.map((sample) => sample.t));
+      expect(actual.playback?.prof.v, name).toEqual(expected.samples.map((sample) => sample.velocityMps));
+      expect(actual.playback?.metrics.accel, name).toEqual(expected.samples.map((sample) => sample.accelerationMps2));
+      expect(actual.playback?.metrics.omega, name).toEqual(expected.samples.map((sample) => sample.angularVelocityRadps));
+      expect(actual.playback?.metrics.curv, name).toEqual(expected.samples.map((sample) => sample.curvatureInvM));
+      expect(actual.markers, name).toEqual(expected.markers);
+    }
   });
 
   it("loads React through the typed renderer module entry without compatibility globals", () => {
@@ -178,3 +280,4 @@ describe("renderer application", () => {
     expect(panels).toContain("'Bordeaux'");
   });
 });
+

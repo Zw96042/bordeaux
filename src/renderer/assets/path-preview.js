@@ -207,6 +207,10 @@ import { PM } from "../lib/pathMath";
     };
 
     const runDirectOrFail = (job, reason) => {
+      if (job.plannerId === 'optimizedTrajectory') {
+        publish(job, { error: { message: `${reason} Optimized previews require the planning worker.` } }, 'direct');
+        return;
+      }
       if (directPreviewIsSafe(job.path, job.perSegment)) {
         directJob = job;
         runDirect();

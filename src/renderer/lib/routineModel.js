@@ -93,7 +93,7 @@ import { createRoutineNodeId } from "../../shared/project/ids";
     else if (node.type === 'function' && node.cat === 'generate' && node.preview) doc = node.preview;
     if (!doc) return null;
     const d = PM.derivePath(doc, robot, 56, plannerId);
-    return { doc, deriv: d, pts: d.sample.pts, total: d.prof.totalTime || 0 };
+    return { doc, deriv: d, pts: d.playback ? d.playback.pts : d.sample.pts, total: (d.playback ? d.playback.prof : d.prof).totalTime || 0 };
   }
 
   const EVENT_DWELL = 0.45; // seconds a non-driving function holds for, in the run
@@ -151,7 +151,8 @@ import { createRoutineNodeId } from "../../shared/project/ids";
     if (!cur) cur = run.steps[run.steps.length - 1];
     if (cur.segIdx != null) {
       const seg = run.segs[cur.segIdx];
-      return PM.poseAtTime(time - cur.t0, seg.pts, seg.deriv.prof, seg.deriv.anchors, mode);
+      const playback = seg.deriv.playback;
+      return PM.poseAtTime(time - cur.t0, seg.pts, playback ? playback.prof : seg.deriv.prof, playback ? playback.anchors : seg.deriv.anchors, mode, playback ? playback.rev : seg.deriv.rev);
     }
     if (cur.pose) return { x: cur.pose.x, y: cur.pose.y, heading: cur.pose.heading || 0, speed: 0 };
     return null;

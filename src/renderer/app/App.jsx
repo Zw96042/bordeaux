@@ -232,10 +232,10 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const finished = !draft && editStore.getLastResolution() === 'finish';
     const bridgeFinishedEdit = finished && editBase.current && (editBase.current === doc || derivedPath !== doc);
     if (!draft && (!finished || (derivedPath === doc && editBase.current !== doc))) editBase.current = null;
-    const draftPreview = draft && preview.path && preview.path.id === draft.id && preview.value
+    const draftPreview = draft && preview.path && preview.path.id === draft.id && preview.value && preview.value.planner === plannerId
       ? { path: preview.path, value: preview.value }
       : null;
-    const committedPreview = !draft && preview.path && preview.path.id === doc.id && preview.value && bridgeFinishedEdit
+    const committedPreview = !draft && preview.path && preview.path.id === doc.id && preview.value && preview.value.planner === plannerId && bridgeFinishedEdit
       ? { path: preview.path, value: preview.value }
       : null;
     const displayed = draftPreview || committedPreview || { path: derivedPath || doc, value: derived };
@@ -266,11 +266,12 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
   function usePathPreview(doc, robot, plannerId, quality) {
     const previewer = useMemo(() => PathPreview.create(), []);
     const fallback = useMemo(() => {
+      if (plannerId === 'optimizedTrajectory') return { path: doc, value: null, error: null };
       if (!PathPreview.directPreviewIsSafe(doc, 14)) return { path: doc, value: null, error: null };
-      try { return { path: doc, value: PM.derivePath(doc, robot, 14, plannerId), error: null }; }
+      try { return { path: doc, value: PM.derivePath(doc, robot, 14, 'profiledSpline'), error: null }; }
       catch (error) { return { path: doc, value: null, error }; }
     }, [doc, robot, plannerId]);
-    const lastValid = useRef(fallback.value ? { path: fallback.path, value: fallback.value } : null);
+    const lastValid = useRef(fallback.value ? { path: fallback.path, value: fallback.value, plannerId } : null);
     const [snapshot, setSnapshot] = useState(() => ({
       status: fallback.value ? 'ready' : fallback.error ? 'error' : 'pending',
       key: doc.id,
@@ -287,13 +288,13 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       previewer.request({ key: doc.id, path: doc, robot, plannerId, quality });
     }, [previewer, doc, robot, plannerId, quality]);
 
-    const current = snapshot.path === doc && snapshot.value
+    const current = snapshot.path === doc && snapshot.value && snapshot.value.planner === plannerId
       ? { path: doc, value: snapshot.value }
-      : fallback.path === doc && fallback.value
+      : fallback.path === doc && fallback.value && fallback.value.planner === plannerId
         ? { path: doc, value: fallback.value }
         : null;
-    if (current) lastValid.current = current;
-    const displayed = current || lastValid.current;
+    if (current) lastValid.current = { ...current, plannerId };
+    const displayed = current || (lastValid.current && lastValid.current.plannerId === plannerId ? lastValid.current : null);
     return {
       value: displayed && displayed.value,
       path: displayed && displayed.path,

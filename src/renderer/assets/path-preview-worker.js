@@ -1,6 +1,13 @@
 import { PM } from "../lib/pathMath";
+import { deriveOptimizedPreview } from "./optimized-preview";
 
-export function processPathPreviewJob(job, derive = PM.derivePath) {
+function derivePathPreview(path, robot, perSegment, plannerId) {
+  return plannerId === 'optimizedTrajectory'
+    ? deriveOptimizedPreview(path, robot, perSegment)
+    : PM.derivePath(path, robot, perSegment, 'profiledSpline');
+}
+
+export function processPathPreviewJob(job, derive = derivePathPreview) {
   const startedAt = performance.now();
   try {
     return {

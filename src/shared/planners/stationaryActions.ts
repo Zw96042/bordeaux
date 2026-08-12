@@ -1,8 +1,8 @@
-import { PM } from "../math/pm";
 import { wrapRadians } from "../math/angles";
 import type { ConstraintRange, PathDoc, PlannerResult, RobotConfig, TrajectorySample } from "../types";
 import { enforceAngularTiming } from "./angularConstraints";
 import { MAX_TRAJECTORY_SAMPLES } from "./limits";
+import { jigglePositions } from "./jiggle";
 import { orderedWaypointSampleIndices } from "./waypointSamples";
 
 const EPSILON = 1e-9;
@@ -186,11 +186,11 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     const turnDuration = rotationDuration(delta, angularLimits);
     const turnTicks = turnDuration > EPSILON ? Math.max(1, Math.ceil(turnDuration / period - EPSILON)) : 0;
     const jiggleSupported = !waypoint.jiggle || robot?.drive !== "tank";
-    const jigglePositions = waypoint.jiggle && jiggleSupported
-      ? PM.jigglePositions(waypoint, targetHeading, waypoint.jiggle)
+    const positions = waypoint.jiggle && jiggleSupported
+      ? jigglePositions(waypoint, targetHeading, waypoint.jiggle)
       : null;
     const linearLimits = activeLinearLimits(path, arrival.f, waypointIndex, result.totalDistanceM);
-    const jiggleDuration = waypoint.jiggle && jigglePositions
+    const jiggleDuration = waypoint.jiggle && positions
       ? feasibleJiggleStrokeDuration(
           waypoint.jiggle.strokeTimeS,
           waypoint.jiggle.distanceM,
@@ -198,7 +198,7 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
           Math.max(robot?.maxSpeed ?? linearLimits.velocity, EPSILON),
         )
       : 0;
-    const jiggleTicks = waypoint.jiggle && jigglePositions
+    const jiggleTicks = waypoint.jiggle && positions
       ? Math.max(1, Math.ceil(jiggleDuration / period - EPSILON))
       : 0;
     const waitTicks = Math.max(0, Math.ceil(Math.max(0, waypoint.wait ?? 0) / period - EPSILON));
@@ -229,7 +229,7 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     const jiggle = waypoint.jiggle;
     const jiggleHeading = turn ? targetHeading : arrival.headingRad;
     const jiggleSupported = !jiggle || robot?.drive !== "tank";
-    const jigglePositions = jiggle && jiggleSupported ? PM.jigglePositions(waypoint, jiggleHeading, jiggle) : null;
+    const positions = jiggle && jiggleSupported ? jigglePositions(waypoint, jiggleHeading, jiggle) : null;
     if (jiggle && !jiggleSupported) {
       diagnostics.push({
         severity: "error",
@@ -237,16 +237,16 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
         message: "Arbitrary-direction jiggle requires a swerve drivetrain",
       });
     }
-    if (jiggle && jiggleSupported && !jigglePositions) {
+    if (jiggle && jiggleSupported && !positions) {
       diagnostics.push({
         severity: "error",
         path: `paths.${path.name}.waypoints[${waypointIndex}].jiggle`,
         message: "Jiggle directions must be unique and every stroke must stay on the field",
       });
     }
-    const jiggleTicks = jiggle && jigglePositions ? ticks.jiggle : 0;
+    const jiggleTicks = jiggle && positions ? ticks.jiggle : 0;
     const jiggleStrokeDuration = jiggleTicks * period;
-    const jiggleDuration = jiggle && jigglePositions ? jiggleStrokeDuration * jiggle.strokes : 0;
+    const jiggleDuration = jiggle && positions ? jiggleStrokeDuration * jiggle.strokes : 0;
     const waitTicks = ticks.wait;
     const waitDuration = waitTicks * period;
     const duration = turnDuration + jiggleDuration + waitDuration;
@@ -287,7 +287,7 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     }
     const waitHeading = turn ? targetHeading : arrival.headingRad;
     const jiggleSamples: TrajectorySample[] = [];
-    if (jiggle && jigglePositions) {
+    if (jiggle && positions) {
       for (let stroke = 0; stroke < jiggle.strokes; stroke += 1) {
         const angle = jiggleHeading + (jiggle.startDeg + jiggle.stepDeg * stroke) * DEG;
         for (let tick = 1; tick <= jiggleTicks; tick += 1) {

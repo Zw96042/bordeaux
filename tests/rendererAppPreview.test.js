@@ -7,6 +7,21 @@ import { PM } from "../src/renderer/lib/pathMath";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
 
 describe("renderer app path preview lifecycle", () => {
+  it("waits for the worker instead of rendering a profiled fallback for optimized mode", () => {
+    const project = createDemoProject();
+    project.plannerId = "optimizedTrajectory";
+    const derivePath = vi.spyOn(PM, "derivePath");
+
+    try {
+      const html = renderToString(React.createElement(App, { initialProject: project }));
+
+      expect(html).toContain("Preparing path preview");
+      expect(derivePath).not.toHaveBeenCalled();
+    } finally {
+      derivePath.mockRestore();
+    }
+  });
+
   it("renders a pending state for an initially heavy path without deriving during render", () => {
     const project = createDemoProject();
     const path = project.paths[0];

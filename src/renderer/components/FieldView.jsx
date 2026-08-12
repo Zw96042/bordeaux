@@ -912,7 +912,9 @@ import { UI } from "./ui";
 
     // ---------- ROBOT (dynamic) ----------
     const robotEl = useMemo(() => {
-      const pose = pts.length > 1 ? PM.poseAtTime(playTime, pts, derived.prof, derived.anchors, derived.mode, derived.rev)
+      const playback = derived.playback;
+      const posePoints = playback ? playback.pts : pts;
+      const pose = posePoints.length > 1 ? PM.poseAtTime(playTime, posePoints, playback ? playback.prof : derived.prof, playback ? playback.anchors : derived.anchors, derived.mode, playback ? playback.rev : derived.rev)
         : (doc.waypoints[0] ? { x: doc.waypoints[0].x, y: doc.waypoints[0].y, heading: ((doc.waypoints[0].theta || 0) + (derived.rev ? 180 : 0)) * Math.PI / 180, speed: 0 } : null);
       if (!pose) return null;
       const c = W2P(pose);
