@@ -14,6 +14,16 @@ Factories must be public methods on public provider types and return `edu.wpi.fi
 
 Call `BordeauxBindings.generated(provider1, provider2, ...)` to construct the generated registry. Provider order does not matter. This fixed bootstrap avoids importing a class emitted during the processor's final aggregation round, while the generated class still owns direct typed calls and compiled catalog identity.
 
+If a test or custom integration builds `BordeauxCommandRegistry` by hand, use the four-argument `register` overload and repeat the factory's argument reads in a side-effect-free validator:
+
+```java
+.register("score", Set.of("count"),
+    args -> args.requireLong("count", "1", "5"),
+    args -> score(args.requireLong("count", "1", "5")))
+```
+
+Event and routine runners call the validator during construction so malformed autonomous arguments fail before motion or command creation. The older three-argument overload remains available for direct `registry.create(...)` use, but registries containing those entries are deliberately rejected by the runners because their factories cannot be safely invoked during preflight.
+
 See [`../examples/bordeaux-template-robot`](../examples/bordeaux-template-robot) for a complete GradleRIO project and [`examples`](examples) for integration snippets. The fixed `bordeauxCatalog` task copies the processor resource to `build/bordeaux/catalog-v1.json`, which is the only generated project file the app reads.
 
 ## Catalog identity
