@@ -6,7 +6,7 @@ type RecordValue = Record<string, unknown>;
 const MAX_PROJECT_PATHS = 1_024;
 const MAX_PATH_ITEMS = 4_096;
 const MAX_PROJECT_ROUTINES = 1_024;
-const MAX_ROUTINE_NODES = 100_000;
+const MAX_ROUTINE_NODES = 2_000;
 const MAX_ROUTINE_DEPTH = 64;
 
 function issue(path: string, message: string, severity: "error" | "warning" = "error"): ValidationIssue {
