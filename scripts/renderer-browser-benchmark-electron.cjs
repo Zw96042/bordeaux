@@ -651,9 +651,9 @@ app.whenReady().then(async () => {
     };
     await window.webContents.executeJavaScript(`window.bordeauxAPI.__benchmarkAgentProposal(${JSON.stringify(postCancelProposal)})`);
     await waitFor(
-      () => window.webContents.executeJavaScript("document.querySelector('.agent-proposal-status')?.textContent.startsWith('Preview only') === true"),
-      1000,
-      "a new proposal to remain ready after canceling the drag",
+      () => window.webContents.executeJavaScript("document.querySelector('.agent-proposal-status')?.textContent.startsWith('Preview only') === true && document.querySelector('.agent-proposal button.primary')?.disabled === false"),
+      3000,
+      "the exact post-cancel proposal preview to become ready",
     );
     await window.webContents.executeJavaScript("document.querySelector('.agent-proposal button.primary')?.click()");
     const proposalUsableAfterCancel = Boolean(await waitFor(async () => {
