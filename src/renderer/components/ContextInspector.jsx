@@ -491,7 +491,7 @@ import { UI } from "./ui";
           { v: issues.length ? String(issues.length) : '\u2713', k: issues.length ? 'Issues' : 'Clear', color: issues.length ? (errors ? 'var(--bad)' : 'var(--warn)') : 'var(--good)' },
         ]),
         h('div', { className: 'qrow', style: { marginTop: '10px' } },
-          h('button', { className: 'qbtn', type: 'button', onClick: () => actions.reversePath() }, h(Icon, { name: 'shuffle', size: 14 }), 'Reverse path'),
+          h('button', { className: 'qbtn', type: 'button', disabled: !actions.canReversePath, title: actions.canReversePath ? undefined : 'Waiting for the current path preview', onClick: () => actions.reversePath() }, h(Icon, { name: 'shuffle', size: 14 }), 'Reverse path'),
           h('button', { className: 'qbtn', type: 'button', onClick: () => { actions.select(null, -1); actions.setTool('waypoint'); } }, h(Icon, { name: 'plus', size: 14 }), 'Place waypoint')),
 
         h('div', { className: 'cgroup-h' }, 'Facing'),
