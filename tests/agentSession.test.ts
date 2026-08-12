@@ -5,8 +5,10 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { AgentBridgeClient, AgentBridgeServer } from "../src/electron/agentBridge";
 import { AgentSessionService, runAgentPlanningJobDirect } from "../src/electron/agentSession";
+import type { RepairCandidate } from "../src/shared/agent/types";
 import { createDemoProject } from "../src/shared/project/defaults";
 import type { JavaCommandCatalog, JavaCommandDescriptor } from "../src/shared/types";
+import { validateProject } from "../src/shared/validation";
 
 function snapshot(revision = 0) {
   const project = createDemoProject();
@@ -928,6 +930,40 @@ describe("agent session and private bridge", () => {
     } finally {
       rename.mockRestore();
       clients.forEach((client) => client.destroy());
+      await server.stop();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("streams a schema-sized repair resource across bounded bridge frames", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-agent-large-test-"));
+    const service = new AgentSessionService(() => {}, () => null);
+    const project = createDemoProject();
+    const authoredPath = structuredClone(project.paths[0]);
+    authoredPath.id = "path_large";
+    authoredPath.name = "Large";
+    authoredPath.waypoints = Array.from({ length: 4_096 }, () => structuredClone(authoredPath.waypoints[0]));
+    project.paths = [authoredPath];
+    project.editor = { ...project.editor, activePathId: authoredPath.id };
+    expect(validateProject(project).ok).toBe(true);
+    const analysis = {
+      pathId: authoredPath.id, pathName: authoredPath.name, authoredPath, planner: "profiledSpline" as const,
+      totalTimeS: null, totalDistanceM: null, sampleCount: 0, samplesTruncated: false,
+      rawSamples: [], extrema: [], findings: [], plannerDiagnostics: [],
+    };
+    const resource: RepairCandidate = {
+      id: "repair_large", label: "Large repair", path: authoredPath, targetFindingIds: [],
+      before: analysis, after: analysis, changedFields: [], valid: true,
+    };
+    expect(Buffer.byteLength(JSON.stringify(resource))).toBeGreaterThan(1024 * 1024);
+    vi.spyOn(service, "request").mockResolvedValue(resource);
+    const server = new AgentBridgeServer(directory, service);
+    try {
+      await server.start();
+      const result: any = await new AgentBridgeClient(directory).request({ method: "inspect_session" });
+      expect(result.path.waypoints).toHaveLength(4_096);
+      expect(result.before.authoredPath.waypoints).toHaveLength(4_096);
+    } finally {
       await server.stop();
       await fs.rm(directory, { recursive: true, force: true });
     }

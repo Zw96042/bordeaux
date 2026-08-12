@@ -6,6 +6,8 @@ import path from "node:path";
 import type { AgentRequest, AgentSessionService } from "./agentSession";
 
 const MAX_MESSAGE_BYTES = 1024 * 1024;
+const MAX_CHUNKED_MESSAGE_BYTES = 256 * 1024 * 1024;
+const CHUNK_BYTES = 512 * 1024;
 const REQUEST_TIMEOUT_MS = 30_000;
 let bridgeLifecycle: Promise<void> = Promise.resolve();
 
@@ -25,6 +27,10 @@ interface BridgeEnvelope {
   request: AgentRequest;
 }
 
+interface BridgeChunk {
+  bordeauxBridgeChunk: { index: number; count: number; data: string };
+}
+
 function descriptorPath(userData: string): string {
   return path.join(userData, "mcp", "runtime-v1.json");
 }
@@ -41,43 +47,84 @@ async function removeOwnedDescriptor(userData: string, owner: AgentRuntimeDescri
   await fs.promises.rm(target, { force: true });
 }
 
-function encode(value: unknown): Buffer {
-  const payload = Buffer.from(JSON.stringify(value), "utf8");
+function encodeFrame(payload: Buffer): Buffer {
   if (payload.length > MAX_MESSAGE_BYTES) throw new Error("Agent bridge message exceeds 1 MiB");
   const header = Buffer.alloc(4);
   header.writeUInt32BE(payload.length);
   return Buffer.concat([header, payload]);
 }
 
+async function writeOne(socket: net.Socket, value: unknown): Promise<void> {
+  const payload = Buffer.from(JSON.stringify(value), "utf8");
+  if (payload.length > MAX_CHUNKED_MESSAGE_BYTES) throw new Error("Agent bridge message exceeds 256 MiB");
+  const write = async (frame: Buffer) => {
+    await new Promise<void>((resolve, reject) => {
+      socket.write(frame, (error) => error ? reject(error) : resolve());
+    });
+  };
+  if (payload.length <= MAX_MESSAGE_BYTES) return write(encodeFrame(payload));
+  const count = Math.ceil(payload.length / CHUNK_BYTES);
+  for (let index = 0; index < count; index += 1) {
+    const data = payload.subarray(index * CHUNK_BYTES, Math.min(payload.length, (index + 1) * CHUNK_BYTES)).toString("base64");
+    await write(encodeFrame(Buffer.from(JSON.stringify({ bordeauxBridgeChunk: { index, count, data } } satisfies BridgeChunk), "utf8")));
+  }
+}
+
 function readOne(socket: net.Socket, timeoutMs: number): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    let chunks: Buffer[] = [];
-    let received = 0;
-    let frameSize: number | null = null;
+    let pending: Buffer = Buffer.alloc(0);
+    const messageChunks: Buffer[] = [];
+    let expectedChunk = 0;
+    let expectedCount: number | null = null;
+    let messageBytes = 0;
     const timer = setTimeout(() => finish(new Error("Agent bridge request timed out")), timeoutMs);
     const finish = (error?: Error, value?: unknown) => {
       clearTimeout(timer);
       socket.off("data", onData);
       socket.off("error", onError);
+      socket.off("end", onEnd);
       error ? reject(error) : resolve(value);
     };
     const onError = (error: Error) => finish(error);
+    const onEnd = () => finish(new Error("Agent bridge connection ended before a complete message"));
     const onData = (chunk: Buffer) => {
-      chunks.push(chunk);
-      received += chunk.length;
-      if (frameSize === null && received >= 4) {
-        const header = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, received);
-        frameSize = header.readUInt32BE(0);
+      pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
+      while (pending.length >= 4) {
+        const frameSize = pending.readUInt32BE(0);
         if (frameSize < 2 || frameSize > MAX_MESSAGE_BYTES) return finish(new Error("Agent bridge frame size is invalid"));
-        if (chunks.length > 1) chunks = [header];
+        if (pending.length < frameSize + 4) return;
+        const frame = pending.subarray(4, frameSize + 4);
+        pending = pending.subarray(frameSize + 4);
+        let value: unknown;
+        try { value = JSON.parse(frame.toString("utf8")); }
+        catch { return finish(new Error("Agent bridge returned invalid JSON")); }
+        const chunkValue = (value as Partial<BridgeChunk> | null)?.bordeauxBridgeChunk;
+        if (!chunkValue) {
+          if (expectedCount !== null) return finish(new Error("Agent bridge chunk stream is incomplete"));
+          return finish(undefined, value);
+        }
+        if (!Number.isSafeInteger(chunkValue.index) || !Number.isSafeInteger(chunkValue.count)
+          || chunkValue.index !== expectedChunk || chunkValue.count < 2
+          || chunkValue.count > Math.ceil(MAX_CHUNKED_MESSAGE_BYTES / CHUNK_BYTES)
+          || (expectedCount !== null && chunkValue.count !== expectedCount) || typeof chunkValue.data !== "string") {
+          return finish(new Error("Agent bridge chunk stream is invalid"));
+        }
+        const decoded = Buffer.from(chunkValue.data, "base64");
+        if (decoded.length === 0 || decoded.toString("base64") !== chunkValue.data) return finish(new Error("Agent bridge chunk data is invalid"));
+        expectedCount = chunkValue.count;
+        expectedChunk += 1;
+        messageBytes += decoded.length;
+        if (messageBytes > MAX_CHUNKED_MESSAGE_BYTES) return finish(new Error("Agent bridge message exceeds 256 MiB"));
+        messageChunks.push(decoded);
+        if (expectedChunk === expectedCount) {
+          try { return finish(undefined, JSON.parse(Buffer.concat(messageChunks, messageBytes).toString("utf8"))); }
+          catch { return finish(new Error("Agent bridge returned invalid chunked JSON")); }
+        }
       }
-      if (frameSize === null || received < frameSize + 4) return;
-      const buffer = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, received);
-      try { finish(undefined, JSON.parse(buffer.subarray(4, frameSize + 4).toString("utf8"))); }
-      catch { finish(new Error("Agent bridge returned invalid JSON")); }
     };
     socket.on("data", onData);
     socket.on("error", onError);
+    socket.on("end", onEnd);
   });
 }
 
@@ -129,10 +176,11 @@ export class AgentBridgeServer {
         const controller = new AbortController();
         socket.once("close", () => controller.abort());
         const result = await this.sessions.request(envelope.request, controller.signal);
-        socket.end(encode({ id: envelope.id, result }));
+        await writeOne(socket, { id: envelope.id, result });
+        socket.end();
       }).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
-        if (!socket.destroyed) socket.end(encode({ error: message }));
+        if (!socket.destroyed) void writeOne(socket, { error: message }).then(() => socket.end(), () => socket.destroy());
       });
     });
     const target = descriptorPath(this.userData);
@@ -215,11 +263,12 @@ export class AgentBridgeClient {
         socket.once("error", (error) => { clearTimeout(timer); reject(error); });
       });
       const id = randomUUID();
-      socket.write(encode({ id, token: descriptor.token, request } satisfies BridgeEnvelope));
-      const response = await readOne(socket, REQUEST_TIMEOUT_MS) as { id?: string; result?: unknown; error?: string };
-      if (response.error) throw new Error(response.error);
-      if (response.id !== id) throw new Error("The Bordeaux MCP response did not match its request.");
-      return response.result;
+      const response = readOne(socket, REQUEST_TIMEOUT_MS) as Promise<{ id?: string; result?: unknown; error?: string }>;
+      await writeOne(socket, { id, token: descriptor.token, request } satisfies BridgeEnvelope);
+      const value = await response;
+      if (value.error) throw new Error(value.error);
+      if (value.id !== id) throw new Error("The Bordeaux MCP response did not match its request.");
+      return value.result;
     } finally {
       signal?.removeEventListener("abort", onAbort);
       socket.destroy();
