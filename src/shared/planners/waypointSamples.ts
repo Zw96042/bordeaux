@@ -42,17 +42,17 @@ export function orderedWaypointSampleIndices(
   let cursor = 0;
   return waypoints.map((waypoint, waypointIndex) => {
     if (options.finalWaypointAtEnd && waypointIndex === waypoints.length - 1) return samples.length - 1;
+    const finalSearchIndex = options.fallback === "full"
+      || options.fallback === "stationary"
+      || waypointIndex === waypoints.length - 1
+      ? samples.length - 1
+      : Math.max(cursor, samples.length - (waypoints.length - waypointIndex));
     const indices = samplesByCoordinate.get(coordinateKey(waypoint));
     const position = indices ? firstAtOrAfter(indices, cursor) : 0;
     const index = indices?.[position];
-    if (index === undefined) {
+    if (index === undefined || index > finalSearchIndex) {
       let nearest = cursor;
       let distance = Infinity;
-      const finalSearchIndex = options.fallback === "full"
-        || options.fallback === "stationary"
-        || waypointIndex === waypoints.length - 1
-        ? samples.length - 1
-        : Math.max(cursor, samples.length - (waypoints.length - waypointIndex));
       for (let candidate = cursor; candidate <= finalSearchIndex; candidate += 1) {
         const candidateDistance = Math.hypot(samples[candidate].x - waypoint.x, samples[candidate].y - waypoint.y);
         if (candidateDistance < distance) { nearest = candidate; distance = candidateDistance; }

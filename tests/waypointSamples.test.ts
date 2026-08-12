@@ -52,6 +52,27 @@ describe("shared path indices", () => {
       .toEqual(legacyArrivalIndices(path, samples));
   });
 
+  it("does not skip an approximate boundary for a later duplicate coordinate", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, segType: "clothoid" },
+      { x: 5, y: 5, segType: "clothoid" },
+      { x: 10, y: 2, segType: "clothoid" },
+      { x: 12, y: 6, segType: "bezier" },
+      { x: 12, y: 6, segType: "line" },
+    ]);
+    const samples = getPlanner("profiledSpline").generate({
+      path,
+      robot: project.robot,
+      samplesPerSegment: 9,
+    }).samples;
+
+    expect(orderedWaypointSampleIndices(path.waypoints, samples)).toEqual([0, 9, 18, 27, 36]);
+    expect(orderedWaypointSampleIndices(path.waypoints, samples))
+      .toEqual(legacyArrivalIndices(path, samples));
+  });
+
   it("preserves heading interpolation at anchors, duplicates, and between anchors", () => {
     const anchors = [
       { f: 0, rad: -1 },

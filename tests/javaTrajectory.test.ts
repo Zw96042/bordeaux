@@ -91,6 +91,23 @@ describe("Java trajectory export", () => {
     expect(sections[1].endSample).toBeGreaterThan(sections[1].startSample);
   });
 
+  it("keeps a follow section for an approximate boundary before a duplicate endpoint", () => {
+    const project = createDemoProject();
+    project.paths[0].waypoints = buildWaypoints([
+      { x: 1, y: 1, segType: "clothoid" },
+      { x: 5, y: 5, segType: "clothoid" },
+      { x: 10, y: 2, segType: "clothoid" },
+      { x: 12, y: 6, segType: "bezier" },
+      { x: 12, y: 6, segType: "line" },
+    ]);
+
+    const sections = buildJavaTrajectory(project, generatedCatalog()).document.paths[0].followSections;
+
+    expect(sections).toHaveLength(4);
+    expect(sections[3].startSample).toBe(sections[2].endSample);
+    expect(sections[3].endSample).toBeGreaterThan(sections[3].startSample);
+  });
+
   it("exports decisions and bound commands between paths", () => {
     const project = createDemoProject();
     const pathId = project.paths[0].id;
