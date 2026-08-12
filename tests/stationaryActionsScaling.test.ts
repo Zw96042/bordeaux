@@ -88,23 +88,51 @@ it("preserves the complete mixed stationary-action timeline", () => {
   expect(canonicalDigest).toBe("1c62fcd83e002cd0f883926819ec591d9393f7d697c693eea944dc92a0def77e");
 });
 
-it("does not shift a finish marker for a coincident nonterminal action", () => {
-  const project = createDemoProject();
-  const path = project.paths[0];
-  path.headingMode = "manual";
-  path.waypoints = buildWaypoints([
-    { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
-    { x: 4, y: 2, theta: 0, thetaOn: true, segType: "line", stop: true, wait: 0.2 },
-    { x: 4, y: 2, theta: 0, thetaOn: true, segType: "line" },
-  ]);
-  path.markers = [{ id: "finish", f: 1, name: "Finish" }];
+it.each(["profiledSpline", "optimizedTrajectory"] as const)(
+  "shifts a finish marker through coincident terminal-time actions in %s",
+  (plannerId) => {
+    for (const terminalWait of [0, 0.3]) {
+      const project = createDemoProject();
+      const path = project.paths[0];
+      path.headingMode = "manual";
+      path.waypoints = buildWaypoints([
+        { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
+        { x: 4, y: 2, theta: 0, thetaOn: true, segType: "line", stop: true, wait: 0.2 },
+        { x: 4, y: 2, theta: 0, thetaOn: true, segType: "line", stop: terminalWait > 0, wait: terminalWait },
+      ]);
+      path.markers = [{ id: "finish", f: 1, name: "Finish" }];
 
-  const result = getPlanner("profiledSpline").generate({ path, robot: project.robot });
+      const result = getPlanner(plannerId).generate({ path, robot: project.robot });
 
-  expect(result.waypointSampleIndices).toEqual([0, 56, 128]);
-  expect(result.markers[0].timeS).toBe(1.3605);
-  expect(result.totalTimeS).toBe(1.5637000000000008);
-});
+      expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+      expect(result.markers[0].timeS).toBe(result.totalTimeS);
+    }
+  },
+);
+
+it.each(["profiledSpline", "optimizedTrajectory"] as const)(
+  "keeps a coincident interior marker before its action in %s",
+  (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 4, y: 2, theta: 0, thetaOn: true, segType: "line", stop: true, wait: 0.2 },
+      { x: 4, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 7, y: 2, theta: 0, thetaOn: true, segType: "line" },
+    ]);
+    path.markers = [{ id: "middle", f: 0.5, name: "Middle" }];
+    const baselinePath = structuredClone(path);
+    baselinePath.waypoints[1].wait = 0;
+
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+    const baseline = getPlanner(plannerId).generate({ path: baselinePath, robot: project.robot });
+
+    expect(result.markers[0].timeS).toBe(baseline.markers[0].timeS);
+    expect(result.totalTimeS).toBeGreaterThan(baseline.totalTimeS);
+  },
+);
 
 const benchmark = process.env.BENCHMARK_STATIONARY_ACTIONS === "1" ? it : it.skip;
 
