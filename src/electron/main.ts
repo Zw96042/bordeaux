@@ -31,6 +31,7 @@ import { AgentBridgeClient, AgentBridgeServer } from "./agentBridge";
 import { appUpdateChannel, AppUpdateController, usesGitHubAppUpdates } from "./appUpdates";
 import { AgentSessionService } from "./agentSession";
 import { runAgentPlanningInWorker } from "./agentPlanningWorkerClient";
+import { quitAfterMcpInputEnds } from "./mcpStdioLifecycle";
 import { serveBordeauxMcp } from "../mcp/server";
 
 function ignoreClosedStandardStream(error: NodeJS.ErrnoException): void {
@@ -1078,7 +1079,10 @@ ipcMain.on("agent:proposalReceipt", (event, rawId, rawSessionId, rawRevision, ra
 app.whenReady().then(async () => {
   if (mcpStdioMode) {
     app.dock?.hide();
-    serveBordeauxMcp(new AgentBridgeClient(app.getPath("userData")));
+    const server = serveBordeauxMcp(new AgentBridgeClient(app.getPath("userData")));
+    quitAfterMcpInputEnds(process.stdin, () => server.close(), () => app.quit(), (error) => {
+      console.warn("Could not close the Bordeaux MCP stdio server cleanly:", error);
+    });
     return;
   }
   try {
