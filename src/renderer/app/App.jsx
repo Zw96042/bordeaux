@@ -135,6 +135,13 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     return { ...request, derived: value || null, error: failed ? snapshot.error : null, pending: !value && !failed };
   }
 
+  function pathPreviewResult(snapshot, request) {
+    const value = snapshot.status === 'ready' && snapshot.key === request
+      && snapshot.path === request.doc && snapshot.value?.planner === request.plannerId ? snapshot.value : null;
+    const failed = snapshot.status === 'error' && snapshot.errorKey === request && snapshot.errorPath === request.doc;
+    return { value, error: failed ? snapshot.error : null, pending: !value && !failed };
+  }
+
   const ACCENT = '#3f6fd0';
 
   const PENDING_PATH_PREVIEW = {
@@ -305,25 +312,26 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
   /** Keeps the last valid preview visible while new geometry is derived off-thread. */
   function usePathPreview(doc, robot, plannerId, quality) {
     const previewer = useMemo(() => PathPreview.create(), []);
+    const request = useMemo(() => ({ doc, robot, plannerId, quality }), [doc, robot, plannerId, quality]);
     const lastValid = useRef(null);
     const [snapshot, setSnapshot] = useState(() => previewer.getSnapshot());
 
     useEffect(() => previewer.retain(), [previewer]);
     useEffect(() => previewer.subscribe(() => setSnapshot(previewer.getSnapshot())), [previewer]);
     useEffect(() => {
-      previewer.request({ key: doc.id, path: doc, robot, plannerId, quality });
-    }, [previewer, doc, robot, plannerId, quality]);
+      previewer.request({ key: request, path: request.doc, robot: request.robot, plannerId: request.plannerId, quality: request.quality });
+    }, [previewer, request]);
 
-    const current = snapshot.path === doc && snapshot.value && snapshot.value.planner === plannerId
-      ? { path: doc, value: snapshot.value }
-      : null;
-    if (current) lastValid.current = { ...current, plannerId };
-    const displayed = current || (lastValid.current && lastValid.current.plannerId === plannerId ? lastValid.current : null);
+    const result = pathPreviewResult(snapshot, request);
+    const current = result.value ? { path: doc, value: result.value } : null;
+    if (current) lastValid.current = current;
+    const displayed = current || lastValid.current;
     return {
       value: displayed && displayed.value,
       path: displayed && displayed.path,
-      error: snapshot.errorPath === doc ? snapshot.error : null,
-      pending: snapshot.status === 'pending',
+      current: Boolean(current),
+      error: result.error,
+      pending: result.pending,
       durationMs: snapshot.durationMs || 0,
     };
   }
@@ -773,7 +781,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const derivation = usePathPreview(doc, robot, plannerId, 'final');
     const derived = derivation.value || PENDING_PATH_PREVIEW;
     const derivationDoc = derivation.path || doc;
-    const derivationCurrent = Boolean(derivation.value && derivationDoc === doc);
+    const derivationCurrent = derivation.current;
 
     useEffect(() => {
       if (!derivationCurrent) return;
@@ -1843,4 +1851,4 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }
   }
 
-export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, agentProposalPreviewResult, applyBrushDraft, canApplyAgentProposalCandidate, duplicatePathForLibrary, remapBrushSelection, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, syncBrushSelection, waypointPreviewResult };
+export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, agentProposalPreviewResult, applyBrushDraft, canApplyAgentProposalCandidate, duplicatePathForLibrary, pathPreviewResult, remapBrushSelection, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, syncBrushSelection, waypointPreviewResult };

@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { App, agentProposalPreviewResult, canApplyAgentProposalCandidate, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, waypointPreviewResult } from "../src/renderer/app/App";
+import { App, agentProposalPreviewResult, canApplyAgentProposalCandidate, pathPreviewResult, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, waypointPreviewResult } from "../src/renderer/app/App";
 import { PathPreview } from "../src/renderer/assets/path-preview";
 import { PM } from "../src/renderer/lib/pathMath";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
@@ -57,6 +57,37 @@ describe("renderer app path preview lifecycle", () => {
     } finally {
       derivePath.mockRestore();
     }
+  });
+
+  it("requires the exact ready robot-scoped path preview", () => {
+    const doc = { id: "path" };
+    const robot = { id: "updated-robot" };
+    const request = { doc, robot, plannerId: "profiledSpline", quality: "final" };
+    const previousRequest = { ...request, robot: { id: "previous-robot" } };
+    const derived = { planner: request.plannerId, sample: { pts: [] } };
+
+    expect(pathPreviewResult({ status: "ready", key: previousRequest, path: doc, value: derived }, request)).toEqual({
+      value: null,
+      error: null,
+      pending: true,
+    });
+    expect(pathPreviewResult({ status: "pending", key: request, path: doc, value: derived }, request)).toEqual({
+      value: null,
+      error: null,
+      pending: true,
+    });
+
+    const error = { message: "robot collision preview failed" };
+    expect(pathPreviewResult({ status: "error", key: previousRequest, path: doc, value: derived, errorKey: request, errorPath: doc, error }, request)).toEqual({
+      value: null,
+      error,
+      pending: false,
+    });
+    expect(pathPreviewResult({ status: "ready", key: request, path: doc, value: derived }, request)).toEqual({
+      value: derived,
+      error: null,
+      pending: false,
+    });
   });
 
   it("shows only the selected candidate after its exact worker result arrives", () => {
