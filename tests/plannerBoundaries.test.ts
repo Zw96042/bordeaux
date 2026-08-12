@@ -300,6 +300,8 @@ describe("project validation boundaries", () => {
       path: "$.paths[0].constraints.maxAngDecel",
       message: "maxAngDecel must be greater than zero",
     }));
+    expect(() => getPlanner(plannerId).generate({ path: project.paths[0], robot: project.robot }))
+      .toThrow("maxAngDecel must be greater than zero");
     expect(() => buildBdxExport(project)).toThrow("maxAngDecel must be greater than zero");
   });
 

@@ -10,6 +10,13 @@ export function preparePlannerInput(input: PlannerInput): {
   robot: RobotConfig;
   planningInput: PlannerInput;
 } {
+  const maxAngDecel = input.path.constraints.maxAngDecel;
+  if (maxAngDecel !== undefined && !Number.isFinite(maxAngDecel)) {
+    throw new Error("maxAngDecel must be a finite number");
+  }
+  if (maxAngDecel !== undefined && maxAngDecel <= 0) {
+    throw new Error("maxAngDecel must be greater than zero");
+  }
   const hardLimits = robotHardLimits(input.robot);
   const robot = hardLimits ? { ...input.robot, maxSpeed: hardLimits.maxSpeedMps } : input.robot;
   const constraints = effectivePathConstraints(input.path.constraints, robot);
