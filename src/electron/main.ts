@@ -518,6 +518,10 @@ function createWindow() {
         }
         [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === 'Plan')?.click();
         await new Promise((resolve) => setTimeout(resolve, 0));
+        await waitFor(() => {
+          const stage = document.querySelector('.stage-plan');
+          return stage && !stage.hasAttribute('aria-disabled');
+        });
         const numInput = [...document.querySelectorAll('.numrow')].find((row) => row.querySelector('.numlbl')?.textContent === 'Start vel')?.querySelector('.numinput');
         if (numInput) {
           editInput(numInput, '1.25');
@@ -561,6 +565,10 @@ function createWindow() {
         const persistedProject = { ...project, paths: [...project.paths, secondPath], editor: { activePathId: secondPath.id, javaProjectBookmarkId: recentJavaProjects[0].id } };
         [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === 'Plan')?.click();
         await new Promise((resolve) => setTimeout(resolve, 0));
+        await waitFor(() => {
+          const stage = document.querySelector('.stage-plan');
+          return stage && !stage.hasAttribute('aria-disabled');
+        });
         document.querySelector('button[aria-label="Add event marker"]')?.click();
         await new Promise((resolve) => setTimeout(resolve, 0));
         const linkButton = document.querySelector('button[aria-label="Choose Java project"]')
@@ -707,6 +715,10 @@ function createWindow() {
         const multiRoutineUi = routineLibraryOpened && newRoutineSelected && routineDuplicateSelected;
         [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === 'Plan')?.click();
         await new Promise((resolve) => setTimeout(resolve, 0));
+        await waitFor(() => {
+          const stage = document.querySelector('.stage-plan');
+          return stage && !stage.hasAttribute('aria-disabled');
+        });
         const closeBaselineSaved = await runMenuStage('save-close-base');
         await new Promise((resolve) => setTimeout(resolve, 50));
         const closeDraft = document.querySelector('.numinput');
