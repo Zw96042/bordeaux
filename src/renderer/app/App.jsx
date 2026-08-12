@@ -105,8 +105,8 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     return { run: current || EMPTY_ROUTINE_RUN, pending: active && !current && !error, error };
   }
 
-  function selectedAgentProposalPreview(snapshot, candidate, request) {
-    if (!candidate?.path || snapshot.key !== request || snapshot.path !== candidate.path || !snapshot.value) return [];
+  function selectedAgentProposalPreview(snapshot, candidate, request, plannerId) {
+    if (!candidate?.path || snapshot.key !== request || snapshot.path !== candidate.path || snapshot.value?.planner !== plannerId) return [];
     return [{ id: candidate.id, label: candidate.label, selected: true, valid: candidate.valid !== false, derived: snapshot.value }];
   }
 
@@ -1452,7 +1452,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         agentPreviewer.request({ key: agentPreviewRequest, path: agentPreviewRequest.candidate.path, robot, plannerId, quality: 'final' });
       }
     }, [agentPreviewer, agentProposal, agentPreviewRequest, robot, plannerId]);
-    const agentProposalPreviews = selectedAgentProposalPreview(agentPreview, agentCandidate, agentPreviewRequest);
+    const agentProposalPreviews = selectedAgentProposalPreview(agentPreview, agentCandidate, agentPreviewRequest, plannerId);
     const rejectAgentProposal = useCallback(() => {
       if (!agentProposal) return;
       if (window.bordeauxAPI && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(agentProposal.id, 'rejected');
