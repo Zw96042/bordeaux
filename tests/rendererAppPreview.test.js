@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { App, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, waypointPreviewResult } from "../src/renderer/app/App";
+import { App, agentProposalPreviewResult, canApplyAgentProposalCandidate, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, waypointPreviewResult } from "../src/renderer/app/App";
 import { PathPreview } from "../src/renderer/assets/path-preview";
 import { PM } from "../src/renderer/lib/pathMath";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
@@ -66,16 +66,48 @@ describe("renderer app path preview lifecycle", () => {
     const derived = { planner: plannerId, sample: { pts: [{ x: 1, y: 1 }, { x: 2, y: 2 }] } };
     const request = {};
 
-    expect(selectedAgentProposalPreview({ key: request, path: stale.path, value: derived }, selected, request, plannerId)).toEqual([]);
-    expect(selectedAgentProposalPreview({ key: {}, path: selected.path, value: derived }, selected, request, plannerId)).toEqual([]);
-    expect(selectedAgentProposalPreview({ key: request, path: selected.path, value: { ...derived, planner: "optimizedTrajectory" } }, selected, request, plannerId)).toEqual([]);
-    expect(selectedAgentProposalPreview({ key: request, path: selected.path, value: derived }, selected, request, plannerId)).toEqual([{
+    expect(selectedAgentProposalPreview({ status: "ready", key: request, path: stale.path, value: derived }, selected, request, plannerId)).toEqual([]);
+    expect(selectedAgentProposalPreview({ status: "ready", key: {}, path: selected.path, value: derived }, selected, request, plannerId)).toEqual([]);
+    expect(selectedAgentProposalPreview({ status: "ready", key: request, path: selected.path, value: { ...derived, planner: "optimizedTrajectory" } }, selected, request, plannerId)).toEqual([]);
+    expect(selectedAgentProposalPreview({ status: "ready", key: request, path: selected.path, value: derived }, selected, request, plannerId)).toEqual([{
       id: selected.id,
       label: selected.label,
       selected: true,
       valid: true,
       derived,
     }]);
+  });
+
+  it("gates path proposal apply on the exact current worker result", () => {
+    const proposal = { operation: "replace", status: "ready" };
+    const previous = { id: "candidate_a", label: "Candidate A", valid: true, path: { id: "path_a" } };
+    const selected = { id: "candidate_b", label: "Candidate B", valid: true, path: { id: "path_b" } };
+    const previousRequest = {};
+    const request = {};
+    const plannerId = "profiledSpline";
+    const derived = { planner: plannerId, sample: { pts: [] } };
+
+    const switched = agentProposalPreviewResult({ status: "ready", key: previousRequest, path: previous.path, value: derived }, selected, request, plannerId);
+    expect(switched).toMatchObject({ ready: false, pending: true, error: null });
+    expect(canApplyAgentProposalCandidate(proposal, selected, switched)).toBe(false);
+
+    const pending = agentProposalPreviewResult({ status: "pending", key: request, path: selected.path, value: derived }, selected, request, plannerId);
+    expect(pending).toMatchObject({ ready: false, pending: true, error: null });
+    expect(canApplyAgentProposalCandidate(proposal, selected, pending)).toBe(false);
+
+    const oldPlanner = agentProposalPreviewResult({ status: "ready", key: request, path: selected.path, value: { ...derived, planner: "optimizedTrajectory" } }, selected, request, plannerId);
+    expect(oldPlanner).toMatchObject({ ready: false, pending: true, error: null });
+    expect(canApplyAgentProposalCandidate(proposal, selected, oldPlanner)).toBe(false);
+
+    const error = { message: "preview worker failed" };
+    const failed = agentProposalPreviewResult({ status: "error", key: request, path: selected.path, value: derived, errorKey: request, errorPath: selected.path, error }, selected, request, plannerId);
+    expect(failed).toMatchObject({ ready: false, pending: false, error });
+    expect(canApplyAgentProposalCandidate(proposal, selected, failed)).toBe(false);
+
+    const ready = agentProposalPreviewResult({ status: "ready", key: request, path: selected.path, value: derived }, selected, request, plannerId);
+    expect(ready).toMatchObject({ ready: true, pending: false, error: null });
+    expect(canApplyAgentProposalCandidate(proposal, selected, ready)).toBe(true);
+    expect(canApplyAgentProposalCandidate({ operation: "configureRobot", status: "ready" }, null, switched)).toBe(true);
   });
 
   it("does not derive maximum-size proposal candidates during render", () => {
