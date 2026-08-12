@@ -6,6 +6,7 @@ import java.util.Deque;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Supplier;
 /** Resolves sensor decisions and commands only between completed path steps. */
 public final class BordeauxRoutineRunner implements AutoCloseable {
     public enum Status { READY, PATH_ACTIVE, WAITING_FOR_COMMAND, COMPLETE, STOPPED }
@@ -48,31 +49,39 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
         validateNodes(routine.nodes());
         reset();
     }
-    /** Legacy path-only view of {@link #startTransition()}; inspect {@link #status()} when empty. */
+    /** Legacy path-only view of {@link #startTransition()}; empty means the routine completed. */
     public Optional<String> start() {
-        return startTransition().pathId();
+        return legacyPath(() -> startTransition(false));
     }
 
     /** Resolves entry decisions and returns the first path, command wait, or completion transition. */
     public Transition startTransition() {
-        if (status != Status.READY) throw new BordeauxRuntimeException("Routine is not ready; call reset() before start()");
-        return advance();
+        return startTransition(true);
     }
 
-    /** Legacy path-only view of {@link #completePathTransition(String)}; inspect {@link #status()} when empty. */
+    private Transition startTransition(boolean allowCommands) {
+        if (status != Status.READY) throw new BordeauxRuntimeException("Routine is not ready; call reset() before start()");
+        return advance(allowCommands);
+    }
+
+    /** Legacy path-only view of {@link #completePathTransition(String)}; empty means the routine completed. */
     public Optional<String> completePath(String completedPathId) {
-        return completePathTransition(completedPathId).pathId();
+        return legacyPath(() -> completePathTransition(completedPathId, false));
     }
 
     /** Marks the active path complete and returns the next routine transition. */
     public Transition completePathTransition(String completedPathId) {
+        return completePathTransition(completedPathId, true);
+    }
+
+    private Transition completePathTransition(String completedPathId, boolean allowCommands) {
         if (status != Status.PATH_ACTIVE) throw new BordeauxRuntimeException("Routine has no active path to complete");
         if (!currentPathId.equals(completedPathId)) {
             throw new BordeauxRuntimeException("Completed path '" + completedPathId + "' does not match active path '" + currentPathId + "'");
         }
         currentPathId = null;
         status = Status.READY;
-        return advance();
+        return advance(allowCommands);
     }
 
     /** Polls a between-path command once; call once per robot loop while waiting. */
@@ -83,7 +92,7 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
         if (scheduler.isScheduled(activeCommand)) return transition();
         activeCommand = null;
         status = Status.READY;
-        return advance();
+        return advance(true);
     }
 
     public void reset() {
@@ -130,7 +139,7 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
         }
     }
 
-    private Transition advance() {
+    private Transition advance(boolean allowCommands) {
         int evaluated = 0;
         while (!pending.isEmpty()) {
             if (++evaluated > 10_000) throw new BordeauxRuntimeException("Routine transition exceeds 10000 steps");
@@ -143,6 +152,11 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
             if (node instanceof BordeauxRoutineNode.Decision decision) {
                 prepend(conditions.evaluate(decision.conditionId()) ? decision.whenTrue() : decision.whenFalse());
             } else if (node instanceof BordeauxRoutineNode.Command invocation) {
+                if (!allowCommands) {
+                    throw new BordeauxRuntimeException(
+                            "Routine is waiting for a command; migrate to startTransition(), "
+                                    + "completePathTransition(...), and periodic()");
+                }
                 Command command = commands.create(invocation.commandId(), invocation.arguments());
                 scheduler.schedule(command);
                 activeCommand = command;
@@ -157,6 +171,21 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
 
     private Transition transition() {
         return new Transition(status, Optional.ofNullable(currentPathId));
+    }
+
+    private Optional<String> legacyPath(Supplier<Transition> operation) {
+        Deque<BordeauxRoutineNode> savedPending = new ArrayDeque<>(pending);
+        String savedPathId = currentPathId;
+        Status savedStatus = status;
+        try {
+            return operation.get().pathId();
+        } catch (BordeauxRuntimeException exception) {
+            pending.clear();
+            pending.addAll(savedPending);
+            currentPathId = savedPathId;
+            status = savedStatus;
+            throw exception;
+        }
     }
 
     private void cancelActiveCommand() {
