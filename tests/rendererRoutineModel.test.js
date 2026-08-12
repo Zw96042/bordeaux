@@ -1,10 +1,27 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AUTO } from "../src/renderer/lib/routineModel";
+import { PM } from "../src/renderer/lib/pathMath";
 import { createDemoProject } from "../src/shared/project/defaults";
 import { normalizeProject } from "../src/shared/project/normalize";
 import { validateProject } from "../src/shared/validation";
 
 describe("renderer routine model", () => {
+  it("derives each referenced path once per routine run", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    const nodes = Array.from({ length: 20 }, (_, index) => ({ id: `p_${index}`, type: "path", ref: path.id }));
+    const derivePath = vi.spyOn(PM, "derivePath");
+
+    try {
+      const run = AUTO.buildRun({ id: "routine", name: "Repeated path", nodes }, project.paths, project.robot, {}, project.plannerId);
+
+      expect(run.segs).toHaveLength(nodes.length);
+      expect(derivePath).toHaveBeenCalledTimes(1);
+    } finally {
+      derivePath.mockRestore();
+    }
+  });
+
   it("creates collision-safe IDs after loading legacy routine nodes", () => {
     const project = createDemoProject();
     const pathId = project.paths[0].id;
