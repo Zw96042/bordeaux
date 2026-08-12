@@ -105,6 +105,11 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     return { run: current || EMPTY_ROUTINE_RUN, pending: active && !current && !error, error };
   }
 
+  function selectedAgentProposalPreview(snapshot, candidate, request) {
+    if (!candidate?.path || snapshot.key !== request || snapshot.path !== candidate.path || !snapshot.value) return [];
+    return [{ id: candidate.id, label: candidate.label, selected: true, valid: candidate.valid !== false, derived: snapshot.value }];
+  }
+
   const ACCENT = '#3f6fd0';
 
   const PENDING_PATH_PREVIEW = {
@@ -275,22 +280,8 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
   /** Keeps the last valid preview visible while new geometry is derived off-thread. */
   function usePathPreview(doc, robot, plannerId, quality) {
     const previewer = useMemo(() => PathPreview.create(), []);
-    const fallback = useMemo(() => {
-      if (plannerId === 'optimizedTrajectory') return { path: doc, value: null, error: null };
-      if (!PathPreview.directPreviewIsSafe(doc, 14)) return { path: doc, value: null, error: null };
-      try { return { path: doc, value: PM.derivePath(doc, robot, 14, 'profiledSpline'), error: null }; }
-      catch (error) { return { path: doc, value: null, error }; }
-    }, [doc, robot, plannerId]);
-    const lastValid = useRef(fallback.value ? { path: fallback.path, value: fallback.value, plannerId } : null);
-    const [snapshot, setSnapshot] = useState(() => ({
-      status: fallback.value ? 'ready' : fallback.error ? 'error' : 'pending',
-      key: doc.id,
-      path: fallback.path,
-      value: fallback.value,
-      error: fallback.error,
-      errorPath: fallback.error ? fallback.path : null,
-      durationMs: 0,
-    }));
+    const lastValid = useRef(null);
+    const [snapshot, setSnapshot] = useState(() => previewer.getSnapshot());
 
     useEffect(() => previewer.retain(), [previewer]);
     useEffect(() => previewer.subscribe(() => setSnapshot(previewer.getSnapshot())), [previewer]);
@@ -300,15 +291,13 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
 
     const current = snapshot.path === doc && snapshot.value && snapshot.value.planner === plannerId
       ? { path: doc, value: snapshot.value }
-      : fallback.path === doc && fallback.value && fallback.value.planner === plannerId
-        ? { path: doc, value: fallback.value }
-        : null;
+      : null;
     if (current) lastValid.current = { ...current, plannerId };
     const displayed = current || (lastValid.current && lastValid.current.plannerId === plannerId ? lastValid.current : null);
     return {
       value: displayed && displayed.value,
       path: displayed && displayed.path,
-      error: snapshot.errorPath === doc ? snapshot.error : fallback.path === doc ? fallback.error : null,
+      error: snapshot.errorPath === doc ? snapshot.error : null,
       pending: snapshot.status === 'pending',
       durationMs: snapshot.durationMs || 0,
     };
@@ -342,7 +331,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     return routinePreviewResult(snapshot, request, active);
   }
 
-  function App({ initialProject = null } = {}) {
+  function App({ initialProject = null, initialAgentProposal = null } = {}) {
     const [project, setProject] = useState(() => initialProject || freshProject());
     const plannerId = project.plannerId;
     const [activeIdx, setActiveIdx] = useState(0);
@@ -362,7 +351,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const [waypointPreview, setWaypointPreview] = useState(null);
     const [headMenu, setHeadMenu] = useState(null);
     const [dirty, setDirty] = useState(false);
-    const [agentProposal, setAgentProposal] = useState(null);
+    const [agentProposal, setAgentProposal] = useState(initialAgentProposal);
     const [agentCandidateId, setAgentCandidateId] = useState(null);
     const [mcpEnabled, setMcpEnabled] = useState(false);
     const [agentSessionId] = useState(() => 'session_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)));
@@ -384,7 +373,11 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const editStore = useMemo(() => PathEdit.create(), []);
     const playbackStore = useMemo(() => createPlaybackStore(), []);
     const routinePlaybackStore = useMemo(() => createPlaybackStore(), []);
+    const agentPreviewer = useMemo(() => PathPreview.create(), []);
+    const [agentPreview, setAgentPreview] = useState(() => agentPreviewer.getSnapshot());
     useEffect(() => () => { playbackStore.destroy(); routinePlaybackStore.destroy(); }, [playbackStore, routinePlaybackStore]);
+    useEffect(() => agentPreviewer.retain(), [agentPreviewer]);
+    useEffect(() => agentPreviewer.subscribe(() => setAgentPreview(agentPreviewer.getSnapshot())), [agentPreviewer]);
 
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.listRecentJavaProjects !== 'function') return;
@@ -1444,13 +1437,13 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     };
     const agentCandidates = agentProposal && Array.isArray(agentProposal.candidates) ? agentProposal.candidates : [];
     const agentCandidate = agentCandidates.find((candidate) => candidate.id === agentCandidateId) || agentCandidates[0] || null;
-    const agentProposalPreviews = useMemo(() => agentCandidates.flatMap((candidate) => {
-      if (!candidate.path) return [];
-      try {
-        return [{ id: candidate.id, label: candidate.label, selected: candidate.id === (agentCandidate && agentCandidate.id), valid: candidate.valid !== false, derived: PM.derivePath(candidate.path, robot, PERSEG, plannerId) }];
+    const agentPreviewRequest = useMemo(() => agentCandidate?.path ? { candidate: agentCandidate, robot, plannerId } : null, [agentCandidate, robot, plannerId]);
+    useEffect(() => {
+      if (agentProposal?.status === 'ready' && agentPreviewRequest) {
+        agentPreviewer.request({ key: agentPreviewRequest, path: agentPreviewRequest.candidate.path, robot, plannerId, quality: 'final' });
       }
-      catch (_) { return []; }
-    }), [agentProposal, agentCandidateId, robot, plannerId]);
+    }, [agentPreviewer, agentProposal, agentPreviewRequest, robot, plannerId]);
+    const agentProposalPreviews = selectedAgentProposalPreview(agentPreview, agentCandidate, agentPreviewRequest);
     const rejectAgentProposal = useCallback(() => {
       if (!agentProposal) return;
       if (window.bordeauxAPI && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(agentProposal.id, 'rejected');
@@ -1823,4 +1816,4 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }
   }
 
-export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, applyBrushDraft, duplicatePathForLibrary, remapBrushSelection, routinePreviewResult, syncBrushSelection };
+export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, applyBrushDraft, duplicatePathForLibrary, remapBrushSelection, routinePreviewResult, selectedAgentProposalPreview, syncBrushSelection };
