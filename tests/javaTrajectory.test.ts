@@ -224,6 +224,14 @@ describe("Java trajectory export", () => {
     expect(() => buildJavaTrajectory(createDemoProject(), catalog)).toThrow(/Build the annotated/);
   });
 
+  it("rejects a document with no exportable paths before the robot reader does", () => {
+    const project = createDemoProject();
+    project.paths.forEach((path) => { path.exportable = false; });
+
+    expect(() => buildJavaTrajectory(project, generatedCatalog()))
+      .toThrow("Java trajectory export requires at least one exportable path");
+  });
+
   it("rejects oversized event and metadata payloads during preflight", () => {
     const eventProject = createDemoProject();
     eventProject.paths[0].markers = Array.from({ length: 2_001 }, (_, index) => ({
