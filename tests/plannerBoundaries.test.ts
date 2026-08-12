@@ -289,6 +289,20 @@ describe("planner correctness boundaries", () => {
 });
 
 describe("project validation boundaries", () => {
+  it.each(["profiledSpline", "optimizedTrajectory"] as const)("rejects zero angular deceleration before %s planning", (plannerId) => {
+    const project = createDemoProject();
+    project.plannerId = plannerId;
+    project.paths[0].constraints.maxAngDecel = 0;
+    project.paths[0].waypoints.at(-1)!.stop = true;
+    project.paths[0].waypoints.at(-1)!.turnInPlace = { headingDeg: 90, direction: "counterclockwise" };
+
+    expect(validateProject(project).issues).toContainEqual(expect.objectContaining({
+      path: "$.paths[0].constraints.maxAngDecel",
+      message: "maxAngDecel must be greater than zero",
+    }));
+    expect(() => buildBdxExport(project)).toThrow("maxAngDecel must be greater than zero");
+  });
+
   it("requires a stopped waypoint for a positive wait", () => {
     const project = createDemoProject();
     project.paths[0].waypoints = buildWaypoints([
