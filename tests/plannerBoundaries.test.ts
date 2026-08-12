@@ -279,6 +279,7 @@ describe("planner correctness boundaries", () => {
 
   it("rejects oversized stationary timelines before allocating their samples", () => {
     const project = createDemoProject();
+    project.paths[0].waypoints.at(-1)!.stop = true;
     project.paths[0].waypoints.at(-1)!.wait = 20_000;
 
     const base = profiledSplinePlanner.generate({ path: project.paths[0], robot: project.robot });
@@ -288,6 +289,21 @@ describe("planner correctness boundaries", () => {
 });
 
 describe("project validation boundaries", () => {
+  it("requires a stopped waypoint for a positive wait", () => {
+    const project = createDemoProject();
+    project.paths[0].waypoints = buildWaypoints([
+      { x: 1, y: 2, segType: "line" },
+      { x: 5, y: 2, wait: 1, stop: false, segType: "line" },
+      { x: 9, y: 2 },
+    ]);
+
+    expect(validateProject(project).issues).toContainEqual(expect.objectContaining({
+      path: "$.paths[0].waypoints[1].wait",
+      message: expect.stringContaining("stopped waypoint"),
+    }));
+    expect(() => buildBdxExport(project)).toThrow(/stopped waypoint/);
+  });
+
   it("rejects deeply nested routines without overflowing during migration", () => {
     const project = createDemoProject() as unknown as Record<string, any>;
     let nodes: unknown[] = [];

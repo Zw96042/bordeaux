@@ -337,6 +337,9 @@ function validateProjectInner(project: unknown): ValidationResult {
           });
           if (waypoint.corner !== undefined && typeof waypoint.corner !== "boolean") issues.push(issue(`${wpBase}.corner`, "Corner must be true or false"));
           validateOptionalFinite(issues, waypoint.wait, `${wpBase}.wait`, "Waypoint wait", { nonnegative: true });
+          if (finite(waypoint.wait) && waypoint.wait > 0 && waypoint.stop !== true) {
+            issues.push(issue(`${wpBase}.wait`, "Wait requires a stopped waypoint"));
+          }
           validatePoint(issues, waypoint.prevC, `${wpBase}.prevC`, "Previous control handle");
           validatePoint(issues, waypoint.nextC, `${wpBase}.nextC`, "Next control handle");
           if (wi > 0 && wi < waypointCount - 1 && waypoint.stop !== true) {

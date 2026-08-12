@@ -156,7 +156,7 @@ function jigglePhase(progress: number): { position: number; velocity: number; ac
 export function applyStationaryActions(path: PathDoc, result: PlannerResult, robot?: RobotConfig): PlannerResult {
   const actions = path.waypoints
     .map((waypoint, index) => ({ waypoint, index }))
-    .filter(({ waypoint }) => waypoint.turnInPlace || waypoint.jiggle || (waypoint.wait ?? 0) > 0);
+    .filter(({ waypoint }) => waypoint.turnInPlace || waypoint.jiggle || (waypoint.stop && (waypoint.wait ?? 0) > 0));
   if (actions.length === 0 || result.samples.length === 0) return result;
 
   const baseIndices = waypointSampleIndices(path, result.samples);
@@ -330,7 +330,7 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
         i: 0,
         t: arrivalTime + turnDuration + jiggleDuration + tick * period,
         s: arrival.s + addedDistance,
-        f: 1,
+        f: arrival.f,
         headingRad: jiggleSamples.at(-1)?.headingRad ?? waitHeading,
         velocityMps: 0,
         accelerationMps2: 0,

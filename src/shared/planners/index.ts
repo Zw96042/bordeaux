@@ -22,13 +22,13 @@ export function getPlanner(id: TrajectoryPlannerId): TrajectoryPlanner {
       const constraints = effectivePathConstraints(input.path.constraints, robot);
       const path = constraints === input.path.constraints ? input.path : { ...input.path, constraints };
       const physicalInput = path === input.path && robot === input.robot ? input : { ...input, path, robot };
-      const hasStationaryPause = path.waypoints.some((waypoint) => waypoint.turnInPlace || (waypoint.wait ?? 0) > 0);
+      const hasStationaryPause = path.waypoints.some((waypoint) => waypoint.turnInPlace || (waypoint.stop && (waypoint.wait ?? 0) > 0));
       const planningInput = hasStationaryPause
         ? {
             ...physicalInput,
             path: {
               ...path,
-              waypoints: path.waypoints.map((waypoint) => (waypoint.wait ?? 0) > 0 ? { ...waypoint, wait: 0 } : waypoint),
+              waypoints: path.waypoints.map((waypoint) => waypoint.stop && (waypoint.wait ?? 0) > 0 ? { ...waypoint, wait: 0 } : waypoint),
             },
           }
         : physicalInput;
