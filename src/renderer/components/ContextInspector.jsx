@@ -249,8 +249,8 @@ import { UI } from "./ui";
         'aria-invalid': !!error,
         'aria-describedby': error ? id + '-error' : id + '-type',
         onChange: (event) => { setDraft(event.target.value); if (error) validate(event.target.value, false); },
-        onBlur: () => validate(draft, true),
-        onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(draft, true); event.currentTarget.blur(); } },
+        onBlur: (event) => validate(event.currentTarget.value, true),
+        onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(event.currentTarget.value, true); event.currentTarget.blur(); } },
       }),
       h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, javaType)),
       error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
@@ -287,8 +287,8 @@ import { UI } from "./ui";
         'aria-invalid': !!error,
         'aria-describedby': error ? id + '-error' : id + '-type',
         onChange: (event) => { setDraft(event.target.value); if (error) validate(event.target.value, false); },
-        onBlur: () => validate(draft, true),
-        onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(draft, true); event.currentTarget.blur(); } },
+        onBlur: (event) => validate(event.currentTarget.value, true),
+        onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(event.currentTarget.value, true); event.currentTarget.blur(); } },
       }),
       h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, javaType + ' · exact integer')),
       error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
@@ -325,8 +325,8 @@ import { UI } from "./ui";
         'aria-invalid': !!error,
         'aria-describedby': error ? id + '-error' : id + '-type',
         onChange: (event) => { setDraft(event.target.value); if (error) validate(event.target.value, false); },
-        onBlur: () => validate(draft, true),
-        onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(draft, true); event.currentTarget.blur(); } },
+        onBlur: (event) => validate(event.currentTarget.value, true),
+        onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(event.currentTarget.value, true); event.currentTarget.blur(); } },
       }),
       h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, javaType + ' · exact decimal')),
       error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
@@ -369,8 +369,8 @@ import { UI } from "./ui";
         'aria-invalid': !!error,
         'aria-describedby': error ? id + '-error' : id + '-type',
         onChange: (event) => { setDraft(event.target.value); if (error) validate(event.target.value, false); },
-        onBlur: () => validate(draft, true),
-        onKeyDown: (event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); validate(draft, true); } },
+        onBlur: (event) => validate(event.currentTarget.value, true),
+        onKeyDown: (event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); validate(event.currentTarget.value, true); } },
       }),
       h('span', { id: id + '-type', className: 'cmd-param-type' }, javaType + ' · JSON' + (schema && schema.kind === 'opaque' ? ' · opaque custom values remain editable as JSON' : '')),
       error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));

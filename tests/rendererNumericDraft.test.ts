@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadRendererExport } from "./helpers/loadRendererExport";
 import { parseFiniteDraftNumber } from "../src/renderer/lib/numericDraft";
 
@@ -109,6 +109,36 @@ function numInput(projectDraft?: boolean): ElementNode {
   return inputIn(tree)!;
 }
 
+function commandNumberInput(onChange: (value: number) => void): ElementNode {
+  const element = (type: unknown, props: Record<string, unknown>, ...children: unknown[]): ElementNode => ({ type, props: props ?? {}, children });
+  const React = {
+    Fragment: Symbol("Fragment"),
+    createElement: element,
+    useEffect: () => undefined,
+    useState: (initial: unknown) => [initial, () => undefined],
+  };
+  const ContextDraftEditors = loadRendererExport<{ NumberValueEditor: (props: Record<string, unknown>) => ElementNode }>(
+    new URL("../src/renderer/components/ContextInspector.jsx", import.meta.url),
+    "ContextDraftEditors",
+    {
+      context: { React, AUTO: {}, PM: {}, UnitPrefs: {}, UI: {}, FIELD_DIMS: { FIELD_W: 17.548, FIELD_H: 8.052 } },
+      replacements: [[
+        "export { ContextInspector, CommandParameterEditor, commandArguments, parameterValueError, safeControlId };",
+        "window.ContextDraftEditors = { NumberValueEditor };",
+      ]],
+    },
+  );
+  return inputIn(ContextDraftEditors.NumberValueEditor({
+    id: "command-count",
+    label: "Count",
+    value: 2,
+    integer: true,
+    javaType: "int",
+    parameter: { min: 1, max: 9 },
+    onChange,
+  }))!;
+}
+
 describe("renderer numeric drafts", () => {
   it.each(["", "   ", "not-a-number"])("rejects an invalid numeric draft %#", (raw) => {
     expect(parseFiniteDraftNumber(raw)).toBeNull();
@@ -138,5 +168,15 @@ describe("renderer numeric drafts", () => {
 
     expect(input.props["aria-invalid"]).toBe(false);
     expect(input.props.value).toBe("10.00");
+  });
+
+  it("commits the live command value when Save blurs before React rerenders", () => {
+    const onChange = vi.fn();
+    const input = commandNumberInput(onChange);
+
+    (input.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: "7" } });
+    (input.props.onBlur as (event: { currentTarget: { value: string } }) => void)({ currentTarget: { value: "7" } });
+
+    expect(onChange).toHaveBeenLastCalledWith(7);
   });
 });
