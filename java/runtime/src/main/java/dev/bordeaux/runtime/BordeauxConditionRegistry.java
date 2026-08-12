@@ -23,13 +23,22 @@ public final class BordeauxConditionRegistry {
 
     public boolean evaluate(String id) {
         if (id == null || id.isBlank()) return true;
-        BooleanSupplier condition = conditions.get(id);
-        if (condition == null) throw new BordeauxRuntimeException("Unknown Bordeaux condition ID '" + id + "'");
+        BooleanSupplier condition = requireCondition(id);
         try {
             return condition.getAsBoolean();
         } catch (RuntimeException exception) {
             throw new BordeauxRuntimeException("Condition '" + id + "' failed: " + exception.getMessage(), exception);
         }
+    }
+
+    void validateReference(String id) {
+        if (id != null && !id.isBlank()) requireCondition(id);
+    }
+
+    private BooleanSupplier requireCondition(String id) {
+        BooleanSupplier condition = conditions.get(id);
+        if (condition == null) throw new BordeauxRuntimeException("Unknown Bordeaux condition ID '" + id + "'");
+        return condition;
     }
 
     public static final class Builder {

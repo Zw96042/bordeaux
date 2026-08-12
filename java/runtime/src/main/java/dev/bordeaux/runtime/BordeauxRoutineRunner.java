@@ -31,6 +31,7 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
         if (!document.catalogId().equals(commands.catalogId()) || !document.catalogHash().equals(commands.catalogHash())) {
             throw new BordeauxRuntimeException("Routine catalog does not match the robot command registry");
         }
+        validateNodes(routine.nodes());
         reset();
     }
     /** Resolves entry decisions and commands, returning the first path to run. */
@@ -64,6 +65,23 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
 
     public int commandCount() {
         return commandCount;
+    }
+
+    private void validateNodes(List<BordeauxRoutineNode> nodes) {
+        for (BordeauxRoutineNode node : nodes) {
+            try {
+                if (node instanceof BordeauxRoutineNode.Decision decision) {
+                    conditions.validateReference(decision.conditionId());
+                    validateNodes(decision.whenTrue());
+                    validateNodes(decision.whenFalse());
+                } else if (node instanceof BordeauxRoutineNode.Command invocation) {
+                    commands.validateInvocation(invocation.commandId(), invocation.arguments());
+                }
+            } catch (RuntimeException exception) {
+                throw new BordeauxRuntimeException(
+                        "Routine node '" + node.id() + "' is invalid: " + exception.getMessage(), exception);
+            }
+        }
     }
 
     private Optional<String> advance() {

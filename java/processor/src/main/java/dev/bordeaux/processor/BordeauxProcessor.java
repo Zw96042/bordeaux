@@ -617,7 +617,11 @@ public final class BordeauxProcessor extends AbstractProcessor {
                     + ".catalogId(CATALOG_ID).catalogHash(CATALOG_HASH);\n");
             for (CommandMethod method : methods) {
                 String names = method.parameters().stream().map(parameter -> quoteJava(parameter.name())).reduce((a, b) -> a + ", " + b).orElse("");
-                writer.write("    builder.register(" + quoteJava(method.id()) + ", java.util.Set.of(" + names + "), args -> ");
+                writer.write("    builder.register(" + quoteJava(method.id()) + ", java.util.Set.of(" + names + "), args -> {\n");
+                for (Parameter parameter : method.parameters()) {
+                    writer.write("      " + argumentExpression(parameter) + ";\n");
+                }
+                writer.write("    }, args -> ");
                 writer.write(method.isStatic() ? method.owner() : providers.get(method.owner()));
                 writer.write("." + method.member() + "(");
                 writer.write(method.parameters().stream().map(this::argumentExpression).reduce((a, b) -> a + ", " + b).orElse(""));

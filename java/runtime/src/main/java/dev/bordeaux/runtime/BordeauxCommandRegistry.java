@@ -14,7 +14,12 @@ public final class BordeauxCommandRegistry {
         Command create(BordeauxArguments arguments);
     }
 
-    private record Entry(Set<String> parameterNames, Factory factory) {}
+    @FunctionalInterface
+    public interface ArgumentValidator {
+        void validate(BordeauxArguments arguments);
+    }
+
+    private record Entry(Set<String> parameterNames, ArgumentValidator validator, Factory factory) {}
 
     private final Map<String, Entry> entries;
     private final String catalogId;
@@ -31,10 +36,7 @@ public final class BordeauxCommandRegistry {
     }
 
     public Command create(String id, ObjectNode values) {
-        Entry entry = entries.get(id);
-        if (entry == null) {
-            throw new BordeauxRuntimeException("Trajectory references unknown Bordeaux command ID '" + id + "'");
-        }
+        Entry entry = requireEntry(id);
         BordeauxArguments arguments = new BordeauxArguments(id, values);
         arguments.assertOnly(entry.parameterNames());
         try {
@@ -46,6 +48,32 @@ public final class BordeauxCommandRegistry {
         } catch (RuntimeException exception) {
             throw new BordeauxRuntimeException("Command factory '" + id + "' failed: " + exception.getMessage(), exception);
         }
+    }
+
+    void validateInvocation(String id, ObjectNode values) {
+        Entry entry = requireEntry(id);
+        BordeauxArguments arguments = new BordeauxArguments(id, values);
+        arguments.assertOnly(entry.parameterNames());
+        if (entry.validator() == null) {
+            throw new BordeauxRuntimeException("Command '" + id
+                    + "' has no side-effect-free argument validator; rebuild the generated Bordeaux bindings");
+        }
+        try {
+            entry.validator().validate(arguments);
+        } catch (BordeauxRuntimeException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw new BordeauxRuntimeException(
+                    "Command argument validator '" + id + "' failed: " + exception.getMessage(), exception);
+        }
+    }
+
+    private Entry requireEntry(String id) {
+        Entry entry = entries.get(id);
+        if (entry == null) {
+            throw new BordeauxRuntimeException("Trajectory references unknown Bordeaux command ID '" + id + "'");
+        }
+        return entry;
     }
 
     public String catalogHash() {
@@ -77,11 +105,23 @@ public final class BordeauxCommandRegistry {
             return this;
         }
 
+        /** Direct creation remains supported, but event and routine runners require the validating overload. */
         public Builder register(String id, Set<String> parameterNames, Factory factory) {
+            return registerEntry(id, parameterNames, null, factory);
+        }
+
+        public Builder register(String id, Set<String> parameterNames,
+                ArgumentValidator validator, Factory factory) {
+            Objects.requireNonNull(validator, "validator");
+            return registerEntry(id, parameterNames, validator, factory);
+        }
+
+        private Builder registerEntry(String id, Set<String> parameterNames,
+                ArgumentValidator validator, Factory factory) {
             if (id == null || id.isBlank()) throw new IllegalArgumentException("Command ID is required");
             Objects.requireNonNull(parameterNames, "parameterNames");
             Objects.requireNonNull(factory, "factory");
-            Entry previous = entries.putIfAbsent(id, new Entry(Set.copyOf(parameterNames), factory));
+            Entry previous = entries.putIfAbsent(id, new Entry(Set.copyOf(parameterNames), validator, factory));
             if (previous != null) throw new IllegalArgumentException("Duplicate Bordeaux command ID '" + id + "'");
             return this;
         }

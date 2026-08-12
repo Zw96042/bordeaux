@@ -61,6 +61,7 @@ public final class BordeauxEventRunner implements AutoCloseable {
             throw new BordeauxRuntimeException("Trajectory catalog hash " + path.catalogHash()
                     + " does not match robot registry " + registry.catalogHash());
         }
+        validatePath();
         reset();
     }
 
@@ -134,6 +135,18 @@ public final class BordeauxEventRunner implements AutoCloseable {
 
     public int firedCount() {
         return firedCount;
+    }
+
+    private void validatePath() {
+        for (BordeauxEvent event : path.events()) {
+            try {
+                registry.validateInvocation(event.commandId(), event.arguments());
+                conditions.validateReference(event.conditionId());
+            } catch (RuntimeException exception) {
+                throw new BordeauxRuntimeException(
+                        "Event '" + event.eventId() + "' is invalid: " + exception.getMessage(), exception);
+            }
+        }
     }
 
     private void schedule(BordeauxEvent event) {

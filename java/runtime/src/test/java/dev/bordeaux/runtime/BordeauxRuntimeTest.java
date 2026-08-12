@@ -609,6 +609,104 @@ class BordeauxRuntimeTest {
         assertTrue(scheduler.scheduled.isEmpty());
     }
 
+    @Test
+    void preflightsEveryEventBeforeAnyCommandFactoryRuns() throws Exception {
+        int[] factoryCalls = {0};
+        BordeauxCommandRegistry registry = BordeauxCommandRegistry.builder()
+                .catalogId(CATALOG_ID)
+                .catalogHash(HASH)
+                .register("exact", Set.of("sequence"),
+                        args -> args.requireLong("sequence"), args -> {
+                    factoryCalls[0]++;
+                    return new TestCommand("exact-" + args.requireLong("sequence"));
+                })
+                .build();
+        ObjectNode valid = (ObjectNode) MAPPER.readTree("{\"sequence\":\"1\"}");
+        ObjectNode invalid = (ObjectNode) MAPPER.readTree("{\"sequence\":2}");
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "p", "P", 2, CATALOG_ID, HASH, List.of(
+                        new BordeauxEvent("early", "Early", 0.1, 0.1, "exact", valid, false),
+                        new BordeauxEvent("late", "Late", 1.0, 0.5, "exact", invalid, false)));
+        RecordingScheduler scheduler = new RecordingScheduler();
+
+        BordeauxRuntimeException failure = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxEventRunner(path, registry, scheduler));
+
+        assertTrue(failure.getMessage().contains("late"));
+        assertEquals(0, factoryCalls[0]);
+        assertTrue(scheduler.scheduled.isEmpty());
+
+        BordeauxEvent unknownCommand = new BordeauxEvent(
+                "unknown", "Unknown", 0.1, 0.1, "missing", valid, false);
+        BordeauxRuntimeException missingCommand = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxEventRunner(
+                        new BordeauxPathEvents("p", "P", 1, CATALOG_ID, HASH, List.of(unknownCommand)),
+                        registry, scheduler));
+        assertTrue(missingCommand.getMessage().contains("unknown Bordeaux command ID"));
+
+        BordeauxEvent conditional = new BordeauxEvent(
+                "conditional", "Conditional", 0.1, 0.1, "exact", valid, false,
+                BordeauxEvent.Trigger.TIME, null, null, "robot.ready");
+        BordeauxRuntimeException missingCondition = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxEventRunner(
+                        new BordeauxPathEvents("p", "P", 1, CATALOG_ID, HASH, List.of(conditional)),
+                        registry, scheduler));
+        assertTrue(missingCondition.getMessage().contains("Unknown Bordeaux condition ID"));
+
+        int[] conditionChecks = {0};
+        BordeauxEventRunner validRunner = new BordeauxEventRunner(
+                new BordeauxPathEvents("p", "P", 1, CATALOG_ID, HASH, List.of(conditional)),
+                registry, BordeauxConditionRegistry.builder().register("robot.ready", () -> {
+                    conditionChecks[0]++;
+                    return true;
+                }).build(), scheduler);
+        assertEquals(0, factoryCalls[0]);
+        assertEquals(0, conditionChecks[0]);
+        validRunner.periodic(0.1);
+        assertEquals(1, factoryCalls[0]);
+        assertEquals(1, conditionChecks[0]);
+
+        BordeauxCommandRegistry legacyRegistry = BordeauxCommandRegistry.builder()
+                .catalogId(CATALOG_ID).catalogHash(HASH)
+                .register("exact", Set.of("sequence"), args -> new TestCommand("legacy"))
+                .build();
+        BordeauxRuntimeException missingValidator = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxEventRunner(
+                        new BordeauxPathEvents("p", "P", 1, CATALOG_ID, HASH, List.of(conditional)),
+                        legacyRegistry,
+                        BordeauxConditionRegistry.builder().register("robot.ready", () -> true).build(), scheduler));
+        assertTrue(missingValidator.getMessage().contains("no side-effect-free argument validator"));
+    }
+
+    @Test
+    void preflightsCommandsInEveryRoutineBranch() throws Exception {
+        int[] factoryCalls = {0};
+        BordeauxCommandRegistry registry = BordeauxCommandRegistry.builder()
+                .catalogId(CATALOG_ID)
+                .catalogHash(HASH)
+                .register("exact", Set.of("sequence"),
+                        args -> args.requireLong("sequence"), args -> {
+                    factoryCalls[0]++;
+                    return new TestCommand("exact");
+                })
+                .build();
+        BordeauxRoutine routine = new BordeauxRoutine("Routine", List.of(
+                new BordeauxRoutineNode.Path("first", "path-a"),
+                new BordeauxRoutineNode.Decision("choose", "robot.ready", List.of(), List.of(
+                        new BordeauxRoutineNode.Command("late", "exact",
+                                (ObjectNode) MAPPER.readTree("{\"sequence\":2}"))))));
+        BordeauxPathEvents document = new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), routine);
+
+        BordeauxRuntimeException failure = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxRoutineRunner(document, registry,
+                        BordeauxConditionRegistry.builder().register("robot.ready", () -> true).build(),
+                        new RecordingScheduler()));
+
+        assertTrue(failure.getMessage().contains("late"));
+        assertEquals(0, factoryCalls[0]);
+    }
+
     private static BordeauxPathEvents read(String json) {
         return BordeauxTrajectoryReader.read(
                 new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), "auto");
@@ -631,7 +729,7 @@ class BordeauxRuntimeTest {
         BordeauxCommandRegistry.Builder builder = BordeauxCommandRegistry.builder()
                 .catalogId(CATALOG_ID).catalogHash(HASH);
         for (String id : ids) {
-            builder.register(id, Set.of(), args -> {
+            builder.register(id, Set.of(), args -> {}, args -> {
                 created.add(id);
                 return new TestCommand(id);
             });
