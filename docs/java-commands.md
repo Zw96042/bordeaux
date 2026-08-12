@@ -21,6 +21,8 @@ The installed `.bordeaux/INTEGRATION.md` contains the project-local handoff. Com
 
 In brief, call `BordeauxBindings.generated(...)` with the team-owned command-provider instances and load an exported path through `BordeauxTrajectoryReader`; use `readWithRoutine(...)` when running the exported Auto-tab routine. Use `BordeauxEventRunner.periodic(elapsedSeconds, measuredFraction)` beside the path follower for time- or position-triggered, conditional, and repeated path events. Register sensor predicates under stable IDs with `BordeauxConditionRegistry`. For Auto-tab routines, use `BordeauxRoutineRunner.startTransition()` and `completePathTransition(id)`: run the path carried by `PATH_ACTIVE`, call `periodic()` once per robot loop during `WAITING_FOR_COMMAND`, and stop at `COMPLETE`. Between-path commands finish sequentially before the next path is exposed. Call `endPath()` when a path ends; only event invocations authored with **Cancel at path end** are canceled.
 
+Generated bindings include side-effect-free argument validators automatically. Hand-built `BordeauxCommandRegistry` instances used with event or routine runners must use the four-argument `register(id, parameterNames, validator, factory)` overload; the validator should perform the same `BordeauxArguments` reads as the factory without creating commands or touching robot state. The legacy three-argument overload supports direct `registry.create(...)` calls only and is rejected during autonomous preflight.
+
 ## Contract invariants
 
 - Catalog schema: `1.0`; trajectory schema: `bordeaux-trajectory/1.0`; support version: `0.1.0`.
