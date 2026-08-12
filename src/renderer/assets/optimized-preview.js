@@ -58,7 +58,8 @@ function plannerPlayback(result, geometryPoints, reverse) {
       prof,
       metrics,
       anchors: buildAnchors(points.map((point) => ({ f: point.f, rad: point.heading }))),
-      rev: reverse,
+      // Shared planner samples already contain the robot's physical heading.
+      rev: false,
     },
     prof: { ...prof, t: mapped(prof.t), v: mapped(prof.v) },
     metrics: Object.assign({}, metrics, {
