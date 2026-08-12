@@ -66,6 +66,9 @@ export function normalizeProject(value: unknown): unknown {
     used.add(id);
     path.id = id;
     delete path.labview;
+    if (isRecord(path.constraints) && path.constraints.maxAngDecel === 0) {
+      path.constraints = { ...path.constraints, maxAngDecel: path.constraints.maxAngAccel };
+    }
     if (Array.isArray(path.waypoints)) {
       path.waypoints = path.waypoints.map((waypoint, index, waypoints) => normalizeWaypoint(waypoint, index, waypoints.length));
     }
