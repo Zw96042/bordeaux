@@ -318,9 +318,10 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const referencedPaths = useMemo(() => RoutinePreview.referencedPaths(routine, paths, outcomes), [routine, paths, outcomes]);
     const request = useMemo(() => ({ routine, paths: referencedPaths, robot, outcomes, plannerId }), [routine, referencedPaths, robot, outcomes, plannerId]);
     const previewer = useMemo(() => PathPreview.create({
-      workerFactory: () => new Worker(new URL('../assets/routine-preview-worker.js', import.meta.url), { type: 'module' }),
+      workerFactory: () => new Worker(new URL('../assets/path-preview-worker.js', import.meta.url), { type: 'module' }),
       derive: (job) => AUTO.buildRun(job.routine, job.paths, job.robot, job.outcomes, job.plannerId),
       workerPayload: (job) => ({
+        kind: 'routine',
         id: job.revision,
         routine: job.routine,
         paths: job.paths,

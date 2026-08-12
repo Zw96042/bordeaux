@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { processRoutinePreviewJob } from "../src/renderer/assets/routine-preview-worker";
+import { processRoutinePreviewJob } from "../src/renderer/assets/path-preview-worker";
 import { loadRendererExport } from "./helpers/loadRendererExport";
 
 function routinePreview() {
