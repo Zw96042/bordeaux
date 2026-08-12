@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -904,6 +905,30 @@ describe("agent session and private bridge", () => {
     } finally {
       await older.stop();
       await active.stop();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("closes accepted sockets when descriptor publication fails", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-agent-startup-test-"));
+    const service = new AgentSessionService(() => {}, () => null);
+    const server = new AgentBridgeServer(directory, service);
+    const clients: net.Socket[] = [];
+    const rename = vi.spyOn(fs, "rename").mockImplementation(async (source) => {
+      const descriptor = JSON.parse(await fs.readFile(source, "utf8"));
+      const client = net.createConnection(descriptor.endpoint);
+      clients.push(client);
+      client.on("error", () => {});
+      await new Promise<void>((resolve) => client.once("connect", resolve));
+      throw new Error("descriptor publication failed");
+    });
+    try {
+      await expect(server.start()).rejects.toThrow("descriptor publication failed");
+      expect(server.enabled).toBe(false);
+    } finally {
+      rename.mockRestore();
+      clients.forEach((client) => client.destroy());
+      await server.stop();
       await fs.rm(directory, { recursive: true, force: true });
     }
   });
