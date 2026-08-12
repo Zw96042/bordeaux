@@ -1,6 +1,7 @@
 import type { PathDoc, PlannerResult, TrajectorySample } from "../types";
 import { indexIntervalPolicies } from "./intervalPolicies";
 import { effectiveRanges } from "./rotationPriority";
+import { orderedWaypointSampleIndices } from "./waypointSamples";
 
 const DEG = Math.PI / 180;
 const EPSILON = 1e-9;
@@ -27,16 +28,10 @@ function indexedLimits(path: PathDoc, samples: readonly TrajectorySample[]) {
 
 function turnBoundaries(path: PathDoc, samples: readonly TrajectorySample[]): Set<number> {
   const boundaries = new Set<number>();
-  for (const waypoint of path.waypoints) {
-    if (!waypoint.turnInPlace) continue;
-    let best = 0;
-    let distance = Infinity;
-    samples.forEach((sample, index) => {
-      const candidate = Math.hypot(sample.x - waypoint.x, sample.y - waypoint.y);
-      if (candidate < distance) { best = index; distance = candidate; }
-    });
-    boundaries.add(best);
-  }
+  const arrivals = orderedWaypointSampleIndices(path.waypoints, samples);
+  path.waypoints.forEach((waypoint, index) => {
+    if (waypoint.turnInPlace) boundaries.add(arrivals[index]);
+  });
   return boundaries;
 }
 
