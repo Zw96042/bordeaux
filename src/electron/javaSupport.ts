@@ -29,6 +29,7 @@ interface InstallPreview {
 }
 
 let activeBuild: { child: ChildProcessWithoutNullStreams; canceled: boolean; killGraceMs: number } | null = null;
+let buildAdmission: symbol | null = null;
 const killEscalations = new WeakMap<ChildProcessWithoutNullStreams, NodeJS.Timeout>();
 
 function sha256(value: Uint8Array | string): string {
@@ -333,8 +334,7 @@ export function windowsGradleCommand(wrapper: string, args: readonly string[]): 
   return `"${wrapper}" ${args.join(" ")}`;
 }
 
-export async function runJavaCatalogBuild(projectRoot: string, limits: { timeoutMs?: number; outputBytes?: number; killGraceMs?: number } = {}): Promise<{ output: string }> {
-  if (activeBuild) throw new Error("A Java catalog build is already running");
+async function runAdmittedJavaCatalogBuild(projectRoot: string, limits: { timeoutMs?: number; outputBytes?: number; killGraceMs?: number }): Promise<{ output: string }> {
   const canonicalRoot = await fs.realpath(projectRoot);
   const wrapperName = process.platform === "win32" ? "gradlew.bat" : "gradlew";
   const wrapper = path.join(canonicalRoot, wrapperName);
@@ -395,6 +395,14 @@ export async function runJavaCatalogBuild(projectRoot: string, limits: { timeout
   if (overflow) throw new Error(`Java catalog build exceeded the ${limits.outputBytes ?? MAX_BUILD_OUTPUT_BYTES}-byte output limit`);
   if (exitCode !== 0) throw new Error(`Java catalog build failed with exit code ${exitCode ?? "unknown"}${redacted ? `\n${redacted.slice(-8_192)}` : ""}`);
   return { output: redacted.slice(-8_192) };
+}
+
+export async function runJavaCatalogBuild(projectRoot: string, limits: { timeoutMs?: number; outputBytes?: number; killGraceMs?: number } = {}): Promise<{ output: string }> {
+  if (buildAdmission) throw new Error("A Java catalog build is already running");
+  const admission = Symbol("java-catalog-build");
+  buildAdmission = admission;
+  try { return await runAdmittedJavaCatalogBuild(projectRoot, limits); }
+  finally { if (buildAdmission === admission) buildAdmission = null; }
 }
 
 export function installPreviewSummary(preview: InstallPreview): { buildFile: string; files: string[]; replacing: boolean } {

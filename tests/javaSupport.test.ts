@@ -138,6 +138,20 @@ describe("Java support installation and trusted catalog builds", () => {
     expect(result.output).not.toContain(project);
   });
 
+  it("atomically admits only one simultaneous catalog build", async () => {
+    const { project } = await fixture();
+    await writeWrapper(project,
+      "#!/bin/sh\nprintf 'started\\n' >> build-starts\nsleep 0.05\n",
+      "@echo off\r\necho started>>build-starts\r\nping 127.0.0.1 -n 2 >nul\r\n");
+
+    const outcomes = await Promise.allSettled([runJavaCatalogBuild(project), runJavaCatalogBuild(project)]);
+
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
+    expect(outcomes.find((outcome) => outcome.status === "rejected")).toMatchObject({ reason: expect.objectContaining({ message: expect.stringMatching(/already running/) }) });
+    expect((await fs.readFile(path.join(project, "build-starts"), "utf8")).trim().split(/\r?\n/)).toHaveLength(1);
+  });
+
   it("enforces output, timeout, cancellation, and one-build-at-a-time limits", async () => {
     const noisy = await fixture();
     await writeWrapper(noisy.project, "#!/bin/sh\nyes x | head -c 4096\n", "@echo off\r\nfor /L %%i in (1,1,200) do @echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\n");
