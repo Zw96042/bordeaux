@@ -30,6 +30,7 @@ function rendererMath() {
         metrics: { accel: number[]; omega: number[]; curv: number[] };
       };
     };
+    poseAtTime(time: number, points: Point[], profile: unknown, anchors: unknown, mode: string, reverse: boolean): { heading: number } | null;
   }>(new URL("../src/renderer/lib/pathMath.js", import.meta.url), "PM", { context: { console } });
 }
 
@@ -46,7 +47,7 @@ function expectPlannerPreviewParity(path: any, robot: any, plannerId: "profiledS
   expect(actual.planner, name).toBe(expected.planner);
   expect(actual.totalDistance, name).toBe(expected.totalDistanceM);
   expect(actual.prof.totalTime, name).toBe(expected.totalTimeS);
-  expect(playback?.rev, name).toBe(Boolean(path.driveBackward));
+  expect(playback?.rev, name).toBe(false);
   expect(playback?.pts, name).toEqual(expected.samples.map((sample) => ({
     x: sample.x,
     y: sample.y,
@@ -228,6 +229,30 @@ describe("renderer application", () => {
       expect(expected.totalTimeS).toBe(5.5556);
       expect(expected.samples[166].velocityMps).toBe(3.8555);
     }
+  });
+
+  it.each(["profiledSpline", "optimizedTrajectory"] as const)("uses shared physical headings for reverse %s playback poses", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.driveBackward = true;
+    const expected = getPlanner(plannerId).generate({ path, robot: project.robot, samplesPerSegment: 56 });
+    const preview = rendererPreview(path, project.robot, plannerId) as any;
+    const sample = expected.samples[Math.floor(expected.samples.length / 2)];
+    const pose = rendererMath().poseAtTime(
+      sample.t,
+      preview.playback.pts,
+      preview.playback.prof,
+      preview.playback.anchors,
+      preview.mode,
+      preview.playback.rev,
+    );
+    const headingError = Math.atan2(
+      Math.sin((pose?.heading ?? NaN) - sample.headingRad),
+      Math.cos((pose?.heading ?? NaN) - sample.headingRad),
+    );
+
+    expect(preview.playback.rev).toBe(false);
+    expect(headingError).toBeCloseTo(0, 12);
   });
 
   it.each(["profiledSpline", "optimizedTrajectory"] as const)("matches shared %s output with ranges, wait, and turn", (plannerId) => {
