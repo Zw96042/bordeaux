@@ -2,6 +2,7 @@ import * as React from "react";
 import { flushSync } from "react-dom";
 import { PathEdit } from "../assets/path-edit";
 import { PathPreview } from "../assets/path-preview";
+import { RoutinePreview } from "../assets/routine-preview";
 import { ContextInspector } from "../components/ContextInspector";
 import { FIELD_DIMS, FieldView } from "../components/FieldView";
 import { Panels } from "../components/Panels";
@@ -304,6 +305,33 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       pending: snapshot.status === 'pending',
       durationMs: snapshot.durationMs || 0,
     };
+  }
+
+  function useRoutinePreview(active, routine, paths, robot, outcomes, plannerId) {
+    const previewer = useMemo(() => PathPreview.create({
+      workerFactory: () => new Worker(new URL('../assets/routine-preview-worker.js', import.meta.url), { type: 'module' }),
+      derive: (job) => AUTO.buildRun(job.routine, job.paths, job.robot, job.outcomes, job.plannerId),
+      workerPayload: (job) => ({
+        id: job.revision,
+        routine: job.routine,
+        paths: job.paths,
+        robot: job.robot,
+        outcomes: job.outcomes,
+        plannerId: job.plannerId,
+      }),
+      directIsSafe: (job) => PathPreview.directWorkIsSafe(
+        RoutinePreview.directRoutineWork(job.routine, job.paths),
+      ),
+    }), []);
+    const [snapshot, setSnapshot] = useState(() => previewer.getSnapshot());
+    const lastValid = useRef({ steps: [], segs: [], total: 0 });
+    useEffect(() => previewer.retain(), [previewer]);
+    useEffect(() => previewer.subscribe(() => setSnapshot(previewer.getSnapshot())), [previewer]);
+    useEffect(() => {
+      if (active) previewer.request({ key: routine.id, routine, paths, robot, outcomes, plannerId, quality: 'final' });
+    }, [previewer, active, routine, paths, robot, outcomes, plannerId]);
+    if (snapshot.value) lastValid.current = snapshot.value;
+    return lastValid.current;
   }
 
   function App({ initialProject = null } = {}) {
@@ -1465,13 +1493,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     useEffect(() => playbackStore.setTotal(total), [playbackStore, total]);
 
     // ---- routine run engine ----
-    const lastRun = useRef({ steps: [], total: 0 });
-    const run = useMemo(() => {
-      if (page !== 'auto') return lastRun.current;
-      const nextRun = AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId);
-      lastRun.current = nextRun;
-      return nextRun;
-    }, [page, routine, project.paths, robot, routineOutcomes, plannerId]);
+    const run = useRoutinePreview(page === 'auto', routine, project.paths, robot, routineOutcomes, plannerId);
     useEffect(() => routinePlaybackStore.setTotal(run.total), [routinePlaybackStore, run.total]);
     useEffect(() => { if (page !== 'plan') playbackStore.pause(); if (page !== 'auto') routinePlaybackStore.pause(); }, [page, playbackStore, routinePlaybackStore]);
 
