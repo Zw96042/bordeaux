@@ -22,6 +22,7 @@ import type {
   PathAnalysisMetric,
   PathSampleReference,
 } from "./types";
+import { angularRateKind } from "../planners/angularConstraints";
 
 const EPSILON = 1e-6;
 const BARRIER_EPSILON = 1e-4;
@@ -166,9 +167,10 @@ function measuredValues(samples: readonly TrajectorySample[]): MeasuredValue[] {
     const dt = sample.t - previous.t;
     if (dt <= EPSILON) return;
     const angularAcceleration = (sample.angularVelocityRadps - previous.angularVelocityRadps) / dt;
-    const angularSpeedChange = (Math.abs(sample.angularVelocityRadps) - Math.abs(previous.angularVelocityRadps)) / dt;
-    values.push({ metric: "angularAcceleration", value: Math.max(0, angularSpeedChange), unit: "rad/s²", sampleIndex: index });
-    values.push({ metric: "angularDeceleration", value: Math.max(0, -angularSpeedChange), unit: "rad/s²", sampleIndex: index });
+    const angularRate = Math.abs(angularAcceleration);
+    const kind = angularRateKind(previous.angularVelocityRadps, sample.angularVelocityRadps);
+    values.push({ metric: "angularAcceleration", value: kind === "deceleration" ? 0 : angularRate, unit: "rad/s²", sampleIndex: index });
+    values.push({ metric: "angularDeceleration", value: kind === "acceleration" ? 0 : angularRate, unit: "rad/s²", sampleIndex: index });
     if (index < 2) return;
     const before = samples[index - 2];
     const previousDt = previous.t - before.t;

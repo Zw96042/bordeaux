@@ -8,6 +8,7 @@ import type {
   ValidationIssue,
 } from "../types";
 import { DEFAULT_SAMPLES_PER_SEGMENT, MAX_TRAJECTORY_SAMPLES } from "./limits";
+import { enforceAngularTiming } from "./angularConstraints";
 
 const R = (value: number, places = 4) => Number(value.toFixed(places));
 
@@ -91,13 +92,13 @@ export const profiledSplinePlanner: TrajectoryPlanner = {
       curvatureInvM: R(metrics.curv?.[i] ?? point.curv ?? 0, 5),
     }));
 
-    return {
+    return enforceAngularTiming(input.path, {
       planner: "profiledSpline",
       totalTimeS: R(derived.prof.totalTime || 0, 4),
       totalDistanceM: R(totalDistanceM, 4),
       samples,
       markers: markersFor(input, pts, times),
       diagnostics: diagnosticsFor(input.path.name, derived),
-    };
+    });
   },
 };

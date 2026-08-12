@@ -1,6 +1,7 @@
 import { PM } from "../math/pm";
 import { wrapRadians } from "../math/angles";
 import type { ConstraintRange, PathDoc, PlannerResult, RobotConfig, TrajectorySample } from "../types";
+import { enforceAngularTiming } from "./angularConstraints";
 import { MAX_TRAJECTORY_SAMPLES } from "./limits";
 
 const EPSILON = 1e-9;
@@ -356,7 +357,7 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     }
   });
   const totalTimeS = samples.at(-1)?.t ?? result.totalTimeS;
-  return {
+  return enforceAngularTiming(path, {
     ...result,
     totalTimeS,
     totalDistanceM: result.totalDistanceM + addedDistance,
@@ -364,5 +365,5 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     markers,
     diagnostics,
     optimization: result.optimization ? { ...result.optimization, totalTimeS } : result.optimization,
-  };
+  }, true);
 }

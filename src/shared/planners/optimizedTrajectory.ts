@@ -9,6 +9,7 @@ import type {
 import { profiledSplinePlanner } from "./profiledSpline";
 import { indexIntervalPolicies, indexPointPolicies } from "./intervalPolicies";
 import { effectiveRanges } from "./rotationPriority";
+import { enforceAngularTiming } from "./angularConstraints";
 
 const R = (value: number, places = 4) => Number(value.toFixed(places));
 const EPSILON = 1e-9;
@@ -229,7 +230,7 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
         message: `Optimized trajectory has ${optimization.constraintViolations} final linear constraint violation${optimization.constraintViolations === 1 ? "" : "s"}.`,
       }] : [];
 
-      return {
+      return enforceAngularTiming(input.path, {
         planner: "optimizedTrajectory",
         totalTimeS,
         totalDistanceM: base.totalDistanceM,
@@ -237,7 +238,7 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
         markers: base.markers.map((marker) => ({ ...marker, timeS: R(timeAtFraction(samples, marker.fraction), 4) })),
         diagnostics: [...base.diagnostics, ...constraintIssue],
         optimization,
-      };
+      });
     } catch (error) {
       const fallbackReason = error instanceof Error ? error.message : "Optimizer failed.";
       const issue: ValidationIssue = {
