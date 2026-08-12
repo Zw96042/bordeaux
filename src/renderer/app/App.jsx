@@ -99,10 +99,18 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       && !currentContext.hasDraft);
   }
 
-  function routinePreviewResult(snapshot, request, active) {
-    const current = snapshot.path === request && snapshot.value ? snapshot.value : null;
-    const error = snapshot.errorPath === request ? snapshot.error : null;
+  function routinePreviewResult(snapshot, request, active, admissionError = null) {
+    const current = !admissionError && snapshot.status === 'ready' && snapshot.key === request
+      && snapshot.path === request && snapshot.value ? snapshot.value : null;
+    const error = admissionError || (snapshot.status === 'error' && snapshot.errorKey === request
+      && snapshot.errorPath === request ? snapshot.error : null);
     return { run: current || EMPTY_ROUTINE_RUN, pending: active && !current && !error, error };
+  }
+
+  function requestRoutinePreview(previewer, request, admission, active = true) {
+    if (!active || !admission.allowed) { previewer.cancel(); return false; }
+    previewer.request({ key: request, path: request, ...request, quality: 'final' });
+    return true;
   }
 
   function selectedAgentProposalPreview(snapshot, candidate, request, plannerId) {
@@ -339,6 +347,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
   function useRoutinePreview(active, routine, paths, robot, outcomes, plannerId) {
     const referencedPaths = useMemo(() => RoutinePreview.referencedPaths(routine, paths, outcomes), [routine, paths, outcomes]);
     const request = useMemo(() => ({ routine, paths: referencedPaths, robot, outcomes, plannerId }), [routine, referencedPaths, robot, outcomes, plannerId]);
+    const admission = useMemo(() => RoutinePreview.workerRoutineAdmission(routine, referencedPaths, robot, outcomes), [routine, referencedPaths, robot, outcomes]);
     const previewer = useMemo(() => PathPreview.create({
       workerFactory: () => new Worker(new URL('../assets/path-preview-worker.js', import.meta.url), { type: 'module' }),
       derive: (job) => AUTO.buildRun(job.routine, job.paths, job.robot, job.outcomes, job.plannerId),
@@ -352,16 +361,17 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         plannerId: job.plannerId,
       }),
       directIsSafe: (job) => PathPreview.directWorkIsSafe(
-        RoutinePreview.directRoutineWork(job.routine, job.paths),
+        RoutinePreview.directRoutineWork(job.routine, job.paths, 56, job.outcomes)
+          + RoutinePreview.workerRoutineEstimate(job.routine, job.paths, job.robot, job.outcomes).outputSamples,
       ),
     }), []);
     const [snapshot, setSnapshot] = useState(() => previewer.getSnapshot());
     useEffect(() => previewer.retain(), [previewer]);
     useEffect(() => previewer.subscribe(() => setSnapshot(previewer.getSnapshot())), [previewer]);
     useEffect(() => {
-      if (active) previewer.request({ key: routine.id, path: request, ...request, quality: 'final' });
-    }, [previewer, active, request, routine.id]);
-    return routinePreviewResult(snapshot, request, active);
+      requestRoutinePreview(previewer, request, admission, active);
+    }, [previewer, active, request, admission]);
+    return routinePreviewResult(snapshot, request, active, active ? admission.error : null);
   }
 
   function App({ initialProject = null, initialAgentProposal = null } = {}) {
@@ -1851,4 +1861,4 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }
   }
 
-export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, agentProposalPreviewResult, applyBrushDraft, canApplyAgentProposalCandidate, duplicatePathForLibrary, pathPreviewResult, remapBrushSelection, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, syncBrushSelection, waypointPreviewResult };
+export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, agentProposalPreviewResult, applyBrushDraft, canApplyAgentProposalCandidate, duplicatePathForLibrary, pathPreviewResult, remapBrushSelection, requestRoutinePreview, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, syncBrushSelection, waypointPreviewResult };

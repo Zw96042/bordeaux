@@ -276,6 +276,18 @@ import { PM } from "../lib/pathMath";
       worker = null;
     };
 
+    const cancel = () => {
+      if (destroyed) return;
+      latestRevision += 1;
+      queued = null;
+      directJob = null;
+      takeInFlight();
+      if (worker) worker.terminate();
+      worker = null;
+      snapshot = { ...snapshot, status: 'idle', revision: latestRevision, error: null, errorKey: null, errorPath: null };
+      notify();
+    };
+
     const attachWorker = (nextWorker) => {
       worker = nextWorker;
       nextWorker.onmessage = (event) => {
@@ -377,6 +389,7 @@ import { PM } from "../lib/pathMath";
           });
         };
       },
+      cancel,
       destroy,
     };
   }

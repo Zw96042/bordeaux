@@ -1,5 +1,6 @@
 import { derivePlannerPreview } from "./optimized-preview";
 import { buildRoutineRun } from "../lib/routineRun";
+import { RoutinePreview } from "./routine-preview";
 
 function derivePathPreview(path, robot, perSegment, plannerId) {
   return derivePlannerPreview(path, robot, perSegment, plannerId);
@@ -30,6 +31,8 @@ export function processPathPreviewJob(job, derive = derivePathPreview) {
 export function processRoutinePreviewJob(job, buildRun = buildRoutineRun) {
   const startedAt = performance.now();
   try {
+    const admission = RoutinePreview.workerRoutineAdmission(job.routine, job.paths, job.robot, job.outcomes);
+    if (!admission.allowed) throw new RangeError(admission.error.message);
     return {
       id: job.id,
       value: buildRun(job.routine, job.paths, job.robot, job.outcomes, job.plannerId, derivePathPreview),

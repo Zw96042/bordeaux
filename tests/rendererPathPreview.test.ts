@@ -32,6 +32,7 @@ function previewModule(context: Record<string, unknown> = {}) {
       request(input: { path: unknown; robot: unknown; plannerId: string; quality: "interactive" | "final"; key?: string }): number;
       getSnapshot(): { status: string; revision: number; quality: string; path: unknown; value: unknown };
       retain(): () => void;
+      cancel(): void;
       destroy(): void;
     };
     samplesForQuality(quality: string): number;
@@ -202,6 +203,27 @@ describe("renderer path preview scheduler", () => {
     expect(module.samplesForQuality("final")).toBe(56);
     preview.destroy();
     expect(worker.terminated).toBe(true);
+  });
+
+  it("cancels active and queued work while keeping the scheduler reusable", () => {
+    const workers = [new FakeWorker(), new FakeWorker()];
+    let workerIndex = 0;
+    const preview = previewModule().create({ workerFactory: () => workers[workerIndex++] });
+    const input = { path: {}, robot: {}, plannerId: "profiledSpline", quality: "final" as const };
+    const canceled = preview.request(input);
+    preview.request(input);
+
+    preview.cancel();
+
+    expect(workers[0].terminated).toBe(true);
+    expect(preview.getSnapshot()).toMatchObject({ status: "idle" });
+    workers[0].resolve({ id: canceled, value: { stale: true } });
+    expect(preview.getSnapshot().value).not.toEqual({ stale: true });
+
+    const resumed = preview.request(input);
+    expect(workers[1].jobs).toEqual([expect.objectContaining({ id: resumed })]);
+    workers[1].resolve({ id: resumed, value: { current: true } });
+    expect(preview.getSnapshot()).toMatchObject({ status: "ready", value: { current: true } });
   });
 
   it("retains exact source provenance until its replacement completes", () => {
