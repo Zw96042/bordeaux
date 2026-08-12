@@ -93,6 +93,55 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void interleavesRepeatedEventCatchUpInGlobalTimeOrder() {
+        ObjectNode arguments = MAPPER.createObjectNode();
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "auto", "Auto", 2, CATALOG_ID, HASH, List.of(
+                        new BordeauxEvent("a", "A", 0, 0, "a", arguments, false,
+                                BordeauxEvent.Trigger.TIME, 1.0, 2.0, null),
+                        new BordeauxEvent("b", "B", 0.5, 0.25, "b", arguments, false,
+                                BordeauxEvent.Trigger.TIME, 1.0, 2.0, null)));
+        List<String> created = new ArrayList<>();
+        BordeauxEventRunner runner = new BordeauxEventRunner(
+                path, registry(created, "a", "b"), new RecordingScheduler());
+
+        runner.periodic(2.0);
+
+        assertEquals(List.of("a", "b", "a", "b", "a"), created);
+    }
+
+    @Test
+    void rejectsOversizedCatchUpBeforeAnyObservableWork() {
+        ObjectNode arguments = MAPPER.createObjectNode();
+        BordeauxEvent event = new BordeauxEvent(
+                "repeat", "Repeat", 0, 0, "repeat", arguments, false,
+                BordeauxEvent.Trigger.TIME, 0.001, 0.064, "enabled");
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "auto", "Auto", 1, CATALOG_ID, HASH, List.of(event));
+        List<String> created = new ArrayList<>();
+        int[] conditionChecks = {0};
+        RecordingScheduler scheduler = new RecordingScheduler();
+        BordeauxEventRunner runner = new BordeauxEventRunner(
+                path, registry(created, "repeat"),
+                BordeauxConditionRegistry.builder().register("enabled", () -> {
+                    conditionChecks[0]++;
+                    return true;
+                }).build(), scheduler);
+
+        BordeauxRuntimeException failure = assertThrows(
+                BordeauxRuntimeException.class, () -> runner.periodic(0.064));
+
+        assertTrue(failure.getMessage().contains("64"));
+        assertTrue(created.isEmpty());
+        assertTrue(scheduler.scheduled.isEmpty());
+        assertEquals(0, conditionChecks[0]);
+        assertEquals(0, runner.firedCount());
+
+        runner.periodic(0.01);
+        assertEquals(11, runner.firedCount());
+    }
+
+    @Test
     void gatesPositionEventsAndCatchesUpBoundedRepetitions() {
         ObjectNode arguments = MAPPER.createObjectNode();
         BordeauxEvent event = new BordeauxEvent(
