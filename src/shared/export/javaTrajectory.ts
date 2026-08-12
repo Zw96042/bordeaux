@@ -199,6 +199,7 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
   const invocationIssues = validateProjectJavaInvocations(project, catalog);
   if (invocationIssues.length > 0) throw new Error(invocationIssues.map((item) => `${item.path}: ${item.message}`).join("\n"));
   const sourcePaths = project.paths.filter((path) => path.exportable !== false);
+  if (sourcePaths.length === 0) throw new Error("Java trajectory export requires at least one exportable path");
   if (sourcePaths.length > MAX_PATH_COUNT) {
     throw new Error(`Java trajectory export exceeds ${MAX_PATH_COUNT} paths`);
   }
