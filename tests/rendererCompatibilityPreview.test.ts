@@ -231,8 +231,14 @@ describe("renderer application", () => {
     }
   });
 
-  it.each(["profiledSpline", "optimizedTrajectory"] as const)("uses shared physical headings for reverse %s playback poses", (plannerId) => {
+  it.each([
+    ["profiledSpline", "swerve"],
+    ["profiledSpline", "tank"],
+    ["optimizedTrajectory", "swerve"],
+    ["optimizedTrajectory", "tank"],
+  ] as const)("uses shared physical headings for reverse %s %s playback poses", (plannerId, drive) => {
     const project = createDemoProject();
+    project.robot.drive = drive;
     const path = project.paths[0];
     path.driveBackward = true;
     const expected = getPlanner(plannerId).generate({ path, robot: project.robot, samplesPerSegment: 56 });
@@ -452,4 +458,3 @@ describe("renderer application", () => {
     expect(panels).toContain("'Bordeaux'");
   });
 });
-
