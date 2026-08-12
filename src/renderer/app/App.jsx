@@ -110,6 +110,17 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     return [{ id: candidate.id, label: candidate.label, selected: true, valid: candidate.valid !== false, derived: snapshot.value }];
   }
 
+  function requestWaypointPreview(previewer, request, robot, plannerId) {
+    return previewer.request({ key: request, path: request.doc, robot, plannerId, quality: 'final' });
+  }
+
+  function waypointPreviewResult(snapshot, request) {
+    if (!request) return null;
+    const value = snapshot.status === 'ready' && snapshot.key === request && snapshot.path === request.doc ? snapshot.value : null;
+    const failed = snapshot.errorKey === request && snapshot.errorPath === request.doc;
+    return { ...request, derived: value || null, error: failed ? snapshot.error : null, pending: !value && !failed };
+  }
+
   const ACCENT = '#3f6fd0';
 
   const PENDING_PATH_PREVIEW = {
@@ -348,7 +359,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const [metric, setMetric] = useState('velocity');
     const [tool, setTool] = useState('select');
     const [brush, setBrush] = useState({ kind: 'push', radius: 0.9, strength: 0.7 });
-    const [waypointPreview, setWaypointPreview] = useState(null);
+    const [waypointPreviewRequest, setWaypointPreviewRequest] = useState(null);
     const [headMenu, setHeadMenu] = useState(null);
     const [dirty, setDirty] = useState(false);
     const [agentProposal, setAgentProposal] = useState(initialAgentProposal);
@@ -373,9 +384,13 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const editStore = useMemo(() => PathEdit.create(), []);
     const playbackStore = useMemo(() => createPlaybackStore(), []);
     const routinePlaybackStore = useMemo(() => createPlaybackStore(), []);
+    const waypointPreviewer = useMemo(() => PathPreview.create(), []);
+    const [waypointPreviewSnapshot, setWaypointPreviewSnapshot] = useState(() => waypointPreviewer.getSnapshot());
     const agentPreviewer = useMemo(() => PathPreview.create(), []);
     const [agentPreview, setAgentPreview] = useState(() => agentPreviewer.getSnapshot());
     useEffect(() => () => { playbackStore.destroy(); routinePlaybackStore.destroy(); }, [playbackStore, routinePlaybackStore]);
+    useEffect(() => waypointPreviewer.retain(), [waypointPreviewer]);
+    useEffect(() => waypointPreviewer.subscribe(() => setWaypointPreviewSnapshot(waypointPreviewer.getSnapshot())), [waypointPreviewer]);
     useEffect(() => agentPreviewer.retain(), [agentPreviewer]);
     useEffect(() => agentPreviewer.subscribe(() => setAgentPreview(agentPreviewer.getSnapshot())), [agentPreviewer]);
 
@@ -533,6 +548,10 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
 
     const robot = project.robot;
     const accent = ACCENT;
+    useEffect(() => {
+      if (waypointPreviewRequest) requestWaypointPreview(waypointPreviewer, waypointPreviewRequest, robot, plannerId);
+    }, [waypointPreviewer, waypointPreviewRequest, robot, plannerId]);
+    const waypointPreview = waypointPreviewResult(waypointPreviewSnapshot, waypointPreviewRequest);
 
     const doc = project.paths[activeIdx];
     const docRef = useRef(doc); docRef.current = doc;
@@ -903,17 +922,12 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const addWaypoint = useCallback((p, segmentHint, onPath, selectedVisit) => {
       const prepared = prepareWaypointInsertion(p, segmentHint, onPath, selectedVisit);
       if (prepared.previewRequired) {
-        try {
-          const previewDerived = PM.derivePath(prepared.doc, robot, PERSEG, plannerId);
-          const message = 'Splitting this ' + prepared.segmentType + ' may rebuild its geometry. Review the dashed path first.';
-          setWaypointPreview({ ...prepared, derived: previewDerived, plannerId, message });
-        } catch (error) {
-          console.error('Could not preview waypoint insertion:', error);
-        }
+        const message = 'Splitting this ' + prepared.segmentType + ' may rebuild its geometry. Review the dashed path first.';
+        setWaypointPreviewRequest({ ...prepared, plannerId, message });
         return;
       }
       commit(() => prepared.doc);
-    }, [commit, plannerId, prepareWaypointInsertion, robot]);
+    }, [commit, plannerId, prepareWaypointInsertion]);
     const appendWaypoint = useCallback((rawPoint) => {
       const point = clampWorld(rawPoint);
       const candidate = clone(docRef.current);
@@ -954,17 +968,12 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       candidate._selAfter = oldCount;
 
       if (segmentType === 'clothoid') {
-        try {
-          const previewDerived = PM.derivePath(candidate, robot, PERSEG, plannerId);
-          const message = 'The new clothoid join may rebuild the previous turn. Review the dashed path first.';
-          setWaypointPreview({ doc: candidate, index: oldCount, derived: previewDerived, plannerId, message, actionLabel: 'Place endpoint' });
-        } catch (error) {
-          console.error('Could not preview waypoint placement:', error);
-        }
+        const message = 'The new clothoid join may rebuild the previous turn. Review the dashed path first.';
+        setWaypointPreviewRequest({ doc: candidate, index: oldCount, plannerId, message, actionLabel: 'Place endpoint' });
         return;
       }
       commit(() => candidate);
-    }, [commit, plannerId, robot]);
+    }, [commit, plannerId]);
     const setJiggle = useCallback((options) => {
       if (!options) {
         commit((d) => { delete d.waypoints[d.waypoints.length - 1].jiggle; return d; });
@@ -993,11 +1002,11 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       return true;
     }, [commit, derived]);
     const applyWaypointPreview = useCallback(() => {
-      if (!waypointPreview) return;
+      if (!waypointPreview?.derived) return;
       commit(() => waypointPreview.doc);
-      setWaypointPreview(null);
+      setWaypointPreviewRequest(null);
     }, [commit, waypointPreview]);
-    useEffect(() => { setWaypointPreview(null); }, [doc, plannerId]);
+    useEffect(() => { setWaypointPreviewRequest(null); }, [doc, robot, plannerId]);
     useEffect(() => { if (doc._selAfter != null) { select('wp', doc._selAfter); mutate((d) => { delete d._selAfter; return d; }); } }, [doc._selAfter]);
 
     const setWp = useCallback((i, patch) => commit((d) => {
@@ -1714,7 +1723,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         }
         if (k === 'g') setShowGrid((s) => !s);
         else if (k === 'f') setView(FIT);
-        else if (e.key === 'Escape') { setTool('select'); setHeadMenu(null); setWaypointPreview(null); select(null, -1); }
+        else if (e.key === 'Escape') { setTool('select'); setHeadMenu(null); setWaypointPreviewRequest(null); select(null, -1); }
         else if ((e.key === 'Backspace' || e.key === 'Delete') && sel.kind) {
           if (sel.kind === 'wp') delWp(sel.idx); else if (sel.kind === 'rt') delTarget(sel.idx); else if (sel.kind === 'em') delMarker(sel.idx); else if (sel.kind === 'cr') delRange(sel.idx);
         }
@@ -1766,11 +1775,11 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
               tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
               waypointPreview && h('div', { className: 'insert-preview', role: 'region', 'aria-label': 'Preview waypoint insertion' },
                 h('div', { className: 'insert-preview-copy' },
-                  h('b', null, 'Preview waypoint'),
-                  h('span', null, waypointPreview.message)),
+                  h('b', null, waypointPreview.pending ? 'Preparing waypoint preview' : waypointPreview.error ? 'Waypoint preview unavailable' : 'Preview waypoint'),
+                  h('span', null, waypointPreview.error ? (waypointPreview.error.message || String(waypointPreview.error)) : waypointPreview.message)),
                 h('div', { className: 'insert-preview-actions' },
-                  h('button', { type: 'button', onClick: () => setWaypointPreview(null) }, 'Cancel'),
-                  h('button', { className: 'primary', type: 'button', onClick: applyWaypointPreview }, waypointPreview.actionLabel || 'Insert waypoint'))),
+                  h('button', { type: 'button', onClick: () => setWaypointPreviewRequest(null) }, 'Cancel'),
+                  h('button', { className: 'primary', type: 'button', disabled: !waypointPreview.derived, onClick: applyWaypointPreview }, waypointPreview.actionLabel || 'Insert waypoint'))),
               agentProposal && h('div', { className: 'insert-preview agent-proposal', role: 'region', 'aria-label': 'Agent path proposal' },
                 h('div', { className: 'insert-preview-copy' },
                   h('b', null, agentProposal.operation === 'replace' ? 'Agent repair proposal' : 'Agent path proposal'),
@@ -1816,4 +1825,4 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }
   }
 
-export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, applyBrushDraft, duplicatePathForLibrary, remapBrushSelection, routinePreviewResult, selectedAgentProposalPreview, syncBrushSelection };
+export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, applyBrushDraft, duplicatePathForLibrary, remapBrushSelection, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, syncBrushSelection, waypointPreviewResult };
