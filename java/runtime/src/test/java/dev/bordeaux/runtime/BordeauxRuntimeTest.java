@@ -707,6 +707,26 @@ class BordeauxRuntimeTest {
         assertEquals(0, factoryCalls[0]);
     }
 
+    @Test
+    void preflightsDeepProgrammaticRoutinesWithoutRecursing() {
+        BordeauxRoutineNode nested = new BordeauxRoutineNode.Path("path", "path-a");
+        for (int depth = 0; depth < 20_000; depth++) {
+            nested = new BordeauxRoutineNode.Decision(
+                    "decision-" + depth, "robot.ready", List.of(nested), List.of());
+        }
+        BordeauxRoutine routine = new BordeauxRoutine("Deep routine", List.of(nested));
+        BordeauxPathEvents document = new BordeauxPathEvents(
+                "path-a", "A", 0, CATALOG_ID, HASH, List.of(), List.of(), List.of(), routine);
+
+        BordeauxRoutineRunner runner = new BordeauxRoutineRunner(
+                document,
+                BordeauxCommandRegistry.builder().catalogId(CATALOG_ID).catalogHash(HASH).build(),
+                BordeauxConditionRegistry.builder().register("robot.ready", () -> true).build(),
+                new RecordingScheduler());
+
+        assertEquals(0, runner.commandCount());
+    }
+
     private static BordeauxPathEvents read(String json) {
         return BordeauxTrajectoryReader.read(
                 new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), "auto");
