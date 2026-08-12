@@ -113,13 +113,17 @@ function anchorFraction(path: Path, waypointIndex: number, local?: number): numb
 
 function anchorPoint(path: Path, waypointIndex: number, local = 0): Point {
   const segment = Math.max(0, Math.min(path.waypoints.length - 2, waypointIndex));
-  const start = path.waypoints[segment];
-  const end = path.waypoints[segment + 1];
-  const t = Math.max(0, Math.min(1, local));
-  const u = 1 - t;
+  const samples = samplePath({ ...path, waypoints: path.waypoints.slice(segment, segment + 2) }, 2048);
+  const lengths = [0];
+  for (let index = 1; index < samples.length; index++) lengths.push(lengths[index - 1] + gap(samples[index - 1], samples[index]));
+  const target = lengths.at(-1)! * Math.max(0, Math.min(1, local));
+  const upper = lengths.findIndex((value) => value >= target);
+  if (upper <= 0) return samples[0];
+  const span = Math.max(1e-12, lengths[upper] - lengths[upper - 1]);
+  const mix = (target - lengths[upper - 1]) / span;
   return {
-    x: u ** 3 * start.x + 3 * u ** 2 * t * start.nextC.x + 3 * u * t ** 2 * end.prevC.x + t ** 3 * end.x,
-    y: u ** 3 * start.y + 3 * u ** 2 * t * start.nextC.y + 3 * u * t ** 2 * end.prevC.y + t ** 3 * end.y,
+    x: samples[upper - 1].x + (samples[upper].x - samples[upper - 1].x) * mix,
+    y: samples[upper - 1].y + (samples[upper].y - samples[upper - 1].y) * mix,
   };
 }
 
@@ -205,6 +209,33 @@ describe("path sculpting brushes", () => {
     const range = path.ranges[0];
     expect(position(range.w0, range.t0 ?? 0)).toBeCloseTo(3.25, 2);
     expect(position(range.w1, range.t1 ?? 0)).toBeCloseTo(7.75, 2);
+  });
+
+  it("remaps split ranges by segment arclength rather than Bezier parameter", () => {
+    const path = straightPath();
+    path.waypoints[0].x = 1;
+    path.waypoints[0].prevC.x = 1;
+    path.waypoints[0].nextC.x = 16;
+    path.waypoints[1].x = 16.5;
+    path.waypoints[1].prevC.x = 16;
+    path.waypoints[1].nextC.x = 16.5;
+    path.ranges = [{ anchor: "wp", w0: 0, t0: 0.4, w1: 0, t1: 0.6 }];
+    const before = path.ranges.map((range) => [
+      anchorFraction(path, range.w0, range.t0),
+      anchorFraction(path, range.w1, range.t1),
+    ]);
+
+    const result = brush().apply(path, {
+      kind: "push",
+      previous: { x: 12.8, y: 4 },
+      center: { x: 12.8, y: 4 },
+      radius: 3,
+      strength: 1,
+    });
+
+    expect(result.added).toBeGreaterThan(0);
+    expect(anchorFraction(path, path.ranges[0].w0, path.ranges[0].t0)).toBeCloseTo(before[0][0], 4);
+    expect(anchorFraction(path, path.ranges[0].w1, path.ranges[0].t1)).toBeCloseTo(before[0][1], 4);
   });
 
   it("refuses a smooth merge that would reshape the curve outside the brush", () => {
