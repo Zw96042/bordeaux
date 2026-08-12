@@ -143,7 +143,12 @@ public final class BordeauxEventRunner implements AutoCloseable {
     }
 
     private void validatePath() {
-        for (BordeauxEvent event : path.events()) {
+        validateEvents(path.events(), registry, conditions);
+    }
+
+    static void validateEvents(List<BordeauxEvent> events, BordeauxCommandRegistry registry,
+            BordeauxConditionRegistry conditions) {
+        for (BordeauxEvent event : events) {
             try {
                 registry.validateInvocation(event.commandId(), event.arguments());
                 conditions.validateReference(event.conditionId());

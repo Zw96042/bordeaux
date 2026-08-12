@@ -3,9 +3,11 @@ package dev.bordeaux.runtime;
 import edu.wpi.first.wpilibj2.command.Command;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Supplier;
 /** Resolves sensor decisions and commands only between completed path steps. */
 public final class BordeauxRoutineRunner implements AutoCloseable {
@@ -47,6 +49,7 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
             throw new BordeauxRuntimeException("Routine catalog does not match the robot command registry");
         }
         validateNodes(routine.nodes());
+        validateRoutinePathEvents(document);
         reset();
     }
     /** Legacy path-only view of {@link #startTransition()}; empty means the routine completed. */
@@ -135,6 +138,36 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
             } catch (RuntimeException exception) {
                 throw new BordeauxRuntimeException(
                         "Routine node '" + node.id() + "' is invalid: " + exception.getMessage(), exception);
+            }
+        }
+    }
+
+    private void validateRoutinePathEvents(BordeauxPathEvents document) {
+        Set<String> pathIds = new LinkedHashSet<>();
+        collectPathIds(routine.nodes(), pathIds);
+        for (String pathId : pathIds) {
+            List<BordeauxEvent> events = document.routinePathEvents().get(pathId);
+            if (events == null) {
+                throw new BordeauxRuntimeException(
+                        "Routine path '" + pathId + "' has no event metadata; load the document with "
+                                + "BordeauxTrajectoryReader.readWithRoutine(...) or provide every routine path event list");
+            }
+            try {
+                BordeauxEventRunner.validateEvents(events, commands, conditions);
+            } catch (BordeauxRuntimeException exception) {
+                throw new BordeauxRuntimeException(
+                        "Routine path '" + pathId + "' is invalid: " + exception.getMessage(), exception);
+            }
+        }
+    }
+
+    private void collectPathIds(List<BordeauxRoutineNode> nodes, Set<String> pathIds) {
+        for (BordeauxRoutineNode node : nodes) {
+            if (node instanceof BordeauxRoutineNode.Path path) {
+                pathIds.add(path.pathId());
+            } else if (node instanceof BordeauxRoutineNode.Decision decision) {
+                collectPathIds(decision.whenTrue(), pathIds);
+                collectPathIds(decision.whenFalse(), pathIds);
             }
         }
     }

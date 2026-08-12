@@ -13,7 +13,10 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /** Strict, bounded reader for Bordeaux native Java trajectory schema 1.0. */
@@ -58,6 +61,7 @@ public final class BordeauxTrajectoryReader {
         ObjectNode nameMatch = null;
         int nameMatchCount = 0;
         Set<String> pathIds = new HashSet<>();
+        Map<String, RawPathEvents> rawPathEvents = new LinkedHashMap<>();
         int sampleCount = 0;
         int eventCount = 0;
         int pathCount = 0;
@@ -117,6 +121,9 @@ public final class BordeauxTrajectoryReader {
                             if (!pathIds.add(pathId)) {
                                 throw new BordeauxRuntimeException("Duplicate path ID '" + pathId + "'");
                             }
+                            if (includeRoutine) {
+                                rawPathEvents.put(pathId, new RawPathEvents(pathId, path.get("totalTimeS"), events));
+                            }
                             if (pathSelector.equals(pathId)) idMatch = path;
                             if (pathSelector.equals(text(path, "name", "$.paths[" + index + "]"))) {
                                 if (nameMatch == null) nameMatch = path;
@@ -163,15 +170,22 @@ public final class BordeauxTrajectoryReader {
             throw new BordeauxRuntimeException("Path selector '" + pathSelector + "' is ambiguous");
         }
         BordeauxRoutine routine = includeRoutine ? parseRoutine(routineNode, pathIds) : BordeauxRoutine.empty();
-        return parsePath(selected, catalogId, catalogHash, routine);
+        Map<String, List<BordeauxEvent>> routinePathEvents = includeRoutine
+                ? parseRoutinePathEvents(routine, rawPathEvents) : Map.of();
+        String selectedId = text(selected, "id", "path");
+        List<BordeauxEvent> selectedEvents = routinePathEvents.get(selectedId);
+        if (selectedEvents == null) selectedEvents = parseEvents(new RawPathEvents(
+                selectedId, selected.get("totalTimeS"), selected.get("events")));
+        return parsePath(selected, catalogId, catalogHash, routine, selectedEvents, routinePathEvents);
     }
 
-    private static BordeauxPathEvents parsePath(JsonNode path, String catalogId, String catalogHash, BordeauxRoutine routine) {
+    private static BordeauxPathEvents parsePath(JsonNode path, String catalogId, String catalogHash,
+            BordeauxRoutine routine, List<BordeauxEvent> events,
+            Map<String, List<BordeauxEvent>> routinePathEvents) {
         String id = text(path, "id", "path");
         String name = text(path, "name", "path '" + id + "'");
         double totalTimeS = nonnegativeFinite(path.get("totalTimeS"), "Path '" + id + "' totalTimeS");
         JsonNode sampleNodes = path.get("samples");
-        JsonNode events = path.get("events");
 
         List<BordeauxSample> samples = new ArrayList<>();
         for (int index = 0; index < sampleNodes.size(); index++) {
@@ -217,6 +231,14 @@ public final class BordeauxTrajectoryReader {
             }
         }
 
+        return new BordeauxPathEvents(
+                id, name, totalTimeS, catalogId, catalogHash, events, samples, sections, routine, routinePathEvents);
+    }
+
+    private static List<BordeauxEvent> parseEvents(RawPathEvents path) {
+        String id = path.pathId();
+        double totalTimeS = nonnegativeFinite(path.totalTimeS(), "Path '" + id + "' totalTimeS");
+        JsonNode events = path.events();
         List<IndexedEvent> indexed = new ArrayList<>();
         Set<String> eventIds = new HashSet<>();
         for (int index = 0; index < events.size(); index++) {
@@ -261,8 +283,29 @@ public final class BordeauxTrajectoryReader {
         }
         indexed.sort(Comparator.comparingDouble((IndexedEvent value) -> value.event().timeS())
                 .thenComparingInt(IndexedEvent::index));
-        return new BordeauxPathEvents(
-                id, name, totalTimeS, catalogId, catalogHash, indexed.stream().map(IndexedEvent::event).toList(), samples, sections, routine);
+        return indexed.stream().map(IndexedEvent::event).toList();
+    }
+
+    private static Map<String, List<BordeauxEvent>> parseRoutinePathEvents(
+            BordeauxRoutine routine, Map<String, RawPathEvents> rawPathEvents) {
+        Set<String> referencedPathIds = new LinkedHashSet<>();
+        collectRoutinePathIds(routine.nodes(), referencedPathIds);
+        Map<String, List<BordeauxEvent>> result = new LinkedHashMap<>();
+        for (String pathId : referencedPathIds) {
+            result.put(pathId, parseEvents(rawPathEvents.get(pathId)));
+        }
+        return result;
+    }
+
+    private static void collectRoutinePathIds(List<BordeauxRoutineNode> nodes, Set<String> pathIds) {
+        for (BordeauxRoutineNode node : nodes) {
+            if (node instanceof BordeauxRoutineNode.Path path) {
+                pathIds.add(path.pathId());
+            } else if (node instanceof BordeauxRoutineNode.Decision decision) {
+                collectRoutinePathIds(decision.whenTrue(), pathIds);
+                collectRoutinePathIds(decision.whenFalse(), pathIds);
+            }
+        }
     }
 
     private static BordeauxRoutine parseRoutine(JsonNode value, Set<String> pathIds) {
@@ -368,6 +411,8 @@ public final class BordeauxTrajectoryReader {
     }
 
     private record IndexedEvent(int index, BordeauxEvent event) {}
+
+    private record RawPathEvents(String pathId, JsonNode totalTimeS, JsonNode events) {}
 
     private static final class BoundedInputStream extends InputStream {
         private final InputStream delegate;
