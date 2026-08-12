@@ -17,6 +17,7 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
@@ -259,7 +260,8 @@ class BordeauxRuntimeTest {
                                 new BordeauxRoutineNode.Path("a-next", "path-b")),
                         List.of(new BordeauxRoutineNode.Path("b-next", "path-c")))));
         BordeauxPathEvents document = new BordeauxPathEvents(
-                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), routine);
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), routine,
+                Map.of("path-a", List.of(), "path-b", List.of(), "path-c", List.of()));
         boolean[] hasNote = {true};
         List<String> created = new ArrayList<>();
         RecordingScheduler scheduler = new RecordingScheduler();
@@ -360,7 +362,8 @@ class BordeauxRuntimeTest {
                 new BordeauxRoutineNode.Command("collect", "collect", arguments),
                 new BordeauxRoutineNode.Path("second", "path-b")));
         BordeauxPathEvents document = new BordeauxPathEvents(
-                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), routine);
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), routine,
+                Map.of("path-a", List.of(), "path-b", List.of()));
         RecordingScheduler scheduler = new RecordingScheduler();
         BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, registry(new ArrayList<>(), "collect"),
                 BordeauxConditionRegistry.empty(), scheduler);
@@ -839,6 +842,71 @@ class BordeauxRuntimeTest {
         assertEquals(0, runner.commandCount());
     }
 
+    @Test
+    void preflightsEventsOnLaterRoutinePathsBeforeTheFirstPathStarts() {
+        int[] factoryCalls = {0};
+        BordeauxCommandRegistry registry = BordeauxCommandRegistry.builder()
+                .catalogId(CATALOG_ID)
+                .catalogHash(HASH)
+                .register("exact", Set.of("sequence"),
+                        args -> args.requireLong("sequence"), args -> {
+                    factoryCalls[0]++;
+                    return new TestCommand("exact");
+                })
+                .build();
+        BordeauxConditionRegistry conditions = BordeauxConditionRegistry.builder()
+                .register("choose-path", () -> true)
+                .build();
+        RecordingScheduler scheduler = new RecordingScheduler();
+
+        BordeauxPathEvents unknownCommand = readRoutineWithLaterEvent(
+                """
+                {"eventId":"later","name":"Later","timeS":0.5,"fraction":0.5,
+                 "commandId":"missing","arguments":{},"cancelOnPathEnd":false}
+                """);
+        assertTrue(unknownCommand.events().isEmpty());
+        assertEquals(Set.of("path-a", "path-b"), unknownCommand.routinePathEvents().keySet());
+        assertThrows(UnsupportedOperationException.class,
+                () -> unknownCommand.routinePathEvents().put("other", List.of()));
+        assertThrows(UnsupportedOperationException.class,
+                () -> unknownCommand.routinePathEvents().get("path-b").clear());
+        BordeauxRuntimeException unknownFailure = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxRoutineRunner(unknownCommand, registry, conditions, scheduler));
+        assertTrue(unknownFailure.getMessage().contains("path-b"));
+        assertTrue(unknownFailure.getMessage().contains("unknown Bordeaux command ID"));
+
+        BordeauxPathEvents missingMetadata = new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), unknownCommand.routine());
+        BordeauxRuntimeException metadataFailure = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxRoutineRunner(missingMetadata, registry, conditions, scheduler));
+        assertTrue(metadataFailure.getMessage().contains("path-b"));
+        assertTrue(metadataFailure.getMessage().contains("readWithRoutine"));
+
+        BordeauxPathEvents badArguments = readRoutineWithLaterEvent(
+                """
+                {"eventId":"later","name":"Later","timeS":0.5,"fraction":0.5,
+                 "commandId":"exact","arguments":{"sequence":"not-a-number"},"cancelOnPathEnd":false}
+                """);
+        BordeauxRuntimeException argumentFailure = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxRoutineRunner(badArguments, registry, conditions, scheduler));
+        assertTrue(argumentFailure.getMessage().contains("path-b"));
+        assertTrue(argumentFailure.getMessage().contains("sequence"));
+
+        BordeauxPathEvents badCondition = readRoutineWithLaterEvent(
+                """
+                {"eventId":"later","name":"Later","timeS":0.5,"fraction":0.5,
+                 "commandId":"exact","arguments":{"sequence":"2"},"cancelOnPathEnd":false,
+                 "conditionId":"missing-condition"}
+                """);
+        BordeauxRuntimeException conditionFailure = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxRoutineRunner(badCondition, registry, conditions, scheduler));
+        assertTrue(conditionFailure.getMessage().contains("path-b"));
+        assertTrue(conditionFailure.getMessage().contains("Unknown Bordeaux condition ID"));
+
+        assertEquals(0, factoryCalls[0]);
+        assertTrue(scheduler.scheduled.isEmpty());
+    }
+
     private static BordeauxPathEvents read(String json) {
         return BordeauxTrajectoryReader.read(
                 new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), "auto");
@@ -847,6 +915,23 @@ class BordeauxRuntimeTest {
     private static BordeauxPathEvents readWithRoutine(String json) {
         return BordeauxTrajectoryReader.readWithRoutine(
                 new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), "auto");
+    }
+
+    private static BordeauxPathEvents readRoutineWithLaterEvent(String eventJson) {
+        String json = """
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
+                 "catalog":{"schemaVersion":"1.0","catalogId":"test-robot","supportVersion":"0.1.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "routine":{"name":"Choose path","nodes":[
+                   {"id":"first","type":"path","ref":"path-a"},
+                   {"id":"choose","type":"decision","cond":"choose-path","thenLabel":"yes","elseLabel":"no",
+                    "then":[{"id":"second","type":"path","ref":"path-b"}],
+                    "else":[{"id":"fallback","type":"path","ref":"path-a"}]}]},
+                 "paths":[
+                   {"id":"path-a","name":"A","totalTimeS":1,"samples":[],"events":[]},
+                   {"id":"path-b","name":"B","totalTimeS":1,"samples":[],"events":[%s]}]}
+                """.formatted(eventJson);
+        return BordeauxTrajectoryReader.readWithRoutine(
+                new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), "path-a");
     }
 
     private static BordeauxSample sample(int index, double timeS, double xM) {
