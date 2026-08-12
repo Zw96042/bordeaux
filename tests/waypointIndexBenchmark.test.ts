@@ -63,7 +63,8 @@ const catalog: JavaCommandCatalog = {
 };
 
 function digest(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value) ?? "undefined").digest("hex");
+  const serialized = JSON.stringify(value, (key, item) => key === "waypointSampleIndices" ? undefined : item);
+  return createHash("sha256").update(serialized ?? "undefined").digest("hex");
 }
 
 benchmark("indexes 600 ordered waypoint arrivals and heading anchors", () => {

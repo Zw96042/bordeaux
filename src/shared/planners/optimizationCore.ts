@@ -23,9 +23,13 @@ function linearLimits(input: PlannerInput) {
   };
 }
 
-function linearLimitProfile(input: PlannerInput, samples: readonly TrajectorySample[]) {
+function linearLimitProfile(
+  input: PlannerInput,
+  samples: readonly TrajectorySample[],
+  waypointSampleIndices?: readonly number[],
+) {
   const base = linearLimits(input);
-  const ranges = effectiveRanges(input.path, samples, samples.at(-1)?.s ?? 0);
+  const ranges = effectiveRanges(input.path, samples, samples.at(-1)?.s ?? 0, waypointSampleIndices);
   const fractions = samples.map((sample) => sample.f);
   const policies = ranges.map((range) => ({ ...range, maxDecel: range.maxDecel ?? range.maxAccel }));
   const pointIndex = indexPointPolicies(fractions, policies);
@@ -42,8 +46,12 @@ function linearLimitProfile(input: PlannerInput, samples: readonly TrajectorySam
   };
 }
 
-function countConstraintViolations(input: PlannerInput, samples: readonly TrajectorySample[]): number {
-  const profile = linearLimitProfile(input, samples);
+function countConstraintViolations(
+  input: PlannerInput,
+  samples: readonly TrajectorySample[],
+  waypointSampleIndices?: readonly number[],
+): number {
+  const profile = linearLimitProfile(input, samples, waypointSampleIndices);
   let violations = 0;
   samples.forEach((sample, index) => {
     if (index === 0) {
@@ -86,6 +94,7 @@ export function optimizationDiagnostics(
   samples: TrajectorySample[],
   solveTimeMs: number,
   fallbackReason?: string,
+  waypointSampleIndices?: readonly number[],
 ): PlannerOptimizationDiagnostics {
   const maxVelocityMps = samples.reduce((max, sample) => Math.max(max, Math.abs(sample.velocityMps)), 0);
   const maxAccelerationMps2 = samples.reduce((max, sample) => Math.max(max, Math.abs(sample.accelerationMps2)), 0);
@@ -95,7 +104,7 @@ export function optimizationDiagnostics(
     totalTimeS: R(samples.at(-1)?.t ?? 0, 4),
     maxVelocityMps: R(maxVelocityMps, 4),
     maxAccelerationMps2: R(maxAccelerationMps2, 4),
-    constraintViolations: countConstraintViolations(input, samples),
+    constraintViolations: countConstraintViolations(input, samples, waypointSampleIndices),
     fallback: Boolean(fallbackReason),
     fallbackReason,
   };
@@ -103,7 +112,7 @@ export function optimizationDiagnostics(
 
 /** Applies the maintained optimized timing pass to an already-profiled trajectory. */
 function optimizePlannerMotionBase(input: PlannerInput, base: PlannerResult): PlannerResult {
-  const limits = linearLimitProfile(input, base.samples);
+  const limits = linearLimitProfile(input, base.samples, base.waypointSampleIndices);
   const velocities = optimizeVelocities(
     base.samples,
     limits,
@@ -118,6 +127,7 @@ function optimizePlannerMotionBase(input: PlannerInput, base: PlannerResult): Pl
     totalTimeS,
     totalDistanceM: base.totalDistanceM,
     samples,
+    waypointSampleIndices: base.waypointSampleIndices,
     markers: base.markers.map((marker) => ({ ...marker, timeS: R(timeAtFraction(samples, marker.fraction), 4) })),
     diagnostics: base.diagnostics,
   };
@@ -130,7 +140,13 @@ export function optimizePlannerMotion(input: PlannerInput, base: PlannerResult):
 
 export function optimizePlannerResult(input: PlannerInput, base: PlannerResult, startedAt: number): PlannerResult {
   const result = optimizePlannerMotionBase(input, base);
-  const optimization = optimizationDiagnostics(input, result.samples, performance.now() - startedAt);
+  const optimization = optimizationDiagnostics(
+    input,
+    result.samples,
+    performance.now() - startedAt,
+    undefined,
+    result.waypointSampleIndices,
+  );
   const constraintIssue: ValidationIssue[] = optimization.constraintViolations > 0 ? [{
     severity: "error",
     path: `paths.${input.path.name}.planner`,

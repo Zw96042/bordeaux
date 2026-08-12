@@ -210,6 +210,100 @@ describe("planner correctness boundaries", () => {
     }
   });
 
+  it.each(["profiledSpline", "optimizedTrajectory"] as const)(
+    "keeps a terminal wait after translation-priority heading catch-up in %s",
+    (plannerId) => {
+      const project = createDemoProject();
+      const path = project.paths[0];
+      path.headingMode = "manual";
+      path.constraints = {
+        ...path.constraints,
+        maxVel: 4,
+        maxAccel: 5,
+        maxDecel: 5,
+        maxAngVel: 60,
+        maxAngAccel: 120,
+        maxAngDecel: 120,
+      };
+      path.waypoints = buildWaypoints([
+        { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
+        { x: 8, y: 2, theta: 180, thetaOn: true, stop: true, wait: 1 },
+      ]);
+      path.ranges = [{
+        anchor: "param", f0: 0.05, f1: 0.95,
+        maxVel: 4, maxAccel: 5, maxDecel: 5, maxAngVel: 60, maxAngAccel: 120,
+        rotationPriority: "translation",
+      }];
+      path.markers = [{ id: "finish", f: 1, name: "Finish" }];
+
+      const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+      const arrival = result.waypointSampleIndices!.at(-1)!;
+      let lastHeadingChange = arrival;
+      for (let index = arrival + 1; index < result.samples.length; index += 1) {
+        if (Math.abs(wrapRadians(result.samples[index].headingRad - result.samples[index - 1].headingRad)) > 1e-8) {
+          lastHeadingChange = index;
+        }
+      }
+
+      expect(lastHeadingChange).toBeGreaterThan(arrival);
+      expect(result.samples.at(-1)!.t - result.samples[lastHeadingChange].t).toBeGreaterThanOrEqual(1 - 1e-4);
+      expect(result.samples.slice(lastHeadingChange).every((sample) => (
+        Math.hypot(sample.x - result.samples[arrival].x, sample.y - result.samples[arrival].y) < 1e-5
+      ))).toBe(true);
+      expect(result.markers[0].timeS).toBeCloseTo(result.totalTimeS, 6);
+    },
+  );
+
+  it.each(["profiledSpline", "optimizedTrajectory"] as const)(
+    "keeps a terminal turn after translation-priority heading catch-up in %s",
+    (plannerId) => {
+      const project = createDemoProject();
+      const path = project.paths[0];
+      path.headingMode = "manual";
+      path.constraints = {
+        ...path.constraints,
+        maxVel: 4,
+        maxAccel: 5,
+        maxDecel: 5,
+        maxAngVel: 60,
+        maxAngAccel: 120,
+        maxAngDecel: 120,
+      };
+      path.waypoints = buildWaypoints([
+        { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
+        {
+          x: 8, y: 2, theta: 180, thetaOn: true, stop: true,
+          turnInPlace: { headingDeg: 90, direction: "shortest" },
+        },
+      ]);
+      path.ranges = [{
+        anchor: "param", f0: 0.05, f1: 0.95,
+        maxVel: 4, maxAccel: 5, maxDecel: 5, maxAngVel: 60, maxAngAccel: 120,
+        rotationPriority: "translation",
+      }];
+      path.markers = [{ id: "finish", f: 1, name: "Finish" }];
+
+      const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+      const arrival = result.waypointSampleIndices!.at(-1)!;
+      const peakIndex = result.samples.reduce((peak, sample, index) => (
+        index >= arrival && sample.headingRad > result.samples[peak].headingRad ? index : peak
+      ), arrival);
+      const targetIndex = result.samples.findIndex((sample, index) => (
+        index > peakIndex && Math.abs(wrapRadians(sample.headingRad - Math.PI / 2)) < 1e-4
+      ));
+      const maxHeadingStep = result.samples.slice(peakIndex + 1).reduce((maximum, sample, index) => (
+        Math.max(maximum, Math.abs(wrapRadians(sample.headingRad - result.samples[peakIndex + index].headingRad)))
+      ), 0);
+
+      expect(peakIndex).toBeGreaterThan(arrival);
+      expect(Math.abs(wrapRadians(result.samples[peakIndex].headingRad - Math.PI))).toBeLessThan(0.01);
+      expect(result.samples.at(-1)!.headingRad).toBeCloseTo(Math.PI / 2, 3);
+      expect(targetIndex).toBeGreaterThanOrEqual(result.samples.length - 2);
+      expect(maxHeadingStep).toBeLessThan(5 * Math.PI / 180);
+      expect(result.markers[0].timeS).toBeCloseTo(result.totalTimeS, 6);
+    },
+  );
+
   it.each(["profiledSpline", "optimizedTrajectory"] as const)("uses maxAngDecel while settling moving heading in %s", (plannerId) => {
     const project = createDemoProject();
     const path = project.paths[0];

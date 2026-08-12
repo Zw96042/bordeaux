@@ -476,6 +476,8 @@ export interface PlannerResult {
   totalTimeS: number;
   totalDistanceM: number;
   samples: TrajectorySample[];
+  /** Structural authored-waypoint arrivals. Internal planner metadata; not part of BDX exports. */
+  waypointSampleIndices?: number[];
   markers: BdxMarker[];
   diagnostics: ValidationIssue[];
   optimization?: PlannerOptimizationDiagnostics;

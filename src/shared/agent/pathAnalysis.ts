@@ -443,9 +443,12 @@ function analyzeGeneratedPath(
   robotHeightM?: number,
   requiredTraversal?: AnalyzePathOptions["requiredTraversal"],
   requiredPortalIds: readonly string[] = [],
+  waypointSampleIndices?: readonly number[],
 ): Pick<PathAnalysis, "rawSamples" | "samplesTruncated" | "extrema" | "findings"> {
   const values = measuredValues(samples);
-  const waypointArrivals = orderedWaypointSampleIndices(path.waypoints, samples);
+  const waypointArrivals = waypointSampleIndices?.length === path.waypoints.length
+    ? waypointSampleIndices
+    : orderedWaypointSampleIndices(path.waypoints, samples);
   const waypointDistances = waypointArrivals.map((index) => samples[index].s);
   const sampleReferenceAt = (index: number) => sampleReference(path, samples, index, waypointArrivals);
   const extrema: PathAnalysisExtremum[] = [];
@@ -571,6 +574,7 @@ export function analyzePath(project: BordeauxProject, pathId: string, options: A
     options.robotHeightM,
     options.requiredTraversal,
     options.requiredPortalIds,
+    generated.waypointSampleIndices,
   );
   const structureFindings: PathAnalysisFinding[] = structural.map((item, index) => ({
     id: `structure:${index}`,

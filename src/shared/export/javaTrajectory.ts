@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { buildBdxExport } from "./bdx";
+import { buildBdxExport, buildBdxExportWithPlannerResults } from "./bdx";
 import { DEFAULT_SAMPLES_PER_SEGMENT } from "../planners/limits";
 import { validateProjectJavaInvocations } from "../javaCommands";
 import { activeRoutine } from "../project/routines";
@@ -80,8 +80,14 @@ export interface BuiltJavaTrajectory {
   sampleCount: number;
 }
 
-function followSections(path: PathDoc, samples: readonly TrajectorySample[]): JavaFollowSection[] {
-  const boundaries = orderedWaypointSampleIndices(path.waypoints, samples);
+function followSections(
+  path: PathDoc,
+  samples: readonly TrajectorySample[],
+  waypointSampleIndices?: readonly number[],
+): JavaFollowSection[] {
+  const boundaries = waypointSampleIndices?.length === path.waypoints.length
+    ? waypointSampleIndices
+    : orderedWaypointSampleIndices(path.waypoints, samples);
   const sections: JavaFollowSection[] = [];
   path.waypoints.slice(0, -1).forEach((waypoint, segmentIndex) => {
     const start = boundaries[segmentIndex];
@@ -230,7 +236,7 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
   assertJsonNestingDepth(preflightDocument);
   assertExportSize(preflightDocument);
 
-  const native = buildBdxExport(project);
+  const { document: native, plannerResults } = buildBdxExportWithPlannerResults(project);
   let sampleCount = 0;
   const paths: JavaTrajectoryPath[] = [];
   native.paths.forEach((path, pathIndex) => {
@@ -264,7 +270,7 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
       totalTimeS: path.totalTimeS,
       totalDistanceM: path.totalDistanceM,
       samples: path.samples,
-      followSections: followSections(sourcePaths[pathIndex], path.samples),
+      followSections: followSections(sourcePaths[pathIndex], path.samples, plannerResults[pathIndex].waypointSampleIndices),
       events,
     });
   });
