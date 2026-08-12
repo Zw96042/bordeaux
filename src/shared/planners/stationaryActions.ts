@@ -3,6 +3,7 @@ import { wrapRadians } from "../math/angles";
 import type { ConstraintRange, PathDoc, PlannerResult, RobotConfig, TrajectorySample } from "../types";
 import { enforceAngularTiming } from "./angularConstraints";
 import { MAX_TRAJECTORY_SAMPLES } from "./limits";
+import { orderedWaypointSampleIndices } from "./waypointSamples";
 
 const EPSILON = 1e-9;
 const DEG = Math.PI / 180;
@@ -100,21 +101,6 @@ function samplePeriod(samples: readonly TrajectorySample[]): number {
   return Number.isFinite(best) ? Math.max(0.01, Math.min(0.05, best)) : 0.02;
 }
 
-function waypointSampleIndices(path: PathDoc, samples: readonly TrajectorySample[]): number[] {
-  let cursor = 0;
-  return path.waypoints.map((waypoint, waypointIndex) => {
-    if (waypointIndex === path.waypoints.length - 1) return samples.length - 1;
-    let best = cursor, distance = Infinity;
-    for (let index = cursor; index < samples.length; index += 1) {
-      const candidate = Math.hypot(samples[index].x - waypoint.x, samples[index].y - waypoint.y);
-      if (candidate < distance) { best = index; distance = candidate; }
-      if (distance < 1e-5 && candidate > distance + 1e-4) break;
-    }
-    cursor = best;
-    return best;
-  });
-}
-
 function firstMovingSampleIndex(samples: readonly TrajectorySample[], boundary: number): number | null {
   const arrival = samples[boundary];
   for (let index = boundary + 1; index < samples.length; index += 1) {
@@ -159,7 +145,10 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     .filter(({ waypoint }) => waypoint.turnInPlace || waypoint.jiggle || (waypoint.stop && (waypoint.wait ?? 0) > 0));
   if (actions.length === 0 || result.samples.length === 0) return result;
 
-  const baseIndices = waypointSampleIndices(path, result.samples);
+  const baseIndices = orderedWaypointSampleIndices(path.waypoints, result.samples, {
+    finalWaypointAtEnd: true,
+    fallback: "stationary",
+  });
   const incompatible = actions.find(({ waypoint, index }) => {
     if (!waypoint.turnInPlace) return false;
     if (index >= path.waypoints.length - 1) return false;

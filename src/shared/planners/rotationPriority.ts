@@ -3,6 +3,7 @@ import { wrapRadians } from "../math/angles";
 import { headingTransitionWindows, segmentHeadingLaws } from "./headingTransitions";
 import { indexIntervalPolicies } from "./intervalPolicies";
 import { MAX_TRAJECTORY_SAMPLES } from "./limits";
+import { orderedWaypointSampleIndices } from "./waypointSamples";
 
 const EPSILON = 1e-9;
 const DEG = Math.PI / 180;
@@ -14,21 +15,8 @@ function clamp(value: number, minimum: number, maximum: number): number {
 }
 
 function waypointFractions(path: PathDoc, samples: readonly TrajectorySample[]): number[] {
-  let cursor = 0;
-  return path.waypoints.map((waypoint, waypointIndex) => {
-    if (waypointIndex === path.waypoints.length - 1) return samples.at(-1)?.f ?? 1;
-    let best = cursor;
-    let bestDistance = Infinity;
-    for (let index = cursor; index < samples.length; index += 1) {
-      const distance = Math.hypot(samples[index].x - waypoint.x, samples[index].y - waypoint.y);
-      if (distance < bestDistance) {
-        best = index;
-        bestDistance = distance;
-      }
-    }
-    cursor = best;
-    return samples[best]?.f ?? 0;
-  });
+  return orderedWaypointSampleIndices(path.waypoints, samples, { finalWaypointAtEnd: true, fallback: "full" })
+    .map((index) => samples[index]?.f ?? 0);
 }
 
 export function effectiveRanges(path: PathDoc, samples: readonly TrajectorySample[], totalDistance: number): EffectiveRange[] {

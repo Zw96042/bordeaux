@@ -23,6 +23,7 @@ import type {
   PathSampleReference,
 } from "./types";
 import { angularRateKind } from "../planners/angularConstraints";
+import { orderedWaypointSampleIndices } from "../planners/waypointSamples";
 
 const EPSILON = 1e-6;
 const BARRIER_EPSILON = 1e-4;
@@ -100,22 +101,6 @@ function metricLimit(path: PathDoc, sample: TrajectorySample, totalDistance: num
   return { limit, source };
 }
 
-function waypointArrivalIndices(path: PathDoc, samples: readonly TrajectorySample[]): number[] {
-  if (samples.length === 0) return [];
-  let cursor = 0;
-  return path.waypoints.map((waypoint, waypointIndex) => {
-    let best = cursor;
-    let distance = Number.POSITIVE_INFINITY;
-    const finalSearchIndex = waypointIndex === path.waypoints.length - 1 ? samples.length - 1 : Math.max(cursor, samples.length - (path.waypoints.length - waypointIndex));
-    for (let index = cursor; index <= finalSearchIndex; index += 1) {
-      const candidate = Math.hypot(samples[index].x - waypoint.x, samples[index].y - waypoint.y);
-      if (candidate < distance) { distance = candidate; best = index; }
-    }
-    cursor = best;
-    return best;
-  });
-}
-
 export interface AnalyzePathOptions {
   sampleLimit?: number;
   minimumClearanceM?: number;
@@ -127,13 +112,34 @@ export interface AnalyzePathOptions {
 
 function sampleReference(path: PathDoc, samples: readonly TrajectorySample[], index: number, arrivals: readonly number[]): PathSampleReference {
   const sample = samples[index];
-  let segmentIndex = 0;
-  for (let waypointIndex = 1; waypointIndex < arrivals.length - 1; waypointIndex += 1) {
-    if (arrivals[waypointIndex] <= index) segmentIndex = waypointIndex;
+  let low = 0;
+  let high = arrivals.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (arrivals[middle] < index) low = middle + 1;
+    else high = middle;
   }
-  const nearestWaypointIndex = arrivals.reduce((best, arrival, waypointIndex) => (
-    Math.abs(arrival - index) < Math.abs(arrivals[best] - index) ? waypointIndex : best
-  ), 0);
+  const nextWaypoint = low < arrivals.length ? low : arrivals.length - 1;
+  const previousArrival = arrivals[Math.max(0, low - 1)];
+  let previousLow = 0;
+  let previousHigh = Math.max(1, low);
+  while (previousLow < previousHigh) {
+    const middle = (previousLow + previousHigh) >>> 1;
+    if (arrivals[middle] < previousArrival) previousLow = middle + 1;
+    else previousHigh = middle;
+  }
+  const previousWaypoint = previousLow;
+  const nearestWaypointIndex = Math.abs(arrivals[nextWaypoint] - index) < Math.abs(arrivals[previousWaypoint] - index)
+    ? nextWaypoint
+    : previousWaypoint;
+  let segmentLow = 0;
+  let segmentHigh = arrivals.length;
+  while (segmentLow < segmentHigh) {
+    const middle = (segmentLow + segmentHigh) >>> 1;
+    if (arrivals[middle] <= index) segmentLow = middle + 1;
+    else segmentHigh = middle;
+  }
+  const segmentIndex = segmentLow - 1;
   return {
     index,
     timeS: sample.t,
@@ -439,7 +445,7 @@ function analyzeGeneratedPath(
   requiredPortalIds: readonly string[] = [],
 ): Pick<PathAnalysis, "rawSamples" | "samplesTruncated" | "extrema" | "findings"> {
   const values = measuredValues(samples);
-  const waypointArrivals = waypointArrivalIndices(path, samples);
+  const waypointArrivals = orderedWaypointSampleIndices(path.waypoints, samples);
   const waypointDistances = waypointArrivals.map((index) => samples[index].s);
   const sampleReferenceAt = (index: number) => sampleReference(path, samples, index, waypointArrivals);
   const extrema: PathAnalysisExtremum[] = [];
