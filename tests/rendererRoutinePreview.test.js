@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { processRoutinePreviewJob } from "../src/renderer/assets/path-preview-worker";
+import { AUTO } from "../src/renderer/lib/routineModel";
+import { createDemoProject } from "../src/shared/project/defaults";
 import { loadRendererExport } from "./helpers/loadRendererExport";
 
 function routinePreview() {
@@ -18,6 +20,24 @@ describe("routine preview worker", () => {
     const routine = { nodes: [{ id: "decision", type: "decision", then: [{ id: "node_a", type: "path", ref: referenced.id }], else: [{ id: "node_b", type: "path", ref: unrelated.id }] }] };
 
     expect(routinePreview().referencedPaths(routine, [unrelated, referenced], { decision: "then" })).toEqual([referenced]);
+  });
+
+  it.each(["authored-first", "generated-first"])("keeps same-ID generated previews separate from authored paths (%s)", (order) => {
+    const project = createDemoProject();
+    const authored = project.paths[0];
+    const generated = structuredClone(authored);
+    generated.name = "Generated preview";
+    generated.waypoints.forEach((waypoint) => { waypoint.y += 2; waypoint.prevC.y += 2; waypoint.nextC.y += 2; });
+    const pathNode = { id: "authored", type: "path", ref: authored.id };
+    const generateNode = { id: "generated", type: "function", cat: "generate", funcRef: "GeneratePath", preview: generated };
+    const routine = { id: "routine", name: "Collision", nodes: order === "authored-first" ? [pathNode, generateNode] : [generateNode, pathNode] };
+
+    const paths = routinePreview().referencedPaths(routine, project.paths, {});
+    const run = AUTO.buildRun(routine, paths, project.robot, {}, project.plannerId);
+
+    expect(paths).toEqual([authored]);
+    expect(run.segs.find((segment) => segment.nodeId === pathNode.id)?.doc).toBe(authored);
+    expect(run.segs.find((segment) => segment.nodeId === generateNode.id)?.doc).toBe(generated);
   });
 
   it("counts unique path and routine assembly work before direct fallback", () => {
