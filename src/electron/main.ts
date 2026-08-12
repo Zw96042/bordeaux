@@ -531,6 +531,8 @@ function createWindow() {
         }
         const numEscapeCanceled = numInput?.value !== '1.25';
         if (numInput) editInput(numInput, '1.25');
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const numDraftReady = numInput?.value === '1.25' && document.activeElement === numInput;
         const numMenuSent = await runMenuStage('save-num');
         await new Promise((resolve) => setTimeout(resolve, 100));
         let numSaved;
@@ -539,7 +541,7 @@ function createWindow() {
           if (numSaved.project.paths[0].startVel === 1.25) break;
           await new Promise((resolve) => setTimeout(resolve, 20));
         }
-        const draftNumSaved = numMenuSent && numSaved.project.paths[0].startVel === 1.25 && numEscapeCanceled;
+        const draftNumSaved = numDraftReady && numMenuSent && numSaved.project.paths[0].startVel === 1.25 && numEscapeCanceled;
         const draftBigSaved = bigMenuSent && bigEscapeCanceled && bigDraftReady && bigSaved.project.robot.w === 0.93;
         [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === 'Robot')?.click();
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -548,8 +550,12 @@ function createWindow() {
           await new Promise((resolve) => setTimeout(resolve, 10));
         }
         document.querySelector('#robot-drive-motor-listbox [data-value="rev-neo"]')?.click();
-        await new Promise((resolve) => setTimeout(resolve, 1_050));
-        const motorAutosave = await window.bordeauxAPI.restoreLastProject();
+        let motorAutosave;
+        for (let attempt = 0; attempt < 150; attempt++) {
+          motorAutosave = await window.bordeauxAPI.restoreLastProject();
+          if (motorAutosave.project.robot.driveModel?.motorId === 'rev-neo') break;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
         const motorPreset = motorAutosave.project.robot.driveModel?.motorId === 'rev-neo'
           && motorAutosave.project.robot.driveModel?.motorFreeRpm === 5676
           && motorAutosave.project.robot.maxSpeed > 4;
@@ -587,7 +593,9 @@ function createWindow() {
         const smokeCommandOption = commandOptions.find((option) => option.getAttribute('data-value') === 'frc.robot.SmokeCommand');
         if (smokeCommandOption) {
           smokeCommandOption.click();
-          await new Promise((resolve) => setTimeout(resolve, 0));
+          // The picker deliberately restores trigger focus on its next frame.
+          // Let that finish before creating the focused parameter draft.
+          await new Promise((resolve) => requestAnimationFrame(resolve));
         }
         const jsonParameter = await waitFor(() => document.getElementById('event-command-param-tags'));
         const exactIntegerParameter = await waitFor(() => document.getElementById('event-command-param-sequence'));
