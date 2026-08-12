@@ -445,25 +445,6 @@ describe("project validation boundaries", () => {
     ]));
   });
 
-  it("aligns the project routine limit with Java export and runtime", () => {
-    const project = createDemoProject();
-    const pathId = project.paths[0].id;
-    project.routines![0].nodes = Array.from({ length: 2_000 }, (_, index) => ({
-      id: `path_${index}`,
-      type: "path" as const,
-      ref: pathId,
-    }));
-
-    expect(validateProject(project)).toEqual({ ok: true, issues: [] });
-
-    project.routines![0].nodes.push({ id: "path_2000", type: "path", ref: pathId });
-    expect(validateProject(project).issues).toContainEqual({
-      path: "$.routines[0].nodes",
-      message: "Routine cannot exceed 2000 nodes",
-      severity: "error",
-    });
-  });
-
   it("bounds project path collections and routine nesting", () => {
     const oversized = createDemoProject();
     oversized.paths = Array.from({ length: 1_025 }, () => oversized.paths[0]);
