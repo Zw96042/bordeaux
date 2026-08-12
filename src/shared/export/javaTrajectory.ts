@@ -3,6 +3,7 @@ import { buildBdxExport } from "./bdx";
 import { DEFAULT_SAMPLES_PER_SEGMENT } from "../planners/limits";
 import { validateProjectJavaInvocations } from "../javaCommands";
 import { activeRoutine } from "../project/routines";
+import { orderedWaypointSampleIndices } from "../planners/waypointSamples";
 import type { BordeauxProject, CommandInvocation, FollowMode, JavaCommandCatalog, PathDoc, RoutineNode, TrajectorySample } from "../types";
 
 const MAX_SAMPLE_COUNT = 100_000;
@@ -80,29 +81,7 @@ export interface BuiltJavaTrajectory {
 }
 
 function followSections(path: PathDoc, samples: readonly TrajectorySample[]): JavaFollowSection[] {
-  const boundaries: number[] = [];
-  path.waypoints.forEach((waypoint, waypointIndex) => {
-    const start = waypointIndex === 0 ? 0 : boundaries[waypointIndex - 1];
-    let nearest = start;
-    let nearestDistanceSquared = Number.POSITIVE_INFINITY;
-    const remainingWaypoints = path.waypoints.length - waypointIndex - 1;
-    const finalSearchIndex = waypointIndex === path.waypoints.length - 1
-      ? samples.length - 1
-      : Math.max(start, samples.length - remainingWaypoints - 1);
-    for (let index = start; index <= finalSearchIndex; index += 1) {
-      const dx = samples[index].x - waypoint.x;
-      const dy = samples[index].y - waypoint.y;
-      const candidateDistanceSquared = dx * dx + dy * dy;
-      if (candidateDistanceSquared < nearestDistanceSquared) {
-        nearest = index;
-        nearestDistanceSquared = candidateDistanceSquared;
-      }
-      // Planners preserve authored waypoint boundaries. The first matching sample is
-      // the ordered arrival, including when the same coordinate is visited again.
-      if (candidateDistanceSquared <= 1e-18) break;
-    }
-    boundaries.push(nearest);
-  });
+  const boundaries = orderedWaypointSampleIndices(path.waypoints, samples);
   const sections: JavaFollowSection[] = [];
   path.waypoints.slice(0, -1).forEach((waypoint, segmentIndex) => {
     const start = boundaries[segmentIndex];

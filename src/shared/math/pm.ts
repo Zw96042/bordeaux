@@ -1,6 +1,7 @@
 // @ts-nocheck
 // Generated from Bordeaux (standalone).html. Do not edit by hand.
 import { indexIntervalPolicies } from "../planners/intervalPolicies";
+import { firstHeadingAnchorInDistanceRange } from "../planners/headingTransitions";
 import { wrapRadians } from "./angles";
 
   // ---- geometry helpers ----
@@ -367,16 +368,18 @@ import { wrapRadians } from "./angles";
   function headingAt(f, anchors) {
     if (!anchors.length) return 0;
     if (f <= anchors[0].f) return anchors[0].rad;
-    for (let i = 0; i < anchors.length - 1; i++) {
-      const a = anchors[i], b = anchors[i + 1];
-      if (f >= a.f && f <= b.f) {
-        const tt = (b.f - a.f) < 1e-6 ? 0 : (f - a.f) / (b.f - a.f);
-        // smoothstep for nicer rotation
-        const ss = tt * tt * (3 - 2 * tt);
-        return angLerp(a.rad, b.rad, ss);
-      }
+    if (anchors.length === 1 || f > anchors[anchors.length - 1].f) return anchors[anchors.length - 1].rad;
+    let low = 1, high = anchors.length - 1;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (anchors[middle].f < f) low = middle + 1;
+      else high = middle;
     }
-    return anchors[anchors.length - 1].rad;
+    const a = anchors[low - 1], b = anchors[low];
+    const tt = (b.f - a.f) < 1e-6 ? 0 : (f - a.f) / (b.f - a.f);
+    // smoothstep for nicer rotation
+    const ss = tt * tt * (3 - 2 * tt);
+    return angLerp(a.rad, b.rad, ss);
   }
 
   // pose at time given sampled pts, profile times, and heading anchors / mode
@@ -620,10 +623,9 @@ import { wrapRadians } from "./angles";
       const boundaryIndex = Math.max(0, Math.min(pts.length - 1, wpIdx[segment]));
       const spanEndIndex = Math.max(boundaryIndex, Math.min(pts.length - 1, wpIdx[spanEndSegment + 1]));
       const boundaryDistance = pts[boundaryIndex].s, spanEndDistance = pts[spanEndIndex].s;
-      const anchor = anchorsByLaw[law].find((candidate) => {
-        const distance = Math.max(0, Math.min(1, candidate.f)) * totalDistance;
-        return distance >= boundaryDistance - 1e-9 && distance <= spanEndDistance + 1e-9;
-      });
+      const anchor = firstHeadingAnchorInDistanceRange(
+        anchorsByLaw[law], totalDistance, boundaryDistance, spanEndDistance,
+      );
       if (anchor) goals.push({ segmentIndex: segment, distanceM: Math.max(boundaryDistance, Math.max(0, Math.min(1, anchor.f)) * totalDistance), heading: anchor.rad, spanEndIndex });
     }
     return goals;

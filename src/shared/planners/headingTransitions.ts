@@ -28,6 +28,27 @@ export interface HeadingTransitionGoal {
   spanEndIndex: number;
 }
 
+export function firstHeadingAnchorInDistanceRange<T extends { f: number }>(
+  anchors: readonly T[],
+  totalDistanceM: number,
+  startDistanceM: number,
+  endDistanceM: number,
+): T | undefined {
+  let low = 0;
+  let high = anchors.length;
+  const minimum = startDistanceM - EPSILON;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    const distance = clamp(anchors[middle].f, 0, 1) * totalDistanceM;
+    if (distance < minimum) low = middle + 1;
+    else high = middle;
+  }
+  const anchor = anchors[low];
+  return anchor && clamp(anchor.f, 0, 1) * totalDistanceM <= endDistanceM + EPSILON
+    ? anchor
+    : undefined;
+}
+
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
 }
@@ -114,10 +135,9 @@ export function headingTransitionGoals(
     const spanEndIndex = clamp(waypointIndices[spanEndSegment + 1], boundaryIndex, Math.max(boundaryIndex, points.length - 1));
     const boundaryDistance = points[boundaryIndex]?.s ?? 0;
     const spanEndDistance = points[spanEndIndex]?.s ?? boundaryDistance;
-    const anchor = anchorsByLaw[law].find((candidate) => {
-      const distance = clamp(candidate.f, 0, 1) * totalDistanceM;
-      return distance >= boundaryDistance - EPSILON && distance <= spanEndDistance + EPSILON;
-    });
+    const anchor = firstHeadingAnchorInDistanceRange(
+      anchorsByLaw[law], totalDistanceM, boundaryDistance, spanEndDistance,
+    );
     if (!anchor) continue;
     goals.push({
       segmentIndex: segment,
