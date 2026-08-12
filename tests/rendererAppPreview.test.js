@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { App, routinePreviewResult, selectedAgentProposalPreview } from "../src/renderer/app/App";
+import { App, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, waypointPreviewResult } from "../src/renderer/app/App";
 import { PathPreview } from "../src/renderer/assets/path-preview";
 import { PM } from "../src/renderer/lib/pathMath";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
@@ -108,6 +108,44 @@ describe("renderer app path preview lifecycle", () => {
     } finally {
       derivePath.mockRestore();
     }
+  });
+
+  it("requests a maximum-size insertion preview without deriving synchronously", () => {
+    const project = createDemoProject();
+    const path = structuredClone(project.paths[0]);
+    path.waypoints = buildWaypoints(Array.from({ length: 4_096 }, (_, index) => ({
+      x: 1 + index * 0.003,
+      y: 4,
+    })));
+    const request = { doc: path, message: "Review insertion" };
+    const previewer = { request: vi.fn(() => 7) };
+    const derivePath = vi.spyOn(PM, "derivePath");
+
+    try {
+      expect(requestWaypointPreview(previewer, request, project.robot, project.plannerId)).toBe(7);
+      expect(previewer.request).toHaveBeenCalledWith({
+        key: request,
+        path,
+        robot: project.robot,
+        plannerId: project.plannerId,
+        quality: "final",
+      });
+      expect(derivePath).not.toHaveBeenCalled();
+    } finally {
+      derivePath.mockRestore();
+    }
+  });
+
+  it("accepts only the exact insertion preview request", () => {
+    const request = { doc: { id: "candidate" }, message: "Review insertion" };
+    const stale = { doc: request.doc, message: "Older insertion" };
+    const derived = { sample: { pts: [] } };
+    const error = { message: "preview failed" };
+
+    expect(waypointPreviewResult({ status: "ready", key: stale, path: request.doc, value: derived }, request)).toMatchObject({ pending: true, derived: null });
+    expect(waypointPreviewResult({ status: "pending", key: request, path: request.doc, value: derived }, request)).toMatchObject({ pending: true, derived: null });
+    expect(waypointPreviewResult({ status: "ready", key: request, path: request.doc, value: derived }, request)).toMatchObject({ pending: false, derived });
+    expect(waypointPreviewResult({ status: "error", errorKey: request, errorPath: request.doc, error }, request)).toMatchObject({ pending: false, derived: null, error });
   });
 
   it("renders a pending state for an 890-waypoint path without deriving during render", () => {
