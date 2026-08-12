@@ -305,6 +305,29 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void completesATerminalPositionWaitUsingTheTrailingTimeSection() {
+        List<BordeauxSample> samples = List.of(
+                new BordeauxSample(0, 0, 0, 0, 0, 0, 0, 1),
+                new BordeauxSample(1, 0.5, 1, 0.5, 1, 0, 0, 1),
+                new BordeauxSample(2, 1, 2, 1, 2, 0, 0, 0),
+                new BordeauxSample(3, 1.5, 2, 1, 2, 0, 0, 0),
+                new BordeauxSample(4, 2, 2, 1, 2, 0, 0, 0));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "terminal-wait", "Terminal wait", 2, CATALOG_ID, HASH, List.of(), samples, List.of(
+                        new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 2),
+                        new BordeauxFollowSection(0, BordeauxFollowSection.Mode.TIME, 2, 4)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(2, follower.update(0.02, 2, 0).index());
+        assertEquals(1, follower.sectionIndex());
+        assertFalse(follower.isFinished());
+        assertEquals(3, follower.update(0.5, 2, 0).index());
+        assertFalse(follower.isFinished());
+        assertEquals(4, follower.update(0.5, 2, 0).index());
+        assertTrue(follower.isFinished());
+    }
+
+    @Test
     void stationaryPositionUpdatesDoNotAdvanceTheLookahead() {
         List<BordeauxSample> samples = List.of(
                 sample(0, 0, 0), sample(1, 0.2, 1), sample(2, 0.4, 2),

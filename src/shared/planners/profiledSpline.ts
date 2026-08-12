@@ -91,12 +91,16 @@ export const profiledSplinePlanner: TrajectoryPlanner = {
       angularVelocityRadps: R(metrics.omega?.[i] ?? 0, 5),
       curvatureInvM: R(metrics.curv?.[i] ?? point.curv ?? 0, 5),
     }));
+    const waypointSampleIndices = Array.isArray(derived.wpIdx)
+      ? derived.wpIdx.map((index: number) => Math.max(0, Math.min(samples.length - 1, index)))
+      : input.path.waypoints.map((_, index) => Math.min(samples.length - 1, index * samplesPerSegment));
 
     return enforceAngularTiming(input.path, {
       planner: "profiledSpline",
       totalTimeS: R(derived.prof.totalTime || 0, 4),
       totalDistanceM: R(totalDistanceM, 4),
       samples,
+      waypointSampleIndices,
       markers: markersFor(input, pts, times),
       diagnostics: diagnosticsFor(input.path.name, derived),
     });

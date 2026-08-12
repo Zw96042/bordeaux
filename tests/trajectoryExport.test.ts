@@ -112,6 +112,7 @@ describe("native trajectory export", () => {
     expect(exported.routine).toEqual(selectedRoutine);
     expect(exported.paths[0].id).toBe(pathId);
     expect(exported.paths[0].samples.length).toBeGreaterThan(1);
+    expect(exported.paths[0]).not.toHaveProperty("waypointSampleIndices");
     expect(exported.paths[0].samples.every((sample) => Object.values(sample).every(Number.isFinite))).toBe(true);
   });
 

@@ -20,7 +20,7 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
         ...base,
         planner: "profiledSpline",
         diagnostics: [...base.diagnostics, issue],
-        optimization: optimizationDiagnostics(input, base.samples, solveTimeMs, fallbackReason),
+        optimization: optimizationDiagnostics(input, base.samples, solveTimeMs, fallbackReason, base.waypointSampleIndices),
       };
     }
 
@@ -37,7 +37,13 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
         ...base,
         planner: "profiledSpline",
         diagnostics: [...base.diagnostics, issue],
-        optimization: optimizationDiagnostics(input, base.samples, performance.now() - started, fallbackReason),
+        optimization: optimizationDiagnostics(
+          input,
+          base.samples,
+          performance.now() - started,
+          fallbackReason,
+          base.waypointSampleIndices,
+        ),
       };
     }
   },

@@ -14,13 +14,21 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
 }
 
-function waypointFractions(path: PathDoc, samples: readonly TrajectorySample[]): number[] {
-  return orderedWaypointSampleIndices(path.waypoints, samples, { finalWaypointAtEnd: true, fallback: "full" })
+function waypointFractions(path: PathDoc, samples: readonly TrajectorySample[], waypointSampleIndices?: readonly number[]): number[] {
+  const indices = waypointSampleIndices?.length === path.waypoints.length
+    ? waypointSampleIndices
+    : orderedWaypointSampleIndices(path.waypoints, samples, { fallback: "full" });
+  return indices
     .map((index) => samples[index]?.f ?? 0);
 }
 
-export function effectiveRanges(path: PathDoc, samples: readonly TrajectorySample[], totalDistance: number): EffectiveRange[] {
-  const waypointF = waypointFractions(path, samples);
+export function effectiveRanges(
+  path: PathDoc,
+  samples: readonly TrajectorySample[],
+  totalDistance: number,
+  waypointSampleIndices?: readonly number[],
+): EffectiveRange[] {
+  const waypointF = waypointFractions(path, samples, waypointSampleIndices);
   return (path.ranges ?? []).map((range) => {
     let start = range.f0;
     let end = range.f1;
@@ -168,8 +176,8 @@ function hasAngularViolation(
  */
 export function applyRotationPriority(path: PathDoc, result: PlannerResult, robot: RobotConfig): PlannerResult {
   if (result.samples.length < 2) return result;
-  const ranges = effectiveRanges(path, result.samples, result.totalDistanceM);
-  const waypointF = waypointFractions(path, result.samples);
+  const ranges = effectiveRanges(path, result.samples, result.totalDistanceM, result.waypointSampleIndices);
+  const waypointF = waypointFractions(path, result.samples, result.waypointSampleIndices);
   const laws = segmentHeadingLaws(path, false);
   const breaks = path.waypoints.slice(0, -1).map((waypoint) => Boolean(waypoint.turnInPlace));
   const transitions = headingTransitionWindows(path.waypoints, laws, breaks, waypointF, result.totalDistanceM);
@@ -262,10 +270,14 @@ export function applyRotationPriority(path: PathDoc, result: PlannerResult, robo
   }
 
   const finalTime = samples.at(-1)?.t ?? result.totalTimeS;
+  const markers = samples.length > result.samples.length
+    ? result.markers.map((marker) => marker.fraction >= 1 - EPSILON ? { ...marker, timeS: finalTime } : marker)
+    : result.markers;
   return {
     ...result,
     totalTimeS: finalTime,
     samples,
+    markers,
     diagnostics,
     optimization: result.optimization ? { ...result.optimization, totalTimeS: finalTime } : result.optimization,
   };

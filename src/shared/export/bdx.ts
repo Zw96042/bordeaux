@@ -5,6 +5,7 @@ import type {
   BdxExport,
   BdxPath,
   BordeauxProject,
+  PlannerResult,
 } from "../types";
 import { validateProject } from "../validation";
 import { robotHardLimits } from "../robotLimits";
@@ -13,13 +14,19 @@ function exportablePaths(project: BordeauxProject) {
   return project.paths.filter((path) => path.exportable !== false);
 }
 
-export function buildBdxExport(project: BordeauxProject): BdxExport {
+export interface BuiltBdxExport {
+  document: BdxExport;
+  plannerResults: PlannerResult[];
+}
+
+export function buildBdxExportWithPlannerResults(project: BordeauxProject): BuiltBdxExport {
   const validation = validateProject(project);
   if (!validation.ok) {
     throw new Error(validation.issues.map((x) => x.message).join("\n"));
   }
 
   const planner = getPlanner(project.plannerId);
+  const plannerResults: PlannerResult[] = [];
   const paths: BdxPath[] = exportablePaths(project).map((path) => {
     const result = planner.generate({ path, robot: project.robot });
     if (result.samples.length < 2) {
@@ -28,6 +35,7 @@ export function buildBdxExport(project: BordeauxProject): BdxExport {
     const blockingDiagnostic = result.diagnostics.find((item) => item.severity === "error");
     if (blockingDiagnostic) throw new Error(`${path.name}: ${blockingDiagnostic.message}`);
     assertFinitePlannerResult(path.name, result);
+    plannerResults.push(result);
     return {
       id: path.id,
       name: path.name,
@@ -44,7 +52,7 @@ export function buildBdxExport(project: BordeauxProject): BdxExport {
   assertFiniteValue(routine, "routine");
 
   const hardLimits = robotHardLimits(project.robot);
-  return {
+  const document: BdxExport = {
     schemaVersion: "1.1",
     generator: "bordeaux",
     units: {
@@ -65,6 +73,11 @@ export function buildBdxExport(project: BordeauxProject): BdxExport {
     paths,
     routine: routine ?? null,
   };
+  return { document, plannerResults };
+}
+
+export function buildBdxExport(project: BordeauxProject): BdxExport {
+  return buildBdxExportWithPlannerResults(project).document;
 }
 
 function assertFiniteValue(value: unknown, valuePath: string): void {

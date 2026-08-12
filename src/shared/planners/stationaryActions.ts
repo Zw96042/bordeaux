@@ -145,10 +145,20 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     .filter(({ waypoint }) => waypoint.turnInPlace || waypoint.jiggle || (waypoint.stop && (waypoint.wait ?? 0) > 0));
   if (actions.length === 0 || result.samples.length === 0) return result;
 
-  const baseIndices = orderedWaypointSampleIndices(path.waypoints, result.samples, {
-    finalWaypointAtEnd: true,
-    fallback: "stationary",
-  });
+  const baseIndices = result.waypointSampleIndices?.length === path.waypoints.length
+    ? result.waypointSampleIndices
+    : orderedWaypointSampleIndices(path.waypoints, result.samples, { fallback: "stationary" });
+  const actionIndices = [...baseIndices];
+  const terminalIndex = path.waypoints.length - 1;
+  if (actions.some(({ index }) => index === terminalIndex)) {
+    const arrival = result.samples[actionIndices[terminalIndex]];
+    while (actionIndices[terminalIndex] + 1 < result.samples.length) {
+      const candidate = result.samples[actionIndices[terminalIndex] + 1];
+      if (Math.hypot(candidate.x - arrival.x, candidate.y - arrival.y) > 1e-5
+        || Math.abs(candidate.s - arrival.s) > 1e-6) break;
+      actionIndices[terminalIndex] += 1;
+    }
+  }
   const incompatible = actions.find(({ waypoint, index }) => {
     if (!waypoint.turnInPlace) return false;
     if (index >= path.waypoints.length - 1) return false;
@@ -172,7 +182,7 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
   let projectedSampleCount = result.samples.length;
   const plannedTicks = new Map<number, { turn: number; jiggle: number; wait: number }>();
   for (const { waypoint, index: waypointIndex } of actions) {
-    const boundary = baseIndices[waypointIndex];
+    const boundary = actionIndices[waypointIndex];
     const arrival = result.samples[boundary];
     const previous = result.samples[Math.max(0, boundary - 1)];
     const startHeading = waypointIndex === 0 ? arrival.headingRad : previous.headingRad;
@@ -210,6 +220,7 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
   }
 
   let samples = result.samples.map((sample) => ({ ...sample }));
+  const waypointSampleIndices = [...baseIndices];
   const markers = result.markers.map((marker) => ({ ...marker }));
   const diagnostics = [...result.diagnostics];
   let inserted = 0;
@@ -217,7 +228,7 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
 
   actions.forEach(({ waypoint, index: waypointIndex }) => {
     const turn = waypoint.turnInPlace;
-    const boundary = baseIndices[waypointIndex] + inserted;
+    const boundary = actionIndices[waypointIndex] + inserted;
     const arrival = samples[boundary];
     const previous = samples[Math.max(0, boundary - 1)];
     const startHeading = waypointIndex === 0 ? arrival.headingRad : previous.headingRad;
@@ -332,7 +343,11 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
       waitSamples,
       samples.slice(boundary + 1),
     );
-    inserted += turnSamples.length + jiggleSamples.length + waitSamples.length;
+    const insertedHere = turnSamples.length + jiggleSamples.length + waitSamples.length;
+    for (let index = waypointIndex + 1; index < waypointSampleIndices.length; index += 1) {
+      waypointSampleIndices[index] += insertedHere;
+    }
+    inserted += insertedHere;
   });
 
   if (samples.length > MAX_TRAJECTORY_SAMPLES) throw new Error(`Stationary actions require ${samples.length} samples, exceeding the trajectory limit of ${MAX_TRAJECTORY_SAMPLES}`);
@@ -351,6 +366,7 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     totalTimeS,
     totalDistanceM: result.totalDistanceM + addedDistance,
     samples,
+    waypointSampleIndices,
     markers,
     diagnostics,
     optimization: result.optimization ? { ...result.optimization, totalTimeS } : result.optimization,

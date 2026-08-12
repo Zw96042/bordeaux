@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildJavaTrajectory, javaTrajectoryFileName } from "../src/shared/export/javaTrajectory";
+import { getPlanner } from "../src/shared/planners";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
 import type { AutonomousRoutine, JavaCommandCatalog, RoutineNode } from "../src/shared/types";
 
@@ -91,7 +92,7 @@ describe("Java trajectory export", () => {
     expect(sections[1].endSample).toBeGreaterThan(sections[1].startSample);
   });
 
-  it("keeps a follow section between consecutive duplicate waypoints", () => {
+  it("keeps a follow section through a final duplicate segment", () => {
     const project = createDemoProject();
     project.paths[0].waypoints = buildWaypoints([
       { x: 1, y: 1, segType: "clothoid" },
@@ -106,6 +107,50 @@ describe("Java trajectory export", () => {
     expect(sections).toHaveLength(4);
     expect(sections[3].startSample).toBe(sections[2].endSample);
     expect(sections[3].endSample).toBeGreaterThan(sections[3].startSample);
+  });
+
+  it("exports a terminal position-follow wait as a trailing time section", () => {
+    const project = createDemoProject();
+    project.paths[0].followMode = "position";
+    project.paths[0].waypoints = buildWaypoints([
+      { x: 1, y: 2, segType: "line" },
+      { x: 5, y: 2, segType: "line", stop: true, wait: 1 },
+    ]);
+
+    const path = buildJavaTrajectory(project, generatedCatalog()).document.paths[0];
+
+    expect(path.followSections.map((section) => section.mode)).toEqual(["position", "time"]);
+    expect(path.followSections[0].endSample).toBe(path.followSections[1].startSample);
+    expect(path.followSections[1].endSample).toBe(path.samples.length - 1);
+    const holdDuration = path.samples.at(-1)!.t - path.samples[path.followSections[1].startSample].t;
+    expect(holdDuration).toBeGreaterThanOrEqual(1);
+    expect(holdDuration).toBeLessThan(1.05);
+  });
+
+  it("exports consecutive duplicate actions from their authored boundaries", () => {
+    const project = createDemoProject();
+    project.paths[0].followMode = "position";
+    project.paths[0].waypoints = buildWaypoints([
+      { x: 0, y: 2, segType: "line" },
+      { x: 2, y: 2, segType: "line" },
+      { x: 2, y: 2, segType: "line", stop: true, wait: 1 },
+      { x: 2, y: 2, segType: "line", stop: true, wait: 2 },
+      { x: 1, y: 2, segType: "line" },
+      { x: 3, y: 2, segType: "line" },
+    ]);
+
+    const path = buildJavaTrajectory(project, generatedCatalog()).document.paths[0];
+    const arrivals = getPlanner(project.plannerId).generate({ path: project.paths[0], robot: project.robot })
+      .waypointSampleIndices!;
+
+    for (const [waypointIndex, wait] of [[2, 1], [3, 2]] as const) {
+      const section = path.followSections.find((candidate) => (
+        candidate.mode === "time" && candidate.startSample === arrivals[waypointIndex]
+      ));
+      expect(section).toBeDefined();
+      expect(path.samples[section!.endSample].t - path.samples[section!.startSample].t)
+        .toBeGreaterThanOrEqual(wait - 1e-4);
+    }
   });
 
   it("exports decisions and bound commands between paths", () => {
