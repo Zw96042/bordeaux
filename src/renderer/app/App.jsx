@@ -1269,6 +1269,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       d._selAfter = i + 1; return d;
     }), [commit]);
     const reversePath = useCallback(() => commit((d) => {
+      const totalDistance = derivationCurrent ? derived.sample.length : PM.pathLength(d.waypoints, PERSEG);
       const endpointJiggle = d.waypoints[d.waypoints.length - 1].jiggle ? { ...d.waypoints[d.waypoints.length - 1].jiggle } : null;
       const oldSeg = d.waypoints.map((w) => w.segType);
       const oldHeading = d.waypoints.map((w) => w.segmentHeadingMode);
@@ -1312,12 +1313,13 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
           placement: transition.placement === 'before' ? 'after' : transition.placement === 'split' ? 'split' : 'before' };
       }
       d.waypoints = w; remapWaypointRanges(d, Array.from({ length: n }, (_, index) => n - 1 - index));
+      PM.reversePathAnchors(d, totalDistance);
       w.forEach((waypoint) => delete waypoint.jiggle);
       if (endpointJiggle) w[n - 1].jiggle = endpointJiggle;
       const sv = d.startVel, gv = d.goalVel; d.startVel = gv; d.goalVel = sv;
       if (endpointJiggle) d.goalVel = 0;
       w[0].thetaOn = true; w[n - 1].thetaOn = true; return d;
-    }), [commit]);
+    }), [commit, derivationCurrent, derived.sample.length]);
     const reorderWp = useCallback((from, to) => commit((d) => {
       const w = d.waypoints; if (to < 0 || to >= w.length || from === to) return d;
       const endpointJiggle = w[w.length - 1].jiggle ? { ...w[w.length - 1].jiggle } : null;
