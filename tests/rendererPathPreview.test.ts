@@ -297,6 +297,33 @@ describe("renderer path preview scheduler", () => {
     expect(preview.getSnapshot()).toMatchObject({ status: "error", revision });
   });
 
+  it("rejects an 890-waypoint tangent path from direct recovery", () => {
+    const path = {
+      headingMode: "tangent",
+      ranges: [],
+      targets: [],
+      waypoints: Array.from({ length: 890 }, (_, index) => ({
+        x: 1 + index * 0.01,
+        y: 4,
+        theta: 0,
+        thetaOn: index === 0 || index === 889,
+      })),
+    };
+    const module = previewModule();
+
+    expect(module.directPreviewIsSafe(path, 14)).toBe(false);
+    expect(module.directPreviewIsSafe(path, 56)).toBe(false);
+  });
+
+  it("rejects translation-priority recovery regardless of geometry size", () => {
+    const path = {
+      ranges: [{ rotationPriority: "translation" }],
+      waypoints: [{ thetaOn: true }, { thetaOn: true }],
+    };
+
+    expect(previewModule().directPreviewIsSafe(path, 14)).toBe(false);
+  });
+
   it("rejects transition-heavy direct derivation without ranges", () => {
     const waypointCount = 1600;
     const path = {

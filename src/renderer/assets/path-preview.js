@@ -1,7 +1,7 @@
 import { PM } from "../lib/pathMath";
 
   const SAMPLES_BY_QUALITY = Object.freeze({ interactive: 14, final: 56 });
-  const MAX_DIRECT_POLICY_SAMPLE_WORK = 100000;
+  const MAX_DIRECT_POLICY_SAMPLE_WORK = 2000;
 
   function samplesForQuality(quality) {
     return SAMPLES_BY_QUALITY[quality] || SAMPLES_BY_QUALITY.final;
@@ -33,6 +33,11 @@ import { PM } from "../lib/pathMath";
   }
 
   function directPreviewWork(path, perSegment) {
+    const translationPriority = (path?.ranges || []).some((range) => range?.rotationPriority === 'translation')
+      || (path?.waypoints || []).some((waypoint) => waypoint?.headingTransition?.rotationPriority === 'translation');
+    // Translation-priority tracking can require up to 250,000 terminal catch-up
+    // iterations independently of geometry size, so it is never a tiny fallback.
+    if (translationPriority) return Infinity;
     const segments = Math.max(0, (path?.waypoints?.length || 0) - 1);
     const policyScans = Math.max(1, (path?.ranges?.length || 0) + headingTransitionCount(path) + headingAnchorCount(path));
     return segments * perSegment * policyScans;
