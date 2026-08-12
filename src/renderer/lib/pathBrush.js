@@ -398,44 +398,72 @@ function mergedCurveCandidate(previous, waypoint, next, stroke) {
 // both neighbours, which can reach past the stroke, so the merged curve must also leave
 // the part of the span outside the radius where it was.
 const OUTSIDE_TOLERANCE = 1e-6;
+const MAX_MERGES_PER_STROKE = 16;
 
-function remapRangesAfterRemoval(path, removedIndex, splitFraction) {
-  const mergedSegment = removedIndex - 1;
-  for (const range of path.ranges || []) {
-    if (range.anchor !== 'wp') continue;
-    for (const [waypointKey, localKey] of [['w0', 't0'], ['w1', 't1']]) {
-      if (!Number.isInteger(range[waypointKey])) continue;
-      const waypointIndex = range[waypointKey];
-      const local = range[localKey];
-      if (local == null) {
-        if (waypointIndex > removedIndex) range[waypointKey] -= 1;
-        else if (waypointIndex === removedIndex) {
-          range[waypointKey] = mergedSegment;
-          range[localKey] = splitFraction;
+// Range endpoints are attached to the original segment objects. Each accepted merge adds
+// one affine parent link, so all links can be composed once after consolidation instead
+// of rescanning every range after every removed waypoint.
+function createRangeRemapper(path) {
+  const waypoints = path.waypoints;
+  const originalWaypoints = waypoints.slice();
+  const originalSegments = waypoints.slice(0, -1).map(() => ({ parent: null, resolved: null }));
+  const segments = originalSegments.slice();
+  const merge = (waypointIndex, splitFraction) => {
+    const left = segments[waypointIndex - 1], right = segments[waypointIndex];
+    const merged = { parent: null, resolved: null };
+    left.parent = { node: merged, scale: splitFraction, offset: 0 };
+    right.parent = { node: merged, scale: 1 - splitFraction, offset: splitFraction };
+    segments.splice(waypointIndex - 1, 2, merged);
+  };
+  const resolve = (segment) => {
+    if (!segment.parent) return { node: segment, scale: 1, offset: 0 };
+    if (segment.resolved) return segment.resolved;
+    const parent = resolve(segment.parent.node);
+    segment.resolved = {
+      node: parent.node,
+      scale: parent.scale * segment.parent.scale,
+      offset: parent.offset + parent.scale * segment.parent.offset,
+    };
+    return segment.resolved;
+  };
+  const restore = () => {
+    const waypointIndexes = new Map(waypoints.map((waypoint, index) => [waypoint, index]));
+    const segmentIndexes = new Map(segments.map((segment, index) => [segment, index]));
+    for (const range of path.ranges || []) {
+      if (range.anchor !== 'wp') continue;
+      for (const [waypointKey, localKey] of [['w0', 't0'], ['w1', 't1']]) {
+        if (!Number.isInteger(range[waypointKey])) continue;
+        const authoredIndex = clamp(range[waypointKey], 0, originalWaypoints.length - 1);
+        const waypointIndex = waypointIndexes.get(originalWaypoints[authoredIndex]);
+        const legacy = range[localKey] == null;
+        if (legacy && waypointIndex != null) {
+          range[waypointKey] = waypointIndex;
+          delete range[localKey];
+          continue;
         }
-        continue;
+        const segmentIndex = clamp(authoredIndex, 0, originalSegments.length - 1);
+        const local = legacy ? (authoredIndex === originalWaypoints.length - 1 ? 1 : 0) : clamp(Number(range[localKey]), 0, 1);
+        const resolved = resolve(originalSegments[segmentIndex]);
+        range[waypointKey] = segmentIndexes.get(resolved.node);
+        range[localKey] = clamp(resolved.offset + resolved.scale * local, 0, 1);
       }
-      const position = clamp(Number(local), 0, 1);
-      if (waypointIndex === mergedSegment) range[localKey] = position * splitFraction;
-      else if (waypointIndex === removedIndex) {
-        range[waypointKey] = mergedSegment;
-        range[localKey] = splitFraction + position * (1 - splitFraction);
-      } else if (waypointIndex > removedIndex) range[waypointKey] -= 1;
+      const start = range.w0 + (Number(range.t0) || 0);
+      const end = range.w1 + (Number(range.t1) || 0);
+      if (start > end) {
+        [range.w0, range.w1] = [range.w1, range.w0];
+        [range.t0, range.t1] = [range.t1, range.t0];
+        if (range.t0 === undefined) delete range.t0;
+        if (range.t1 === undefined) delete range.t1;
+      }
     }
-    const start = range.w0 + (Number(range.t0) || 0);
-    const end = range.w1 + (Number(range.t1) || 0);
-    if (start > end) {
-      [range.w0, range.w1] = [range.w1, range.w0];
-      [range.t0, range.t1] = [range.t1, range.t0];
-      if (range.t0 === undefined) delete range.t0;
-      if (range.t1 === undefined) delete range.t1;
-    }
-  }
+  };
+  return { merge, restore };
 }
 
 function consolidateWaypoints(path, stroke) {
+  const rangeRemapper = createRangeRemapper(path);
   let removed = 0;
-  for (let index = 1; index < path.waypoints.length - 1;) {
+  for (let index = 1; index < path.waypoints.length - 1 && removed < MAX_MERGES_PER_STROKE;) {
     const previous = path.waypoints[index - 1];
     const waypoint = path.waypoints[index];
     const next = path.waypoints[index + 1];
@@ -453,11 +481,12 @@ function consolidateWaypoints(path, stroke) {
     }
     previous.nextC = point(candidate.curve[1]);
     next.prevC = point(candidate.curve[2]);
-    remapRangesAfterRemoval(path, index, candidate.splitFraction);
+    rangeRemapper.merge(index, candidate.splitFraction);
     path.waypoints.splice(index, 1);
     removed += 1;
     index = Math.max(1, index - 1);
   }
+  if (removed > 0) rangeRemapper.restore();
   return removed;
 }
 
