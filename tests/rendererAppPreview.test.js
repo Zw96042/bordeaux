@@ -1,7 +1,7 @@
 import React from "react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { App, agentProposalPreviewResult, canApplyAgentProposalCandidate, pathPreviewResult, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, waypointPreviewResult } from "../src/renderer/app/App";
+import { App, agentProposalPreviewResult, canApplyAgentProposalCandidate, pathPreviewResult, requestRoutinePreview, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, waypointPreviewResult } from "../src/renderer/app/App";
 import { PathPreview } from "../src/renderer/assets/path-preview";
 import { PM } from "../src/renderer/lib/pathMath";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
@@ -27,22 +27,47 @@ describe("renderer app path preview lifecycle", () => {
     const staleRequest = {};
     const staleRun = { steps: [{ id: "old" }], segs: [], total: 4 };
 
-    expect(routinePreviewResult({ path: staleRequest, value: staleRun }, currentRequest, true)).toMatchObject({
+    expect(routinePreviewResult({ status: "ready", key: staleRequest, path: staleRequest, value: staleRun }, currentRequest, true)).toMatchObject({
       run: { steps: [], segs: [], total: 0 },
       pending: true,
       error: null,
     });
-    expect(routinePreviewResult({ path: currentRequest, value: staleRun }, currentRequest, true)).toMatchObject({
+    expect(routinePreviewResult({ status: "ready", key: currentRequest, path: currentRequest, value: staleRun }, currentRequest, true)).toMatchObject({
       run: staleRun,
       pending: false,
       error: null,
     });
     const error = { message: "routine failed" };
-    expect(routinePreviewResult({ errorPath: currentRequest, error }, currentRequest, true)).toMatchObject({
+    expect(routinePreviewResult({ status: "error", errorKey: currentRequest, errorPath: currentRequest, error }, currentRequest, true)).toMatchObject({
       run: { steps: [], segs: [], total: 0 },
       pending: false,
       error,
     });
+    expect(routinePreviewResult({ status: "pending", key: currentRequest, path: currentRequest, value: staleRun }, currentRequest, true)).toMatchObject({
+      run: { steps: [], segs: [], total: 0 },
+      pending: true,
+      error: null,
+    });
+  });
+
+  it("does not send a routine preview that fails admission", () => {
+    const previewer = { request: vi.fn(), cancel: vi.fn() };
+    const request = { routine: {}, paths: [], robot: {}, outcomes: {}, plannerId: "profiledSpline" };
+    const error = { name: "RangeError", message: "Routine too large" };
+
+    expect(requestRoutinePreview(previewer, request, { allowed: false, error })).toBe(false);
+    expect(previewer.request).not.toHaveBeenCalled();
+    expect(previewer.cancel).toHaveBeenCalledOnce();
+    expect(routinePreviewResult({}, request, true, error)).toMatchObject({
+      run: { steps: [], segs: [], total: 0 },
+      pending: false,
+      error,
+    });
+
+    previewer.cancel.mockClear();
+    expect(requestRoutinePreview(previewer, request, { allowed: true, error: null }, false)).toBe(false);
+    expect(previewer.request).not.toHaveBeenCalled();
+    expect(previewer.cancel).toHaveBeenCalledOnce();
   });
 
   it("does not derive even a small path during initial render", () => {
