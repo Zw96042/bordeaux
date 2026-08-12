@@ -68,12 +68,15 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
     }
 
     private void validateNodes(List<BordeauxRoutineNode> nodes) {
-        for (BordeauxRoutineNode node : nodes) {
+        Deque<BordeauxRoutineNode> remaining = new ArrayDeque<>();
+        prepend(remaining, nodes);
+        while (!remaining.isEmpty()) {
+            BordeauxRoutineNode node = remaining.removeFirst();
             try {
                 if (node instanceof BordeauxRoutineNode.Decision decision) {
                     conditions.validateReference(decision.conditionId());
-                    validateNodes(decision.whenTrue());
-                    validateNodes(decision.whenFalse());
+                    prepend(remaining, decision.whenFalse());
+                    prepend(remaining, decision.whenTrue());
                 } else if (node instanceof BordeauxRoutineNode.Command invocation) {
                     commands.validateInvocation(invocation.commandId(), invocation.arguments());
                 }
@@ -106,7 +109,11 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
     }
 
     private void prepend(List<BordeauxRoutineNode> nodes) {
-        for (int index = nodes.size() - 1; index >= 0; index--) pending.addFirst(nodes.get(index));
+        prepend(pending, nodes);
+    }
+
+    private static void prepend(Deque<BordeauxRoutineNode> target, List<BordeauxRoutineNode> nodes) {
+        for (int index = nodes.size() - 1; index >= 0; index--) target.addFirst(nodes.get(index));
     }
 
     @Override
