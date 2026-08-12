@@ -20,6 +20,7 @@ interface Point {
 function rendererMath() {
   return loadRendererExport<{
     derivePath(path: unknown, robot: unknown, perSegment: number, plannerId: string): {
+      planner: string;
       sample: { pts: Array<Point & { s: number }>; length: number };
       prof: { totalTime: number };
       metrics: { v: number[]; accel: number[]; omega: number[]; curv: number[] };
