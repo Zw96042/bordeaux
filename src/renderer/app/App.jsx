@@ -30,6 +30,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
   const { FIELD_W, FIELD_H, IMG_W, IMG_H } = FIELD_DIMS;
   const PERSEG = 56;
   const clone = (o) => JSON.parse(JSON.stringify(o));
+  const EMPTY_ROUTINE_RUN = Object.freeze({ steps: Object.freeze([]), segs: Object.freeze([]), total: 0 });
   const clampWorld = (p) => ({ x: Math.max(0, Math.min(FIELD_W, p.x)), y: Math.max(0, Math.min(FIELD_H, p.y)) });
   const blankRoutine = (name) => ({ id: routineId(), name: name || 'Autonomous Routine', nodes: [] });
   function normalizeProject(raw) {
@@ -96,6 +97,12 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       && publishedContext.editRevision === currentContext.editRevision
       && (!proposal.baseJavaCatalogFingerprint || proposal.baseJavaCatalogFingerprint === currentContext.javaCatalogFingerprint)
       && !currentContext.hasDraft);
+  }
+
+  function routinePreviewResult(snapshot, request, active) {
+    const current = snapshot.path === request && snapshot.value ? snapshot.value : null;
+    const error = snapshot.errorPath === request ? snapshot.error : null;
+    return { run: current || EMPTY_ROUTINE_RUN, pending: active && !current && !error, error };
   }
 
   const ACCENT = '#3f6fd0';
@@ -308,6 +315,8 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
   }
 
   function useRoutinePreview(active, routine, paths, robot, outcomes, plannerId) {
+    const referencedPaths = useMemo(() => RoutinePreview.referencedPaths(routine, paths, outcomes), [routine, paths, outcomes]);
+    const request = useMemo(() => ({ routine, paths: referencedPaths, robot, outcomes, plannerId }), [routine, referencedPaths, robot, outcomes, plannerId]);
     const previewer = useMemo(() => PathPreview.create({
       workerFactory: () => new Worker(new URL('../assets/routine-preview-worker.js', import.meta.url), { type: 'module' }),
       derive: (job) => AUTO.buildRun(job.routine, job.paths, job.robot, job.outcomes, job.plannerId),
@@ -324,14 +333,12 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       ),
     }), []);
     const [snapshot, setSnapshot] = useState(() => previewer.getSnapshot());
-    const lastValid = useRef({ steps: [], segs: [], total: 0 });
     useEffect(() => previewer.retain(), [previewer]);
     useEffect(() => previewer.subscribe(() => setSnapshot(previewer.getSnapshot())), [previewer]);
     useEffect(() => {
-      if (active) previewer.request({ key: routine.id, routine, paths, robot, outcomes, plannerId, quality: 'final' });
-    }, [previewer, active, routine, paths, robot, outcomes, plannerId]);
-    if (snapshot.value) lastValid.current = snapshot.value;
-    return lastValid.current;
+      if (active) previewer.request({ key: routine.id, path: request, ...request, quality: 'final' });
+    }, [previewer, active, request, routine.id]);
+    return routinePreviewResult(snapshot, request, active);
   }
 
   function App({ initialProject = null } = {}) {
@@ -1493,7 +1500,8 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     useEffect(() => playbackStore.setTotal(total), [playbackStore, total]);
 
     // ---- routine run engine ----
-    const run = useRoutinePreview(page === 'auto', routine, project.paths, robot, routineOutcomes, plannerId);
+    const routinePreview = useRoutinePreview(page === 'auto', routine, project.paths, robot, routineOutcomes, plannerId);
+    const run = routinePreview.run;
     useEffect(() => routinePlaybackStore.setTotal(run.total), [routinePlaybackStore, run.total]);
     useEffect(() => { if (page !== 'plan') playbackStore.pause(); if (page !== 'auto') routinePlaybackStore.pause(); }, [page, playbackStore, routinePlaybackStore]);
 
@@ -1740,6 +1748,10 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
             h('nav', { className: 'rail rail-l', 'aria-label': 'Autonomous routine steps' },
               h(RoutinePanelPlayback, { store: routinePlaybackStore, routine, run, paths: project.paths, selId: routineSel, onSelect: setRoutineSel, acq })),
             h('div', { className: 'fieldcol' },
+              routinePreview.pending && h('div', { className: 'insert-preview', role: 'status', 'aria-live': 'polite' },
+                h('div', { className: 'insert-preview-copy' }, h('b', null, 'Preparing routine preview'), h('span', null, 'Calculating the current routine off the UI thread…'))),
+              routinePreview.error && h('div', { className: 'insert-preview derivation-error', role: 'alert' },
+                h('div', { className: 'insert-preview-copy' }, h('b', null, 'Routine preview unavailable'), h('span', null, routinePreview.error.message || String(routinePreview.error)))),
               h(RoutineFieldPlayback, { store: routinePlaybackStore, run, selectedId: routineSel, doc, derived, sel: { kind: null, idx: -1 }, tool: 'select', view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: autoFieldActions }),
               h(RoutineTransportPlayback, { store: routinePlaybackStore, run }),
               h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
@@ -1810,4 +1822,4 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }
   }
 
-export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, applyBrushDraft, duplicatePathForLibrary, remapBrushSelection, syncBrushSelection };
+export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, applyBrushDraft, duplicatePathForLibrary, remapBrushSelection, routinePreviewResult, syncBrushSelection };
