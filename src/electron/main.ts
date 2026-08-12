@@ -123,7 +123,10 @@ const agentSessions = new AgentSessionService(
 );
 
 app.setName("Bordeaux");
+if (smokeDirectory) app.setPath("userData", smokeDirectory);
 app.setAppUserModelId("org.frc2468.bordeaux");
+const ownsDesktopInstance = mcpStdioMode || app.requestSingleInstanceLock();
+if (!ownsDesktopInstance) app.quit();
 
 function showUpdateMessage(options: Electron.MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> {
   const window = mainWindow;
@@ -1075,7 +1078,14 @@ ipcMain.on("agent:proposalReceipt", (event, rawId, rawSessionId, rawRevision, ra
   receipt.resolve();
 });
 
-app.whenReady().then(async () => {
+if (!mcpStdioMode && ownsDesktopInstance) app.on("second-instance", () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+});
+
+if (ownsDesktopInstance) app.whenReady().then(async () => {
   if (mcpStdioMode) {
     app.dock?.hide();
     serveBordeauxMcp(new AgentBridgeClient(app.getPath("userData")));

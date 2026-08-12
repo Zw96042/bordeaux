@@ -28,6 +28,18 @@ function descriptorPath(userData: string): string {
   return path.join(userData, "mcp", "runtime-v1.json");
 }
 
+async function removeOwnedDescriptor(userData: string, owner: AgentRuntimeDescriptor): Promise<void> {
+  const target = descriptorPath(userData);
+  let current: AgentRuntimeDescriptor;
+  try { current = JSON.parse(await fs.promises.readFile(target, "utf8")) as AgentRuntimeDescriptor; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof SyntaxError) return;
+    throw error;
+  }
+  if (current.instanceId !== owner.instanceId || current.endpoint !== owner.endpoint || current.token !== owner.token) return;
+  await fs.promises.rm(target, { force: true });
+}
+
 function encode(value: unknown): Buffer {
   const payload = Buffer.from(JSON.stringify(value), "utf8");
   if (payload.length > MAX_MESSAGE_BYTES) throw new Error("Agent bridge message exceeds 1 MiB");
@@ -77,12 +89,23 @@ export class AgentBridgeServer {
   private server: net.Server | null = null;
   private descriptor: AgentRuntimeDescriptor | null = null;
   private readonly sockets = new Set<net.Socket>();
+  private lifecycle: Promise<void> = Promise.resolve();
 
   constructor(private readonly userData: string, private readonly sessions: AgentSessionService) {}
 
   get enabled(): boolean { return this.server !== null; }
 
-  async start(): Promise<AgentRuntimeDescriptor> {
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.lifecycle.then(operation, operation);
+    this.lifecycle = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  start(): Promise<AgentRuntimeDescriptor> {
+    return this.serialize(() => this.startNow());
+  }
+
+  private async startNow(): Promise<AgentRuntimeDescriptor> {
     if (this.descriptor) return this.descriptor;
     const endpoint = endpointForLaunch();
     const descriptor: AgentRuntimeDescriptor = {
@@ -110,22 +133,33 @@ export class AgentBridgeServer {
         if (!socket.destroyed) socket.end(encode({ error: message }));
       });
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(endpoint, () => { server.off("error", reject); resolve(); });
-    });
-    if (process.platform !== "win32") await fs.promises.chmod(endpoint, 0o600);
     const target = descriptorPath(this.userData);
-    await fs.promises.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-    const temporary = `${target}.${process.pid}.tmp`;
-    await fs.promises.writeFile(temporary, JSON.stringify(descriptor), { encoding: "utf8", mode: 0o600, flag: "wx" });
-    await fs.promises.rename(temporary, target);
-    this.server = server;
-    this.descriptor = descriptor;
-    return descriptor;
+    const temporary = `${target}.${descriptor.instanceId}.tmp`;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(endpoint, () => { server.off("error", reject); resolve(); });
+      });
+      if (process.platform !== "win32") await fs.promises.chmod(endpoint, 0o600);
+      await fs.promises.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+      await fs.promises.writeFile(temporary, JSON.stringify(descriptor), { encoding: "utf8", mode: 0o600, flag: "wx" });
+      await fs.promises.rename(temporary, target);
+      this.server = server;
+      this.descriptor = descriptor;
+      return descriptor;
+    } catch (error) {
+      if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+      await fs.promises.rm(temporary, { force: true });
+      if (process.platform !== "win32") await fs.promises.rm(endpoint, { force: true });
+      throw error;
+    }
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    return this.serialize(() => this.stopNow());
+  }
+
+  private async stopNow(): Promise<void> {
     const server = this.server;
     const descriptor = this.descriptor;
     this.server = null;
@@ -133,7 +167,7 @@ export class AgentBridgeServer {
     for (const socket of this.sockets) socket.destroy();
     this.sockets.clear();
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
-    await fs.promises.rm(descriptorPath(this.userData), { force: true });
+    if (descriptor) await removeOwnedDescriptor(this.userData, descriptor);
     if (descriptor && process.platform !== "win32") await fs.promises.rm(descriptor.endpoint, { force: true });
   }
 }

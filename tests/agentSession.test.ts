@@ -888,6 +888,26 @@ describe("agent session and private bridge", () => {
     }
   });
 
+  it("does not let an older bridge remove the active runtime descriptor", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-agent-owner-test-"));
+    const service = new AgentSessionService(() => {}, () => null);
+    service.publishSnapshot(snapshot());
+    const older = new AgentBridgeServer(directory, service);
+    const active = new AgentBridgeServer(directory, service);
+    try {
+      await older.start();
+      await active.start();
+      await older.stop();
+
+      const result: any = await new AgentBridgeClient(directory).request({ method: "inspect_session" });
+      expect(result.sessionId).toBe("session_test");
+    } finally {
+      await older.stop();
+      await active.stop();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("does not open a bridge request when cancellation arrives during descriptor I/O", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-agent-cancel-test-"));
     const service = new AgentSessionService(() => {}, () => null);
