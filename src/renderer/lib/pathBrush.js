@@ -56,9 +56,9 @@ function segmentMetadata(source) {
   return result;
 }
 
-// `wp` range anchors are deliberately segment-local. Splitting a segment must therefore
-// remap its local t, while anchors on every other segment keep their local coordinates.
-function shiftWaypointRanges(path, insertedIndex, splitT) {
+// `wp` range anchors are deliberately segment-local arclength fractions. Splitting a
+// segment must therefore remap them by the split's length ratio, not its Bezier parameter.
+function shiftWaypointRanges(path, insertedIndex, splitFraction) {
   const segmentIndex = insertedIndex - 1;
   for (const range of path.ranges || []) {
     if (range.anchor !== 'wp') continue;
@@ -74,10 +74,10 @@ function shiftWaypointRanges(path, insertedIndex, splitT) {
       }
       if (range[waypointKey] !== segmentIndex) continue;
       const local = clamp(Number(range[localKey]), 0, 1);
-      if (local <= splitT) range[localKey] = local / Math.max(splitT, 1e-9);
+      if (local <= splitFraction) range[localKey] = local / Math.max(splitFraction, 1e-9);
       else {
         range[waypointKey] += 1;
-        range[localKey] = (local - splitT) / Math.max(1 - splitT, 1e-9);
+        range[localKey] = (local - splitFraction) / Math.max(1 - splitFraction, 1e-9);
       }
     }
   }
@@ -141,6 +141,9 @@ function splitSegment(path, segmentIndex, parameters) {
   parameters.forEach((parameter, offset) => {
     const localT = (parameter - previousT) / Math.max(1e-9, 1 - previousT);
     const halves = splitCubic(remaining, localT);
+    const leftLength = approximateLength(halves.left);
+    const rightLength = approximateLength(halves.right);
+    const splitFraction = leftLength / Math.max(leftLength + rightLength, 1e-9);
     currentStart.nextC = point(halves.left[1]);
     const insertedIndex = segmentIndex + offset + 1;
     const waypoint = {
@@ -156,7 +159,7 @@ function splitSegment(path, segmentIndex, parameters) {
       ...metadata,
     };
     waypoints.splice(insertedIndex, 0, waypoint);
-    shiftWaypointRanges(path, insertedIndex, localT);
+    shiftWaypointRanges(path, insertedIndex, splitFraction);
     currentStart = waypoint;
     remaining = halves.right;
     previousT = parameter;
@@ -385,7 +388,10 @@ function mergedCurveCandidate(previous, waypoint, next, stroke) {
       outsideError = Math.max(outsideError, distanceToCurve(original, curve));
     }
   }
-  return { curve, error, outsideError, splitT };
+  const halves = splitCubic(curve, splitT);
+  const leftLength = approximateLength(halves.left);
+  const rightLength = approximateLength(halves.right);
+  return { curve, error, outsideError, splitFraction: leftLength / Math.max(leftLength + rightLength, 1e-9) };
 }
 
 // Merges redundant waypoints back into a single curve. A merge rewrites the handles of
@@ -393,7 +399,7 @@ function mergedCurveCandidate(previous, waypoint, next, stroke) {
 // the part of the span outside the radius where it was.
 const OUTSIDE_TOLERANCE = 1e-6;
 
-function remapRangesAfterRemoval(path, removedIndex, splitT) {
+function remapRangesAfterRemoval(path, removedIndex, splitFraction) {
   const mergedSegment = removedIndex - 1;
   for (const range of path.ranges || []) {
     if (range.anchor !== 'wp') continue;
@@ -405,15 +411,15 @@ function remapRangesAfterRemoval(path, removedIndex, splitT) {
         if (waypointIndex > removedIndex) range[waypointKey] -= 1;
         else if (waypointIndex === removedIndex) {
           range[waypointKey] = mergedSegment;
-          range[localKey] = splitT;
+          range[localKey] = splitFraction;
         }
         continue;
       }
       const position = clamp(Number(local), 0, 1);
-      if (waypointIndex === mergedSegment) range[localKey] = position * splitT;
+      if (waypointIndex === mergedSegment) range[localKey] = position * splitFraction;
       else if (waypointIndex === removedIndex) {
         range[waypointKey] = mergedSegment;
-        range[localKey] = splitT + position * (1 - splitT);
+        range[localKey] = splitFraction + position * (1 - splitFraction);
       } else if (waypointIndex > removedIndex) range[waypointKey] -= 1;
     }
     const start = range.w0 + (Number(range.t0) || 0);
@@ -447,7 +453,7 @@ function consolidateWaypoints(path, stroke) {
     }
     previous.nextC = point(candidate.curve[1]);
     next.prevC = point(candidate.curve[2]);
-    remapRangesAfterRemoval(path, index, candidate.splitT);
+    remapRangesAfterRemoval(path, index, candidate.splitFraction);
     path.waypoints.splice(index, 1);
     removed += 1;
     index = Math.max(1, index - 1);
