@@ -274,14 +274,44 @@ import { UI } from "./ui";
   const TOOLS = [
     { id: 'select', icon: 'select', label: 'Select / move', key: '1', alternateKey: 'V' },
     { id: 'waypoint', icon: 'waypoint', label: 'Place waypoint', key: '2', alternateKey: 'W' },
+    { id: 'brush', icon: 'brush', label: 'Sculpt path', key: '6', alternateKey: 'B' },
     { id: 'rotation', icon: 'rotation', label: 'Rotation target', key: '3', alternateKey: 'R' },
     { id: 'marker', icon: 'flag2', label: 'Event marker', key: '4', alternateKey: 'M' },
     { id: 'range', icon: 'gauge', label: 'Constraint range', key: '5', alternateKey: 'C' },
   ];
-  function ToolRail({ tool, setTool }) {
+  const BRUSHES = [
+    { id: 'push', icon: 'brushPush', label: 'Push', detail: 'Move the curve with the pointer' },
+    { id: 'smooth', icon: 'brushSmooth', label: 'Smooth', detail: 'Relax bends and remove redundant points' },
+    { id: 'twirl', icon: 'brushTwirl', label: 'Twirl', detail: 'Rotate the curve through the radius' },
+  ];
+  function ToolRail({ tool, setTool, brush, setBrush, waypointCount }) {
+    const [brushOpen, setBrushOpen] = useState(false);
+    useEffect(() => setBrushOpen(tool === 'brush'), [tool]);
     return h('div', { className: 'toolrail' }, TOOLS.map((t) =>
-      h('button', { key: t.id, className: 'toolrail-b' + (tool === t.id ? ' on' : ''), type: 'button', 'aria-label': t.label, 'aria-pressed': tool === t.id, title: t.label + '  (' + t.key + ' or ' + t.alternateKey + ')', onClick: () => setTool(t.id) },
-        h(Icon, { name: t.icon, size: 18 }), h('span', { className: 'toolrail-k' }, t.key))));
+      h('button', { key: t.id, className: 'toolrail-b' + (tool === t.id ? ' on' : ''), type: 'button', 'aria-label': t.label, 'aria-pressed': tool === t.id, 'aria-expanded': t.id === 'brush' ? brushOpen : undefined, title: t.label + '  (' + t.key + ' or ' + t.alternateKey + ')', onClick: () => {
+        if (t.id === 'brush') {
+          setBrushOpen((open) => tool === 'brush' ? !open : true);
+          setTool('brush');
+        } else setTool(t.id);
+      } },
+        h(Icon, { name: t.icon, size: 18 }), h('span', { className: 'toolrail-k' }, t.key))),
+      tool === 'brush' && brushOpen && h('section', { className: 'brush-panel', 'aria-label': 'Path brush settings' },
+        h('div', { className: 'brush-panel-head' },
+          h('span', null, 'Path brush'),
+          h('span', { className: 'brush-waypoint-count' }, waypointCount + ' waypoints'),
+          h('button', { className: 'brush-panel-close', type: 'button', 'aria-label': 'Close brush settings', onClick: () => setBrushOpen(false) }, h(Icon, { name: 'x', size: 13 }))),
+        h('div', { className: 'brush-modes', role: 'radiogroup', 'aria-label': 'Brush type' },
+          BRUSHES.map((option) => h('button', { key: option.id, className: 'brush-mode' + (brush.kind === option.id ? ' on' : ''), type: 'button', role: 'radio', 'aria-checked': brush.kind === option.id, title: option.detail, onClick: () => setBrush({ ...brush, kind: option.id }) },
+            h(Icon, { name: option.icon, size: 21 }), h('span', null, option.label)))),
+        h('label', { className: 'brush-setting' },
+          h('span', null, 'Radius'),
+          h('input', { type: 'range', min: 0.3, max: 2.4, step: 0.1, value: brush.radius, onChange: (event) => setBrush({ ...brush, radius: Number(event.target.value) }) }),
+          h('output', null, brush.radius.toFixed(1) + ' m')),
+        h('label', { className: 'brush-setting' },
+          h('span', null, 'Strength'),
+          h('input', { type: 'range', min: 0.1, max: 1, step: 0.05, value: brush.strength, onChange: (event) => setBrush({ ...brush, strength: Number(event.target.value) }) }),
+          h('output', null, Math.round(brush.strength * 100) + '%')),
+        h('p', { className: 'brush-help' }, 'Drag across a path. Waypoints form where the curve needs them.')));
   }
 
   // ---------------- global-constraint chip bar (top of canvas) — memo §6 ----------------

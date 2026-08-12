@@ -39,13 +39,14 @@ import { UI } from "./ui";
   const forwardExtent = (robot) => Math.max(...localFootprint(robot).map((point) => point.x)) * SX;
 
   function FieldView(props) {
-    const { doc, derived, editStore, insertionPreview, proposalPreviews, sel, tool, view, setView, alliance, showGrid, robot, drive, accent, metric, playTime, actions, routine, routinePose } = props;
+    const { doc, derived, editStore, insertionPreview, proposalPreviews, sel, tool, brush, view, setView, alliance, showGrid, robot, drive, accent, metric, playTime, actions, routine, routinePose } = props;
     const interactionReady = props.interactionReady !== false;
     const showHandles = props.showHandles !== false;
     const svgRef = useRef(null);
     const [cw, setCw] = useState(1200);
     const [preview, setPreview] = useState(null);
     const [snap, setSnap] = useState(null);
+    const [brushCursor, setBrushCursor] = useState(null);
     const [visitFocus, setVisitFocus] = useState(null);
     const visitFocusRef = useRef(null);
     const actionsRef = useRef(actions);
@@ -89,6 +90,7 @@ import { UI } from "./ui";
     }, []);
 
     useEffect(() => updateVisitFocus(null), [doc.id, updateVisitFocus]);
+    useEffect(() => { if (tool !== 'brush') setBrushCursor(null); }, [tool]);
     useEffect(() => {
       if (!editStore || typeof editStore.getCancelRevision !== 'function') return undefined;
       let revision = editStore.getCancelRevision();
@@ -267,6 +269,11 @@ import { UI } from "./ui";
         return;
       }
       const world = clientToWorld(e.clientX, e.clientY);
+      if (e.button === 0 && tool === 'brush' && brush && actions.applyBrush) {
+        setBrushCursor(world);
+        drag.current = { role: 'brush', origin: world, lastWorld: world, moved: false, historyStarted: false };
+        return;
+      }
       if (e.button === 0 && e.shiftKey) {
         const idx = parseInt(t.getAttribute && t.getAttribute('data-idx'), 10);
         let removed = false;
@@ -341,6 +348,16 @@ import { UI } from "./ui";
     const applyMove = (e) => {
       const d = drag.current; if (!d) return;
       const world = clientToWorld(e.clientX, e.clientY, d.role !== 'ct');
+      if (d.role === 'brush') {
+        const travel = Math.hypot(world.x - d.lastWorld.x, world.y - d.lastWorld.y);
+        setBrushCursor(world);
+        if (travel > 0.002) {
+          const changed = actions.applyBrush({ ...brush, center: world, previous: d.lastWorld, origin: d.origin });
+          if (changed) { d.historyStarted = true; d.moved = true; }
+          d.lastWorld = world;
+        }
+        return;
+      }
       if (d.role === 'inspect') {
         const dx = e.clientX - d.start.cx, dy = e.clientY - d.start.cy;
         if (Math.hypot(dx, dy) > 4) d.moved = true;
@@ -551,7 +568,7 @@ import { UI } from "./ui";
         if (derived.wpFrac) {
           for (let si = 0; si < doc.waypoints.length - 1; si++) {
             const sd = FieldScene.pathData(pts, FieldScene.segmentRange(derived, si), W2P, 1);
-            if (sd) els.push(h('path', { key: 'seghit' + si, d: sd, fill: 'none', stroke: 'transparent', strokeWidth: P(18), strokeLinecap: 'round', 'data-role': 'seg', 'data-idx': si, style: { cursor: tool === 'range' ? 'crosshair' : tool === 'waypoint' ? 'copy' : 'pointer' } }));
+            if (sd) els.push(h('path', { key: 'seghit' + si, d: sd, fill: 'none', stroke: 'transparent', strokeWidth: P(18), strokeLinecap: 'round', 'data-role': 'seg', 'data-idx': si, style: { cursor: tool === 'range' || tool === 'brush' ? 'crosshair' : tool === 'waypoint' ? 'copy' : 'pointer' } }));
           }
         }
         // Range labels share the canvas with handles, waypoints, targets, and warnings.
@@ -813,7 +830,7 @@ import { UI } from "./ui";
         const c = W2P(w);
         const isSel = sel.kind === 'wp' && sel.idx === i;
         const isStart = i === 0, isEnd = i === doc.waypoints.length - 1;
-        const baseCol = isStart ? C_START : isEnd ? C_END : C_NODE;
+        const baseCol = isStart ? C_START : isEnd ? C_END : tool === 'brush' ? accent : C_NODE;
         const col = isSel ? accent : baseCol;
         const group = [];
         const wpTangent = waypointTangent(i);
@@ -1006,12 +1023,22 @@ import { UI } from "./ui";
 
     const snapEl = (snap && doc.waypoints[snap.idx]) ? (function () { const c = W2P(doc.waypoints[snap.idx]); return h('g', { transform: `translate(${c.x} ${c.y - P(34)})`, style: { pointerEvents: 'none' } }, h('rect', { x: -P(37), y: -P(11), width: P(74), height: P(20), rx: P(4), fill: 'rgba(11,12,14,0.95)', stroke: accent, strokeWidth: P(1) }), h('text', { x: 0, y: P(4), fill: accent, fontSize: P(11), fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, textAnchor: 'middle' }, snap.label)); })() : null;
 
+    const brushEl = tool === 'brush' && brush && brushCursor ? (function () {
+      const center = W2P(brushCursor);
+      return h('g', { className: 'brush-cursor', style: { pointerEvents: 'none' } },
+        h('ellipse', { cx: center.x, cy: center.y, rx: brush.radius * SX, ry: brush.radius * SY, fill: accent, fillOpacity: 0.055, stroke: accent, strokeOpacity: 0.74, strokeWidth: P(1.4) }),
+        h('line', { x1: center.x - P(7), y1: center.y, x2: center.x + P(7), y2: center.y, stroke: '#ffffff', strokeWidth: P(1.3) }),
+        h('line', { x1: center.x, y1: center.y - P(7), x2: center.x, y2: center.y + P(7), stroke: '#ffffff', strokeWidth: P(1.3) }));
+    })() : null;
+
     const vb = `${view.x} ${view.y} ${view.w} ${view.h}`;
-    const cursor = drag.current && drag.current.moved && drag.current.role === 'bg' ? 'grabbing' : (tool === 'waypoint' || tool === 'rotation' || tool === 'marker' || tool === 'range') ? 'crosshair' : 'default';
+    const cursor = drag.current && drag.current.moved && drag.current.role === 'bg' ? 'grabbing' : (tool === 'waypoint' || tool === 'rotation' || tool === 'marker' || tool === 'range' || tool === 'brush') ? 'crosshair' : 'default';
 
     return h('svg', {
       ref: svgRef, className: 'fieldsvg', viewBox: vb, preserveAspectRatio: 'xMidYMid meet',
-      onPointerDown: onDown, onWheel: onWheel, onDoubleClick: onDbl,
+      onPointerDown: onDown, onPointerMove: tool === 'brush' ? (event) => setBrushCursor(clientToWorld(event.clientX, event.clientY)) : undefined,
+      onPointerLeave: tool === 'brush' ? () => { if (!drag.current) setBrushCursor(null); } : undefined,
+      onWheel: onWheel, onDoubleClick: onDbl,
       style: { cursor, userSelect: 'none', WebkitUserSelect: 'none', touchAction: 'none' },
       onContextMenu: onCtx, onDragStart: (e) => e.preventDefault(), draggable: false,
     },
@@ -1026,6 +1053,7 @@ import { UI } from "./ui";
       routine ? null : insertionGhost,
       routine ? null : proposalGhosts,
       routine ? routineRobot : robotEl,
+      routine ? null : brushEl,
       routine ? null : snapEl,
     );
   }

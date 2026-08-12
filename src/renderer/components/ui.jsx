@@ -12,6 +12,10 @@ import { UnitPrefs } from "../lib/unitPreferences";
   const PATHS = {
     select: 'M5 3l6 14 2-6 6-2z',
     waypoint: 'M12 4v4M12 16v4M4 12h4M16 12h4',
+    brush: 'M4 16c4-10 9 5 16-8 M5 20h14',
+    brushPush: 'M3 16c5-11 10 6 18-8',
+    brushSmooth: 'M3 16c4-10 7 7 11-3s5 2 7-6',
+    brushTwirl: 'M4 15c2-10 16-10 16 0 0 6-10 5-8 0 1-4 7-2 5 1',
     rotation: 'M5 12a7 7 0 1 1 2.5 5.3 M5 17v-4h4',
     marker: 'M6 4v16 M6 4h11l-2.5 4L17 12H6',
     play: 'M7 4l13 8-13 8z',

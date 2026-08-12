@@ -10,6 +10,7 @@ import { RoutineTransport, StepInspector } from "../components/RoutineInspector"
 import { RoutinePanel } from "../components/RoutinePanel";
 import { UI } from "../components/ui";
 import { PM } from "../lib/pathMath";
+import { PathBrush } from "../lib/pathBrush";
 import { PathLinks } from "../lib/pathLinks";
 import { AUTO } from "../lib/routineModel";
 import { enqueuePersistenceAfterPreflight, flushFocusedProjectDraft, noteProjectDraftInput, projectPersistenceStayedCurrent } from "../lib/draftPersistence";
@@ -39,6 +40,47 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     duplicate.name = name;
     duplicate.markers = duplicate.markers.map((marker) => ({ ...marker, id: markerId() }));
     return duplicate;
+  }
+
+  // A brush drag should not create an edit until it actually reaches the path. Keeping
+  // that decision here lets an off-path pointer sample remain a true no-op while the same
+  // drag can continue and open one coalesced edit when a later sample changes geometry.
+  function applyBrushDraft(editStore, source, stroke) {
+    const active = editStore.getSnapshot();
+    const candidate = clone(active || source);
+    const beforeWaypoints = candidate.waypoints.slice();
+    const result = PathBrush.apply(candidate, stroke);
+    if (result.changed) {
+      if (!active) editStore.begin(clone(source));
+      editStore.update(result.path);
+    }
+    return { ...result, beforeWaypoints };
+  }
+
+  function remapBrushSelection(selection, beforeWaypoints, afterWaypoints) {
+    if (!selection || (selection.kind !== 'wp' && selection.kind !== 'seg')) return selection;
+    if (selection.kind === 'wp') {
+      const moved = afterWaypoints.indexOf(beforeWaypoints[selection.idx]);
+      return moved >= 0 ? { kind: 'wp', idx: moved } : { kind: null, idx: -1 };
+    }
+    const start = afterWaypoints.indexOf(beforeWaypoints[selection.idx]);
+    const end = afterWaypoints.indexOf(beforeWaypoints[selection.idx + 1]);
+    if (start >= 0 && start < afterWaypoints.length - 1) return { kind: 'seg', idx: start };
+    if (end > 0) return { kind: 'seg', idx: end - 1 };
+    return { kind: null, idx: -1 };
+  }
+
+  function syncBrushSelection(selectionRef, beforeWaypoints, afterWaypoints, onSelect) {
+    const current = selectionRef.current;
+    const next = remapBrushSelection(current, beforeWaypoints, afterWaypoints);
+    if (next && (next.kind !== current.kind || next.idx !== current.idx)) {
+      // Pointer-up may synchronously flush a queued move and then dispatch its final
+      // coordinates before React renders. Advance the ref with the state update so that
+      // second sample remaps from the topology produced by the first one.
+      selectionRef.current = next;
+      onSelect(next.kind, next.idx);
+    }
+    return next;
   }
 
   function agentProposalMatchesPublishedContext(proposal, sessionId, publishedContext, currentContext) {
@@ -277,6 +319,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const [times, setTimes] = useState({});
     const [metric, setMetric] = useState('velocity');
     const [tool, setTool] = useState('select');
+    const [brush, setBrush] = useState({ kind: 'push', radius: 0.9, strength: 0.7 });
     const [waypointPreview, setWaypointPreview] = useState(null);
     const [headMenu, setHeadMenu] = useState(null);
     const [dirty, setDirty] = useState(false);
@@ -461,6 +504,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
 
     const doc = project.paths[activeIdx];
     const docRef = useRef(doc); docRef.current = doc;
+    const selRef = useRef(sel); selRef.current = sel;
     const projectRef = useRef(project); projectRef.current = project;
     const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
     const hist = useRef({ past: [], future: [] });
@@ -754,6 +798,14 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       }
       return d;
     }), [mutate]);
+    // Sculpts the active draft. Waypoint and segment selections follow their original
+    // endpoints across inserted or removed topology instead of jumping to generated spans.
+    const applyBrush = useCallback((stroke) => {
+      const result = applyBrushDraft(editStore, docRef.current, stroke);
+      if (!result.changed) return false;
+      syncBrushSelection(selRef, result.beforeWaypoints, result.path.waypoints, select);
+      return true;
+    }, [editStore, select]);
     const prepareWaypointInsertion = useCallback((rawPoint, segmentHint, onPath, selectedVisit) => {
       const p = clampWorld(rawPoint);
       const candidate = clone(docRef.current);
@@ -1222,7 +1274,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       setSegMeta, setSegmentHeadingMode, setHeadingTransition, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, reorderWp, insertWp,
       setStop, setWait, setTurnInPlace, setTurnInPlaceMeta, setHeadingMode, toggleDriveBackward,
       openInspector: () => setInspectorOpen(true) };
-    const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginEdit, finishEdit, cancelEdit,
+    const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, applyBrush, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginEdit, finishEdit, cancelEdit,
       setWaypointHeading, moveSegmentLookAt, headingMenu, faceWaypoint, delWp, delTarget, delMarker, delRange,
       openInspector: () => setInspectorOpen(true),
       select };
@@ -1598,7 +1650,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
           playbackStore.toggle();
           return;
         }
-        const toolShortcut = !e.metaKey && !e.ctrlKey && !e.altKey && !textEditing && ({ '1': 'select', '2': 'waypoint', '3': 'rotation', '4': 'marker', '5': 'range', v: 'select', w: 'waypoint', r: 'rotation', m: 'marker', c: 'range' })[k];
+        const toolShortcut = !e.metaKey && !e.ctrlKey && !e.altKey && !textEditing && ({ '1': 'select', '2': 'waypoint', '3': 'rotation', '4': 'marker', '5': 'range', '6': 'brush', v: 'select', w: 'waypoint', r: 'rotation', m: 'marker', c: 'range', b: 'brush' })[k];
         if (page === 'plan' && toolShortcut) {
           e.preventDefault();
           if (typeof e.target.blur === 'function') e.target.blur();
@@ -1607,6 +1659,16 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
         }
         const formControl = matches && matches('input,select,textarea,[contenteditable="true"]');
         if (formControl) return;
+        // Bracket radius nudges sit below the form-control guard so a focused field
+        // (including .numinput, which tool shortcuts deliberately pass through) keeps its
+        // keystrokes. FieldView's visit cycling binds the same keys in the capture phase,
+        // so defer to it when it claimed the event.
+        if (page === 'plan' && tool === 'brush' && !e.defaultPrevented && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === '[' || e.key === ']')) {
+          e.preventDefault();
+          const direction = e.key === ']' ? 1 : -1;
+          setBrush((current) => ({ ...current, radius: Math.max(0.3, Math.min(2.4, +(current.radius + direction * 0.1).toFixed(1))) }));
+          return;
+        }
         if ((e.metaKey || e.ctrlKey) && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
         if ((e.metaKey || e.ctrlKey) && k === 'y') { e.preventDefault(); redo(); return; }
         if (page !== 'plan') return;
@@ -1632,7 +1694,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
       };
       window.addEventListener('keydown', onKey);
       return () => window.removeEventListener('keydown', onKey);
-    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, derivationCurrent, nudgeWp, nudgeFrac, playbackStore]);
+    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, tool, derivationCurrent, nudgeWp, nudgeFrac, playbackStore]);
 
     const selNode = (page === 'auto' && routineSel) ? AUTO.findNode(routine, routineSel) : null;
 
@@ -1662,14 +1724,14 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
             h('nav', { className: 'rail rail-l' + (outlineOpen ? '' : ' collapsed'), 'aria-label': 'Path outline' },
               h(Panels.Outline, { open: outlineOpen, setOpen: setOutlineOpen, doc: derivationDoc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot })),
             h('div', { className: 'fieldcol' },
-              h(Panels.ToolRail, { tool, setTool }),
+              h(Panels.ToolRail, { tool, setTool, brush, setBrush, waypointCount: derivationDoc.waypoints.length }),
               exportError && h('div', { className: 'insert-preview export-error-banner', role: 'alert' },
                 h('div', { className: 'insert-preview-copy' }, h('b', null, 'Export failed'), h('span', null, exportError)),
                 h('button', { type: 'button', 'aria-label': 'Dismiss export error', onClick: () => setExportError('') }, '\u00d7')),
               derivation.error && h('div', { className: 'insert-preview derivation-error', role: 'alert' },
                 h('div', { className: 'insert-preview-copy' }, h('b', null, 'Path preview unavailable'), h('span', null, derivation.error.message || String(derivation.error))),
                 h('span', null, 'Showing the last valid preview. Undo the latest geometry change to recover.')),
-              h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, derivedPath: derivation.path, robot, plannerId, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, showHandles: true }),
+              h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, derivedPath: derivation.path, robot, plannerId, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, brush, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, showHandles: true }),
               tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
               waypointPreview && h('div', { className: 'insert-preview', role: 'region', 'aria-label': 'Preview waypoint insertion' },
                 h('div', { className: 'insert-preview-copy' },
@@ -1707,6 +1769,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     if (tool === 'rotation') return 'Click the path to set a <b>rotation target</b>';
     if (tool === 'marker') return 'Click the path to place an <b>event marker</b>';
     if (tool === 'range') return 'Drag along the path to define a <b>constraint range</b> \u00b7 then edit its limits';
+    if (tool === 'brush') return 'Drag to <b>sculpt the path</b> \u00b7 [ and ] adjust the radius';
     return '';
   }
 
@@ -1722,4 +1785,4 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }
   }
 
-export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, duplicatePathForLibrary };
+export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, applyBrushDraft, duplicatePathForLibrary, remapBrushSelection, syncBrushSelection };
