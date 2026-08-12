@@ -51,7 +51,9 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const beforeWaypoints = candidate.waypoints.slice();
     const result = PathBrush.apply(candidate, stroke);
     if (result.changed) {
-      if (!active) editStore.begin(clone(source));
+      // The draft is replaced before listeners are notified, so beginning with the
+      // completed candidate avoids cloning a maximum-size path twice on the first sample.
+      if (!active) editStore.begin(result.path);
       editStore.update(result.path);
     }
     return { ...result, beforeWaypoints };
