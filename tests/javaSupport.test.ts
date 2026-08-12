@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyJavaSupportInstall,
   cancelJavaCatalogBuild,
@@ -150,6 +150,37 @@ describe("Java support installation and trusted catalog builds", () => {
     expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
     expect(outcomes.find((outcome) => outcome.status === "rejected")).toMatchObject({ reason: expect.objectContaining({ message: expect.stringMatching(/already running/) }) });
     expect((await fs.readFile(path.join(project, "build-starts"), "utf8")).trim().split(/\r?\n/)).toHaveLength(1);
+  });
+
+  it("cancels an admitted catalog build before delayed preflight can spawn", async () => {
+    const { project } = await fixture();
+    await writeWrapper(project,
+      "#!/bin/sh\nprintf 'started\\n' >> build-starts\n",
+      "@echo off\r\necho started>>build-starts\r\n");
+    const originalRealpath = fs.realpath.bind(fs);
+    let releasePreflight!: () => void;
+    let markPreflightStarted!: () => void;
+    const preflightStarted = new Promise<void>((resolve) => { markPreflightStarted = resolve; });
+    const preflightRelease = new Promise<void>((resolve) => { releasePreflight = resolve; });
+    const realpath = vi.spyOn(fs, "realpath").mockImplementationOnce(async (target) => {
+      markPreflightStarted();
+      await preflightRelease;
+      return originalRealpath(target);
+    });
+    try {
+      const running = runJavaCatalogBuild(project);
+      await preflightStarted;
+      const canceled = cancelJavaCatalogBuild(true);
+      releasePreflight();
+      const [outcome] = await Promise.allSettled([running]);
+
+      expect(canceled).toBe(true);
+      expect(outcome).toMatchObject({ status: "rejected", reason: expect.objectContaining({ message: expect.stringMatching(/canceled/) }) });
+      await expect(fs.stat(path.join(project, "build-starts"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      releasePreflight();
+      realpath.mockRestore();
+    }
   });
 
   it("enforces output, timeout, cancellation, and one-build-at-a-time limits", async () => {
