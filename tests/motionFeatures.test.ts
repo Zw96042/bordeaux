@@ -996,6 +996,14 @@ describe("motion features", () => {
     expect(boundary.length).toBeGreaterThan(2);
     expect(boundary.at(-1)!.t - boundary[0].t).toBeGreaterThanOrEqual(path.waypoints[1].wait! - 1e-6);
     expect(boundary.every((sample) => Math.abs(sample.velocityMps) < 1e-8)).toBe(true);
+    expect(boundary.every((sample) => Math.abs(sample.f - boundary[0].f) < 1e-8)).toBe(true);
+    expect(result.samples.every((sample, index) => index === 0 || sample.f >= result.samples[index - 1].f - 1e-9)).toBe(true);
+    result.samples.slice(1).forEach((sample, index) => {
+      const previous = result.samples[index];
+      const dt = sample.t - previous.t;
+      const acceleration = Math.abs(sample.velocityMps - previous.velocityMps) / dt;
+      expect(acceleration).toBeLessThanOrEqual(Math.max(path.constraints.maxAccel, path.constraints.maxDecel) * 1.05);
+    });
   });
 
   it("validates track points and stopped turns without changing path-wide heading modes", () => {
