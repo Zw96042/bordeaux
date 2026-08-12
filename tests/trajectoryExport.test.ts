@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildBdxExport } from "../src/shared/export/bdx";
+import { getPlanner } from "../src/shared/planners";
 import { blankPath, buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
 import { decodeProjectValue, encodeProjectFile } from "../src/shared/project/fileFormat";
 import { readProject, writeProject } from "../src/electron/projectFiles";
@@ -21,6 +22,26 @@ describe("project files", () => {
     const decoded = decodeProjectValue(project);
     expect(decoded.project.plannerId).toBe("profiledSpline");
     expect(decoded.migrated).toBe(true);
+  });
+
+  it("migrates schema 1.0 zero angular deceleration to the legacy fallback", () => {
+    const source = createDemoProject();
+    source.paths[0].constraints.maxAngAccel = 90;
+    source.paths[0].constraints.maxAngDecel = 0;
+    source.paths[0].waypoints.at(-1)!.stop = true;
+    source.paths[0].waypoints.at(-1)!.turnInPlace = { headingDeg: 45, direction: "shortest" };
+
+    const decoded = decodeProjectValue(source);
+
+    expect(decoded.migrated).toBe(true);
+    expect(decoded.project.paths[0].constraints.maxAngDecel).toBe(90);
+    expect(validateProject(decoded.project)).toEqual({ ok: true, issues: [] });
+    for (const plannerId of ["profiledSpline", "optimizedTrajectory"] as const) {
+      decoded.project.plannerId = plannerId;
+      expect(() => getPlanner(plannerId).generate({ path: decoded.project.paths[0], robot: decoded.project.robot }))
+        .not.toThrow();
+      expect(() => buildBdxExport(decoded.project)).not.toThrow();
+    }
   });
 
   it("imports singular routines but keeps canonical project files singular-free", () => {

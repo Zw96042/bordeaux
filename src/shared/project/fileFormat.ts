@@ -43,7 +43,11 @@ function needsV1Migration(value: Record<string, unknown>): boolean {
   const hasNumericReference = routines.some((routine) => isRecord(routine) && hasNumericRoutineReference(routine.nodes))
     || (isRecord(value.routine) && hasNumericRoutineReference(value.routine.nodes));
   const hasInvalidPlanner = value.plannerId !== "profiledSpline" && value.plannerId !== "optimizedTrajectory";
-  return hasMissingPathId || "routine" in value || hasInvalidRoutineState || hasNumericReference || hasInvalidPlanner;
+  const hasLegacyAngularDeceleration = Array.isArray(value.paths) && value.paths.some((path) => (
+    isRecord(path) && isRecord(path.constraints) && path.constraints.maxAngDecel === 0
+  ));
+  return hasMissingPathId || "routine" in value || hasInvalidRoutineState || hasNumericReference
+    || hasInvalidPlanner || hasLegacyAngularDeceleration;
 }
 
 function validatedProject(value: unknown, migrated: boolean): DecodedProjectFile {
