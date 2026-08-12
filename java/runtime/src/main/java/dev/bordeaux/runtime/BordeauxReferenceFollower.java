@@ -46,13 +46,21 @@ public final class BordeauxReferenceFollower {
         if (finished) return samples.get(sampleIndex);
         BordeauxFollowSection section = sections.get(sectionIndex);
         if (section.mode() == BordeauxFollowSection.Mode.TIME) {
-            sectionElapsedS += dtS;
-            double target = samples.get(section.startSample()).timeS() + sectionElapsedS;
-            while (sampleIndex < section.endSample() && samples.get(sampleIndex + 1).timeS() <= target + 1e-9) {
-                sampleIndex++;
+            double remainingTimeS = dtS;
+            while (!finished && section.mode() == BordeauxFollowSection.Mode.TIME) {
+                sectionElapsedS += remainingTimeS;
+                double target = samples.get(section.startSample()).timeS() + sectionElapsedS;
+                while (sampleIndex < section.endSample()
+                        && samples.get(sampleIndex + 1).timeS() <= target + 1e-9) {
+                    sampleIndex++;
+                }
+                double duration = samples.get(section.endSample()).timeS()
+                        - samples.get(section.startSample()).timeS();
+                if (sampleIndex < section.endSample() || sectionElapsedS < duration - 1e-9) break;
+                remainingTimeS = Math.max(0, sectionElapsedS - duration);
+                advanceSection();
+                if (!finished) section = sections.get(sectionIndex);
             }
-            double duration = samples.get(section.endSample()).timeS() - samples.get(section.startSample()).timeS();
-            if (sampleIndex == section.endSample() && sectionElapsedS >= duration - 1e-9) advanceSection();
         } else {
             updateMeasuredTravel(section, measuredXM, measuredYM);
             int searchStart = positionIndexes[sectionIndex].endOfCoincidentRun(measuredSampleIndex);
