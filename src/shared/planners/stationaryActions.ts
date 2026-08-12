@@ -372,7 +372,7 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     waypointSampleIndices[index] = baseIndices[index] + insertedBefore;
     insertedBefore += insertedByWaypoint[index];
   }
-  const markerOffsets: Array<{ time: number; duration: number; terminal: boolean }> = [];
+  const markerOffsets: Array<{ time: number; duration: number }> = [];
   let cumulativeDuration = 0;
   actions.forEach(({ waypoint, index }) => {
     const ticks = plannedTicks.get(index)!;
@@ -382,7 +382,6 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     markerOffsets.push({
       time: result.samples[actionIndices[index]].t,
       duration: cumulativeDuration,
-      terminal: index === terminalIndex,
     });
   });
   markers.forEach((marker) => {
@@ -393,11 +392,6 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
       if (markerOffsets[middle].time < marker.timeS - EPSILON) low = middle + 1;
       else high = middle;
     }
-    const terminalAtArrival = low === markerOffsets.length - 1
-      && markerOffsets[low].terminal
-      && marker.fraction >= 1 - EPSILON
-      && Math.abs(marker.timeS - markerOffsets[low].time) <= EPSILON;
-    if (terminalAtArrival) low += 1;
     if (low > 0) marker.timeS += markerOffsets[low - 1].duration;
   });
 
@@ -412,6 +406,9 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     }
   });
   const totalTimeS = samples.at(-1)?.t ?? result.totalTimeS;
+  markers.forEach((marker) => {
+    if (marker.fraction >= 1 - EPSILON) marker.timeS = totalTimeS;
+  });
   return enforceAngularTiming(path, {
     ...result,
     totalTimeS,
