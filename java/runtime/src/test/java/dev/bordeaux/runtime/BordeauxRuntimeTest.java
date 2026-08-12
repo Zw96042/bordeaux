@@ -305,6 +305,30 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void timeFollowingConsumesOneUpdateAcrossEveryTimeSectionBoundary() {
+        List<BordeauxSample> samples = List.of(
+                sample(0, 0, 0), sample(1, 0.25, 1), sample(2, 0.5, 2),
+                sample(3, 0.75, 3), sample(4, 1, 4));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "time-sections", "Time sections", 1, CATALOG_ID, HASH, List.of(), samples, List.of(
+                        new BordeauxFollowSection(0, BordeauxFollowSection.Mode.TIME, 0, 1),
+                        new BordeauxFollowSection(1, BordeauxFollowSection.Mode.TIME, 1, 2),
+                        new BordeauxFollowSection(2, BordeauxFollowSection.Mode.TIME, 2, 3),
+                        new BordeauxFollowSection(3, BordeauxFollowSection.Mode.TIME, 3, 4)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(3, follower.update(0.8, 0, 0).index());
+        assertEquals(3, follower.sectionIndex());
+        assertFalse(follower.isFinished());
+        assertEquals(4, follower.update(0.2, 0, 0).index());
+        assertTrue(follower.isFinished());
+
+        follower.reset();
+        assertEquals(4, follower.update(1, 0, 0).index());
+        assertTrue(follower.isFinished());
+    }
+
+    @Test
     void completesATerminalPositionWaitUsingTheTrailingTimeSection() {
         List<BordeauxSample> samples = List.of(
                 new BordeauxSample(0, 0, 0, 0, 0, 0, 0, 1),
