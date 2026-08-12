@@ -8,14 +8,28 @@ import java.util.Objects;
 import java.util.Optional;
 /** Resolves sensor decisions and commands only between completed path steps. */
 public final class BordeauxRoutineRunner implements AutoCloseable {
+    public enum Status { READY, PATH_ACTIVE, WAITING_FOR_COMMAND, COMPLETE, STOPPED }
+
+    /** An atomic routine transition; only {@link Status#PATH_ACTIVE} carries a path ID. */
+    public record Transition(Status status, Optional<String> pathId) {
+        public Transition {
+            Objects.requireNonNull(status, "status");
+            Objects.requireNonNull(pathId, "pathId");
+            if ((status == Status.PATH_ACTIVE) != pathId.isPresent()) {
+                throw new IllegalArgumentException("Only an active-path transition may carry a path ID");
+            }
+        }
+    }
+
     private final BordeauxRoutine routine;
     private final BordeauxCommandRegistry commands;
     private final BordeauxConditionRegistry conditions;
     private final BordeauxEventRunner.Scheduler scheduler;
     private final Deque<BordeauxRoutineNode> pending = new ArrayDeque<>();
     private String currentPathId;
+    private Command activeCommand;
     private int commandCount;
-    private boolean active;
+    private Status status;
     public BordeauxRoutineRunner(BordeauxPathEvents document, BordeauxCommandRegistry commands,
             BordeauxConditionRegistry conditions) {
         this(document, commands, conditions, BordeauxEventRunner.Scheduler.wpilib());
@@ -34,33 +48,62 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
         validateNodes(routine.nodes());
         reset();
     }
-    /** Resolves entry decisions and commands, returning the first path to run. */
+    /** Legacy path-only view of {@link #startTransition()}; inspect {@link #status()} when empty. */
     public Optional<String> start() {
-        if (!active) throw new BordeauxRuntimeException("Routine runner is stopped; call reset() before start()");
-        if (currentPathId != null) throw new BordeauxRuntimeException("Routine already has an active path");
+        return startTransition().pathId();
+    }
+
+    /** Resolves entry decisions and returns the first path, command wait, or completion transition. */
+    public Transition startTransition() {
+        if (status != Status.READY) throw new BordeauxRuntimeException("Routine is not ready; call reset() before start()");
         return advance();
     }
-    /** Marks the active path complete and returns the next selected path, if any. */
+
+    /** Legacy path-only view of {@link #completePathTransition(String)}; inspect {@link #status()} when empty. */
     public Optional<String> completePath(String completedPathId) {
-        if (!active || currentPathId == null) throw new BordeauxRuntimeException("Routine has no active path to complete");
+        return completePathTransition(completedPathId).pathId();
+    }
+
+    /** Marks the active path complete and returns the next routine transition. */
+    public Transition completePathTransition(String completedPathId) {
+        if (status != Status.PATH_ACTIVE) throw new BordeauxRuntimeException("Routine has no active path to complete");
         if (!currentPathId.equals(completedPathId)) {
             throw new BordeauxRuntimeException("Completed path '" + completedPathId + "' does not match active path '" + currentPathId + "'");
         }
         currentPathId = null;
+        status = Status.READY;
         return advance();
     }
+
+    /** Polls a between-path command once; call once per robot loop while waiting. */
+    public Transition periodic() {
+        if (status != Status.WAITING_FOR_COMMAND) {
+            throw new BordeauxRuntimeException("Routine has no active command to poll");
+        }
+        if (scheduler.isScheduled(activeCommand)) return transition();
+        activeCommand = null;
+        status = Status.READY;
+        return advance();
+    }
+
     public void reset() {
+        cancelActiveCommand();
         pending.clear();
         prepend(routine.nodes());
         currentPathId = null;
         commandCount = 0;
-        active = true;
+        status = Status.READY;
     }
 
     public void stop() {
+        cancelActiveCommand();
         pending.clear();
         currentPathId = null;
-        active = false;
+        status = Status.STOPPED;
+    }
+
+    public Status status() {
+        return status;
     }
 
     public int commandCount() {
@@ -87,25 +130,39 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
         }
     }
 
-    private Optional<String> advance() {
+    private Transition advance() {
         int evaluated = 0;
         while (!pending.isEmpty()) {
             if (++evaluated > 10_000) throw new BordeauxRuntimeException("Routine transition exceeds 10000 steps");
             BordeauxRoutineNode node = pending.removeFirst();
             if (node instanceof BordeauxRoutineNode.Path path) {
                 currentPathId = path.pathId();
-                return Optional.of(currentPathId);
+                status = Status.PATH_ACTIVE;
+                return transition();
             }
             if (node instanceof BordeauxRoutineNode.Decision decision) {
                 prepend(conditions.evaluate(decision.conditionId()) ? decision.whenTrue() : decision.whenFalse());
             } else if (node instanceof BordeauxRoutineNode.Command invocation) {
                 Command command = commands.create(invocation.commandId(), invocation.arguments());
                 scheduler.schedule(command);
+                activeCommand = command;
                 commandCount++;
+                status = Status.WAITING_FOR_COMMAND;
+                return transition();
             }
         }
-        active = false;
-        return Optional.empty();
+        status = Status.COMPLETE;
+        return transition();
+    }
+
+    private Transition transition() {
+        return new Transition(status, Optional.ofNullable(currentPathId));
+    }
+
+    private void cancelActiveCommand() {
+        if (activeCommand == null) return;
+        scheduler.cancel(activeCommand);
+        activeCommand = null;
     }
 
     private void prepend(List<BordeauxRoutineNode> nodes) {

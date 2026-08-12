@@ -249,12 +249,13 @@ class BordeauxRuntimeTest {
     }
 
     @Test
-    void choosesNextPathAndSchedulesCommandsBetweenPaths() throws Exception {
+    void waitsForCommandsBeforeChoosingNextPath() throws Exception {
         ObjectNode arguments = (ObjectNode) MAPPER.readTree("{}");
         BordeauxRoutine routine = new BordeauxRoutine("Choose note", List.of(
                 new BordeauxRoutineNode.Path("first", "path-a"),
                 new BordeauxRoutineNode.Decision("choose", "has-note",
                         List.of(new BordeauxRoutineNode.Command("collect", "collect", arguments),
+                                new BordeauxRoutineNode.Command("score", "score", arguments),
                                 new BordeauxRoutineNode.Path("a-next", "path-b")),
                         List.of(new BordeauxRoutineNode.Path("b-next", "path-c")))));
         BordeauxPathEvents document = new BordeauxPathEvents(
@@ -262,20 +263,78 @@ class BordeauxRuntimeTest {
         boolean[] hasNote = {true};
         List<String> created = new ArrayList<>();
         RecordingScheduler scheduler = new RecordingScheduler();
-        BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, registry(created, "collect"),
+        BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, registry(created, "collect", "score"),
                 BordeauxConditionRegistry.builder().register("has-note", () -> hasNote[0]).build(), scheduler);
 
-        assertEquals("path-a", runner.start().orElseThrow());
-        assertEquals("path-b", runner.completePath("path-a").orElseThrow());
+        BordeauxRoutineRunner.Transition firstPath = runner.startTransition();
+        assertEquals(BordeauxRoutineRunner.Status.PATH_ACTIVE, firstPath.status());
+        assertEquals("path-a", firstPath.pathId().orElseThrow());
+
+        BordeauxRoutineRunner.Transition collecting = runner.completePathTransition("path-a");
+        assertEquals(BordeauxRoutineRunner.Status.WAITING_FOR_COMMAND, collecting.status());
+        assertTrue(collecting.pathId().isEmpty());
         assertEquals(List.of("collect"), created);
         assertEquals(1, runner.commandCount());
-        assertTrue(runner.completePath("path-b").isEmpty());
+        assertEquals(collecting, runner.periodic());
+        assertEquals(List.of("collect"), created);
+
+        scheduler.finish(scheduler.scheduled.get(0));
+        BordeauxRoutineRunner.Transition scoring = runner.periodic();
+        assertEquals(BordeauxRoutineRunner.Status.WAITING_FOR_COMMAND, scoring.status());
+        assertEquals(List.of("collect", "score"), created);
+        assertEquals(2, runner.commandCount());
+        assertEquals(scoring, runner.periodic());
+
+        scheduler.finish(scheduler.scheduled.get(1));
+        BordeauxRoutineRunner.Transition secondPath = runner.periodic();
+        assertEquals(BordeauxRoutineRunner.Status.PATH_ACTIVE, secondPath.status());
+        assertEquals("path-b", secondPath.pathId().orElseThrow());
+        assertEquals(BordeauxRoutineRunner.Status.COMPLETE,
+                runner.completePathTransition("path-b").status());
 
         hasNote[0] = false;
         runner.reset();
-        runner.start();
+        assertEquals("path-a", runner.start().orElseThrow());
         assertEquals("path-c", runner.completePath("path-a").orElseThrow());
         assertThrows(BordeauxRuntimeException.class, () -> runner.completePath("wrong"));
+    }
+
+    @Test
+    void cancelsActiveRoutineCommandOnResetStopAndClose() throws Exception {
+        ObjectNode arguments = (ObjectNode) MAPPER.readTree("{}");
+        BordeauxRoutine routine = new BordeauxRoutine("Command lifecycle", List.of(
+                new BordeauxRoutineNode.Path("first", "path-a"),
+                new BordeauxRoutineNode.Command("collect", "collect", arguments),
+                new BordeauxRoutineNode.Path("second", "path-b")));
+        BordeauxPathEvents document = new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), routine);
+        RecordingScheduler scheduler = new RecordingScheduler();
+        BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, registry(new ArrayList<>(), "collect"),
+                BordeauxConditionRegistry.empty(), scheduler);
+
+        runner.start();
+        runner.completePath("path-a");
+        Command resetCommand = scheduler.scheduled.get(0);
+        runner.reset();
+        assertEquals(BordeauxRoutineRunner.Status.READY, runner.status());
+
+        runner.start();
+        runner.completePath("path-a");
+        Command stopCommand = scheduler.scheduled.get(1);
+        runner.stop();
+        assertEquals(BordeauxRoutineRunner.Status.STOPPED, runner.status());
+
+        runner.reset();
+        runner.start();
+        runner.completePath("path-a");
+        Command closeCommand = scheduler.scheduled.get(2);
+        runner.close();
+
+        assertEquals(List.of(resetCommand, stopCommand, closeCommand), scheduler.cancelled);
+        assertEquals(BordeauxRoutineRunner.Status.STOPPED, runner.status());
+        assertFalse(scheduler.isScheduled(resetCommand));
+        assertFalse(scheduler.isScheduled(stopCommand));
+        assertFalse(scheduler.isScheduled(closeCommand));
     }
 
     @Test
@@ -766,15 +825,27 @@ class BordeauxRuntimeTest {
     private static final class RecordingScheduler implements BordeauxEventRunner.Scheduler {
         private final List<Command> scheduled = new ArrayList<>();
         private final List<Command> cancelled = new ArrayList<>();
+        private final List<Command> active = new ArrayList<>();
 
         @Override
         public void schedule(Command command) {
             scheduled.add(command);
+            active.add(command);
         }
 
         @Override
         public void cancel(Command command) {
             cancelled.add(command);
+            active.remove(command);
+        }
+
+        @Override
+        public boolean isScheduled(Command command) {
+            return active.contains(command);
+        }
+
+        private void finish(Command command) {
+            if (!active.remove(command)) throw new AssertionError("Command was not scheduled");
         }
     }
 }

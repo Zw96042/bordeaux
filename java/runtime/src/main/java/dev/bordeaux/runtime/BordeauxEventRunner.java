@@ -13,6 +13,11 @@ public final class BordeauxEventRunner implements AutoCloseable {
 
         void cancel(Command command);
 
+        /** Reports whether a command is still running. Non-WPILib custom schedulers must override this. */
+        default boolean isScheduled(Command command) {
+            return CommandScheduler.getInstance().isScheduled(command);
+        }
+
         static Scheduler wpilib() {
             return new Scheduler() {
                 @Override
