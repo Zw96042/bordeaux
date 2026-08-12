@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { PM } from "../src/shared/math/pm";
 import { getPlanner } from "../src/shared/planners";
 import { enforceAngularTiming } from "../src/shared/planners/angularConstraints";
+import { profiledSplinePlanner } from "../src/shared/planners/profiledSpline";
 import { orderedWaypointSampleIndices } from "../src/shared/planners/waypointSamples";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
 import type { PathDoc, TrajectorySample } from "../src/shared/types";
@@ -52,7 +53,7 @@ describe("shared path indices", () => {
       .toEqual(legacyArrivalIndices(path, samples));
   });
 
-  it("does not skip an approximate boundary for a later duplicate coordinate", () => {
+  it("preserves an earlier boundary before a later duplicate endpoint", () => {
     const project = createDemoProject();
     const path = project.paths[0];
     path.waypoints = buildWaypoints([
@@ -69,8 +70,51 @@ describe("shared path indices", () => {
     }).samples;
 
     expect(orderedWaypointSampleIndices(path.waypoints, samples)).toEqual([0, 9, 18, 27, 36]);
-    expect(orderedWaypointSampleIndices(path.waypoints, samples))
-      .toEqual(legacyArrivalIndices(path, samples));
+  });
+
+  it("keeps a waited loop departure distinct from its returned duplicate", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, segType: "clothoid" },
+      { x: 5, y: 5, segType: "clothoid" },
+      { x: 10, y: 2, segType: "clothoid" },
+      { x: 12, y: 6, segType: "clothoid", stop: true, wait: 1 },
+      { x: 12, y: 6, segType: "line" },
+      { x: 14, y: 3, segType: "line" },
+    ]);
+    const input = { path, robot: project.robot, samplesPerSegment: 9 };
+    const raw = profiledSplinePlanner.generate(input);
+    const final = getPlanner("profiledSpline").generate(input);
+
+    expect(orderedWaypointSampleIndices(path.waypoints, raw.samples))
+      .toEqual([0, 9, 18, 27, 36, 45]);
+    for (const fallback of ["full", "stationary"] as const) {
+      expect(orderedWaypointSampleIndices(path.waypoints, final.samples, { fallback }))
+        .toEqual([0, 9, 18, 27, 56, 65]);
+    }
+    expect(final.samples[28].t).toBeGreaterThan(final.samples[27].t);
+    expect(final.samples[56]).toMatchObject({ x: 12, y: 6 });
+    expect(final.samples[57].x).not.toBe(12);
+  });
+
+  it("keeps consecutive zero-length waypoint boundaries nondecreasing", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, segType: "line" },
+      { x: 4, y: 4, segType: "line" },
+      { x: 4, y: 4, segType: "line" },
+      { x: 4, y: 4, segType: "line" },
+      { x: 8, y: 2, segType: "line" },
+    ]);
+    const samples = profiledSplinePlanner.generate({ path, robot: project.robot, samplesPerSegment: 9 }).samples;
+    const indices = orderedWaypointSampleIndices(path.waypoints, samples);
+
+    expect(indices).toEqual([...indices].sort((first, second) => first - second));
+    expect(indices.map((index) => [samples[index].x, samples[index].y])).toEqual(
+      path.waypoints.map((waypoint) => [waypoint.x, waypoint.y]),
+    );
   });
 
   it("preserves heading interpolation at anchors, duplicates, and between anchors", () => {

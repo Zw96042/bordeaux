@@ -91,7 +91,7 @@ describe("Java trajectory export", () => {
     expect(sections[1].endSample).toBeGreaterThan(sections[1].startSample);
   });
 
-  it("keeps a follow section for an approximate boundary before a duplicate endpoint", () => {
+  it("keeps a follow section between consecutive duplicate waypoints", () => {
     const project = createDemoProject();
     project.paths[0].waypoints = buildWaypoints([
       { x: 1, y: 1, segType: "clothoid" },

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
-import { createDemoProject } from "../src/shared/project/defaults";
+import { PM } from "../src/shared/math/pm";
+import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
 import { loadRendererExport } from "./helpers/loadRendererExport";
 
 interface Point { x: number; y: number }
@@ -31,6 +32,24 @@ describe("renderer application", () => {
       expect(preview.sample.length).toBeGreaterThan(0);
       expect(preview.prof.totalTime).toBeGreaterThan(0);
     }
+  });
+
+  it.each([2, 56])("keeps shared and renderer clothoid endpoints exact at density %s", (samplesPerSegment) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, segType: "clothoid" },
+      { x: 5, y: 5, segType: "clothoid" },
+      { x: 10, y: 2, segType: "clothoid" },
+      { x: 12, y: 6, segType: "line" },
+    ]);
+    const shared = PM.sample(path.waypoints, samplesPerSegment).pts;
+    const renderer = rendererMath().derivePath(path, project.robot, samplesPerSegment, "profiledSpline").sample.pts;
+
+    path.waypoints.forEach((waypoint, index) => {
+      expect(shared[index * samplesPerSegment]).toMatchObject({ x: waypoint.x, y: waypoint.y });
+      expect(renderer[index * samplesPerSegment]).toMatchObject({ x: waypoint.x, y: waypoint.y });
+    });
   });
 
   it("loads React through the typed renderer module entry without compatibility globals", () => {
