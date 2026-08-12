@@ -189,7 +189,8 @@
           head = ang + (arc.sweep >= 0 ? Math.PI / 2 : -Math.PI / 2);
           curv = arc.rad > 1e-6 ? 1 / arc.rad : 0;
         } else if (effType === 'clothoid') {
-          pos = { x: cloth.xs[k], y: cloth.ys[k] }; head = cloth.hs[k]; curv = Math.abs(cloth.ks[k]);
+          pos = k === steps ? p1 : { x: cloth.xs[k], y: cloth.ys[k] };
+          head = cloth.hs[k]; curv = Math.abs(cloth.ks[k]);
         } else {
           pos = bez(p0, c0, c1, p1, t);
           const d = bezD(p0, c0, c1, p1, t), dd = bezDD(p0, c0, c1, p1, t);
