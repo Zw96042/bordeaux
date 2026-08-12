@@ -990,4 +990,42 @@ describe("agent session and private bridge", () => {
       await fs.rm(directory, { recursive: true, force: true });
     }
   });
+
+  it("settles the response read when a bridge request write fails", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-agent-write-test-"));
+    const endpoint = path.join(os.tmpdir(), `bordeaux-mcp-w-${path.basename(directory).slice(-6)}.sock`);
+    const transport = net.createServer((socket) => socket.destroy());
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => unhandled.push(error);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        transport.once("error", reject);
+        transport.listen(endpoint, () => { transport.off("error", reject); resolve(); });
+      });
+      await fs.chmod(endpoint, 0o600);
+      await fs.mkdir(path.join(directory, "mcp"), { recursive: true, mode: 0o700 });
+      await fs.writeFile(path.join(directory, "mcp", "runtime-v1.json"), JSON.stringify({
+        schemaVersion: 1,
+        protocolVersion: 1,
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        instanceId: "write-failure-test",
+        endpoint,
+        token: "write-failure-test-token",
+      }), { mode: 0o600 });
+      process.on("unhandledRejection", onUnhandled);
+
+      const largeRequest = { method: "inspect_session" as const, padding: "x".repeat(32 * 1024 * 1024) };
+      const request = new AgentBridgeClient(directory).request(largeRequest);
+      await expect(request).rejects.toThrow();
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      await new Promise<void>((resolve) => transport.close(() => resolve()));
+      await fs.rm(endpoint, { force: true });
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
 });

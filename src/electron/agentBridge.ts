@@ -264,8 +264,10 @@ export class AgentBridgeClient {
       });
       const id = randomUUID();
       const response = readOne(socket, REQUEST_TIMEOUT_MS) as Promise<{ id?: string; result?: unknown; error?: string }>;
-      await writeOne(socket, { id, token: descriptor.token, request } satisfies BridgeEnvelope);
-      const value = await response;
+      const [value] = await Promise.all([
+        response,
+        writeOne(socket, { id, token: descriptor.token, request } satisfies BridgeEnvelope),
+      ]);
       if (value.error) throw new Error(value.error);
       if (value.id !== id) throw new Error("The Bordeaux MCP response did not match its request.");
       return value.result;
