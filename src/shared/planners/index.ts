@@ -4,6 +4,7 @@ import { profiledSplinePlanner } from "./profiledSpline";
 import { applyStationaryActions } from "./stationaryActions";
 import { applyRotationPriority } from "./rotationPriority";
 import { addJerkDiagnostics } from "./jerkDiagnostics";
+import { addAngularLimitDiagnostics, enforceAngularTiming } from "./angularConstraints";
 import { effectivePathConstraints, robotHardLimits } from "../robotLimits";
 
 export const planners: Record<TrajectoryPlannerId, TrajectoryPlanner> = {
@@ -32,8 +33,9 @@ export function getPlanner(id: TrajectoryPlannerId): TrajectoryPlanner {
           }
         : physicalInput;
       const generated = planner.generate(planningInput);
-      const final = applyStationaryActions(path, applyRotationPriority(path, generated, robot), robot);
-      return addJerkDiagnostics(path, final);
+      const prioritized = applyRotationPriority(path, generated, robot);
+      const final = applyStationaryActions(path, enforceAngularTiming(path, prioritized, true), robot);
+      return addAngularLimitDiagnostics(path, addJerkDiagnostics(path, final));
     },
   };
 }

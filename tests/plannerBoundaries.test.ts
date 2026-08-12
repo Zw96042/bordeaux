@@ -1,12 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { optimizedTrajectoryPlanner } from "../src/shared/planners/optimizedTrajectory";
 import { profiledSplinePlanner } from "../src/shared/planners/profiledSpline";
+import { getPlanner } from "../src/shared/planners";
 import { applyStationaryActions } from "../src/shared/planners/stationaryActions";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
-import type { ConstraintRange, RoutineNode } from "../src/shared/types";
+import type { ConstraintRange, RoutineNode, TrajectorySample } from "../src/shared/types";
 import { validateProject } from "../src/shared/validation";
 import { decodeProjectValue } from "../src/shared/project/fileFormat";
 import { wrapRadians } from "../src/shared/math/angles";
+import { buildBdxExport } from "../src/shared/export/bdx";
+
+function maxAngularAcceleration(samples: readonly TrajectorySample[]): number {
+  return samples.slice(1).reduce((maximum, sample, index) => {
+    const previous = samples[index];
+    return Math.max(maximum, Math.abs(sample.angularVelocityRadps - previous.angularVelocityRadps) / (sample.t - previous.t));
+  }, 0);
+}
+
+function maxAngularDeceleration(samples: readonly TrajectorySample[]): number {
+  return samples.slice(1).reduce((maximum, sample, index) => {
+    const previous = samples[index];
+    if (Math.abs(previous.angularVelocityRadps) <= 1e-9 && Math.abs(sample.angularVelocityRadps) > 1e-9) return maximum;
+    const sameDirection = Math.sign(sample.angularVelocityRadps) === Math.sign(previous.angularVelocityRadps);
+    if (sameDirection && Math.abs(sample.angularVelocityRadps) > Math.abs(previous.angularVelocityRadps)) return maximum;
+    return Math.max(maximum, Math.abs(sample.angularVelocityRadps - previous.angularVelocityRadps) / (sample.t - previous.t));
+  }, 0);
+}
 
 describe("planner correctness boundaries", () => {
   it("normalizes large finite headings in constant time", () => {
@@ -122,6 +141,140 @@ describe("planner correctness boundaries", () => {
     }
     expect(result.optimization?.constraintViolations).toBe(0);
     expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+  });
+
+  it.each(["profiledSpline", "optimizedTrajectory"] as const)("enforces signed angular acceleration through a direction reversal in %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.constraints = {
+      ...path.constraints,
+      maxVel: 2,
+      maxAccel: 2,
+      maxDecel: 2,
+      maxAngVel: 180,
+      maxAngAccel: 30,
+      maxAngDecel: 30,
+    };
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 3.488662326708436 },
+      { x: 5, y: 1.07577219652012 },
+      { x: 10, y: 1.1318204896524549 },
+      { x: 15, y: 6.9169465894810855 },
+    ]);
+
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+
+    expect(maxAngularAcceleration(result.samples))
+      .toBeLessThanOrEqual(path.constraints.maxAngAccel * Math.PI / 180 * 1.02);
+    expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+  });
+
+  it.each([
+    ["terminal turn", (waypoint: ReturnType<typeof buildWaypoints>[number]) => {
+      waypoint.stop = true;
+      waypoint.turnInPlace = { headingDeg: 90, direction: "counterclockwise" };
+    }],
+    ["terminal jiggle", (waypoint: ReturnType<typeof buildWaypoints>[number]) => {
+      waypoint.stop = true;
+      waypoint.jiggle = { distanceM: 0.15, strokes: 2, startDeg: 0, stepDeg: 90, strokeTimeS: 0.4 };
+    }],
+  ] as const)("keeps moving signed angular limits with a %s", (_name, addAction) => {
+    for (const plannerId of ["profiledSpline", "optimizedTrajectory"] as const) {
+      const project = createDemoProject();
+      const path = project.paths[0];
+      path.headingMode = "tangent";
+      path.constraints = {
+        ...path.constraints,
+        maxVel: 2,
+        maxAccel: 2,
+        maxDecel: 2,
+        maxAngVel: 180,
+        maxAngAccel: 30,
+        maxAngDecel: 30,
+      };
+      path.waypoints = buildWaypoints([
+        { x: 1, y: 3.488662326708436 },
+        { x: 5, y: 1.07577219652012 },
+        { x: 10, y: 1.1318204896524549 },
+        { x: 15, y: 6.9169465894810855 },
+      ]);
+      addAction(path.waypoints.at(-1)!);
+
+      const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+
+      expect(maxAngularAcceleration(result.samples), plannerId)
+        .toBeLessThanOrEqual(path.constraints.maxAngAccel * Math.PI / 180 * 1.03);
+      expect(result.diagnostics.some((issue) => issue.severity === "error" && issue.message.includes("angular limits")), plannerId)
+        .toBe(false);
+    }
+  });
+
+  it.each(["profiledSpline", "optimizedTrajectory"] as const)("uses maxAngDecel while settling moving heading in %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints = {
+      ...path.constraints,
+      maxVel: 2,
+      maxAccel: 2,
+      maxDecel: 2,
+      maxAngVel: 360,
+      maxAngAccel: 720,
+      maxAngDecel: 1,
+    };
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 9, y: 2, theta: 180, thetaOn: true },
+    ]);
+
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+
+    expect(maxAngularDeceleration(result.samples))
+      .toBeLessThanOrEqual(path.constraints.maxAngDecel! * Math.PI / 180 * 1.02);
+  });
+
+  it("enforces a full-width local angular acceleration range", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxAngAccel = 720;
+    path.constraints.maxAngDecel = 720;
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 9, y: 2, theta: 180, thetaOn: true },
+    ]);
+    path.ranges = [{
+      anchor: "param", f0: 0, f1: 1,
+      maxVel: path.constraints.maxVel,
+      maxAccel: path.constraints.maxAccel,
+      maxDecel: path.constraints.maxDecel,
+      maxAngVel: path.constraints.maxAngVel,
+      maxAngAccel: 1,
+    }];
+
+    const result = profiledSplinePlanner.generate({ path, robot: project.robot });
+
+    expect(maxAngularAcceleration(result.samples)).toBeLessThanOrEqual(Math.PI / 180 * 1.02);
+  });
+
+  it("never exports samples that exceed authored angular acceleration", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.constraints.maxAngAccel = 30;
+    path.constraints.maxAngDecel = 30;
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 3.488662326708436 },
+      { x: 5, y: 1.07577219652012 },
+      { x: 10, y: 1.1318204896524549 },
+      { x: 15, y: 6.9169465894810855 },
+    ]);
+
+    const exported = buildBdxExport(project).paths[0];
+
+    expect(maxAngularAcceleration(exported.samples))
+      .toBeLessThanOrEqual(path.constraints.maxAngAccel * Math.PI / 180 * 1.02);
   });
 
   it("rejects oversized stationary timelines before allocating their samples", () => {
