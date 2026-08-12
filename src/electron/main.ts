@@ -625,6 +625,8 @@ function createWindow() {
         }
         const numberParameter = document.getElementById('event-command-param-count');
         if (numberParameter) editInput(numberParameter, '7');
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const commandDraftReady = numberParameter?.value === '7' && document.activeElement === numberParameter;
         const commandMenuSent = await runMenuStage('save-command');
         await new Promise((resolve) => setTimeout(resolve, 100));
         let commandSaved;
@@ -633,7 +635,7 @@ function createWindow() {
           if (commandSaved.project.paths[0].markers.at(-1)?.invocation?.arguments?.count === 7) break;
           await new Promise((resolve) => setTimeout(resolve, 20));
         }
-        const draftCommandSaved = commandMenuSent && commandSaved.project.paths[0].markers.at(-1)?.invocation?.arguments?.count === 7;
+        const draftCommandSaved = commandDraftReady && commandMenuSent && commandSaved.project.paths[0].markers.at(-1)?.invocation?.arguments?.count === 7;
         document.getElementById('event-marker-command')?.click();
         for (let attempt = 0; attempt < 50 && !document.querySelector('#event-marker-command-listbox [role="option"]'); attempt++) {
           await new Promise((resolve) => setTimeout(resolve, 10));
