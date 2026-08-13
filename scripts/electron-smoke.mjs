@@ -2,11 +2,41 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import electron from "electron";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
-const smokeDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-electron-smoke-"));
+// The GUI smoke owns machine-wide desktop focus, even across separate clones.
+const smokeLockPort = 24968;
+
+async function acquireSmokeLock() {
+  const deadline = Date.now() + 60000;
+  while (true) {
+    const server = net.createServer((socket) => socket.destroy());
+    try {
+      await new Promise((resolve, reject) => {
+        const onError = (error) => reject(error);
+        server.once("error", onError);
+        server.listen({ host: "127.0.0.1", port: smokeLockPort, exclusive: true }, () => {
+          server.off("error", onError);
+          resolve();
+        });
+      });
+      return server;
+    } catch (error) {
+      if (error?.code !== "EADDRINUSE" || Date.now() >= deadline) {
+        throw new Error("Could not acquire the Bordeaux Electron smoke lock.", { cause: error });
+      }
+      await delay(100);
+    }
+  }
+}
+
+const smokeLock = await acquireSmokeLock();
+let smokeDirectory;
 try {
+  smokeDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-electron-smoke-"));
   const javaSourceDirectory = path.join(smokeDirectory, "java-project", "src", "main", "java", "frc", "robot");
   await fs.mkdir(javaSourceDirectory, { recursive: true });
   await fs.writeFile(path.join(smokeDirectory, "java-project", "build.gradle"), "plugins { id 'java'; id 'edu.wpi.first.GradleRIO' version '2026.2.2' }\n");
@@ -77,9 +107,11 @@ public final class IdleCommand extends CommandBase {}
   await fs.writeFile(path.join(smokeDirectory, "java-project", "gradlew.bat"), windowsWrapper);
 
   const packagedExecutable = process.env.BORDEAUX_SMOKE_EXECUTABLE;
+  const childEnvironment = { ...process.env, BORDEAUX_SMOKE_TEST: "1", BORDEAUX_SMOKE_DIRECTORY: smokeDirectory };
+  delete childEnvironment.ELECTRON_RUN_AS_NODE;
   const child = spawn(packagedExecutable || electron, packagedExecutable ? ["--enable-mcp-access"] : ["dist-electron/electron/main.js", "--enable-mcp-access"], {
     cwd: process.cwd(),
-    env: { ...process.env, BORDEAUX_SMOKE_TEST: "1", BORDEAUX_SMOKE_DIRECTORY: smokeDirectory },
+    env: childEnvironment,
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -102,5 +134,9 @@ public final class IdleCommand extends CommandBase {}
     throw new Error(`Electron smoke test failed with exit code ${code}`);
   }
 } finally {
-  await fs.rm(smokeDirectory, { recursive: true, force: true });
+  try {
+    if (smokeDirectory) await fs.rm(smokeDirectory, { recursive: true, force: true });
+  } finally {
+    await new Promise((resolve, reject) => smokeLock.close((error) => error ? reject(error) : resolve()));
+  }
 }
