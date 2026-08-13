@@ -442,12 +442,18 @@ function createWindow() {
 
   if (process.env.BORDEAUX_SMOKE_TEST === "1") {
     window.webContents.once("did-finish-load", async () => {
+      if (process.platform === "darwin") app.focus({ steal: true });
       window.show();
       window.focus();
       await new Promise((resolve) => setTimeout(resolve, 50));
       let smokeDraftCommandRunning = false;
       const smokeDraftCommandTimer = setInterval(() => {
         if (smokeDraftCommandRunning || window.isDestroyed()) return;
+        if (!window.isFocused()) {
+          if (process.platform === "darwin") app.focus({ steal: true });
+          window.show();
+          window.focus();
+        }
         smokeDraftCommandRunning = true;
         void window.webContents.executeJavaScript("window.__bordeauxSmokeDraftStage || ''").then((stage) => {
           if (stage === "save-big" || stage === "save-num" || stage === "save-command" || stage === "save-close-base") sendCommand("save-project");
@@ -457,6 +463,8 @@ function createWindow() {
         }).catch(() => undefined).finally(() => { smokeDraftCommandRunning = false; });
       }, 10);
       let result: any;
+      let smokeFailure = "";
+      let smokeFailureKind = "";
       try {
         result = await window.webContents.executeJavaScript(`(async () => {
         const setInputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
@@ -468,7 +476,7 @@ function createWindow() {
           for (let attempt = 0; attempt < 5; attempt++) {
             editInput(input, value);
             await new Promise((resolve) => requestAnimationFrame(resolve));
-            if (document.activeElement === input && input.value === value) return true;
+            if (document.hasFocus() && document.activeElement === input && input.value === value) return true;
           }
           return false;
         };
@@ -479,6 +487,17 @@ function createWindow() {
             await new Promise((resolve) => setTimeout(resolve, 10));
           }
           return null;
+        };
+        const requireFocusedDraft = (stage, input, value, ready) => {
+          if (!input || !ready || !document.hasFocus() || document.activeElement !== input || input.value !== value || input.getAttribute('aria-invalid') === 'true') {
+            const reason = !input ? 'control missing'
+              : !document.hasFocus() ? 'window not focused'
+                : document.activeElement !== input ? 'control not focused'
+                  : input.value !== value ? 'draft value changed'
+                    : input.getAttribute('aria-invalid') === 'true' ? 'draft invalid'
+                      : !ready ? 'draft did not settle' : 'unknown setup failure';
+            throw new Error('BORDEAUX_SMOKE_SETUP_FAILURE ' + stage + ': ' + reason + '.');
+          }
         };
         const runMenuStage = async (stage) => {
           window.__bordeauxSmokeDraftStage = stage;
@@ -517,6 +536,7 @@ function createWindow() {
           editInput(bigInput, '0.93');
           bigDraftReady = !!await waitFor(() => document.activeElement === bigInput && bigInput.value === '0.93');
         }
+        requireFocusedDraft('save-big', bigInput, '0.93', bigDraftReady);
         const bigMenuSent = await runMenuStage('save-big');
         await new Promise((resolve) => setTimeout(resolve, 100));
         let bigSaved;
@@ -540,6 +560,7 @@ function createWindow() {
         }
         const numEscapeCanceled = numInput?.value !== '1.25';
         const numDraftReady = await settleFocusedInput(numInput, '1.25');
+        requireFocusedDraft('save-num', numInput, '1.25', numDraftReady);
         const numMenuSent = await runMenuStage('save-num');
         await new Promise((resolve) => setTimeout(resolve, 100));
         let numSaved;
@@ -640,6 +661,7 @@ function createWindow() {
         }
         const numberParameter = document.getElementById('event-command-param-count');
         const commandDraftReady = await settleFocusedInput(numberParameter, '7');
+        requireFocusedDraft('save-command', numberParameter, '7', commandDraftReady);
         const commandMenuSent = await runMenuStage('save-command');
         await new Promise((resolve) => setTimeout(resolve, 100));
         let commandSaved;
@@ -743,8 +765,22 @@ function createWindow() {
         const editorRestored = opened.project.editor?.activePathId === secondPath.id && opened.project.editor?.javaProjectBookmarkId === recentJavaProjects[0].id;
         return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), fatalError: document.querySelector('.fatal-error')?.textContent || '', unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, validation: validation.ok, motorPreset, eventMarkerAutosave, multiRoutineUi, draftBigSaved, draftNumSaved, draftCommandSaved, closeDraftDirty, javaDiscovery: javaConnection.catalog.projectName === 'SmokeRobot' && javaConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), javaInstalled: installedJavaConnection.integration.installed, javaBuilt: builtJavaConnection.catalog.authoritative === true && builtJavaConnection.catalog.catalogHash === reopenedJavaConnection.catalog.catalogHash, javaRecent: recentJavaProjects.length === 1 && reopenedJavaConnection.catalog.projectName === 'SmokeRobot', javaUi, staleJavaExportRejected, javaExported: javaExported.exported && javaExported.eventCount === 1, restored: restored.project.name === persistedProject.name, roundTrip: saved.saved && opened.project.name === persistedProject.name && opened.project.routines.find((routine) => routine.id === opened.project.activeRoutineId)?.nodes[0]?.ref === 'path_smoke' && !('routine' in opened.project), editorRestored, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
         })()`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const setupPrefix = 'BORDEAUX_SMOKE_SETUP_FAILURE';
+        const setupIndex = message.indexOf(setupPrefix);
+        smokeFailureKind = setupIndex >= 0 ? setupPrefix : 'BORDEAUX_SMOKE_FAILURE';
+        smokeFailure = setupIndex >= 0 ? message.slice(setupIndex + setupPrefix.length).trim() : message;
       } finally {
         clearInterval(smokeDraftCommandTimer);
+      }
+      if (smokeFailure) {
+        console.error(`${smokeFailureKind} ${smokeFailure}`);
+        allowClose = true;
+        await stopBackgroundServices().catch((error) => console.warn("Could not stop Bordeaux smoke services cleanly:", error));
+        backgroundServicesReadyForExit = true;
+        app.exit(1);
+        return;
       }
       await new Promise((resolve) => setTimeout(resolve, 50));
       window.close();
