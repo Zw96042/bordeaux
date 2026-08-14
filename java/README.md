@@ -34,7 +34,7 @@ For a multi-path autonomous routine, load the document with `BordeauxTrajectoryR
 
 ## Optional Bordeaux push mailbox
 
-Teams that opt into desktop-to-robot pushes provision `/home/lvuser/deploy/bordeaux/push-v1` with `inbox` and `acks` subdirectories, construct `BordeauxRevisionService` with their disabled supplier and compiled compatibility, then construct `BordeauxRobotMailboxService`. Call `pollOnce()` from `disabledPeriodic`; it accepts only the nonce-bound revision files written by Bordeaux, writes a nonce-bound acknowledgment and `status.json` atomically, and never starts a listener, watcher, command, or network connection. The mailbox leaves a candidate in place if acknowledgment publication fails, so the next disabled-period poll can recover the persisted activation acknowledgment safely.
+Teams that opt into desktop-to-robot pushes provision `/home/lvuser/deploy/bordeaux/push-v1` with `inbox` and `acks` subdirectories, construct `BordeauxRevisionService` with their disabled supplier and compiled compatibility, then construct `BordeauxRobotMailboxService`. Call `periodic()` from `robotPeriodic` so `status.json` follows enabled transitions immediately. It accepts only the nonce-bound revision files written by Bordeaux, rejects activation unless the robot is disabled, writes a nonce-bound acknowledgment and `status.json` atomically, and never starts a listener, watcher, command, or network connection. The mailbox leaves a candidate in place if acknowledgment publication fails, so the next robot-loop poll can recover the persisted activation acknowledgment safely.
 
 ```java
 var namespace = Path.of(BordeauxRobotStatusPublisher.PRODUCTION_DEPLOYMENT_NAMESPACE);
@@ -47,8 +47,8 @@ var revisions = new BordeauxRevisionService(
     namespace.resolve("state"), 2468, DriverStation::isDisabled, compatibility);
 var mailbox = new BordeauxRobotMailboxService(namespace, revisions);
 
-// Robot.disabledPeriodic():
-mailbox.pollOnce();
+// Robot.robotPeriodic():
+mailbox.periodic();
 ```
 
 Replace the team number and seasonal field identity with the values compiled into the robot project. Directory provisioning belongs in robot initialization, and mailbox failures should be reported through `DriverStation.reportError` without crashing the control loop.

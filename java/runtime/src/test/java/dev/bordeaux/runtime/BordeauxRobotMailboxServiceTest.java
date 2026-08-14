@@ -37,7 +37,7 @@ class BordeauxRobotMailboxServiceTest {
         Files.writeString(inbox, envelope("nonce-active", null), StandardCharsets.UTF_8);
         BordeauxRobotMailboxService mailbox = new BordeauxRobotMailboxService(namespace, revisions);
 
-        mailbox.pollOnce();
+        mailbox.periodic();
 
         JsonNode acknowledgement = MAPPER.readTree(Files.readAllBytes(namespace.resolve("acks/nonce-active.json")));
         assertEquals("bordeaux-robot-push/1.0", acknowledgement.path("protocolVersion").textValue());
@@ -67,12 +67,17 @@ class BordeauxRobotMailboxServiceTest {
         disabled.set(false);
         Files.writeString(namespace.resolve("inbox/nonce-disabled.bordeaux-revision.json"),
                 envelope("nonce-disabled", prior.revisionId()), StandardCharsets.UTF_8);
-        mailbox.pollOnce();
+        mailbox.periodic();
+        JsonNode enabledStatus = MAPPER.readTree(Files.readAllBytes(namespace.resolve("status.json")));
+        assertFalse(enabledStatus.path("disabled").booleanValue());
+        assertEquals("rejected", MAPPER.readTree(Files.readAllBytes(
+                namespace.resolve("acks/nonce-disabled.json"))).path("state").textValue());
+        assertFalse(Files.exists(namespace.resolve("inbox/nonce-disabled.bordeaux-revision.json")));
         disabled.set(true);
         Files.writeString(namespace.resolve("inbox/nonce-stale.bordeaux-revision.json"),
                 envelope("nonce-stale", "sha256:" + "b".repeat(64)), StandardCharsets.UTF_8);
         Files.writeString(namespace.resolve("inbox/nonce-malformed.bordeaux-revision.json"), "{}", StandardCharsets.UTF_8);
-        mailbox.pollOnce();
+        mailbox.periodic();
 
         for (String nonce : new String[] {"nonce-disabled", "nonce-stale", "nonce-malformed"}) {
             JsonNode acknowledgement = MAPPER.readTree(Files.readAllBytes(namespace.resolve("acks/" + nonce + ".json")));
@@ -90,7 +95,7 @@ class BordeauxRobotMailboxServiceTest {
         Files.writeString(namespace.resolve("inbox/nonce-file.bordeaux-revision.json"),
                 envelope("nonce-envelope", null), StandardCharsets.UTF_8);
 
-        new BordeauxRobotMailboxService(namespace, revisions).pollOnce();
+        new BordeauxRobotMailboxService(namespace, revisions).periodic();
 
         JsonNode acknowledgement = MAPPER.readTree(Files.readAllBytes(namespace.resolve("acks/nonce-file.json")));
         assertEquals("rejected", acknowledgement.path("state").textValue());
@@ -107,14 +112,14 @@ class BordeauxRobotMailboxServiceTest {
         Files.createDirectory(namespace.resolve("acks/nonce-recover.json"));
         BordeauxRobotMailboxService mailbox = new BordeauxRobotMailboxService(namespace, revisions);
 
-        assertThrows(BordeauxRuntimeException.class, mailbox::pollOnce);
+        assertThrows(BordeauxRuntimeException.class, mailbox::periodic);
         assertEquals(revisionId(payload()), revisions.status().activeRevisionId());
         assertTrue(Files.exists(candidate));
 
         Files.delete(namespace.resolve("acks/nonce-recover.json"));
         BordeauxRevisionService restarted = new BordeauxRevisionService(
                 temporaryDirectory.resolve("state"), 9604, () -> true, COMPATIBILITY);
-        new BordeauxRobotMailboxService(namespace, restarted).pollOnce();
+        new BordeauxRobotMailboxService(namespace, restarted).periodic();
 
         JsonNode acknowledgement = MAPPER.readTree(Files.readAllBytes(namespace.resolve("acks/nonce-recover.json")));
         assertEquals("active", acknowledgement.path("state").textValue());
@@ -134,7 +139,7 @@ class BordeauxRobotMailboxServiceTest {
         }
         BordeauxRobotMailboxService mailbox = new BordeauxRobotMailboxService(namespace, revisions(true));
 
-        mailbox.pollOnce();
+        mailbox.periodic();
 
         assertEquals("rejected", MAPPER.readTree(Files.readAllBytes(namespace.resolve("acks/nonce-link.json")))
                 .path("state").textValue());
@@ -142,7 +147,7 @@ class BordeauxRobotMailboxServiceTest {
         for (int index = 0; index <= BordeauxRobotMailboxService.MAX_INBOX_ENTRIES; index++) {
             Files.writeString(namespace.resolve("inbox/ignored-" + index), "x");
         }
-        assertThrows(BordeauxRuntimeException.class, mailbox::pollOnce);
+        assertThrows(BordeauxRuntimeException.class, mailbox::periodic);
         assertTrue(Files.isRegularFile(namespace.resolve("status.json")));
     }
 

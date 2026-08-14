@@ -22,8 +22,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Caller-driven processor for the constrained Bordeaux robot inbox. Call {@link #pollOnce()} from disabledPeriodic;
- * this service creates no watcher, thread, socket, shell, or command execution path.
+ * Caller-driven processor for the constrained Bordeaux robot inbox. Call {@link #periodic()} from robotPeriodic so
+ * status follows enabled transitions immediately; activation still rejects unless the robot is disabled. This
+ * service creates no watcher, thread, socket, shell, or command execution path.
  */
 public final class BordeauxRobotMailboxService {
     static final int MAX_INBOX_ENTRIES = 64;
@@ -55,7 +56,7 @@ public final class BordeauxRobotMailboxService {
     }
 
     /** Processes the bounded inbox once, then publishes the current status even when a candidate is rejected. */
-    public synchronized void pollOnce() {
+    public synchronized void periodic() {
         try {
             for (Path candidate : candidates()) process(candidate);
         } finally {
