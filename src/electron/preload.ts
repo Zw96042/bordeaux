@@ -14,6 +14,8 @@ const bordeauxAPI = {
   saveProject: (project: BordeauxProject, saveAs = false) => ipcRenderer.invoke("project:save", project, saveAs),
   autosaveProject: (project: BordeauxProject) => ipcRenderer.invoke("project:autosave", project),
   exportJava: (project: BordeauxProject, destination: "linked" | "saveAs" = "linked") => ipcRenderer.invoke("project:exportJava", project, destination),
+  previewBetaDiagnostic: (project: BordeauxProject) => ipcRenderer.invoke("diagnostics:preview", project),
+  saveBetaDiagnostic: (previewId: string) => ipcRenderer.invoke("diagnostics:save", previewId),
   validateProject: (project: BordeauxProject) => ipcRenderer.invoke("project:validate", project),
   listRecentJavaProjects: () => ipcRenderer.invoke("javaProject:listRecent"),
   linkJavaProject: () => ipcRenderer.invoke("javaProject:link"),

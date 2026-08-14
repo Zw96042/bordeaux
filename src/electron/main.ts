@@ -2,6 +2,7 @@ import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, clipboard, dialog
 import { autoUpdater as updateClient } from "electron-updater";
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { javaTrajectoryFileName, type BuiltJavaTrajectory } from "../shared/export/javaTrajectory";
@@ -30,6 +31,15 @@ import {
 } from "./javaSupport";
 import { AgentBridgeClient, AgentBridgeServer } from "./agentBridge";
 import { appUpdateChannel, AppUpdateController, usesGitHubAppUpdates } from "./appUpdates";
+import {
+  DiagnosticBundleCapability,
+  buildDiagnosticBundle,
+  diagnosticFieldPin,
+  reduceRobotAcknowledgement,
+  saveDiagnosticPreview,
+  type DiagnosticBundleInput,
+  type DiagnosticRobotAcknowledgement,
+} from "./diagnosticBundle";
 import { AgentSessionService } from "./agentSession";
 import { runAgentPlanningInWorker } from "./agentPlanningWorkerClient";
 import { serveBordeauxMcp } from "../mcp/server";
@@ -40,6 +50,7 @@ import { connectRobotSftp } from "./robotSsh2Session";
 import {
   BordeauxRobotTransport,
   type RobotEndpoint,
+  type RobotPairing,
 } from "./robotSftpTransport";
 
 function ignoreClosedStandardStream(error: NodeJS.ErrnoException): void {
@@ -90,12 +101,14 @@ let javaProjectBookmarks: JavaProjectBookmark[] = [];
 let robotPairings = new RobotPairingController();
 const robotTransport = new BordeauxRobotTransport(connectRobotSftp);
 type PendingRobotOperation =
-  | { kind: "push"; operation: RobotPushOperation }
+  | { kind: "push"; operation: RobotPushOperation; pairing: RobotPairing }
   | { kind: "retention"; operation: RobotRetentionOperation };
 type ActiveRobotOperation = { operationId: string; controller: AbortController; kind: PendingRobotOperation["kind"] };
 let pendingRobotOperation: PendingRobotOperation | null = null;
 let activeRobotPush: ActiveRobotOperation | null = null;
 let robotPushPreparationGeneration = 0;
+const diagnosticBundleCapability = new DiagnosticBundleCapability();
+let lastDiagnosticRobotAcknowledgement: DiagnosticRobotAcknowledgement = { state: "not-observed" };
 const smokeDirectory = process.env.BORDEAUX_SMOKE_DIRECTORY;
 const mcpStdioMode = process.argv.includes("--mcp-stdio");
 const enableMcpAccessOnLaunch = process.argv.includes("--enable-mcp-access");
@@ -154,6 +167,7 @@ function stopBackgroundServices(): Promise<void> {
   cancelJavaCatalogBuild(true);
   activeRobotPush?.controller.abort();
   pendingRobotOperation = null;
+  diagnosticBundleCapability.clear();
   robotPushPreparationGeneration += 1;
   rejectProposalReceipts("Bordeaux is shutting down.");
   if (backgroundShutdownPromise) return backgroundShutdownPromise;
@@ -380,6 +394,24 @@ function handle(channel: string, listener: (event: Electron.IpcMainInvokeEvent, 
     assertTrustedSender(event);
     return listener(event, ...args);
   });
+}
+
+function diagnosticCatalog(catalog: JavaCommandCatalog | null): DiagnosticBundleInput["catalog"] {
+  if (!catalog?.authoritative || !catalog.catalogId || !catalog.catalogHash || !catalog.supportVersion
+    || (catalog.generatedSchemaVersion !== "1.0" && catalog.generatedSchemaVersion !== "1.1" && catalog.generatedSchemaVersion !== "1.2")) {
+    return null;
+  }
+  return {
+    schemaVersion: catalog.generatedSchemaVersion,
+    catalogId: catalog.catalogId,
+    catalogHash: catalog.catalogHash,
+    supportVersion: catalog.supportVersion,
+  };
+}
+
+function diagnosticIssueCount(error: unknown): number {
+  const message = error instanceof Error ? error.message : "";
+  return Math.max(1, Math.min(1_000, message.split("\n").filter((line) => line.trim()).length));
 }
 
 function createWindow() {
@@ -909,6 +941,69 @@ handle("project:exportJava", async (_event, rawProject, rawDestination) => {
   return { exported: true, relativePath, pathCount: built.pathCount, eventCount: built.eventCount, sha256: built.sha256 };
 });
 
+handle("diagnostics:preview", async (_event, rawProject) => {
+  const catalog = diagnosticCatalog(linkedJavaCatalog);
+  let fieldPin = diagnosticFieldPin(rawProject);
+  let exportStatus: DiagnosticBundleInput["export"] = { state: "unavailable" };
+  let routinePreflight: DiagnosticBundleInput["routinePreflight"] = { state: "unavailable", issueCount: 0 };
+  const linkedProjectMatches = Boolean(linkedJavaProjectBookmarkId
+    && rawProject && typeof rawProject === "object"
+    && (rawProject as BordeauxProject).editor?.javaProjectBookmarkId === linkedJavaProjectBookmarkId);
+  if (catalog && linkedJavaCatalog && linkedJavaIntegration?.installed
+    && linkedJavaIntegration.supportVersion === linkedJavaCatalog.supportVersion && linkedProjectMatches) {
+    try {
+      const built = await buildJavaTrajectoryOffThread(rawProject as BordeauxProject, linkedJavaCatalog);
+      fieldPin = {
+        id: built.document.field.id,
+        revision: built.document.field.revision,
+        coordinateSchemaId: built.document.field.coordinateSchemaId,
+      };
+      exportStatus = {
+        state: "generated",
+        sha256: `sha256:${built.sha256}`,
+        pathCount: built.pathCount,
+        eventCount: built.eventCount,
+        sampleCount: built.sampleCount,
+      };
+      routinePreflight = { state: "passed", issueCount: 0 };
+    } catch (error) {
+      exportStatus = { state: "invalid" };
+      routinePreflight = { state: "failed", issueCount: diagnosticIssueCount(error) };
+    }
+  }
+  const contents = buildDiagnosticBundle({
+    generatedAt: new Date().toISOString(),
+    app: {
+      version: app.getVersion(),
+      build: app.isPackaged ? "packaged" : "development",
+      channel: appUpdateChannel(app.getVersion()),
+    },
+    os: { platform: process.platform, release: os.release(), arch: process.arch },
+    fieldPin,
+    catalog,
+    export: exportStatus,
+    routinePreflight,
+    robotAcknowledgement: lastDiagnosticRobotAcknowledgement,
+  });
+  return diagnosticBundleCapability.preview(contents);
+});
+
+handle("diagnostics:save", async (_event, previewId) => {
+  try {
+    return await saveDiagnosticPreview(previewId, diagnosticBundleCapability, async (fileName) => {
+      const result = await dialog.showSaveDialog(mainWindow!, {
+        title: "Save Bordeaux beta diagnostic",
+        defaultPath: fileName,
+        filters: [{ name: "Bordeaux beta diagnostic", extensions: ["json"] }],
+      });
+      return result.canceled || !result.filePath ? null : result.filePath;
+    }, writeBufferAtomically);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("no longer current")) throw error;
+    throw new Error("Bordeaux could not save the beta diagnostic bundle");
+  }
+});
+
 handle("project:validate", (_event, project) => validateProject(project));
 handle("javaProject:listRecent", () => summarizeJavaProjectBookmarks(javaProjectBookmarks));
 handle("javaProject:link", async () => {
@@ -1117,7 +1212,7 @@ handle("robot:preparePush", async (_event, rawProject) => {
     status,
     trajectory,
   });
-  pendingRobotOperation = { kind: "push", operation };
+  pendingRobotOperation = { kind: "push", operation, pairing: robotPairing };
   return operation.preview;
 });
 handle("robot:confirmPush", async (event, rawOperationId) => {
@@ -1127,6 +1222,7 @@ handle("robot:confirmPush", async (event, rawOperationId) => {
   }
   if (activeRobotPush) throw new Error("A robot push is already in progress");
   const operation = pendingRobotOperation.operation;
+  const pairing = pendingRobotOperation.pairing;
   pendingRobotOperation = null;
   const controller = new AbortController();
   activeRobotPush = { operationId: rawOperationId, controller, kind: "push" };
@@ -1135,27 +1231,39 @@ handle("robot:confirmPush", async (event, rawOperationId) => {
     latestState = progress.state;
     if (!event.sender.isDestroyed()) event.sender.send("robot:pushState", progress);
   };
+  let result: unknown;
   try {
-    return await operation.execute(robotTransport, publish, { signal: controller.signal });
+    result = await operation.execute(robotTransport, publish, { signal: controller.signal });
   } catch (error) {
     const message = error instanceof Error ? error.message : "The robot push failed";
     if (latestState === "staged") {
-      return {
+      result = {
         operationId: rawOperationId,
         state: "staged",
         boundary: "acknowledgement",
         message: `The revision remains staged, but Bordeaux could not confirm activation: ${message}`,
       };
+    } else {
+      result = {
+        operationId: rawOperationId,
+        state: controller.signal.aborted ? "cancelled" : "failed",
+        boundary: latestState === "uploaded" ? "staging" : "upload",
+        message,
+      };
     }
-    return {
-      operationId: rawOperationId,
-      state: controller.signal.aborted ? "cancelled" : "failed",
-      boundary: latestState === "uploaded" ? "staging" : "upload",
-      message,
-    };
   } finally {
     if (activeRobotPush?.operationId === rawOperationId) activeRobotPush = null;
   }
+  const revision = operation.revision.document.revision;
+  lastDiagnosticRobotAcknowledgement = reduceRobotAcknowledgement(result, {
+    teamNumber: pairing.teamNumber,
+    revisionId: revision.revisionId,
+    payloadSha256: revision.payloadSha256,
+    catalogId: revision.catalog.catalogId,
+    catalogHash: revision.catalog.catalogHash,
+    supportVersion: revision.catalog.supportVersion,
+  }, new Date().toISOString());
+  return result;
 });
 handle("robot:cancelPush", (_event, rawOperationId) => {
   if (typeof rawOperationId !== "string") return { canceled: false };
