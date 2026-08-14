@@ -29,7 +29,7 @@ import java.util.function.BooleanSupplier;
 public final class BordeauxRevisionService {
     static final int MAX_REPLAY_NONCES = 2_048;
     static final int MAX_STATUS_HEALTH = 8;
-    private static final int MANIFEST_VERSION = 1;
+    private static final int MANIFEST_VERSION = 2;
     private static final ObjectMapper MAPPER = new ObjectMapper(JsonFactory.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .streamReadConstraints(StreamReadConstraints.builder()
@@ -76,8 +76,17 @@ public final class BordeauxRevisionService {
      * the exact immutable payload is safely stored.
      */
     public synchronized BordeauxActivationAck activate(Path stagedEnvelope) {
+        return activate(stagedEnvelope, null);
+    }
+
+    /**
+     * Activates one explicitly staged envelope only when its nonce also matches the caller's already-bounded file
+     * name. This keeps the filesystem mailbox from choosing a different activation identity than its file name.
+     */
+    synchronized BordeauxActivationAck activate(Path stagedEnvelope, String expectedNonce) {
         requireDisabled();
         BordeauxRevision revision = readAndValidate(stagedEnvelope);
+        requireExpectedNonce(revision, expectedNonce);
         return storage.withExclusiveLock(() -> {
             requireDisabled();
             RuntimeState state = loadOrCreateState();
@@ -93,6 +102,22 @@ public final class BordeauxRevisionService {
             RuntimeState activated = state.activate(revision);
             storage.writeState(serialize(activated));
             return acknowledgement(revision, activated.runtimeId());
+        });
+    }
+
+    /**
+     * Reconstructs the most recent persisted activation acknowledgment when the supplied staged envelope is the
+     * exact nonce-bound revision that was already activated. This lets a caller recover after its acknowledgment
+     * publication failed without accepting an unrelated replay.
+     */
+    synchronized Optional<BordeauxActivationAck> recoverLatestAcknowledgement(Path stagedEnvelope, String expectedNonce) {
+        BordeauxRevision revision = readAndValidate(stagedEnvelope);
+        requireExpectedNonce(revision, expectedNonce);
+        return storage.withExclusiveLock(() -> {
+            RuntimeState state = loadOrCreateState();
+            LatestActivation latest = state.latestActivation();
+            if (latest == null || !latest.matches(revision)) return Optional.empty();
+            return Optional.of(acknowledgement(latest, state.runtimeId()));
         });
     }
 
@@ -125,6 +150,12 @@ public final class BordeauxRevisionService {
     private void requireDisabled() {
         if (!disabled.getAsBoolean()) {
             throw new BordeauxRuntimeException("Bordeaux revision activation is allowed only while the robot is disabled");
+        }
+    }
+
+    private static void requireExpectedNonce(BordeauxRevision revision, String expectedNonce) {
+        if (expectedNonce != null && !expectedNonce.equals(revision.activationNonce())) {
+            throw new BordeauxRuntimeException("Bordeaux revision activation nonce does not match its inbox file name");
         }
     }
 
@@ -165,6 +196,14 @@ public final class BordeauxRevisionService {
         else root.put("activeRevisionId", state.activeRevisionId());
         if (state.activePayloadSha256() == null) root.putNull("activePayloadSha256");
         else root.put("activePayloadSha256", state.activePayloadSha256());
+        if (state.latestActivation() == null) {
+            root.putNull("latestActivation");
+        } else {
+            ObjectNode latest = root.putObject("latestActivation");
+            latest.put("nonce", state.latestActivation().nonce());
+            latest.put("revisionId", state.latestActivation().revisionId());
+            latest.put("payloadSha256", state.latestActivation().payloadSha256());
+        }
         ArrayNode nonces = root.putArray("recentNonces");
         state.recentNonces().forEach(nonces::add);
         try {
@@ -178,9 +217,11 @@ public final class BordeauxRevisionService {
         try {
             JsonNode root = MAPPER.readTree(contents);
             if (!(root instanceof ObjectNode object)) throw invalidState("root must be an object");
-            if (!object.path("version").canConvertToInt() || object.path("version").intValue() != MANIFEST_VERSION) {
+            if (!object.path("version").canConvertToInt()
+                    || (object.path("version").intValue() != 1 && object.path("version").intValue() != MANIFEST_VERSION)) {
                 throw invalidState("version is unsupported");
             }
+            int version = object.path("version").intValue();
             String runtimeId = text(object, "runtimeId");
             try {
                 UUID.fromString(runtimeId);
@@ -202,7 +243,13 @@ public final class BordeauxRevisionService {
                     throw invalidState("recent nonces must be unique valid nonce strings");
                 }
             }
-            return new RuntimeState(runtimeId, activeRevisionId, activePayloadSha256, List.copyOf(replay));
+            LatestActivation latest = version == 1 ? null : latestActivation(object.get("latestActivation"));
+            if (latest != null && (!latest.revisionId().equals(activeRevisionId)
+                    || !latest.payloadSha256().equals(activePayloadSha256)
+                    || !replay.contains(latest.nonce()))) {
+                throw invalidState("latest activation must match the active revision and replay history");
+            }
+            return new RuntimeState(runtimeId, activeRevisionId, activePayloadSha256, List.copyOf(replay), latest);
         } catch (BordeauxRuntimeException exception) {
             throw exception;
         } catch (IOException exception) {
@@ -226,25 +273,61 @@ public final class BordeauxRevisionService {
         return value.textValue();
     }
 
+    private static LatestActivation latestActivation(JsonNode value) {
+        if (value == null || value.isNull()) return null;
+        if (!(value instanceof ObjectNode latest)) throw invalidState("latest activation must be an object or null");
+        String nonce = text(latest, "nonce");
+        if (!nonce.matches("[A-Za-z0-9._:-]{1,256}")) throw invalidState("latest activation nonce is invalid");
+        String revisionId = nullableHash(latest, "revisionId");
+        String payloadSha256 = nullableHash(latest, "payloadSha256");
+        if (revisionId == null || payloadSha256 == null) {
+            throw invalidState("latest activation revision and payload hash are required");
+        }
+        return new LatestActivation(nonce, revisionId, payloadSha256);
+    }
+
     private static BordeauxRuntimeException invalidState(String detail) {
         return new BordeauxRuntimeException("Persisted Bordeaux runtime state is invalid: " + detail);
     }
 
+    private BordeauxActivationAck acknowledgement(LatestActivation latest, String runtimeId) {
+        return new BordeauxActivationAck(
+                latest.nonce(), latest.revisionId(), latest.payloadSha256(), compatibility.catalogId(), compatibility.catalogHash(),
+                compatibility.supportVersion(), runtimeId, teamNumber);
+    }
+
     private record RuntimeState(
-            String runtimeId, String activeRevisionId, String activePayloadSha256, List<String> recentNonces) {
+            String runtimeId,
+            String activeRevisionId,
+            String activePayloadSha256,
+            List<String> recentNonces,
+            LatestActivation latestActivation) {
         private static RuntimeState initial() {
-            return new RuntimeState(UUID.randomUUID().toString(), null, null, List.of());
+            return new RuntimeState(UUID.randomUUID().toString(), null, null, List.of(), null);
         }
 
         private RuntimeState activate(BordeauxRevision revision) {
             ArrayList<String> nonces = new ArrayList<>(recentNonces);
             nonces.add(revision.activationNonce());
             if (nonces.size() > MAX_REPLAY_NONCES) nonces.remove(0);
-            return new RuntimeState(runtimeId, revision.revisionId(), revision.payloadSha256(), List.copyOf(nonces));
+            return new RuntimeState(
+                    runtimeId, revision.revisionId(), revision.payloadSha256(), List.copyOf(nonces), LatestActivation.from(revision));
         }
 
         private RuntimeState resetIdentity() {
-            return new RuntimeState(UUID.randomUUID().toString(), activeRevisionId, activePayloadSha256, List.of());
+            return new RuntimeState(UUID.randomUUID().toString(), activeRevisionId, activePayloadSha256, List.of(), null);
+        }
+    }
+
+    private record LatestActivation(String nonce, String revisionId, String payloadSha256) {
+        private static LatestActivation from(BordeauxRevision revision) {
+            return new LatestActivation(revision.activationNonce(), revision.revisionId(), revision.payloadSha256());
+        }
+
+        private boolean matches(BordeauxRevision revision) {
+            return nonce.equals(revision.activationNonce())
+                    && revisionId.equals(revision.revisionId())
+                    && payloadSha256.equals(revision.payloadSha256());
         }
     }
 }

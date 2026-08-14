@@ -188,6 +188,22 @@ class BordeauxRevisionServiceTest {
     }
 
     @Test
+    void readsVersionOneStateWithoutAnAcknowledgementRecoveryRecord() throws IOException {
+        Path stateDirectory = temporaryDirectory.resolve("state");
+        Files.createDirectories(stateDirectory);
+        String active = "sha256:" + "b".repeat(64);
+        Files.writeString(stateDirectory.resolve("runtime-state.json"), """
+                {"version":1,"runtimeId":"00000000-0000-0000-0000-000000000001",
+                "activeRevisionId":"%s","activePayloadSha256":"%s","recentNonces":["nonce-old"]}
+                """.formatted(active, active), StandardCharsets.UTF_8);
+
+        BordeauxRuntimeStatus status = new BordeauxRevisionService(stateDirectory, 9604, () -> true, COMPATIBILITY).status();
+
+        assertEquals(active, status.activeRevisionId());
+        assertTrue(status.health().stream().anyMatch(message -> message.contains("missing or corrupt")));
+    }
+
+    @Test
     void serializesCompareAndSwapAcrossServiceInstances() throws Exception {
         Path state = temporaryDirectory.resolve("state");
         new BordeauxRevisionService(state, 9604, () -> true, COMPATIBILITY).status();

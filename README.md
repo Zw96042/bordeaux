@@ -34,6 +34,8 @@ Installed GitHub builds update on version-derived beta or production channels; M
 
 Link a GradleRIO project in Bordeaux and use **Install Java Support**. This is the sole supported setup path: it installs bounded runtime/processor jars and a managed Gradle script in the robot project. See [java/README.md](java/README.md) for the generated command catalog and runtime APIs.
 
+The optional **Push to Robot** flow is a separate, explicit action: saving never opens a network connection. After a team wires the caller-driven Java mailbox, Bordeaux can pair to the robot over SSH/SFTP on a pit USB, Ethernet, or practice connection, review one immutable revision, stage it with read-back verification, and report it active only after the disabled runtime returns the matching acknowledgment. SSH/SFTP port 22 is unavailable on the FMS field network.
+
 ## Project files
 
 `.bordeaux.json` files contain all paths, routines, and compact editor restoration metadata, including the selected path and linked Java project bookmark. Java trajectory export writes the bounded `bordeaux-trajectory/1.0` JSON consumed by the robot runtime.

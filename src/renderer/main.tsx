@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App, AppErrorBoundary } from "./app/App";
 import "./styles/app.css";
+import "./styles/robot-push.css";
 
 const root = document.getElementById("root");
 

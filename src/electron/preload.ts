@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { BordeauxProject } from "../shared/types";
 import type { AgentProposal, AgentSessionSnapshot } from "../shared/agent/types";
 import type { RobotEndpoint, RobotPairing, RobotProbe, RobotRuntimeStatus } from "./robotSftpTransport";
+import type { RobotPushPreview, RobotPushProgress, RobotPushResult } from "./robotPush";
 
 const bordeauxAPI = {
   platform: process.platform,
@@ -24,6 +25,19 @@ const bordeauxAPI = {
   probeRobot: (endpoint: RobotEndpoint): Promise<RobotProbe> => ipcRenderer.invoke("robot:probe", endpoint),
   confirmRobotPairing: (hostKeyFingerprint: string, runtimeId: string): Promise<RobotPairing> => ipcRenderer.invoke("robot:confirmPairing", hostKeyFingerprint, runtimeId),
   inspectPairedRobot: (): Promise<RobotRuntimeStatus> => ipcRenderer.invoke("robot:inspect"),
+  prepareRobotPush: (project: BordeauxProject): Promise<RobotPushPreview> => ipcRenderer.invoke("robot:preparePush", project),
+  confirmRobotPush: (operationId: string): Promise<RobotPushResult | {
+    operationId: string;
+    state: "failed" | "cancelled";
+    boundary: "upload" | "staging";
+    message: string;
+  }> => ipcRenderer.invoke("robot:confirmPush", operationId),
+  cancelRobotPush: (operationId: string): Promise<{ canceled: boolean; boundary?: "review" | "upload" }> => ipcRenderer.invoke("robot:cancelPush", operationId),
+  onRobotPushState: (handler: (progress: RobotPushProgress) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: RobotPushProgress) => handler(progress);
+    ipcRenderer.on("robot:pushState", listener);
+    return () => ipcRenderer.removeListener("robot:pushState", listener);
+  },
   setDirty: (dirty: boolean) => ipcRenderer.send("project:setDirty", dirty),
   publishAgentSession: (snapshot: AgentSessionSnapshot) => ipcRenderer.send("agent:publishSession", snapshot),
   updateAgentProposalStatus: (proposalId: string, status: "applied" | "rejected" | "stale", revision?: number) => ipcRenderer.send("agent:proposalStatus", proposalId, status, revision),

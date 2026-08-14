@@ -1,6 +1,6 @@
 import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, clipboard, dialog, ipcMain, Menu } from "electron";
 import { autoUpdater as updateClient } from "electron-updater";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
@@ -33,6 +33,7 @@ import { AgentSessionService } from "./agentSession";
 import { runAgentPlanningInWorker } from "./agentPlanningWorkerClient";
 import { serveBordeauxMcp } from "../mcp/server";
 import { RobotPairingController, readRobotPairing, writeRobotPairing } from "./robotPairings";
+import { createRobotPushOperation, type RobotPushOperation, type RobotPushProgress } from "./robotPush";
 import { connectRobotSftp } from "./robotSsh2Session";
 import {
   BordeauxRobotTransport,
@@ -86,6 +87,9 @@ let javaConnectionGeneration = 0;
 let javaProjectBookmarks: JavaProjectBookmark[] = [];
 let robotPairings = new RobotPairingController();
 const robotTransport = new BordeauxRobotTransport(connectRobotSftp);
+let pendingRobotPush: RobotPushOperation | null = null;
+let activeRobotPush: { operationId: string; controller: AbortController } | null = null;
+let robotPushPreparationGeneration = 0;
 const smokeDirectory = process.env.BORDEAUX_SMOKE_DIRECTORY;
 const mcpStdioMode = process.argv.includes("--mcp-stdio");
 const enableMcpAccessOnLaunch = process.argv.includes("--enable-mcp-access");
@@ -98,6 +102,8 @@ function clearLinkedJavaProject(): void {
   linkedJavaProjectBookmarkId = null;
   linkedJavaCatalog = null;
   linkedJavaIntegration = null;
+  pendingRobotPush = null;
+  robotPushPreparationGeneration += 1;
   agentSessions.refreshJavaCatalog();
 }
 
@@ -140,6 +146,9 @@ function showUpdateMessage(options: Electron.MessageBoxOptions): Promise<Electro
 
 function stopBackgroundServices(): Promise<void> {
   cancelJavaCatalogBuild(true);
+  activeRobotPush?.controller.abort();
+  pendingRobotPush = null;
+  robotPushPreparationGeneration += 1;
   rejectProposalReceipts("Bordeaux is shutting down.");
   if (backgroundShutdownPromise) return backgroundShutdownPromise;
   const bridge = agentBridge;
@@ -460,7 +469,7 @@ function createWindow() {
           await new Promise((resolve) => setTimeout(resolve, 0));
           unnamed.push(...unnamedOnPage());
         }
-        const project = { schemaVersion: '1.0', name: 'Smoke edited', robot: { drive: 'swerve', w: .8, l: .8, maxSpeed: 4 }, paths: [{ id: 'path_smoke', name: 'Smoke', waypoints: [{ x: 1, y: 1, theta: 0, thetaOn: true, linked: true, stop: false, prevC: { x: .8, y: 1 }, nextC: { x: 1.2, y: 1 } }, { x: 2, y: 1, theta: 0, thetaOn: true, linked: true, stop: false, prevC: { x: 1.8, y: 1 }, nextC: { x: 2.2, y: 1 } }], targets: [], markers: [{ id: 'event_smoke', f: .5, name: 'Smoke event', invocation: { commandId: 'frc.robot.SmokeCommand', arguments: { count: 2, sequence: '9007199254740993', tags: ['auto'] }, cancelOnPathEnd: true } }], ranges: [], constraints: { maxVel: 2, maxAccel: 2, maxDecel: 2, maxAngVel: 180, maxAngAccel: 360 }, startVel: 0, goalVel: 0 }], pathLinks: [], routines: [{ id: 'routine_smoke_active', name: 'Smoke routine', nodes: [{ id: 'routine_smoke', type: 'path', ref: 'path_smoke' }] }], activeRoutineId: 'routine_smoke_active', plannerId: 'profiledSpline' };
+        const project = { schemaVersion: '1.0', field: { id: '2026-rebuilt', revision: '2026-manual-tu19-welded-4', coordinateSchemaId: 'bordeaux-field/1.0' }, name: 'Smoke edited', robot: { drive: 'swerve', w: .8, l: .8, maxSpeed: 4 }, paths: [{ id: 'path_smoke', name: 'Smoke', waypoints: [{ x: 1, y: 1, theta: 0, thetaOn: true, linked: true, stop: false, prevC: { x: .8, y: 1 }, nextC: { x: 1.2, y: 1 } }, { x: 2, y: 1, theta: 0, thetaOn: true, linked: true, stop: false, prevC: { x: 1.8, y: 1 }, nextC: { x: 2.2, y: 1 } }], targets: [], markers: [{ id: 'event_smoke', f: .5, name: 'Smoke event', invocation: { commandId: 'frc.robot.SmokeCommand', arguments: { count: 2, sequence: '9007199254740993', tags: ['auto'] }, cancelOnPathEnd: true } }], ranges: [], constraints: { maxVel: 2, maxAccel: 2, maxDecel: 2, maxAngVel: 180, maxAngAccel: 360 }, startVel: 0, goalVel: 0 }], pathLinks: [], routines: [{ id: 'routine_smoke_active', name: 'Smoke routine', nodes: [{ id: 'routine_smoke', type: 'path', ref: 'path_smoke' }] }], activeRoutineId: 'routine_smoke_active', plannerId: 'profiledSpline' };
         await window.bordeauxAPI.saveProject(project, true);
         document.getElementById('robot-drive-motor')?.click();
         for (let attempt = 0; attempt < 50 && !document.querySelector('#robot-drive-motor-listbox [data-value="rev-neo"]'); attempt++) {
@@ -483,9 +492,15 @@ function createWindow() {
         secondPath.markers = [];
         const persistedProject = { ...project, paths: [...project.paths, secondPath], editor: { activePathId: secondPath.id, javaProjectBookmarkId: recentJavaProjects[0].id } };
         [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === 'Plan')?.click();
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        for (let attempt = 0; attempt < 100; attempt++) {
+          const planStage = document.querySelector('.stage-plan');
+          if (planStage && planStage.getAttribute('aria-disabled') !== 'true') break;
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
         document.querySelector('button[aria-label="Add event marker"]')?.click();
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        for (let attempt = 0; attempt < 100 && !document.querySelector('button[aria-label="Choose Java project"], .cmd-primary-action'); attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
         const linkButton = document.querySelector('button[aria-label="Choose Java project"]')
           || [...document.querySelectorAll('.cmd-primary-action')].find((button) => button.textContent.trim() === 'Choose Java project');
         linkButton?.click();
@@ -503,7 +518,9 @@ function createWindow() {
         const smokeCommandOption = commandOptions.find((option) => option.getAttribute('data-value') === 'frc.robot.SmokeCommand');
         if (smokeCommandOption) {
           smokeCommandOption.click();
-          await new Promise((resolve) => setTimeout(resolve, 0));
+          for (let attempt = 0; attempt < 100 && !document.getElementById('event-command-param-tags'); attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
         }
         const jsonParameter = document.getElementById('event-command-param-tags');
         const exactIntegerParameter = document.getElementById('event-command-param-sequence');
@@ -618,11 +635,24 @@ function createWindow() {
         await new Promise((resolve) => setTimeout(resolve, 0));
         const routineDuplicateSelected = document.querySelector('.routinelib .pathsw-nm')?.textContent === 'New routine copy';
         const multiRoutineUi = routineLibraryOpened && newRoutineSelected && routineDuplicateSelected;
+        document.querySelector('.robot-push-trigger')?.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const robotPushDialog = document.querySelector('[aria-labelledby="robot-push-title"]');
+        const robotPushUi = Boolean(robotPushDialog
+          && robotPushDialog.textContent.includes('Saving never contacts the robot')
+          && robotPushDialog.textContent.includes('Port 22 is unavailable on the FMS field network')
+          && robotPushDialog.querySelector('input[placeholder="roborio-2468-frc.local"]')
+          && robotPushDialog.querySelector('button[aria-label="Close robot push"]'));
         window.bordeauxAPI.setDirty(true);
         const probe = document.createElement('script'); probe.textContent = 'window.__bordeauxInlineScriptRan = true'; document.head.appendChild(probe);
         const editorRestored = opened.project.editor?.activePathId === secondPath.id && opened.project.editor?.javaProjectBookmarkId === recentJavaProjects[0].id;
-        return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), fatalError: document.querySelector('.fatal-error')?.textContent || '', unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, validation: validation.ok, motorPreset, eventMarkerAutosave, multiRoutineUi, javaDiscovery: javaConnection.catalog.projectName === 'SmokeRobot' && javaConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), javaInstalled: installedJavaConnection.integration.installed, javaBuilt: builtJavaConnection.catalog.authoritative === true && builtJavaConnection.catalog.catalogHash === reopenedJavaConnection.catalog.catalogHash, javaRecent: recentJavaProjects.length === 1 && reopenedJavaConnection.catalog.projectName === 'SmokeRobot', javaUi, staleJavaExportRejected, javaExported: javaExported.exported && javaExported.eventCount === 1, restored: restored.project.name === persistedProject.name, roundTrip: saved.saved && opened.project.name === persistedProject.name && opened.project.routines.find((routine) => routine.id === opened.project.activeRoutineId)?.nodes[0]?.ref === 'path_smoke' && !('routine' in opened.project), editorRestored, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
+        return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), fatalError: document.querySelector('.fatal-error')?.textContent || '', unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, validation: validation.ok, motorPreset, eventMarkerAutosave, multiRoutineUi, robotPushUi, javaDiscovery: javaConnection.catalog.projectName === 'SmokeRobot' && javaConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), javaInstalled: installedJavaConnection.integration.installed, javaBuilt: builtJavaConnection.catalog.authoritative === true && builtJavaConnection.catalog.catalogHash === reopenedJavaConnection.catalog.catalogHash, javaRecent: recentJavaProjects.length === 1 && reopenedJavaConnection.catalog.projectName === 'SmokeRobot', javaUi, staleJavaExportRejected, javaExported: javaExported.exported && javaExported.eventCount === 1, restored: restored.project.name === persistedProject.name, roundTrip: saved.saved && opened.project.name === persistedProject.name && opened.project.routines.find((routine) => routine.id === opened.project.activeRoutineId)?.nodes[0]?.ref === 'path_smoke' && !('routine' in opened.project), editorRestored, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
       })()`);
+      if (process.env.BORDEAUX_SMOKE_CAPTURE_PATH) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const capture = await window.webContents.capturePage();
+        await fs.promises.writeFile(process.env.BORDEAUX_SMOKE_CAPTURE_PATH, capture.toPNG());
+      }
       await new Promise((resolve) => setTimeout(resolve, 50));
       window.close();
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -630,7 +660,7 @@ function createWindow() {
       result.filesWritten = filesWritten;
       result.closeGuard = smokeCloseGuardTriggered && !window.isDestroyed();
       console.log(`BORDEAUX_SMOKE_OK ${JSON.stringify(result)}`);
-      const passed = result.api && result.root && result.unnamed.length === 0 && result.main > 0 && result.nav > 0 && result.validation && result.motorPreset && result.eventMarkerAutosave && result.multiRoutineUi && result.javaDiscovery && result.javaInstalled && result.javaBuilt && result.javaRecent && result.javaUi.markerInspector && result.javaUi.linkAction && result.javaUi.commandEnabled && result.javaUi.commandOptions === 4 && result.javaUi.searchHiddenForSmallCatalog && result.javaUi.recentHiddenForSingleProject && result.javaUi.cancelSwitch && result.javaUi.parameter && result.javaUi.jsonShapeRejected && result.javaUi.jsonShapeAccepted && result.javaUi.longRangeRejected && result.javaUi.exactInteger && result.javaUi.largeEnumPicker && result.javaUi.accessible && result.staleJavaExportRejected && result.javaExported && result.restored && result.roundTrip && result.editorRestored && result.nodeGlobalsBlocked && result.popupBlocked && result.inlineScriptBlocked && result.filesWritten && result.closeGuard;
+      const passed = result.api && result.root && result.unnamed.length === 0 && result.main > 0 && result.nav > 0 && result.validation && result.motorPreset && result.eventMarkerAutosave && result.multiRoutineUi && result.robotPushUi && result.javaDiscovery && result.javaInstalled && result.javaBuilt && result.javaRecent && result.javaUi.markerInspector && result.javaUi.linkAction && result.javaUi.commandEnabled && result.javaUi.commandOptions === 4 && result.javaUi.searchHiddenForSmallCatalog && result.javaUi.recentHiddenForSingleProject && result.javaUi.cancelSwitch && result.javaUi.parameter && result.javaUi.jsonShapeRejected && result.javaUi.jsonShapeAccepted && result.javaUi.longRangeRejected && result.javaUi.exactInteger && result.javaUi.largeEnumPicker && result.javaUi.accessible && result.staleJavaExportRejected && result.javaExported && result.restored && result.roundTrip && result.editorRestored && result.nodeGlobalsBlocked && result.popupBlocked && result.inlineScriptBlocked && result.filesWritten && result.closeGuard;
       allowClose = true;
       app.exit(passed ? 0 : 1);
     });
@@ -969,12 +999,101 @@ handle("robot:confirmPairing", async (_event, rawFingerprint, rawRuntimeId) => {
   if (typeof rawFingerprint !== "string" || typeof rawRuntimeId !== "string") {
     throw new Error("Probe the robot before confirming its identity");
   }
-  return robotPairings.confirm(rawFingerprint, rawRuntimeId, (pairing) => writeRobotPairing(robotPairingFile(), pairing));
+  if (activeRobotPush) throw new Error("Wait for the current robot push to finish before changing its pairing");
+  const pairing = await robotPairings.confirm(rawFingerprint, rawRuntimeId, (confirmed) => writeRobotPairing(robotPairingFile(), confirmed));
+  pendingRobotPush = null;
+  robotPushPreparationGeneration += 1;
+  return pairing;
 });
 handle("robot:inspect", async () => {
   const robotPairing = robotPairings.current();
   if (!robotPairing) throw new Error("Pair a robot before inspecting its Bordeaux runtime");
   return robotTransport.inspect(robotPairing, { password: "" });
+});
+handle("robot:preparePush", async (_event, rawProject) => {
+  if (activeRobotPush) throw new Error("Wait for the current robot push to finish before preparing another one");
+  const robotPairing = robotPairings.current();
+  if (!robotPairing) throw new Error("Pair a robot before preparing a push");
+  if (!linkedJavaCatalog || !linkedJavaIntegration || !linkedJavaProjectBookmarkId) {
+    throw new Error("Link a Java robot project before preparing a push");
+  }
+  const preparationGeneration = ++robotPushPreparationGeneration;
+  pendingRobotPush = null;
+  if (!linkedJavaIntegration.installed || linkedJavaIntegration.supportVersion !== linkedJavaCatalog.supportVersion) {
+    throw new Error("Install matching Bordeaux Java support and rebuild the command catalog before pushing");
+  }
+  const project = rawProject as BordeauxProject;
+  if (project.editor?.javaProjectBookmarkId !== linkedJavaProjectBookmarkId) {
+    throw new Error("The linked Java project does not match this Bordeaux project; relink it before pushing");
+  }
+  const connectionGeneration = javaConnectionGeneration;
+  const catalog = linkedJavaCatalog;
+  const status = await robotTransport.inspect(robotPairing, { password: "" });
+  const trajectory = await buildJavaTrajectoryOffThread(project, catalog);
+  if (preparationGeneration !== robotPushPreparationGeneration
+    || connectionGeneration !== javaConnectionGeneration || catalog !== linkedJavaCatalog) {
+    throw new Error("The linked Java project changed while preparing the push; review it again");
+  }
+  const operationId = `push-${randomBytes(12).toString("hex")}`;
+  pendingRobotPush = createRobotPushOperation({
+    operationId,
+    nonce: operationId,
+    projectName: project.name,
+    pairing: robotPairing,
+    status,
+    trajectory,
+  });
+  return pendingRobotPush.preview;
+});
+handle("robot:confirmPush", async (event, rawOperationId) => {
+  if (typeof rawOperationId !== "string" || !pendingRobotPush
+    || pendingRobotPush.preview.operationId !== rawOperationId) {
+    throw new Error("The reviewed robot push is no longer current; prepare it again");
+  }
+  if (activeRobotPush) throw new Error("A robot push is already in progress");
+  const operation = pendingRobotPush;
+  pendingRobotPush = null;
+  const controller = new AbortController();
+  activeRobotPush = { operationId: rawOperationId, controller };
+  let latestState: string = "review";
+  const publish = (progress: RobotPushProgress) => {
+    latestState = progress.state;
+    if (!event.sender.isDestroyed()) event.sender.send("robot:pushState", progress);
+  };
+  try {
+    return await operation.execute(robotTransport, publish, { signal: controller.signal });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "The robot push failed";
+    if (latestState === "staged") {
+      return {
+        operationId: rawOperationId,
+        state: "staged",
+        boundary: "acknowledgement",
+        message: `The revision remains staged, but Bordeaux could not confirm activation: ${message}`,
+      };
+    }
+    return {
+      operationId: rawOperationId,
+      state: controller.signal.aborted ? "cancelled" : "failed",
+      boundary: latestState === "uploaded" ? "staging" : "upload",
+      message,
+    };
+  } finally {
+    if (activeRobotPush?.operationId === rawOperationId) activeRobotPush = null;
+  }
+});
+handle("robot:cancelPush", (_event, rawOperationId) => {
+  if (typeof rawOperationId !== "string") return { canceled: false };
+  if (pendingRobotPush?.preview.operationId === rawOperationId) {
+    pendingRobotPush = null;
+    robotPushPreparationGeneration += 1;
+    return { canceled: true, boundary: "review" };
+  }
+  if (activeRobotPush?.operationId === rawOperationId) {
+    activeRobotPush.controller.abort();
+    return { canceled: true, boundary: "upload" };
+  }
+  return { canceled: false };
 });
 handle("agent:getActiveProposal", () => agentSessions.getActiveProposal());
 handle("agent:getMcpStatus", () => ({ enabled: agentBridge?.enabled === true }));

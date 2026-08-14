@@ -6,6 +6,7 @@ import { ContextInspector } from "../components/ContextInspector";
 import { FIELD_DIMS, FieldView } from "../components/FieldView";
 import { Panels } from "../components/Panels";
 import { RobotPage } from "../components/RobotPage";
+import { RobotPushDialog } from "../components/RobotPushDialog";
 import { RoutineTransport, StepInspector } from "../components/RoutineInspector";
 import { RoutinePanel } from "../components/RoutinePanel";
 import { UI } from "../components/ui";
@@ -1639,6 +1640,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     return h('div', { className: 'app' },
       h(Panels.Toolbar, { project, page, setPage, alliance, setAlliance, exportError, unitSystem, setUnitSystem, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
         routines, activeRoutineId: routine.id, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine }),
+      h(RobotPushDialog, { getProject: materializeProject }),
       page === 'robot'
         ? h('main', { className: 'page-main' }, h(RobotPage, { robot, setRobot, mcpEnabled, agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
         : page === 'auto'

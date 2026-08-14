@@ -42,6 +42,37 @@ export interface RobotPairing {
   pairedAt: string;
 }
 
+export interface RobotActivationExpectation {
+  nonce: string;
+  revisionId: string;
+  payloadSha256: string;
+  catalogId: string;
+  catalogHash: string;
+  supportVersion: string;
+}
+
+export interface RobotActiveAcknowledgement extends RobotActivationExpectation {
+  protocolVersion: typeof ROBOT_PUSH_PROTOCOL_VERSION;
+  state: "active";
+  runtimeId: string;
+  teamNumber: number;
+}
+
+export interface RobotRejectedAcknowledgement {
+  protocolVersion: typeof ROBOT_PUSH_PROTOCOL_VERSION;
+  nonce: string;
+  state: "rejected";
+  boundary: "activation";
+  message: string;
+  runtimeId: string;
+  teamNumber: number;
+}
+
+export type RobotActivationResult =
+  | { state: "active"; acknowledgement: RobotActiveAcknowledgement }
+  | { state: "rejected"; acknowledgement: RobotRejectedAcknowledgement }
+  | { state: "staged"; boundary: "acknowledgement"; message: string };
+
 export type RobotRemoteFile =
   | { kind: "status" }
   | { kind: "incomingTemporary"; nonce: string; token: string }
@@ -90,6 +121,7 @@ export class RobotTransportError extends Error {
 }
 
 const MAX_STATUS_BYTES = 64 * 1024;
+const MAX_ACKNOWLEDGEMENT_BYTES = 64 * 1024;
 const MAX_REVISION_BYTES = 24 * 1024 * 1024;
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
@@ -155,6 +187,81 @@ function parseRobotStatus(contents: Buffer): RobotRuntimeStatus {
     activePayloadSha256,
     health: [...raw.health] as string[],
   };
+}
+
+function parseActivationAcknowledgement(
+  contents: Buffer,
+  pairing: RobotPairing,
+  expected: RobotActivationExpectation,
+): RobotActiveAcknowledgement | RobotRejectedAcknowledgement {
+  let raw: unknown;
+  try { raw = JSON.parse(contents.toString("utf8")); }
+  catch (error) { throw new RobotTransportError("transfer_failed", "Robot activation acknowledgment is not valid JSON", { cause: error }); }
+  if (!isRecord(raw) || raw.protocolVersion !== ROBOT_PUSH_PROTOCOL_VERSION) {
+    throw new RobotTransportError("transfer_failed", "Robot activation acknowledgment protocol is invalid");
+  }
+  const nonce = requiredText(raw.nonce, "acknowledgment nonce");
+  const runtimeId = requiredText(raw.runtimeId, "acknowledgment runtimeId", 64);
+  if (!RUNTIME_ID.test(runtimeId) || runtimeId !== pairing.runtimeId
+    || raw.teamNumber !== pairing.teamNumber || nonce !== expected.nonce) {
+    throw new RobotTransportError("transfer_failed", "Robot activation acknowledgment identity does not match this push");
+  }
+  if (raw.state === "rejected") {
+    if (raw.boundary !== "activation") {
+      throw new RobotTransportError("transfer_failed", "Robot rejection did not identify the activation boundary");
+    }
+    return {
+      protocolVersion: ROBOT_PUSH_PROTOCOL_VERSION,
+      nonce,
+      state: "rejected",
+      boundary: "activation",
+      message: requiredText(raw.message, "acknowledgment message", 512),
+      runtimeId,
+      teamNumber: pairing.teamNumber,
+    };
+  }
+  if (raw.state !== "active") {
+    throw new RobotTransportError("transfer_failed", "Robot activation acknowledgment state is invalid");
+  }
+  const actual = {
+    revisionId: requiredText(raw.revisionId, "acknowledgment revisionId", 71),
+    payloadSha256: requiredText(raw.payloadSha256, "acknowledgment payloadSha256", 71),
+    catalogId: requiredText(raw.catalogId, "acknowledgment catalogId"),
+    catalogHash: requiredText(raw.catalogHash, "acknowledgment catalogHash", 71),
+    supportVersion: requiredText(raw.supportVersion, "acknowledgment supportVersion", 64),
+  };
+  if (!SHA256.test(actual.revisionId) || !SHA256.test(actual.payloadSha256) || !SHA256.test(actual.catalogHash)
+    || actual.revisionId !== expected.revisionId || actual.payloadSha256 !== expected.payloadSha256
+    || actual.catalogId !== expected.catalogId || actual.catalogHash !== expected.catalogHash
+    || actual.supportVersion !== expected.supportVersion) {
+    throw new RobotTransportError("transfer_failed", "Robot active acknowledgment does not match the reviewed revision");
+  }
+  return {
+    protocolVersion: ROBOT_PUSH_PROTOCOL_VERSION,
+    nonce,
+    state: "active",
+    ...actual,
+    runtimeId,
+    teamNumber: pairing.teamNumber,
+  };
+}
+
+function waitForPoll(milliseconds: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new RobotTransportError("cancelled", "Waiting for robot activation was cancelled"));
+  if (milliseconds <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(done, milliseconds);
+    function done() {
+      signal.removeEventListener("abort", cancelled);
+      resolve();
+    }
+    function cancelled() {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", cancelled);
+      reject(new RobotTransportError("cancelled", "Waiting for robot activation was cancelled"));
+    }
+    signal.addEventListener("abort", cancelled, { once: true });
+  });
 }
 
 function validateEndpoint(endpoint: RobotEndpoint): void {
@@ -227,7 +334,7 @@ export class BordeauxRobotTransport {
     pairing: RobotPairing,
     credentials: RobotCredentials,
     revision: { nonce: string; contents: Buffer; sha256: string },
-    options: { signal?: AbortSignal; timeoutMs?: number } = {},
+    options: { signal?: AbortSignal; timeoutMs?: number; onState?: (state: "uploaded" | "staged") => void } = {},
   ): Promise<{ state: "staged"; nonce: string; sha256: string; size: number }> {
     validateEndpoint(pairing.endpoint);
     if (!FILE_TOKEN.test(revision.nonce)) {
@@ -269,11 +376,13 @@ export class BordeauxRobotTransport {
       if (readBack.length !== revision.contents.length || readBackHash !== revision.sha256) {
         throw new RobotTransportError("transfer_failed", "Robot upload read-back did not match the staged revision bytes");
       }
+      options.onState?.("uploaded");
       if (await session.exists(destination, signal)) {
         throw new RobotTransportError("transfer_failed", "A robot inbox revision already uses this activation nonce");
       }
       await session.renameSameDirectory(temporary, destination, signal);
       staged = true;
+      options.onState?.("staged");
       return { state: "staged", nonce: revision.nonce, sha256: revision.sha256, size: revision.contents.length };
     } catch (error) {
       if (error instanceof RobotTransportError) throw error;
@@ -284,6 +393,64 @@ export class BordeauxRobotTransport {
         try { await session.remove(temporary, signal); }
         catch { /* Preserve the primary transfer error; temp files are ignored by the robot runtime. */ }
       }
+      await session.close();
+    }
+  }
+
+  async waitForActivation(
+    pairing: RobotPairing,
+    credentials: RobotCredentials,
+    expected: RobotActivationExpectation,
+    options: { signal?: AbortSignal; timeoutMs?: number; pollIntervalMs?: number } = {},
+  ): Promise<RobotActivationResult> {
+    validateEndpoint(pairing.endpoint);
+    if (!FILE_TOKEN.test(expected.nonce) || !SHA256.test(expected.revisionId)
+      || !SHA256.test(expected.payloadSha256) || !SHA256.test(expected.catalogHash)) {
+      throw new RobotTransportError("invalid_request", "Robot activation expectation is invalid");
+    }
+    const signal = options.signal ?? new AbortController().signal;
+    const timeoutMs = options.timeoutMs ?? 15_000;
+    const pollIntervalMs = options.pollIntervalMs ?? 250;
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || !Number.isFinite(pollIntervalMs) || pollIntervalMs < 0) {
+      throw new RobotTransportError("invalid_request", "Robot acknowledgment timing is invalid");
+    }
+    const session = await this.connect({
+      endpoint: pairing.endpoint,
+      credentials,
+      expectedHostKeyFingerprint: pairing.hostKeyFingerprint,
+      signal,
+      timeoutMs: Math.max(1_000, timeoutMs),
+    });
+    const acknowledgement: RobotRemoteFile = { kind: "acknowledgement", nonce: expected.nonce };
+    const deadline = Date.now() + timeoutMs;
+    try {
+      if (session.hostKeyFingerprint !== pairing.hostKeyFingerprint) {
+        throw new RobotTransportError("re_pair_required", "The robot SSH host key changed; explicitly re-pair this robot before transferring data");
+      }
+      const status = parseRobotStatus(await session.read({ kind: "status" }, MAX_STATUS_BYTES, signal));
+      if (status.runtimeId !== pairing.runtimeId || status.teamNumber !== pairing.teamNumber) {
+        throw new RobotTransportError("re_pair_required", "The paired Bordeaux runtime identity changed; explicitly re-pair this robot before transferring data");
+      }
+      while (true) {
+        if (signal.aborted) throw new RobotTransportError("cancelled", "Waiting for robot activation was cancelled");
+        if (await session.exists(acknowledgement, signal)) {
+          const parsed = parseActivationAcknowledgement(
+            await session.read(acknowledgement, MAX_ACKNOWLEDGEMENT_BYTES, signal), pairing, expected,
+          );
+          return parsed.state === "active"
+            ? { state: "active", acknowledgement: parsed }
+            : { state: "rejected", acknowledgement: parsed };
+        }
+        if (Date.now() >= deadline) {
+          return {
+            state: "staged",
+            boundary: "acknowledgement",
+            message: "The revision is staged, but Bordeaux did not receive the nonce-bound robot acknowledgment before the timeout",
+          };
+        }
+        await waitForPoll(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())), signal);
+      }
+    } finally {
       await session.close();
     }
   }

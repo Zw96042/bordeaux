@@ -32,6 +32,27 @@ For a multi-path autonomous routine, load the document with `BordeauxTrajectoryR
 
 `endPath()`, `stop()`, `close()`, and `reset()` cancel only commands from events that set `cancelOnPathEnd: true`; ordinary commands scheduled by an event are left alone. `reset()` also clears exactly-once state for another run. Elapsed time cannot move backward without a reset.
 
+## Optional Bordeaux push mailbox
+
+Teams that opt into desktop-to-robot pushes provision `/home/lvuser/deploy/bordeaux/push-v1` with `inbox` and `acks` subdirectories, construct `BordeauxRevisionService` with their disabled supplier and compiled compatibility, then construct `BordeauxRobotMailboxService`. Call `pollOnce()` from `disabledPeriodic`; it accepts only the nonce-bound revision files written by Bordeaux, writes a nonce-bound acknowledgment and `status.json` atomically, and never starts a listener, watcher, command, or network connection. The mailbox leaves a candidate in place if acknowledgment publication fails, so the next disabled-period poll can recover the persisted activation acknowledgment safely.
+
+```java
+var namespace = Path.of(BordeauxRobotStatusPublisher.PRODUCTION_DEPLOYMENT_NAMESPACE);
+Files.createDirectories(namespace.resolve("inbox"));
+Files.createDirectories(namespace.resolve("acks"));
+var compatibility = new BordeauxRuntimeCompatibility(
+    commandRegistry.catalogId(), commandRegistry.catalogHash(), "0.1.0",
+    "2026-rebuilt", "2026-manual-tu19-welded-4", "bordeaux-field/1.0");
+var revisions = new BordeauxRevisionService(
+    namespace.resolve("state"), 2468, DriverStation::isDisabled, compatibility);
+var mailbox = new BordeauxRobotMailboxService(namespace, revisions);
+
+// Robot.disabledPeriodic():
+mailbox.pollOnce();
+```
+
+Replace the team number and seasonal field identity with the values compiled into the robot project. Directory provisioning belongs in robot initialization, and mailbox failures should be reported through `DriverStation.reportError` without crashing the control loop.
+
 ## Build and test
 
 From this directory:

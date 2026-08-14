@@ -142,12 +142,14 @@ describe("constrained robot SFTP transport", () => {
       close: async () => undefined,
     };
     const transport = new BordeauxRobotTransport(async () => session, () => "feedface");
+    const states: string[] = [];
 
     await expect(transport.stageRevision(pairing, { password: "" }, {
       nonce: "push-2026-08-14",
       contents: Buffer.from("revision-envelope\n"),
       sha256: "9e65848c141c882c831950e7093275b6406a9e9d1b0c214d4f6b2ba341ef1ca7",
-    })).resolves.toMatchObject({ state: "staged", nonce: "push-2026-08-14" });
+    }, { onState: (state) => states.push(state) })).resolves.toMatchObject({ state: "staged", nonce: "push-2026-08-14" });
+    expect(states).toEqual(["uploaded", "staged"]);
     expect(operations).toEqual([
       "read:status",
       "write:incomingTemporary",
@@ -155,6 +157,135 @@ describe("constrained robot SFTP transport", () => {
       "exists:incomingRevision",
       "rename:incomingTemporary->incomingRevision",
     ]);
+  });
+
+  it("accepts active only from the exact nonce-bound runtime acknowledgment", async () => {
+    const pairing = confirmRobotPairing({
+      probe,
+      acceptedHostKeyFingerprint: probe.hostKeyFingerprint,
+      acceptedRuntimeId: probe.status.runtimeId,
+    });
+    const acknowledgement = {
+      protocolVersion: ROBOT_PUSH_PROTOCOL_VERSION,
+      nonce: "push-active",
+      state: "active",
+      revisionId: `sha256:${"b".repeat(64)}`,
+      payloadSha256: `sha256:${"c".repeat(64)}`,
+      catalogId: probe.status.catalogId,
+      catalogHash: probe.status.catalogHash,
+      supportVersion: probe.status.supportVersion,
+      runtimeId: probe.status.runtimeId,
+      teamNumber: probe.status.teamNumber,
+    };
+    const session: RobotSftpSession = {
+      hostKeyFingerprint: pairing.hostKeyFingerprint,
+      read: async (file) => file.kind === "status"
+        ? Buffer.from(JSON.stringify(probe.status))
+        : Buffer.from(JSON.stringify(acknowledgement)),
+      write: async () => undefined,
+      exists: async (file) => file.kind === "acknowledgement",
+      renameSameDirectory: async () => undefined,
+      remove: async () => undefined,
+      close: async () => undefined,
+    };
+    const transport = new BordeauxRobotTransport(async () => session);
+
+    await expect(transport.waitForActivation(pairing, { password: "" }, {
+      nonce: acknowledgement.nonce,
+      revisionId: acknowledgement.revisionId,
+      payloadSha256: acknowledgement.payloadSha256,
+      catalogId: acknowledgement.catalogId,
+      catalogHash: acknowledgement.catalogHash,
+      supportVersion: acknowledgement.supportVersion,
+    })).resolves.toEqual({ state: "active", acknowledgement });
+  });
+
+  it("keeps rejected and staged-without-acknowledgment distinct from active", async () => {
+    const pairing = confirmRobotPairing({
+      probe,
+      acceptedHostKeyFingerprint: probe.hostKeyFingerprint,
+      acceptedRuntimeId: probe.status.runtimeId,
+    });
+    const rejected = {
+      protocolVersion: ROBOT_PUSH_PROTOCOL_VERSION,
+      nonce: "push-rejected",
+      state: "rejected",
+      boundary: "activation",
+      message: "Robot must remain disabled while activating a Bordeaux revision",
+      runtimeId: probe.status.runtimeId,
+      teamNumber: probe.status.teamNumber,
+    };
+    let hasAcknowledgement = true;
+    const session: RobotSftpSession = {
+      hostKeyFingerprint: pairing.hostKeyFingerprint,
+      read: async (file) => file.kind === "status"
+        ? Buffer.from(JSON.stringify(probe.status))
+        : Buffer.from(JSON.stringify(rejected)),
+      write: async () => undefined,
+      exists: async () => hasAcknowledgement,
+      renameSameDirectory: async () => undefined,
+      remove: async () => undefined,
+      close: async () => undefined,
+    };
+    const transport = new BordeauxRobotTransport(async () => session);
+    const expectation = {
+      nonce: rejected.nonce,
+      revisionId: `sha256:${"b".repeat(64)}`,
+      payloadSha256: `sha256:${"c".repeat(64)}`,
+      catalogId: probe.status.catalogId,
+      catalogHash: probe.status.catalogHash,
+      supportVersion: probe.status.supportVersion,
+    };
+
+    await expect(transport.waitForActivation(pairing, { password: "" }, expectation))
+      .resolves.toEqual({ state: "rejected", acknowledgement: rejected });
+
+    hasAcknowledgement = false;
+    await expect(transport.waitForActivation(pairing, { password: "" }, expectation, {
+      timeoutMs: 0,
+      pollIntervalMs: 0,
+    })).resolves.toMatchObject({ state: "staged", boundary: "acknowledgement" });
+  });
+
+  it("rejects an active acknowledgment whose revision identity does not match", async () => {
+    const pairing = confirmRobotPairing({
+      probe,
+      acceptedHostKeyFingerprint: probe.hostKeyFingerprint,
+      acceptedRuntimeId: probe.status.runtimeId,
+    });
+    const acknowledgement = {
+      protocolVersion: ROBOT_PUSH_PROTOCOL_VERSION,
+      nonce: "push-mismatch",
+      state: "active",
+      revisionId: `sha256:${"d".repeat(64)}`,
+      payloadSha256: `sha256:${"c".repeat(64)}`,
+      catalogId: probe.status.catalogId,
+      catalogHash: probe.status.catalogHash,
+      supportVersion: probe.status.supportVersion,
+      runtimeId: probe.status.runtimeId,
+      teamNumber: probe.status.teamNumber,
+    };
+    const session: RobotSftpSession = {
+      hostKeyFingerprint: pairing.hostKeyFingerprint,
+      read: async (file) => file.kind === "status"
+        ? Buffer.from(JSON.stringify(probe.status))
+        : Buffer.from(JSON.stringify(acknowledgement)),
+      write: async () => undefined,
+      exists: async () => true,
+      renameSameDirectory: async () => undefined,
+      remove: async () => undefined,
+      close: async () => undefined,
+    };
+    const transport = new BordeauxRobotTransport(async () => session);
+
+    await expect(transport.waitForActivation(pairing, { password: "" }, {
+      nonce: acknowledgement.nonce,
+      revisionId: `sha256:${"b".repeat(64)}`,
+      payloadSha256: acknowledgement.payloadSha256,
+      catalogId: acknowledgement.catalogId,
+      catalogHash: acknowledgement.catalogHash,
+      supportVersion: acknowledgement.supportVersion,
+    })).rejects.toMatchObject({ code: "transfer_failed" });
   });
 
   it("rejects path-like activation nonces before opening SFTP", async () => {

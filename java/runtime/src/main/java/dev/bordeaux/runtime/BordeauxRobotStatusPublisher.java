@@ -42,6 +42,7 @@ public final class BordeauxRobotStatusPublisher {
     /** Atomically replaces the bounded status document and returns its fixed path. */
     public Path publish(BordeauxRuntimeStatus status) {
         Objects.requireNonNull(status, "status");
+        requireSafeDirectory(namespace, "Bordeaux deployment namespace");
         rejectSymbolicLink(statusFile, "Bordeaux status file");
         byte[] document = serialize(status);
         if (document.length > MAX_STATUS_BYTES) {
@@ -52,7 +53,7 @@ public final class BordeauxRobotStatusPublisher {
         return statusFile;
     }
 
-    private static Path requireSafeDirectory(Path path, String name) {
+    static Path requireSafeDirectory(Path path, String name) {
         if (path == null) throw new BordeauxRuntimeException(name + " is required");
         Path directory = path.toAbsolutePath().normalize();
         for (Path current = directory; current != null; current = current.getParent()) {
@@ -64,7 +65,7 @@ public final class BordeauxRobotStatusPublisher {
         return directory;
     }
 
-    private static void rejectSymbolicLink(Path path, String name) {
+    static void rejectSymbolicLink(Path path, String name) {
         if (Files.isSymbolicLink(path)) {
             throw new BordeauxRuntimeException(name + " must not be a symbolic link");
         }
