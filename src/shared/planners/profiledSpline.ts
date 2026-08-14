@@ -63,8 +63,8 @@ export const profiledSplinePlanner: TrajectoryPlanner = {
   id: "profiledSpline",
   generate(input: PlannerInput): PlannerResult {
     const samplesPerSegment = input.samplesPerSegment ?? DEFAULT_SAMPLES_PER_SEGMENT;
-    if (!Number.isInteger(samplesPerSegment) || samplesPerSegment < 1) {
-      throw new Error("Planner samples per segment must be a positive integer");
+    if (!Number.isInteger(samplesPerSegment) || samplesPerSegment < 2) {
+      throw new Error("Planner samples per segment must be an integer of at least 2");
     }
     const segmentCount = Math.max(0, input.path.waypoints.length - 1);
     if (segmentCount > Math.floor((MAX_TRAJECTORY_SAMPLES - 1) / samplesPerSegment)) {
@@ -82,7 +82,10 @@ export const profiledSplinePlanner: TrajectoryPlanner = {
       i,
       t: R(times[i] ?? 0, 4),
       s: R(point.s ?? 0, 4),
-      f: R(totalDistanceM > 1e-9 ? (point.s ?? 0) / totalDistanceM : 0, 5),
+      // The optimized planner re-indexes local constraints from these samples.
+      // Five decimals can move a range boundary across a sample, so retain
+      // enough fraction precision for that second planning pass.
+      f: R(totalDistanceM > 1e-9 ? (point.s ?? 0) / totalDistanceM : 0, 9),
       x: R(point.x ?? 0, 4),
       y: R(point.y ?? 0, 4),
       headingRad: R((metrics.head?.[i] ?? point.heading ?? 0) + (derived.rev ? Math.PI : 0), 5),

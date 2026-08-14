@@ -4,6 +4,7 @@ import { PointerDrag } from "../hooks/usePointerDrag";
 import { parseFiniteDraftNumber } from "../lib/numericDraft";
 import { PM } from "../lib/pathMath";
 import { UnitPrefs } from "../lib/unitPreferences";
+import { effectivePathConstraints } from "../../shared/robotLimits";
 
 // Bordeaux shared UI primitives.
   const { useState, useRef, useEffect, useId } = React;
@@ -321,7 +322,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
   }
 
   function constraintRangeSummary(range, constraints, robot) {
-    const c = PM.effectiveConstraints(constraints || {}, robot);
+    const c = effectivePathConstraints(constraints || {}, robot);
     const velocityBase = Math.min(c.maxVel || Infinity, robot && robot.maxSpeed > 0 ? robot.maxSpeed : Infinity);
     const candidates = [
       { key: 'maxVel', base: velocityBase, order: 0, text: (v) => 'v \u2264 ' + UnitPrefs.format(v, 'm/s', 1), aria: (v) => 'maximum velocity ' + UnitPrefs.format(v, 'm/s', 1) },

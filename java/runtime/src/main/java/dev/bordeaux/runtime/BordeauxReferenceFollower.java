@@ -45,6 +45,7 @@ public final class BordeauxReferenceFollower {
         }
         if (finished) return samples.get(sampleIndex);
         BordeauxFollowSection section = sections.get(sectionIndex);
+        BordeauxSample reference = null;
         if (section.mode() == BordeauxFollowSection.Mode.TIME) {
             double remainingTimeS = dtS;
             while (!finished && section.mode() == BordeauxFollowSection.Mode.TIME) {
@@ -54,12 +55,16 @@ public final class BordeauxReferenceFollower {
                         && samples.get(sampleIndex + 1).timeS() <= target + 1e-9) {
                     sampleIndex++;
                 }
+                reference = interpolateTimeReference(section, target);
                 double duration = samples.get(section.endSample()).timeS()
                         - samples.get(section.startSample()).timeS();
                 if (sampleIndex < section.endSample() || sectionElapsedS < duration - 1e-9) break;
                 remainingTimeS = Math.max(0, sectionElapsedS - duration);
                 advanceSection();
-                if (!finished) section = sections.get(sectionIndex);
+                if (!finished) {
+                    section = sections.get(sectionIndex);
+                    reference = null;
+                }
             }
         } else {
             updateMeasuredTravel(section, measuredXM, measuredYM);
@@ -75,7 +80,7 @@ public final class BordeauxReferenceFollower {
                 advanceSection();
             }
         }
-        return samples.get(sampleIndex);
+        return reference != null ? reference : samples.get(sampleIndex);
     }
 
     public boolean isFinished() {
@@ -130,6 +135,31 @@ public final class BordeauxReferenceFollower {
 
     private static double distance(BordeauxSample sample, double x, double y) {
         return Math.hypot(sample.xM() - x, sample.yM() - y);
+    }
+
+    private BordeauxSample interpolateTimeReference(BordeauxFollowSection section, double targetTimeS) {
+        BordeauxSample before = samples.get(sampleIndex);
+        if (sampleIndex >= section.endSample()) return before;
+        BordeauxSample after = samples.get(sampleIndex + 1);
+        double durationS = after.timeS() - before.timeS();
+        if (durationS <= 1e-9) return after;
+        double progress = Math.max(0, Math.min(1, (targetTimeS - before.timeS()) / durationS));
+        double headingDelta = Math.atan2(
+                Math.sin(after.headingRad() - before.headingRad()),
+                Math.cos(after.headingRad() - before.headingRad()));
+        return new BordeauxSample(
+                before.index(),
+                lerp(before.timeS(), after.timeS(), progress),
+                lerp(before.distanceM(), after.distanceM(), progress),
+                lerp(before.fraction(), after.fraction(), progress),
+                lerp(before.xM(), after.xM(), progress),
+                lerp(before.yM(), after.yM(), progress),
+                before.headingRad() + headingDelta * progress,
+                lerp(before.velocityMps(), after.velocityMps(), progress));
+    }
+
+    private static double lerp(double before, double after, double progress) {
+        return before + (after - before) * progress;
     }
 
     /** Exact nearest-sample lookup inside a monotonic, measured-travel progress window. */

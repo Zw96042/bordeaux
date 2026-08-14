@@ -4,6 +4,8 @@ import { enforceAngularTiming } from "./angularConstraints";
 import { MAX_TRAJECTORY_SAMPLES } from "./limits";
 import { jigglePositions } from "./jiggle";
 import { orderedWaypointSampleIndices } from "./waypointSamples";
+import { motorAccelerationAtSpeed } from "../robotLimits";
+import { outgoingSegmentTangentHeading } from "../math/pathTangents";
 
 const EPSILON = 1e-9;
 const DEG = Math.PI / 180;
@@ -42,7 +44,7 @@ function activeAngularLimits(path: PathDoc, fraction: number, waypointIndex: num
   return { velocity: Math.max(velocity, EPSILON), acceleration: Math.max(acceleration, EPSILON), jerk };
 }
 
-function activeLinearLimits(path: PathDoc, fraction: number, waypointIndex: number, totalDistance: number): { velocity: number; acceleration: number; deceleration: number } {
+function activeLinearLimits(path: PathDoc, fraction: number, waypointIndex: number, totalDistance: number): { velocity: number; acceleration: number; deceleration: number; jerk: number } {
   let velocity = path.constraints.maxVel;
   let acceleration = path.constraints.maxAccel;
   let deceleration = path.constraints.maxDecel ?? path.constraints.maxAccel;
@@ -67,19 +69,32 @@ function activeLinearLimits(path: PathDoc, fraction: number, waypointIndex: numb
     velocity: Math.max(velocity, EPSILON),
     acceleration: Math.max(acceleration, EPSILON),
     deceleration: Math.max(deceleration, EPSILON),
+    jerk: Math.max(0, path.constraints.maxJerk ?? 0),
   };
 }
 
-function feasibleJiggleStrokeDuration(requested: number, distance: number, limits: ReturnType<typeof activeLinearLimits>, freeSpeed: number): number {
+function feasibleJiggleStrokeDuration(
+  requested: number,
+  distance: number,
+  limits: ReturnType<typeof activeLinearLimits>,
+  freeSpeed: number,
+  robot?: RobotConfig,
+): number {
+  const jerkLimited = limits.jerk > EPSILON;
+  const peakVelocityScale = jerkLimited ? 3.75 : 4;
+  const peakAccelerationScale = jerkLimited ? 40 * Math.sqrt(3) / 3 : 16;
   const minimum = Math.max(
     requested,
-    4 * distance / Math.min(limits.velocity, freeSpeed),
-    Math.sqrt(16 * distance / limits.deceleration),
+    peakVelocityScale * distance / Math.min(limits.velocity, freeSpeed),
+    Math.sqrt(peakAccelerationScale * distance / limits.deceleration),
+    jerkLimited ? Math.cbrt(480 * distance / limits.jerk) : 0,
   );
   const feasible = (duration: number) => {
-    const peakVelocity = 4 * distance / duration;
-    const availableAcceleration = limits.acceleration * Math.max(0, 1 - peakVelocity / freeSpeed);
-    return 16 * distance / (duration * duration) <= availableAcceleration + 1e-9;
+    const peakVelocity = peakVelocityScale * distance / duration;
+    const availableAcceleration = robot
+      ? motorAccelerationAtSpeed(robot, peakVelocity, limits.acceleration)
+      : limits.acceleration * Math.max(0, 1 - peakVelocity / freeSpeed);
+    return peakAccelerationScale * distance / (duration * duration) <= availableAcceleration + 1e-9;
   };
   if (feasible(minimum)) return minimum;
   let low = minimum, high = minimum;
@@ -130,8 +145,21 @@ function rotationDuration(delta: number, limits: ReturnType<typeof activeAngular
   );
 }
 
-function jigglePhase(progress: number): { position: number; velocity: number; acceleration: number; travel: number } {
+function jigglePhase(progress: number, jerkLimited: boolean): { position: number; velocity: number; acceleration: number; travel: number } {
   const u = Math.max(0, Math.min(1, progress));
+  if (jerkLimited) {
+    const outbound = u <= 0.5;
+    const q = outbound ? 2 * u : 2 * (1 - u);
+    const position = 10 * q ** 3 - 15 * q ** 4 + 6 * q ** 5;
+    const derivative = 30 * q ** 2 - 60 * q ** 3 + 30 * q ** 4;
+    const secondDerivative = 60 * q - 180 * q ** 2 + 120 * q ** 3;
+    return {
+      position,
+      velocity: (outbound ? 2 : -2) * derivative,
+      acceleration: 4 * secondDerivative,
+      travel: outbound ? position : 2 - position,
+    };
+  }
   if (u < 0.25) return { position: 8 * u * u, velocity: 16 * u, acceleration: 16, travel: 8 * u * u };
   if (u < 0.5) {
     const remaining = 0.5 - u;
@@ -177,7 +205,15 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     if (index >= path.waypoints.length - 1) return false;
     const boundary = baseIndices[index];
     const movingIndex = nextMoving![boundary];
-    const outgoing = movingIndex < 0 ? null : result.samples[movingIndex].headingRad;
+    const outgoingMode = robot?.drive === "tank"
+      ? "tangent"
+      : waypoint.segmentHeadingMode ?? path.headingMode ?? "targets";
+    const exactTangent = outgoingMode === "tangent"
+      ? outgoingSegmentTangentHeading(path.waypoints, index)
+      : undefined;
+    const outgoing = exactTangent !== undefined
+      ? exactTangent + (path.driveBackward ? Math.PI : 0)
+      : movingIndex < 0 ? null : result.samples[movingIndex].headingRad;
     const target = waypoint.turnInPlace!.headingDeg * DEG + (path.driveBackward ? Math.PI : 0);
     return outgoing == null || Math.abs(wrapRadians(outgoing - target)) > 2 * DEG;
   });
@@ -221,6 +257,7 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
         waypoint.jiggle.distanceM,
         linearLimits,
         Math.max(robot?.maxSpeed ?? linearLimits.velocity, EPSILON),
+        robot,
       );
     }
     const jiggleTicks = waypoint.jiggle && positions
@@ -253,6 +290,7 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     samples[sampleCount] = {
       ...source,
       t: source.t + timeOffset,
+      s: source.s + addedDistance,
       ...(headingOverride ? { headingRad: headingOverride.heading } : {}),
     };
     sampleCount += 1;
@@ -270,6 +308,7 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
       const turnTicks = ticks.turn;
       const turnDuration = turnTicks * period;
       const jiggle = waypoint.jiggle;
+      const jerkLimitedJiggle = (path.constraints.maxJerk ?? 0) > EPSILON;
       const jiggleHeading = turn ? targetHeading : arrival.headingRad;
       const jiggleSupported = !jiggle || robot?.drive !== "tank";
       const positions = jiggle && jiggleSupported ? jigglePositions(waypoint, jiggleHeading, jiggle) : null;
@@ -298,7 +337,7 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
 
       if (turn) {
         arrival.headingRad = startHeading;
-        headingOverride = { x: arrival.x, y: arrival.y, s: arrival.s, heading: targetHeading };
+        headingOverride = { x: arrival.x, y: arrival.y, s: source.s, heading: targetHeading };
       }
       arrival.velocityMps = 0;
       arrival.accelerationMps2 = 0;
@@ -319,19 +358,20 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
       }
       const waitHeading = turn ? targetHeading : arrival.headingRad;
       let finalJiggleHeading: number | undefined;
+      const jiggleDistance = jiggle && positions ? jiggle.distanceM * 2 * jiggle.strokes : 0;
       if (jiggle && positions) {
         for (let stroke = 0; stroke < jiggle.strokes; stroke += 1) {
           const angle = jiggleHeading + (jiggle.startDeg + jiggle.stepDeg * stroke) * DEG;
           for (let tick = 1; tick <= jiggleTicks; tick += 1) {
             const u = tick / jiggleTicks;
-            const phase = jigglePhase(u);
+            const phase = jigglePhase(u, jerkLimitedJiggle);
             const radialDistance = jiggle.distanceM * phase.position;
             samples[sampleCount] = {
               ...arrival,
               i: 0,
               t: arrivalTime + turnDuration + stroke * jiggleStrokeDuration + tick * period,
-              s: arrival.s + addedDistance + stroke * jiggle.distanceM * 2 + jiggle.distanceM * phase.travel,
-              f: 1,
+              s: arrival.s + stroke * jiggle.distanceM * 2 + jiggle.distanceM * phase.travel,
+              f: arrival.f,
               x: arrival.x + Math.cos(angle) * radialDistance,
               y: arrival.y + Math.sin(angle) * radialDistance,
               headingRad: jiggleHeading,
@@ -344,14 +384,14 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
             sampleCount += 1;
           }
         }
-        addedDistance += jiggle.distanceM * 2 * jiggle.strokes;
+        addedDistance += jiggleDistance;
       }
       for (let tick = 1; tick <= waitTicks; tick += 1) {
         samples[sampleCount] = {
           ...arrival,
           i: 0,
           t: arrivalTime + turnDuration + jiggleDuration + tick * period,
-          s: arrival.s + addedDistance,
+          s: arrival.s + jiggleDistance,
           f: arrival.f,
           headingRad: finalJiggleHeading ?? waitHeading,
           velocityMps: 0,
@@ -418,5 +458,5 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     markers,
     diagnostics,
     optimization: result.optimization ? { ...result.optimization, totalTimeS } : result.optimization,
-  }, true);
+  }, true, true);
 }

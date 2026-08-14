@@ -10,7 +10,7 @@ function inputIn(node: unknown): ElementNode | undefined {
   return element.type === "input" ? element : element.children?.map(inputIn).find(Boolean);
 }
 
-function numericDraftHarness(kind: "Num" | "BigNum") {
+function numericDraftHarness(kind: "Num" | "BigNum", overrides: Record<string, unknown> = {}) {
   const element = (type: unknown, props: Record<string, unknown>, ...children: unknown[]): ElementNode => ({ type, props: props ?? {}, children });
   const states: unknown[] = [];
   const refs: Array<{ current: unknown }> = [];
@@ -66,7 +66,7 @@ function numericDraftHarness(kind: "Num" | "BigNum") {
         "RobotPageControls",
         { context, replacements: [["export { RobotPage };", "window.RobotPageControls = { BigNum };"]] },
       ).BigNum;
-  const props = { label: "Value", value: 1, unit: "m", imperialUnit: "in", onChange: () => undefined };
+  const props = { label: "Value", value: 1, unit: "m", imperialUnit: "in", onChange: () => undefined, ...overrides };
   const render = () => {
     let tree: ElementNode;
     for (let pass = 0; pass < 2; pass += 1) {
@@ -168,6 +168,18 @@ describe("renderer numeric drafts", () => {
 
     expect(input.props["aria-invalid"]).toBe(false);
     expect(input.props.value).toBe("10.00");
+  });
+
+  it("keeps an optional BigNum blank when it receives focus", () => {
+    const harness = numericDraftHarness("BigNum", { value: undefined, placeholder: "Add" });
+    let input = harness.render();
+    expect(input.props.value).toBe("");
+    expect(input.props.placeholder).toBe("Add");
+
+    (input.props.onFocus as (event: { target: { select: () => void } }) => void)({ target: { select: () => undefined } });
+    input = harness.render();
+
+    expect(input.props.value).toBe("");
   });
 
   it("commits the live command value when Save blurs before React rerenders", () => {

@@ -118,31 +118,24 @@ describe("renderer app path preview lifecycle", () => {
 
   it("enables path reversal only from the exact current preview", () => {
     const staleValue = { sample: { length: 12.5 } };
-    const pathLength = vi.spyOn(PM, "pathLength");
+    expect(currentPathLength({ current: false, pending: true, value: null })).toBeNull();
+    expect(currentPathLength({ current: false, pending: true, value: staleValue })).toBeNull();
+    expect(currentPathLength({ current: true, pending: false, value: staleValue })).toBe(12.5);
 
-    try {
-      expect(currentPathLength({ current: false, pending: true, value: null })).toBeNull();
-      expect(currentPathLength({ current: false, pending: true, value: staleValue })).toBeNull();
-      expect(currentPathLength({ current: true, pending: false, value: staleValue })).toBe(12.5);
-      expect(pathLength).not.toHaveBeenCalled();
-
-      const project = createDemoProject();
-      const actions = new Proxy({ canReversePath: false }, {
-        get(target, key) { return key in target ? target[key] : vi.fn(); },
-      });
-      const html = renderToString(React.createElement(ContextInspector, {
-        doc: project.paths[0],
-        sel: { kind: null, idx: -1 },
-        derived: { prof: { totalTime: 1 }, totalDistance: 3, sample: { length: 3 }, checks: [] },
-        actions,
-        drive: project.robot.drive,
-        robot: project.robot,
-        onClose: vi.fn(),
-      }));
-      expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*Reverse path/);
-    } finally {
-      pathLength.mockRestore();
-    }
+    const project = createDemoProject();
+    const actions = new Proxy({ canReversePath: false }, {
+      get(target, key) { return key in target ? target[key] : vi.fn(); },
+    });
+    const html = renderToString(React.createElement(ContextInspector, {
+      doc: project.paths[0],
+      sel: { kind: null, idx: -1 },
+      derived: { prof: { totalTime: 1 }, totalDistance: 3, sample: { length: 3 }, checks: [] },
+      actions,
+      drive: project.robot.drive,
+      robot: project.robot,
+      onClose: vi.fn(),
+    }));
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*Reverse path/);
   });
 
   it("shows only the selected candidate after its exact worker result arrives", () => {

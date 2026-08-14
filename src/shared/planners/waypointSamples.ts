@@ -11,6 +11,18 @@ interface CoordinateRun {
   end: number;
 }
 
+/** Cumulative authored-geometry distance, excluding same-fraction stationary action travel. */
+export function authoredGeometryDistances(samples: readonly TrajectorySample[]): number[] {
+  const distances = new Array<number>(samples.length).fill(0);
+  for (let index = 1; index < samples.length; index += 1) {
+    const sample = samples[index];
+    const previous = samples[index - 1];
+    distances[index] = distances[index - 1]
+      + (sample.f > previous.f ? Math.max(0, sample.s - previous.s) : 0);
+  }
+  return distances;
+}
+
 function nearestIndex(
   waypoint: Waypoint,
   samples: readonly TrajectorySample[],

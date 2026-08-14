@@ -23,7 +23,8 @@ import type {
   PathSampleReference,
 } from "./types";
 import { angularRateKind } from "../planners/angularConstraints";
-import { orderedWaypointSampleIndices } from "../planners/waypointSamples";
+import { authoredGeometryDistances, orderedWaypointSampleIndices } from "../planners/waypointSamples";
+import { effectivePathConstraints } from "../robotLimits";
 
 const EPSILON = 1e-6;
 const BARRIER_EPSILON = 1e-4;
@@ -64,7 +65,7 @@ function waypointRangeDistance(waypointDistances: readonly number[], waypointInd
   return waypointDistances[index] + (waypointDistances[index + 1] - waypointDistances[index]) * Math.max(0, Math.min(1, localT));
 }
 
-function metricLimit(path: PathDoc, sample: TrajectorySample, totalDistance: number, waypointDistances: readonly number[], metric: PathAnalysisMetric): { limit?: number; source: string } {
+function metricLimit(path: PathDoc, sample: TrajectorySample, sampleDistance: number, totalDistance: number, waypointDistances: readonly number[], metric: PathAnalysisMetric): { limit?: number; source: string } {
   const global: Partial<Record<PathAnalysisMetric, number | undefined>> = {
     velocity: path.constraints.maxVel,
     acceleration: path.constraints.maxAccel,
@@ -83,11 +84,11 @@ function metricLimit(path: PathDoc, sample: TrajectorySample, totalDistance: num
     else if (range.anchor === "dist") {
       const first = range.d0 ?? range.f0 * totalDistance;
       const last = range.d1 ?? range.f1 * totalDistance;
-      active = sample.s >= Math.min(first, last) - EPSILON && sample.s <= Math.max(first, last) + EPSILON;
+      active = sampleDistance >= Math.min(first, last) - EPSILON && sampleDistance <= Math.max(first, last) + EPSILON;
     } else {
       const first = waypointRangeDistance(waypointDistances, range.w0 ?? 0, range.t0 ?? 0);
       const last = waypointRangeDistance(waypointDistances, range.w1 ?? waypointDistances.length - 1, range.t1 ?? 0);
-      active = sample.s >= Math.min(first, last) - EPSILON && sample.s <= Math.max(first, last) + EPSILON;
+      active = sampleDistance >= Math.min(first, last) - EPSILON && sampleDistance <= Math.max(first, last) + EPSILON;
     }
     if (!active) return;
     const local = metric === "velocity" ? range.maxVel
@@ -182,8 +183,9 @@ function measuredValues(samples: readonly TrajectorySample[]): MeasuredValue[] {
     const previousDt = previous.t - before.t;
     if (previousDt <= EPSILON) return;
     const previousAngularAcceleration = (previous.angularVelocityRadps - before.angularVelocityRadps) / previousDt;
-    values.push({ metric: "jerk", value: Math.abs((sample.accelerationMps2 - previous.accelerationMps2) / dt), unit: "m/s³", sampleIndex: index });
-    values.push({ metric: "angularJerk", value: Math.abs((angularAcceleration - previousAngularAcceleration) / dt), unit: "rad/s³", sampleIndex: index });
+    const accelerationSpacingS = (previousDt + dt) / 2;
+    values.push({ metric: "jerk", value: Math.abs((sample.accelerationMps2 - previous.accelerationMps2) / accelerationSpacingS), unit: "m/s³", sampleIndex: index });
+    values.push({ metric: "angularJerk", value: Math.abs((angularAcceleration - previousAngularAcceleration) / accelerationSpacingS), unit: "rad/s³", sampleIndex: index });
   });
   return values;
 }
@@ -449,7 +451,9 @@ function analyzeGeneratedPath(
   const waypointArrivals = waypointSampleIndices?.length === path.waypoints.length
     ? waypointSampleIndices
     : orderedWaypointSampleIndices(path.waypoints, samples);
-  const waypointDistances = waypointArrivals.map((index) => samples[index].s);
+  const authoredDistances = authoredGeometryDistances(samples);
+  const waypointDistances = waypointArrivals.map((index) => authoredDistances[index] ?? 0);
+  const authoredDistance = authoredDistances.at(-1) ?? 0;
   const sampleReferenceAt = (index: number) => sampleReference(path, samples, index, waypointArrivals);
   const extrema: PathAnalysisExtremum[] = [];
   const retainedIndices = new Set<number>(waypointArrivals);
@@ -467,7 +471,7 @@ function analyzeGeneratedPath(
   const checkedMetrics: PathAnalysisMetric[] = ["velocity", "acceleration", "deceleration", "angularVelocity", "angularAcceleration", "angularDeceleration", "jerk", "angularJerk"];
   checkedMetrics.forEach((metric) => {
     const violation = values.filter((item) => item.metric === metric).reduce<{ measured: MeasuredValue; limit: number; source: string; ratio: number } | undefined>((worst, measured) => {
-      const active = metricLimit(path, samples[measured.sampleIndex], samples.at(-1)?.s ?? 0, waypointDistances, metric);
+      const active = metricLimit(path, samples[measured.sampleIndex], authoredDistances[measured.sampleIndex] ?? 0, authoredDistance, waypointDistances, metric);
       if (active.limit === undefined || measured.value <= active.limit + Math.max(EPSILON, active.limit * 1e-3)) return worst;
       const candidate = { measured, limit: active.limit, source: active.source, ratio: measured.value / active.limit };
       return !worst || candidate.ratio > worst.ratio ? candidate : worst;
@@ -564,9 +568,11 @@ export function analyzePath(project: BordeauxProject, pathId: string, options: A
       plannerDiagnostics: [],
     };
   }
+  const analysisConstraints = effectivePathConstraints(path.constraints, project.robot);
+  const analysisPath = analysisConstraints === path.constraints ? path : { ...path, constraints: analysisConstraints };
   const measured = analyzeGeneratedPath(
     project,
-    path,
+    analysisPath,
     generated.samples,
     generated.diagnostics,
     Math.max(50, Math.min(2_000, options.sampleLimit ?? DEFAULT_SAMPLE_LIMIT)),

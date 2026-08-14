@@ -6,6 +6,7 @@ import {
   applyJavaSupportInstall,
   cancelJavaCatalogBuild,
   inspectJavaSupport,
+  installPreviewSummary,
   prepareJavaSupportInstall,
   runJavaCatalogBuild,
   windowsGradleCommand,
@@ -33,6 +34,23 @@ async function fixture(dialect: "groovy" | "kotlin" = "groovy"): Promise<{ proje
   await fs.writeFile(path.join(artifacts, "bordeaux-runtime.jar"), "runtime");
   await fs.writeFile(path.join(artifacts, "bordeaux-processor.jar"), "processor");
   return { project, artifacts };
+}
+
+async function installVendordep(project: string): Promise<void> {
+  const directory = path.join(project, "vendordeps");
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, "BordeauxLib2026.json"), JSON.stringify({
+    fileName: "BordeauxLib2026.json",
+    name: "BordeauxLib",
+    version: "0.1.0",
+    uuid: "eafa3419-00b5-4089-9035-7924013acc7b",
+    frcYear: "2026",
+    mavenUrls: ["https://example.invalid/maven"],
+    jsonUrl: "https://example.invalid/BordeauxLib2026.json",
+    javaDependencies: [{ groupId: "dev.bordeaux", artifactId: "bordeaux-java", version: "0.1.0" }],
+    jniDependencies: [],
+    cppDependencies: [],
+  }));
 }
 
 function sourceCatalog(): JavaCommandCatalog {
@@ -66,9 +84,9 @@ describe("Java support installation and trusted catalog builds", () => {
     expect(await fs.readFile(path.join(project, ".bordeaux/lib/bordeaux-runtime.jar"), "utf8")).toBe("runtime");
     const integrationGuide = await fs.readFile(path.join(project, ".bordeaux/INTEGRATION.md"), "utf8");
     expect(integrationGuide).toContain("BordeauxBindings.generated(actions)");
-    expect(integrationGuide).toContain("void autonomousPeriodic(double elapsedSeconds, double measuredFraction)");
-    expect(integrationGuide).toContain("bordeauxEvents.periodic(elapsedSeconds, measuredFraction)");
-    expect(integrationGuide).not.toContain("bordeauxEvents.periodic(elapsedSeconds);");
+    expect(integrationGuide).toContain("void autonomousPeriodic(double dtSeconds, double measuredX, double measuredY, double measuredFraction)");
+    expect(integrationGuide).toContain("bordeauxPath.update(dtSeconds, measuredX, measuredY, measuredFraction)");
+    expect(integrationGuide).not.toContain("BordeauxEventRunner");
     expect(await fs.readFile(path.join(project, ".bordeaux/bordeaux.gradle"), "utf8")).toContain("-Abordeaux.catalogId=");
     expect(await fs.readFile(path.join(project, `.bordeaux/${buildName}.before-bordeaux`), "utf8")).toContain("GradleRIO");
     await expect(inspectJavaSupport(project, sourceCatalog(), artifacts)).resolves.toMatchObject({ installed: true, supportVersion: "0.1.0", wrapperAvailable: true });
@@ -80,16 +98,45 @@ describe("Java support installation and trusted catalog builds", () => {
     await expect(inspectJavaSupport(project, sourceCatalog(), artifacts)).resolves.toMatchObject({ installed: false });
   });
 
-  it("keeps shipped Java examples on the measured-progress event API", async () => {
-    const sources = await Promise.all([
-      fs.readFile(path.join(process.cwd(), "java/examples/RobotContainerSnippet.java"), "utf8"),
-      fs.readFile(path.join(process.cwd(), "examples/bordeaux-template-robot/src/main/java/frc/robot/RobotContainer.java"), "utf8"),
-    ]);
+  it("uses an installed matching vendordep without copying bundled jars", async () => {
+    const { project, artifacts } = await fixture();
+    await installVendordep(project);
 
-    sources.forEach((source) => {
-      expect(source).toContain("periodic(elapsedS, measuredFraction)");
-      expect(source).not.toContain("periodic(elapsedS);");
-    });
+    const preview = await prepareJavaSupportInstall(project, artifacts);
+    expect(installPreviewSummary(preview)).toMatchObject({ installMode: "vendordep" });
+    expect(installPreviewSummary(preview).files).not.toContain(".bordeaux/lib/bordeaux-runtime.jar");
+    await applyJavaSupportInstall(preview);
+
+    const script = await fs.readFile(path.join(project, ".bordeaux/bordeaux.gradle"), "utf8");
+    expect(script).toContain("implementation wpi.java.vendor.java()");
+    expect(script).toContain("annotationProcessor 'dev.bordeaux:bordeaux-java:0.1.0'");
+    expect(script).not.toContain("bordeaux-runtime.jar");
+    await expect(fs.stat(path.join(project, ".bordeaux/lib/bordeaux-runtime.jar"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(inspectJavaSupport(project, sourceCatalog(), artifacts)).resolves.toMatchObject({ installed: true });
+
+    await fs.writeFile(path.join(project, "vendordeps/BordeauxLib2026.json"), "{}");
+    await expect(inspectJavaSupport(project, sourceCatalog(), artifacts)).resolves.toMatchObject({ installed: false });
+  });
+
+  it("rejects a vendordep changed after the install preview", async () => {
+    const { project, artifacts } = await fixture();
+    await installVendordep(project);
+    const preview = await prepareJavaSupportInstall(project, artifacts);
+
+    await fs.writeFile(path.join(project, "vendordeps/BordeauxLib2026.json"), "{}");
+
+    await expect(applyJavaSupportInstall(preview)).rejects.toThrow(/vendordep changed/);
+    await expect(fs.stat(path.join(project, ".bordeaux/install.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("ships a path-following example that keeps measured and lookahead progress separate", async () => {
+    const source = await fs.readFile(
+      path.join(process.cwd(), "java/examples/RobotContainerSnippet.java"), "utf8",
+    );
+
+    expect(source).toContain("new BordeauxPathRunner(path, bordeauxCommands)");
+    expect(source).toContain("drivetrain.measuredPathFraction()");
+    expect(source).toContain("drivetrain.follow(reference)");
   });
 
   it("rejects ambiguous projects, missing GradleRIO, and symlinked support directories", async () => {

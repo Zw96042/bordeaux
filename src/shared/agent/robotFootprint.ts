@@ -106,16 +106,24 @@ function projection(vertices: readonly ControlPoint[], axis: ControlPoint): { mi
 /** Signed convex-polygon clearance: positive when separate, negative when overlapping. */
 export function convexPolygonClearance(first: readonly ControlPoint[], second: readonly ControlPoint[]): number {
   const separatingAxes = [...axes(first), ...axes(second)];
-  let minimumOverlap = Number.POSITIVE_INFINITY;
+  let minimumTranslation = Number.POSITIVE_INFINITY;
   let separated = false;
   separatingAxes.forEach((axis) => {
     const a = projection(first, axis);
     const b = projection(second, axis);
     const overlap = Math.min(a.max, b.max) - Math.max(a.min, b.min);
     if (overlap < -EPSILON) separated = true;
-    else minimumOverlap = Math.min(minimumOverlap, Math.max(0, overlap));
+    else {
+      // The ordinary interval overlap understates penetration when one
+      // projection contains the other. Use the smaller translation that moves
+      // either side of A past the opposite side of B, which is the SAT minimum
+      // translation distance for this axis.
+      minimumTranslation = Math.min(minimumTranslation, Math.max(0,
+        Math.min(a.max - b.min, b.max - a.min),
+      ));
+    }
   });
-  if (!separated) return -minimumOverlap;
+  if (!separated) return -minimumTranslation;
 
   let minimumDistance = Number.POSITIVE_INFINITY;
   first.forEach((point) => second.forEach((edge, index) => {

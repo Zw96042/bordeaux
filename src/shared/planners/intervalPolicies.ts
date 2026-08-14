@@ -21,23 +21,12 @@ interface HeapEntry {
   last: number;
 }
 
-function lowerBound(values: readonly number[], target: number): number {
+function bound(values: readonly number[], target: number, upper = false): number {
   let low = 0;
   let high = values.length;
   while (low < high) {
     const middle = (low + high) >>> 1;
-    if (values[middle] < target) low = middle + 1;
-    else high = middle;
-  }
-  return low;
-}
-
-function upperBound(values: readonly number[], target: number): number {
-  let low = 0;
-  let high = values.length;
-  while (low < high) {
-    const middle = (low + high) >>> 1;
-    if (values[middle] <= target) low = middle + 1;
+    if (values[middle] < target || (upper && values[middle] === target)) low = middle + 1;
     else high = middle;
   }
   return low;
@@ -98,31 +87,24 @@ export function indexIntervalPolicies(
   const toIndexed = (policy: IntervalPolicy): IndexedPolicy | null => {
     const start = Math.min(policy.start, policy.end);
     const end = Math.max(policy.start, policy.end);
-    const first = Math.max(0, lowerBound(fractions, start - EPSILON) - 1);
-    const last = Math.min(count - 1, upperBound(fractions, end + EPSILON) - 1);
+    const first = Math.max(0, bound(fractions, start - EPSILON) - 1);
+    const last = Math.min(count - 1, bound(fractions, end + EPSILON, true) - 1);
     return first <= last ? { ...policy, first, last } : null;
   };
   const indexedRanges = ranges.map(toIndexed).filter((policy): policy is IndexedPolicy => policy != null)
     .sort((a, b) => a.first - b.first);
   const indexedTransitions = transitions.map(toIndexed).filter((policy): policy is IndexedPolicy => policy != null);
-  const active = new Int32Array(count + 1);
-  const heading = new Int32Array(count + 1);
-  const transition = new Int32Array(count + 1);
-  const headingTransition = new Int32Array(count + 1);
+  const deltas = Array.from({ length: 4 }, () => new Int32Array(count + 1));
   const addPolicy = (policy: IndexedPolicy, isTransition: boolean) => {
-    active[policy.first] += 1;
-    active[policy.last + 1] -= 1;
-    if (policy.rotationPriority !== "translation") {
-      heading[policy.first] += 1;
-      heading[policy.last + 1] -= 1;
-    }
+    const add = (delta: Int32Array) => {
+      delta[policy.first] += 1;
+      delta[policy.last + 1] -= 1;
+    };
+    add(deltas[0]);
+    if (policy.rotationPriority !== "translation") add(deltas[1]);
     if (isTransition) {
-      transition[policy.first] += 1;
-      transition[policy.last + 1] -= 1;
-      if (policy.rotationPriority !== "translation") {
-        headingTransition[policy.first] += 1;
-        headingTransition[policy.last + 1] -= 1;
-      }
+      add(deltas[2]);
+      if (policy.rotationPriority !== "translation") add(deltas[3]);
     }
   };
   indexedRanges.forEach((policy) => addPolicy(policy, false));
@@ -136,10 +118,10 @@ export function indexIntervalPolicies(
   let headingTransitionCount = 0;
   let transitionFollowing = false;
   for (let interval = 0; interval < count; interval += 1) {
-    activeCount += active[interval];
-    headingCount += heading[interval];
-    transitionCount += transition[interval];
-    headingTransitionCount += headingTransition[interval];
+    activeCount += deltas[0][interval];
+    headingCount += deltas[1][interval];
+    transitionCount += deltas[2][interval];
+    headingTransitionCount += deltas[3][interval];
     if (transitionCount > 0) transitionFollowing = headingTransitionCount === 0;
     activeTranslationPriority[interval + 1] = activeCount > 0 && headingCount === 0;
     translationPriority[interval + 1] = activeCount > 0 ? activeTranslationPriority[interval + 1] : transitionFollowing;
@@ -161,8 +143,8 @@ export function indexPointPolicies(fractions: readonly number[], ranges: readonl
   const indexedRanges = ranges.map((policy): IndexedPolicy | null => {
     const start = Math.min(policy.start, policy.end);
     const end = Math.max(policy.start, policy.end);
-    const first = lowerBound(fractions, start - EPSILON);
-    const last = upperBound(fractions, end + EPSILON) - 1;
+    const first = bound(fractions, start - EPSILON);
+    const last = bound(fractions, end + EPSILON, true) - 1;
     return first <= last ? { ...policy, first, last } : null;
   }).filter((policy): policy is IndexedPolicy => policy != null).sort((a, b) => a.first - b.first);
   return {

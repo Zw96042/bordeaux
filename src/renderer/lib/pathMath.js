@@ -1,3 +1,6 @@
+import { effectivePathConstraints as effectiveConstraints, motorAccelerationAtSpeed, motorLimitedVelocityAfterDistance, robotHardLimits } from '../../shared/robotLimits';
+import { indexIntervalPolicies } from '../../shared/planners/intervalPolicies';
+
 // Bordeaux path math engine. Kept renderer-local until the shared planner reaches API parity.
   // ---- geometry helpers ----
   const lerp = (a, b, t) => a + (b - a) * t;
@@ -55,32 +58,6 @@
   }
   function angLerp(a, b, t) { return a + angWrap(b - a) * t; }
   const D2R = Math.PI / 180, R2D = 180 / Math.PI;
-  function robotHardLimits(robot) {
-    const m = robot && robot.driveModel;
-    if (!m) return null;
-    const values = [m.motorFreeRpm, m.motorMaxTorqueNm, m.motorCount, m.gearRatio, m.wheelDiameterM, m.massKg, m.moiKgM2, m.wheelbaseM, m.trackwidthM, m.wheelFrictionCoefficient];
-    if (!values.every((value) => Number.isFinite(value) && value > 0)) return null;
-    const radius = m.wheelDiameterM / 2;
-    const maxSpeed = m.motorFreeRpm / 60 * Math.PI * m.wheelDiameterM / m.gearRatio;
-    const motorAccel = m.motorCount * m.motorMaxTorqueNm * m.gearRatio / (radius * m.massKg);
-    const tractionAccel = m.wheelFrictionCoefficient * 9.80665;
-    const maxAccel = Math.min(motorAccel, tractionAccel);
-    const moduleRadius = robot.drive === 'tank' ? m.trackwidthM / 2 : Math.hypot(m.wheelbaseM / 2, m.trackwidthM / 2);
-    return {
-      maxSpeed,
-      maxAccel,
-      maxCornerAccel: tractionAccel,
-      maxAngVel: maxSpeed / moduleRadius * R2D,
-      maxAngAccel: maxAccel * m.massKg * moduleRadius / m.moiKgM2 * R2D,
-      motorAccel,
-      tractionAccel,
-    };
-  }
-  function effectiveConstraints(constraints, robot) {
-    const limits = robotHardLimits(robot);
-    return limits ? { ...constraints, maxVel: limits.maxSpeed, maxAccel: limits.maxAccel, maxDecel: limits.maxAccel, maxCentripetalAccel: limits.maxCornerAccel, maxAngVel: limits.maxAngVel, maxAngAccel: limits.maxAngAccel, maxAngDecel: limits.maxAngAccel } : constraints;
-  }
-
   // ---- arc primitive: circle tangent to the start handle, through the endpoint ----
   function arcSetup(p0, p1, c0) {
     let tx = c0.x - p0.x, ty = c0.y - p0.y; let tl = Math.hypot(tx, ty);
@@ -111,9 +88,11 @@
     const Hcos = (b) => { let s = 0; const N = 24; for (let k = 0; k <= N; k++) { const t = k / N; const th = ph0 + (dphi - b) * t + b * t * t; const w = (k === 0 || k === N) ? 1 : (k % 2 ? 4 : 2); s += w * Math.cos(th); } return s / (3 * N); };
     // root of Hsin(b)=0 with the smallest |b| (closest to a gentle spiral)
     let best = null; const lo = -6 * Math.PI, hi = 6 * Math.PI, STEPS = 240; let pb = lo, pf = Hsin(lo);
+    if (Math.abs(pf) <= 1e-12) best = lo;
     for (let k = 1; k <= STEPS; k++) {
       const b = lo + (hi - lo) * k / STEPS, f = Hsin(b);
-      if (pf * f < 0) { let a = pb, bb = b, fa = pf; for (let it = 0; it < 44; it++) { const m = (a + bb) / 2, fm = Hsin(m); if (fa * fm <= 0) bb = m; else { a = m; fa = fm; } } const root = (a + bb) / 2; if (best === null || Math.abs(root) < Math.abs(best)) best = root; }
+      if (Math.abs(f) <= 1e-12) { if (best === null || Math.abs(b) < Math.abs(best)) best = b; }
+      else if (pf * f < 0) { let a = pb, bb = b, fa = pf; for (let it = 0; it < 44; it++) { const m = (a + bb) / 2, fm = Hsin(m); if (fa * fm <= 0) bb = m; else { a = m; fa = fm; } } const root = (a + bb) / 2; if (best === null || Math.abs(root) < Math.abs(best)) best = root; }
       pb = b; pf = f;
     }
     if (best === null) return null;
@@ -194,8 +173,20 @@
         } else {
           pos = bez(p0, c0, c1, p1, t);
           const d = bezD(p0, c0, c1, p1, t), dd = bezDD(p0, c0, c1, p1, t);
-          const speed2 = d.x * d.x + d.y * d.y, cross = d.x * dd.y - d.y * dd.x;
-          head = Math.atan2(d.y, d.x); curv = speed2 > 1e-9 ? Math.abs(cross) / Math.pow(speed2, 1.5) : 0;
+          const speed2 = d.x * d.x + d.y * d.y;
+          if (speed2 > 1e-12) head = Math.atan2(d.y, d.x);
+          else {
+            const before = bez(p0, c0, c1, p1, Math.max(0, t - 1e-4));
+            const after = bez(p0, c0, c1, p1, Math.min(1, t + 1e-4));
+            const hx = after.x - before.x, hy = after.y - before.y;
+            head = Math.hypot(hx, hy) > 1e-12 ? Math.atan2(hy, hx) : chordHeading(p0, p1);
+          }
+          const curvatureT = speed2 > 1e-12 ? t : (t <= 0.5 ? Math.min(1, t + 1e-4) : Math.max(0, t - 1e-4));
+          const curvatureD = speed2 > 1e-12 ? d : bezD(p0, c0, c1, p1, curvatureT);
+          const curvatureDD = speed2 > 1e-12 ? dd : bezDD(p0, c0, c1, p1, curvatureT);
+          const curvatureSpeed2 = curvatureD.x * curvatureD.x + curvatureD.y * curvatureD.y;
+          const cross = curvatureD.x * curvatureDD.y - curvatureD.y * curvatureDD.x;
+          curv = curvatureSpeed2 > 1e-12 ? Math.abs(cross) / Math.pow(curvatureSpeed2, 1.5) : 0;
         }
         pts.push({ x: pos.x, y: pos.y, seg: i, t, heading: head, curv, s: 0 });
       }
@@ -233,20 +224,36 @@
 
   // ---- trapezoidal velocity profile with curvature (centripetal) limit ----
   // constraints: {maxVel, maxAccel, maxAngVel, maxAngAccel}, start/end vel
-  function jigglePhase(progress) {
+  function jigglePhase(progress, jerkLimited) {
     const u = Math.max(0, Math.min(1, progress));
+    if (jerkLimited) {
+      const outbound = u <= 0.5, q = outbound ? 2 * u : 2 * (1 - u);
+      const position = 10 * q ** 3 - 15 * q ** 4 + 6 * q ** 5;
+      const derivative = 30 * q ** 2 - 60 * q ** 3 + 30 * q ** 4;
+      return { position, velocity: (outbound ? 2 : -2) * derivative, travel: outbound ? position : 2 - position };
+    }
     if (u < 0.25) return { position: 8 * u * u, velocity: 16 * u, travel: 8 * u * u };
     if (u < 0.5) { const r = 0.5 - u, position = 1 - 8 * r * r; return { position, velocity: 16 * r, travel: position }; }
     if (u < 0.75) { const e = u - 0.5, position = 1 - 8 * e * e; return { position, velocity: -16 * e, travel: 2 - position }; }
     const r = 1 - u, position = 8 * r * r; return { position, velocity: -16 * r, travel: 2 - position };
   }
 
-  function feasibleJiggleStrokeDuration(requested, distance, velocity, acceleration, deceleration, freeSpeed) {
-    const minimum = Math.max(requested, 4 * distance / Math.max(1e-9, Math.min(velocity, freeSpeed)), Math.sqrt(16 * distance / Math.max(1e-9, deceleration)));
+  function feasibleJiggleStrokeDuration(requested, distance, velocity, acceleration, deceleration, jerk, freeSpeed, robot) {
+    const jerkLimited = jerk > 1e-9;
+    const peakVelocityScale = jerkLimited ? 3.75 : 4;
+    const peakAccelerationScale = jerkLimited ? 40 * Math.sqrt(3) / 3 : 16;
+    const minimum = Math.max(
+      requested,
+      peakVelocityScale * distance / Math.max(1e-9, Math.min(velocity, freeSpeed)),
+      Math.sqrt(peakAccelerationScale * distance / Math.max(1e-9, deceleration)),
+      jerkLimited ? Math.cbrt(480 * distance / jerk) : 0,
+    );
     const feasible = (duration) => {
-      const peakVelocity = 4 * distance / duration;
-      const availableAcceleration = acceleration * Math.max(0, 1 - peakVelocity / freeSpeed);
-      return 16 * distance / (duration * duration) <= availableAcceleration + 1e-9;
+      const peakVelocity = peakVelocityScale * distance / duration;
+      const availableAcceleration = robot
+        ? motorAccelerationAtSpeed(robot, peakVelocity, acceleration)
+        : acceleration * Math.max(0, 1 - peakVelocity / freeSpeed);
+      return peakAccelerationScale * distance / (duration * duration) <= availableAcceleration + 1e-9;
     };
     if (feasible(minimum)) return minimum;
     let low = minimum, high = minimum;
@@ -258,81 +265,6 @@
     return high;
   }
 
-  function indexIntervalPolicies(fractions, ranges, transitions = []) {
-    const count = Math.max(0, fractions.length - 1);
-    const bound = (target, upper) => {
-      let low = 0, high = fractions.length;
-      while (low < high) {
-        const middle = (low + high) >>> 1;
-        if (fractions[middle] < target || (upper && fractions[middle] === target)) low = middle + 1; else high = middle;
-      }
-      return low;
-    };
-    const indexed = (policies) => policies.map((policy) => {
-      const start = Math.min(policy.start, policy.end), end = Math.max(policy.start, policy.end);
-      return { ...policy, first: Math.max(0, bound(start - 1e-9, false) - 1), last: Math.min(count - 1, bound(end + 1e-9, true) - 1) };
-    }).filter((policy) => policy.first <= policy.last);
-    const indexedRanges = indexed(ranges).sort((a, b) => a.first - b.first);
-    const indexedTransitions = indexed(transitions);
-    const minimums = (key) => {
-      const result = new Array(count + 1).fill(Infinity), heap = [];
-      const push = (entry) => {
-        let index = heap.length; heap.push(entry);
-        while (index > 0) {
-          const parent = (index - 1) >>> 1;
-          if (heap[parent].value <= entry.value) break;
-          heap[index] = heap[parent]; index = parent;
-        }
-        heap[index] = entry;
-      };
-      const pop = () => {
-        const tail = heap.pop();
-        if (!heap.length || !tail) return;
-        let index = 0;
-        while (index * 2 + 1 < heap.length) {
-          const left = index * 2 + 1, right = left + 1;
-          const child = right < heap.length && heap[right].value < heap[left].value ? right : left;
-          if (heap[child].value >= tail.value) break;
-          heap[index] = heap[child]; index = child;
-        }
-        heap[index] = tail;
-      };
-      let cursor = 0;
-      for (let interval = 0; interval < count; interval++) {
-        while (indexedRanges[cursor] && indexedRanges[cursor].first <= interval) {
-          const policy = indexedRanges[cursor++], value = policy[key];
-          if (typeof value === 'number' && value > 0) push({ value, last: policy.last });
-        }
-        while (heap[0] && heap[0].last < interval) pop();
-        if (heap[0]) result[interval + 1] = heap[0].value;
-      }
-      return result;
-    };
-    const deltas = Array.from({ length: 4 }, () => new Int32Array(count + 1));
-    const addPolicy = (policy, isTransition) => {
-      const add = (delta) => { delta[policy.first]++; delta[policy.last + 1]--; };
-      add(deltas[0]);
-      if (policy.rotationPriority !== 'translation') add(deltas[1]);
-      if (isTransition) { add(deltas[2]); if (policy.rotationPriority !== 'translation') add(deltas[3]); }
-    };
-    indexedRanges.forEach((policy) => addPolicy(policy, false));
-    indexedTransitions.forEach((policy) => addPolicy(policy, true));
-    const translationPriority = new Array(count + 1).fill(false);
-    const activeTranslationPriority = new Array(count + 1).fill(false);
-    let active = 0, heading = 0, activeTransitions = 0, headingTransitions = 0, transitionFollowing = false;
-    for (let interval = 0; interval < count; interval++) {
-      active += deltas[0][interval]; heading += deltas[1][interval];
-      activeTransitions += deltas[2][interval]; headingTransitions += deltas[3][interval];
-      if (activeTransitions > 0) transitionFollowing = headingTransitions === 0;
-      activeTranslationPriority[interval + 1] = active > 0 && heading === 0;
-      translationPriority[interval + 1] = active > 0 ? activeTranslationPriority[interval + 1] : transitionFollowing;
-    }
-    return {
-      maxVel: minimums('maxVel'), maxAccel: minimums('maxAccel'), maxDecel: minimums('maxDecel'),
-      maxAngVel: minimums('maxAngVel'), maxAngAccel: minimums('maxAngAccel'), activeTranslationPriority, translationPriority,
-    };
-  }
-
   function profile(pts, c, startV = 0, endV = 0, opts = {}) {
     const n = pts.length;
     if (n < 2) return { v: [], t: [], totalTime: 0, holds: [], turns: [], jiggles: [], actionDistance: 0, rotLimited: [] };
@@ -341,7 +273,7 @@
     const v = new Array(n).fill(vmax);
     const vLimit = new Array(n).fill(vmax);
     // curvature cap: v <= sqrt(aLat / k)
-    const aLat = Math.max(0.1, c.maxCentripetalAccel != null ? c.maxCentripetalAccel : c.maxAccel);
+    const aLat = Math.max(1e-9, c.maxCentripetalAccel != null ? c.maxCentripetalAccel : c.maxAccel);
     for (let i = 0; i < n; i++) {
       const k = pts[i].curv;
       if (k > 1e-4) v[i] = Math.min(v[i], Math.sqrt(aLat / k));
@@ -353,8 +285,8 @@
     // Per-interval limits, tightened by any overlapping constraint range (tightest wins).
     const ranges = opts.ranges || [];
     const totalS = pts[n - 1].s || 1;
-    const accelG = Math.max(0.1, c.maxAccel);
-    const decelG = (c.maxDecel != null && c.maxDecel > 0) ? c.maxDecel : accelG;
+    const accelG = Math.max(1e-9, c.maxAccel);
+    const decelG = Math.max(1e-9, (c.maxDecel != null && c.maxDecel > 0) ? c.maxDecel : accelG);
     const aFwd = new Array(n).fill(accelG), aBack = new Array(n).fill(decelG);
     const rangeAngV = new Array(n).fill(Infinity), rangeAngA = new Array(n).fill(Infinity);
     // Index i describes the interval (i - 1, i). Evaluating overlap instead of
@@ -374,7 +306,7 @@
         v[i - 1] = Math.min(v[i - 1], rv); v[i] = Math.min(v[i], rv);
         vLimit[i - 1] = Math.min(vLimit[i - 1], rv); vLimit[i] = Math.min(vLimit[i], rv);
       }
-      if (ra < Infinity) { aFwd[i - 1] = Math.min(accelG, ra); aFwd[i] = Math.min(accelG, ra); }
+      if (ra < Infinity) aFwd[i] = Math.min(accelG, ra);
       if (rd < Infinity) aBack[i - 1] = Math.min(decelG, rd);
       if (rw < Infinity) rangeAngV[i] = rw * Math.PI / 180;
       if (rwa < Infinity) rangeAngA[i] = rwa * Math.PI / 180;
@@ -383,17 +315,23 @@
     // omega = (dtheta/ds) * v ; enforce |omega| <= Wmax and |d omega/dt| <= Aang (memo §16)
     const rotLimited = new Array(n).fill(0);
     const head = opts.heading;
+    const headingBreaks = new Map((opts.headingBreaks || []).map((entry) => [entry.idx, entry.end]));
+    const headingDelta = (index) => {
+      if (!head || index <= 0 || index >= n) return 0;
+      const previous = headingBreaks.has(index - 1) ? headingBreaks.get(index - 1) : head[index - 1];
+      return angWrap(head[index] - previous);
+    };
     const Wmax = (c.maxAngVel || 0) * Math.PI / 180;
     const Aaccel = (c.maxAngAccel || 0) * Math.PI / 180;
     const Adecel = (c.maxAngDecel || c.maxAngAccel || 0) * Math.PI / 180;
-    if (head && head.length === n && Wmax > 1e-4) {
+    if (head && head.length === n && Wmax > 0) {
       const g = new Array(n).fill(0), dth = new Array(n).fill(0);
-      for (let i = 1; i < n; i++) { const ds = pts[i].s - pts[i - 1].s; const dd = angWrap(head[i] - head[i - 1]); dth[i] = Math.abs(dd); g[i] = ds > 1e-6 ? dd / ds : 0; }
+      for (let i = 1; i < n; i++) { const ds = pts[i].s - pts[i - 1].s; const dd = headingDelta(i); dth[i] = Math.abs(dd); g[i] = ds > 1e-6 ? dd / ds : 0; }
       g[0] = g[1] || 0;
       const w = new Array(n);
       for (let i = 0; i < n; i++) w[i] = Math.min(Wmax, rangeAngV[i]);
       stopSet.forEach(idx => { if (idx >= 0 && idx < n) w[idx] = 0; });
-      if (Aaccel > 1e-4 || Adecel > 1e-4) {
+      if (Aaccel > 0 || Adecel > 0) {
         for (let i = 1; i < n; i++) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i - 1] * w[i - 1] + 2 * Math.min(Aaccel, rangeAngA[i]) * dth[i])));
         for (let i = n - 2; i >= 0; i--) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i + 1] * w[i + 1] + 2 * Math.min(Adecel, rangeAngA[i + 1]) * dth[i + 1])));
       }
@@ -402,19 +340,18 @@
     // forward
     for (let i = 1; i < n; i++) {
       const ds = pts[i].s - pts[i - 1].s;
-      const availableAccel = opts.motorMaxSpeed > 1e-6
-        ? aFwd[i - 1] * Math.max(0, 1 - Math.abs(v[i - 1]) / opts.motorMaxSpeed)
-        : aFwd[i];
-      v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * availableAccel * ds)));
+      const reachableVelocity = opts.robot
+        ? motorLimitedVelocityAfterDistance(opts.robot, v[i - 1], ds, aFwd[i])
+        : Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * aFwd[i] * ds));
+      v[i] = Math.min(v[i], reachableVelocity);
     }
     // backward (dedicated deceleration limit, tightened by ranges)
     for (let i = n - 2; i >= 0; i--) {
       const ds = pts[i + 1].s - pts[i].s;
       v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i + 1] * v[i + 1] + 2 * aBack[i] * ds)));
     }
-    // Enforce angular acceleration in generated timing instead of manufacturing
-    // visible velocity constraint ranges around ordinary moving turns.
-    if (head && head.length === n && (Aaccel > 1e-4 || Adecel > 1e-4)) {
+    const linearProfile = v.slice();
+    if (head && head.length === n && (Aaccel > 0 || Adecel > 0)) {
       const intervalDt = (index, candidate, candidateIndex) => {
         const ds = pts[index].s - pts[index - 1].s;
         const before = candidateIndex === index - 1 ? candidate : v[index - 1];
@@ -424,7 +361,7 @@
       const intervalOmega = (index, candidate, candidateIndex) => {
         if (index <= 0 || index >= n) return 0;
         const dt = intervalDt(index, candidate, candidateIndex);
-        return dt > 1e-9 ? angWrap(head[index] - head[index - 1]) / dt : 0;
+        return dt > 1e-9 ? headingDelta(index) / dt : 0;
       };
       const angularBudget = (previousOmega, currentOmega, first, second) => {
         const reversing = Math.sign(previousOmega) !== 0 && Math.sign(currentOmega) !== 0 && Math.sign(previousOmega) !== Math.sign(currentOmega);
@@ -481,7 +418,10 @@
         }
         for (let i = 1; i < n; i++) {
           const ds = pts[i].s - pts[i - 1].s;
-          v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * aFwd[i] * ds)));
+          const reachableVelocity = opts.robot
+            ? motorLimitedVelocityAfterDistance(opts.robot, v[i - 1], ds, aFwd[i])
+            : Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * aFwd[i] * ds));
+          v[i] = Math.min(v[i], reachableVelocity);
         }
         for (let i = n - 2; i >= 0; i--) {
           const ds = pts[i + 1].s - pts[i].s;
@@ -489,13 +429,35 @@
         }
         if (!changed) break;
       }
+
+      const collapsed = v.some((velocity, index) => linearProfile[index] > 1e-12
+        && velocity < linearProfile[index] * 1e-8);
+      if (collapsed) {
+        for (let index = 0; index < n; index++) v[index] = linearProfile[index];
+        const stableDt = (index) => 2 * (pts[index].s - pts[index - 1].s) / Math.max(1e-12, v[index - 1] + v[index]);
+        const stableOmega = (index) => {
+          const dt = stableDt(index);
+          return dt > 1e-12 ? headingDelta(index) / dt : 0;
+        };
+        let scale = 1;
+        for (let interval = 2; interval < n; interval++) {
+          if (translationPriority[interval - 1] || translationPriority[interval]) continue;
+          const dt = stableDt(interval);
+          if (dt <= 1e-12) continue;
+          const previousOmega = stableOmega(interval - 1), currentOmega = stableOmega(interval);
+          const limit = angularBudget(previousOmega, currentOmega, interval - 1, interval);
+          if (limit > 0) scale = Math.max(scale, Math.sqrt(Math.abs(currentOmega - previousOmega) / dt / limit));
+        }
+        if (scale > 1) for (let index = 0; index < n; index++) v[index] /= scale;
+      }
     }
     // time
     const t = new Array(n).fill(0);
     for (let i = 1; i < n; i++) {
       const ds = pts[i].s - pts[i - 1].s;
       const vm = (v[i] + v[i - 1]) / 2;
-      t[i] = t[i - 1] + (vm > 1e-4 ? ds / vm : 0);
+      if (ds > 1e-9 && vm <= 0) throw new Error('Trajectory interval ' + (i - 1) + '-' + i + ' has distance but no reachable velocity');
+      t[i] = t[i - 1] + (vm > 0 ? ds / vm : 0);
     }
     // Stationary turns happen after arrival and before any wait.
     const turns = [], turnDelay = new Map(); let terminalDelay = 0;
@@ -515,10 +477,11 @@
     const jiggles = [], jiggleDelay = new Map(); let jiggleDistance = 0;
     (opts.jiggles || []).slice().sort((a, b) => a.idx - b.idx).forEach((jiggle) => {
       if (jiggle.idx < 0 || jiggle.idx >= n || !jiggle.config || !(jiggle.config.strokeTimeS > 0)) return;
-      const strokeDuration = feasibleJiggleStrokeDuration(jiggle.config.strokeTimeS, jiggle.config.distanceM, vLimit[jiggle.idx], aFwd[jiggle.idx], aBack[jiggle.idx], Math.max(1e-9, opts.freeSpeed || vmax));
+      const jerkLimited = (c.maxJerk || 0) > 1e-9;
+      const strokeDuration = feasibleJiggleStrokeDuration(jiggle.config.strokeTimeS, jiggle.config.distanceM, vLimit[jiggle.idx], aFwd[jiggle.idx], aBack[jiggle.idx], Math.max(0, c.maxJerk || 0), Math.max(1e-9, opts.freeSpeed || vmax), opts.jiggleRobot);
       const duration = strokeDuration * jiggle.config.strokes;
       const t0 = t[jiggle.idx] + (turnDelay.get(jiggle.idx) || 0);
-      jiggles.push({ ...jiggle, strokeDuration, t0, t1: t0 + duration });
+      jiggles.push({ ...jiggle, strokeDuration, jerkLimited, t0, t1: t0 + duration });
       jiggleDistance += jiggle.config.distanceM * 2 * jiggle.config.strokes;
       jiggleDelay.set(jiggle.idx, duration);
       for (let j = jiggle.idx + 1; j < n; j++) t[j] += duration;
@@ -589,7 +552,7 @@
         const stroke = Math.min(config.strokes - 1, Math.floor(elapsed / jiggle.strokeDuration));
         const strokeElapsed = elapsed - stroke * jiggle.strokeDuration;
         const u = stroke === config.strokes - 1 && elapsed >= jiggle.t1 - jiggle.t0 ? 1 : strokeElapsed / jiggle.strokeDuration;
-        const phase = jigglePhase(u), physicalBase = jiggle.baseRad + (rev ? Math.PI : 0);
+        const phase = jigglePhase(u, jiggle.jerkLimited), physicalBase = jiggle.baseRad + (rev ? Math.PI : 0);
         const angle = physicalBase + (config.startDeg + config.stepDeg * stroke) * D2R;
         const radial = config.distanceM * phase.position;
         const heading = jiggle.tank ? angle + (u > 0.5 ? Math.PI : 0) : physicalBase;
@@ -1012,10 +975,10 @@
       const maxAccel = Math.min(doc.constraints.maxAngAccel || 0, intervalPolicies.maxAngAccel[i]) * D2R;
       const maxDecel = Math.min(doc.constraints.maxAngDecel || doc.constraints.maxAngAccel || 0, intervalPolicies.maxAngAccel[i]) * D2R;
       const error = desired[i] - actual;
-      const desiredOmega = Math.max(-maxOmega, Math.min(maxOmega, (desired[i] - desired[i - 1]) / dt));
-      const brakingOmega = Math.max(0, Math.sqrt(2 * Math.max(1e-9, maxDecel) * Math.abs(error)) - Math.max(1e-9, maxDecel) * dt);
-      const catchUpOmega = Math.sign(error) * brakingOmega;
-      let target = Math.max(-maxOmega, Math.min(maxOmega, desiredOmega + catchUpOmega));
+      const nextDt = i + 1 < prof.t.length ? prof.t[i + 1] - prof.t[i] : dt;
+      const brakingDt = Math.max(dt, nextDt);
+      const brakingOmega = Math.max(0, Math.sqrt(2 * Math.max(1e-9, maxDecel) * Math.abs(error)) - Math.max(1e-9, maxDecel) * brakingDt);
+      let target = Math.sign(error) * Math.min(maxOmega, brakingOmega);
       const exactOmega = error / dt;
       const exactReversing = Math.sign(exactOmega) !== 0 && Math.sign(omega) !== 0 && Math.sign(exactOmega) !== Math.sign(omega);
       const exactRate = exactReversing ? Math.min(maxAccel, maxDecel) : Math.abs(exactOmega) > Math.abs(omega) ? maxAccel : maxDecel;
@@ -1117,10 +1080,6 @@
     return doc;
   }
 
-  function pathLength(waypoints, perSegment) {
-    return sample(waypoints, perSegment || 56).length;
-  }
-
   function remapWaypointRange(range, oldToNew, removedIndex, newCount) {
     if (!range || range.anchor !== 'wp') return range;
     const next = { ...range };
@@ -1166,7 +1125,7 @@
     perSeg = perSeg || 56;
     const hardLimits = robotHardLimits(robot);
     if (hardLimits) {
-      robot = { ...robot, maxSpeed: hardLimits.maxSpeed };
+      robot = { ...robot, maxSpeed: hardLimits.maxSpeedMps };
       doc = { ...doc, constraints: effectiveConstraints(doc.constraints, robot) };
     }
     const smp = sample(doc.waypoints, perSeg);
@@ -1241,7 +1200,10 @@
         jiggles.push({ idx: wpIdx[nWp - 1], baseRad, config: endpoint.jiggle });
       } else invalidJiggle = true;
     }
-    const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns, jiggles, freeSpeed: cap, motorMaxSpeed: hardLimits ? cap : 0 });
+    const headingBreaks = doc.waypoints.flatMap((w, k) => w.stop && w.turnInPlace
+      ? [{ idx: wpIdx[k], end: w.turnInPlace.headingDeg * D2R }]
+      : []);
+    const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, headingBreaks, dwell, turns, jiggles, freeSpeed: cap, robot: hardLimits && hardLimits.sagCoefficient > 0 ? robot : null, jiggleRobot: robot });
     const trackedHead = headingWithTranslationPriority(doc, robot, pts, prof, head, effRanges, headingTransitions);
     appendTerminalHeadingCatchup(doc, prof, trackedHead, head, effRanges);
     const anchors = mode === 'tank' ? [] : buildAnchors(pts.map((p, i) => ({ f: total > 1e-6 ? p.s / total : 0, rad: trackedHead[i] })));
@@ -1297,4 +1259,4 @@
     return positions;
   }
 
-export const PM = { splitBezier, nearestPointOnSegment, poseAtTime, headingAt, metricColor, metricGradient, METRICS, SEGTYPES, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, derivePath, jigglePositions, featureFraction, reversePathAnchors, pathLength, remapWaypointRange, waypointFracs, robotHardLimits, effectiveConstraints, indexIntervalPolicies };
+export const PM = { splitBezier, nearestPointOnSegment, poseAtTime, headingAt, metricColor, metricGradient, METRICS, SEGTYPES, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, derivePath, jigglePositions, featureFraction, reversePathAnchors, remapWaypointRange, waypointFracs };

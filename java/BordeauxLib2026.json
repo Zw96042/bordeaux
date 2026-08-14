@@ -1,0 +1,21 @@
+{
+  "fileName": "${vendorFileName}",
+  "name": "BordeauxLib",
+  "version": "${bordeauxVersion}",
+  "uuid": "eafa3419-00b5-4089-9035-7924013acc7b",
+  "frcYear": "${bordeauxFrcYear}",
+  "mavenUrls": [
+    "${publicRepository}/maven/",
+    "https://repo1.maven.org/maven2"
+  ],
+  "jsonUrl": "${publicRepository}/${vendorFileName}",
+  "javaDependencies": [
+    {
+      "groupId": "dev.bordeaux",
+      "artifactId": "bordeaux-java",
+      "version": "${bordeauxVersion}"
+    }
+  ],
+  "jniDependencies": [],
+  "cppDependencies": []
+}

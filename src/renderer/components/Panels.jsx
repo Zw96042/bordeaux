@@ -3,6 +3,7 @@ import { PointerDrag } from "../hooks/usePointerDrag";
 import { PM } from "../lib/pathMath";
 import { AUTO } from "../lib/routineModel";
 import { UnitPrefs } from "../lib/unitPreferences";
+import { effectivePathConstraints } from "../../shared/robotLimits";
 import { UI } from "./ui";
 
 // Bordeaux — chrome: top bar, path switcher, tool rail, outline, constraint chip bar,
@@ -316,7 +317,7 @@ import { UI } from "./ui";
 
   // ---------------- global-constraint chip bar (top of canvas) — memo §6 ----------------
   function ConstraintBar({ c, robot, onOpen }) {
-    const limits = PM.effectiveConstraints(c, robot);
+    const limits = effectivePathConstraints(c, robot);
     const physical = limits !== c;
     const chips = [
       { k: 'Max V', v: UnitPrefs.fromCanonical(Math.min(limits.maxVel, robot.maxSpeed), 'm/s').toFixed(1), u: UnitPrefs.label('m/s') },

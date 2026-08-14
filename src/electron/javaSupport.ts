@@ -7,6 +7,8 @@ import type { JavaCommandCatalog, JavaIntegrationStatus } from "../shared/types"
 import { writeBufferAtomically, writeJsonAtomically } from "./projectFiles";
 
 export const JAVA_SUPPORT_VERSION = "0.1.0";
+const JAVA_VENDOR_FILE = "BordeauxLib2026.json";
+const JAVA_VENDOR_UUID = "eafa3419-00b5-4089-9035-7924013acc7b";
 const MAX_BUILD_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_INSTALL_MANIFEST_BYTES = 64 * 1024;
 const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
@@ -21,10 +23,12 @@ interface InstallPreview {
   buildFileName: "build.gradle" | "build.gradle.kts";
   buildHash: string;
   nextBuildContents: string;
-  runtimeJar: Uint8Array;
-  processorJar: Uint8Array;
-  runtimeHash: string;
-  processorHash: string;
+  installMode: "bundled" | "vendordep";
+  runtimeJar?: Uint8Array;
+  processorJar?: Uint8Array;
+  runtimeHash?: string;
+  processorHash?: string;
+  vendordepHash?: string;
   replacingManagedBlock: boolean;
 }
 
@@ -104,15 +108,21 @@ function withManagedBlock(contents: string, block: string): { contents: string; 
   return { contents: `${contents.replace(/\s*$/, "")}\n\n${block}\n`, replacing: false };
 }
 
-function gradleSupportScript(): string {
+function gradleSupportScript(installMode: "bundled" | "vendordep" = "bundled"): string {
+  const dependencies = installMode === "vendordep"
+    ? `dependencies {\n` +
+      `  implementation wpi.java.vendor.java()\n` +
+      `  annotationProcessor 'dev.bordeaux:bordeaux-java:${JAVA_SUPPORT_VERSION}'\n` +
+      `}\n`
+    : `def bordeauxRuntimeJar = rootProject.file('.bordeaux/lib/bordeaux-runtime.jar')\n` +
+      `def bordeauxProcessorJar = rootProject.file('.bordeaux/lib/bordeaux-processor.jar')\n` +
+      `dependencies {\n` +
+      `  implementation files(bordeauxRuntimeJar)\n` +
+      `  implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.3'\n` +
+      `  annotationProcessor files(bordeauxRuntimeJar, bordeauxProcessorJar)\n` +
+      `}\n`;
   return `// Managed by Bordeaux. Reinstall support through the app instead of editing this file.\n` +
-`def bordeauxRuntimeJar = rootProject.file('.bordeaux/lib/bordeaux-runtime.jar')\n` +
-`def bordeauxProcessorJar = rootProject.file('.bordeaux/lib/bordeaux-processor.jar')\n` +
-`dependencies {\n` +
-`  implementation files(bordeauxRuntimeJar)\n` +
-`  implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.3'\n` +
-`  annotationProcessor files(bordeauxRuntimeJar, bordeauxProcessorJar)\n` +
-`}\n` +
+dependencies +
 `tasks.withType(org.gradle.api.tasks.compile.JavaCompile).configureEach {\n` +
 `  options.compilerArgs.add('-Abordeaux.catalogId=' + rootProject.name)\n` +
 `}\n` +
@@ -132,6 +142,30 @@ function gradleSupportScript(): string {
 `}\n`;
 }
 
+async function matchingVendordepHash(projectRoot: string): Promise<string | undefined> {
+  const vendorPath = path.join(projectRoot, "vendordeps", JAVA_VENDOR_FILE);
+  let contents: Buffer;
+  try {
+    contents = await readBoundedRegularFile(vendorPath, MAX_INSTALL_MANIFEST_BYTES, "Bordeaux vendordep");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  try {
+    const vendor = JSON.parse(contents.toString("utf8")) as Record<string, unknown>;
+    const dependencies = Array.isArray(vendor.javaDependencies) ? vendor.javaDependencies : [];
+    const runtime = dependencies.find((dependency) => dependency && typeof dependency === "object"
+      && (dependency as Record<string, unknown>).groupId === "dev.bordeaux"
+      && (dependency as Record<string, unknown>).artifactId === "bordeaux-java") as Record<string, unknown> | undefined;
+    if (vendor.fileName !== JAVA_VENDOR_FILE || vendor.uuid !== JAVA_VENDOR_UUID
+        || vendor.version !== JAVA_SUPPORT_VERSION || vendor.frcYear !== "2026"
+        || runtime?.version !== JAVA_SUPPORT_VERSION) return undefined;
+    return sha256(contents);
+  } catch {
+    return undefined;
+  }
+}
+
 function integrationGuide(): string {
   return `# Bordeaux Java integration\n\n` +
 `Bordeaux owns the JSON contract and generated bindings, but your robot project keeps ownership of subsystems and autonomous lifecycle.\n\n` +
@@ -139,7 +173,7 @@ function integrationGuide(): string {
 `2. In Bordeaux, run **Java > Build Command Catalog** and place generated commands on event markers.\n` +
 `3. Call \`dev.bordeaux.runtime.BordeauxBindings.generated(...)\` with instances of each non-static provider.\n` +
 `4. Open the exported JSON below WPILib's deploy directory and call \`BordeauxTrajectoryReader.read(input, pathId)\`.\n` +
-`5. Create \`BordeauxEventRunner\`, call \`periodic(elapsedSeconds, measuredFraction)\` beside the path follower, and call \`endPath()\` when the path ends.\n\n` +
+`5. Create \`BordeauxPathRunner\`, call \`update(dtSeconds, measuredX, measuredY, measuredFraction)\` once per loop, send its \`BordeauxSample\` to your drivetrain controller, and call \`end()\` when the path command ends. Use actual measured progress, not the lookahead sample fraction.\n\n` +
 `A minimal team-owned integration looks like this (replace \`actions\`, file name, and path ID with your code):\n\n` +
 "```java\n" +
 `import dev.bordeaux.runtime.BordeauxBindings;\n` +
@@ -148,22 +182,24 @@ function integrationGuide(): string {
 `import java.nio.file.Files;\n\n` +
 `private final BordeauxCommandRegistry bordeauxRegistry =\n` +
 `    BordeauxBindings.generated(actions);\n` +
-`private BordeauxEventRunner bordeauxEvents;\n\n` +
+`private BordeauxPathRunner bordeauxPath;\n\n` +
 `void startBordeauxPath(String fileName, String pathId) throws Exception {\n` +
 `  var file = Filesystem.getDeployDirectory().toPath().resolve("bordeaux").resolve(fileName);\n` +
 `  try (var input = Files.newInputStream(file)) {\n` +
-`    bordeauxEvents = new BordeauxEventRunner(BordeauxTrajectoryReader.read(input, pathId), bordeauxRegistry);\n` +
+`    bordeauxPath = new BordeauxPathRunner(BordeauxTrajectoryReader.read(input, pathId), bordeauxRegistry);\n` +
 `  }\n` +
 `}\n\n` +
-`void autonomousPeriodic(double elapsedSeconds, double measuredFraction) {\n` +
-`  if (bordeauxEvents != null) bordeauxEvents.periodic(elapsedSeconds, measuredFraction);\n` +
+`void autonomousPeriodic(double dtSeconds, double measuredX, double measuredY, double measuredFraction) {\n` +
+`  if (bordeauxPath != null) drivetrain.follow(\n` +
+`      bordeauxPath.update(dtSeconds, measuredX, measuredY, measuredFraction));\n` +
 `}\n\n` +
 `void endBordeauxPath() {\n` +
-`  if (bordeauxEvents != null) bordeauxEvents.endPath();\n` +
-`  bordeauxEvents = null;\n` +
+`  if (bordeauxPath != null) bordeauxPath.end();\n` +
+`  bordeauxPath = null;\n` +
+`  drivetrain.stop();\n` +
 `}\n` +
 "```\n\n" +
-`Pass a monotonic measured path fraction from 0 to 1 so position-triggered events can fire. Pass every non-static command provider to \`BordeauxBindings.generated(...)\`; provider order does not matter. Bordeaux intentionally does not edit \`RobotContainer\` or deploy robot code.\n`;
+`Pass field-relative measured X/Y and a monotonic measured path fraction from 0 to 1. The returned sample is a reference for your controller; your command still owns subsystem requirements, odometry reset, settling, and drivetrain stop behavior. Pass every non-static command provider to \`BordeauxBindings.generated(...)\`; provider order does not matter. Bordeaux intentionally does not edit \`RobotContainer\` or deploy robot code.\n`;
 }
 
 async function assertSafeSupportDirectory(projectRoot: string): Promise<void> {
@@ -188,29 +224,36 @@ export async function inspectJavaSupport(projectRoot: string, catalog: JavaComma
   let supportVersion: string | undefined;
   let manifestRuntimeHash: string | undefined;
   let manifestProcessorHash: string | undefined;
+  let manifestVendordepHash: string | undefined;
   let manifestScriptHash: string | undefined;
+  let installMode: "bundled" | "vendordep" = "bundled";
   try {
     const manifestContents = await readBoundedRegularFile(path.join(projectRoot, ".bordeaux/install.json"), MAX_INSTALL_MANIFEST_BYTES, "Java support manifest");
     const manifest = JSON.parse(manifestContents.toString("utf8")) as Record<string, unknown>;
     if (typeof manifest.supportVersion === "string" && manifest.supportVersion.length <= 64) supportVersion = manifest.supportVersion;
     if (typeof manifest.runtimeSha256 === "string") manifestRuntimeHash = manifest.runtimeSha256;
     if (typeof manifest.processorSha256 === "string") manifestProcessorHash = manifest.processorSha256;
+    if (manifest.installMode === "vendordep") installMode = "vendordep";
+    if (typeof manifest.vendordepSha256 === "string") manifestVendordepHash = manifest.vendordepSha256;
     if (typeof manifest.scriptSha256 === "string") manifestScriptHash = manifest.scriptSha256;
   } catch {
     supportVersion = undefined;
   }
-  const [runtimeHash, processorHash, scriptHash, bundledRuntimeHash, bundledProcessorHash] = await Promise.all([
+  const [runtimeHash, processorHash, scriptHash, bundledRuntimeHash, bundledProcessorHash, vendordepHash] = await Promise.all([
     boundedFileHash(path.join(projectRoot, ".bordeaux/lib/bordeaux-runtime.jar")),
     boundedFileHash(path.join(projectRoot, ".bordeaux/lib/bordeaux-processor.jar")),
     boundedFileHash(path.join(projectRoot, ".bordeaux/bordeaux.gradle")),
     boundedFileHash(path.join(artifactsDirectory, "bordeaux-runtime.jar")),
     boundedFileHash(path.join(artifactsDirectory, "bordeaux-processor.jar")),
+    matchingVendordepHash(projectRoot),
   ]);
+  const bundledArtifactsMatch = runtimeHash !== undefined && runtimeHash === manifestRuntimeHash && runtimeHash === bundledRuntimeHash
+    && processorHash !== undefined && processorHash === manifestProcessorHash && processorHash === bundledProcessorHash;
+  const vendordepMatches = vendordepHash !== undefined && vendordepHash === manifestVendordepHash;
   const installed = contents.includes(managedBlock(build.name))
     && supportVersion === JAVA_SUPPORT_VERSION
-    && runtimeHash !== undefined && runtimeHash === manifestRuntimeHash && runtimeHash === bundledRuntimeHash
-    && processorHash !== undefined && processorHash === manifestProcessorHash && processorHash === bundledProcessorHash
-    && scriptHash !== undefined && scriptHash === manifestScriptHash && scriptHash === sha256(gradleSupportScript());
+    && (installMode === "vendordep" ? vendordepMatches : bundledArtifactsMatch)
+    && scriptHash !== undefined && scriptHash === manifestScriptHash && scriptHash === sha256(gradleSupportScript(installMode));
   return {
     installed,
     ...(supportVersion ? { supportVersion } : {}),
@@ -229,18 +272,22 @@ export async function prepareJavaSupportInstall(projectRoot: string, artifactsDi
   const wrapperName = process.platform === "win32" ? "gradlew.bat" : "gradlew";
   if (!(await regularFile(path.join(canonicalRoot, wrapperName)))) throw new Error(`Automatic Java support installation requires a regular ${wrapperName} wrapper`);
   await assertSafeSupportDirectory(canonicalRoot);
+  const vendordepHash = await matchingVendordepHash(canonicalRoot);
+  const installMode = vendordepHash ? "vendordep" : "bundled";
   const runtimePath = path.join(artifactsDirectory, "bordeaux-runtime.jar");
   const processorPath = path.join(artifactsDirectory, "bordeaux-processor.jar");
-  let runtimeJar: Buffer;
-  let processorJar: Buffer;
-  try {
-    [runtimeJar, processorJar] = await Promise.all([
-      readBoundedRegularFile(runtimePath, MAX_ARTIFACT_BYTES, "Bordeaux runtime artifact"),
-      readBoundedRegularFile(processorPath, MAX_ARTIFACT_BYTES, "Bordeaux processor artifact"),
-    ]);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    throw new Error("Bundled Bordeaux Java support artifacts are missing; rebuild or reinstall the desktop app", { cause: error });
+  let runtimeJar: Buffer | undefined;
+  let processorJar: Buffer | undefined;
+  if (installMode === "bundled") {
+    try {
+      [runtimeJar, processorJar] = await Promise.all([
+        readBoundedRegularFile(runtimePath, MAX_ARTIFACT_BYTES, "Bordeaux runtime artifact"),
+        readBoundedRegularFile(processorPath, MAX_ARTIFACT_BYTES, "Bordeaux processor artifact"),
+      ]);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      throw new Error("Bundled Bordeaux Java support artifacts are missing; rebuild or reinstall the desktop app", { cause: error });
+    }
   }
   const next = withManagedBlock(buildContents, managedBlock(build.name));
   return {
@@ -249,10 +296,14 @@ export async function prepareJavaSupportInstall(projectRoot: string, artifactsDi
     buildFileName: build.name,
     buildHash: sha256(buildContents),
     nextBuildContents: next.contents,
-    runtimeJar,
-    processorJar,
-    runtimeHash: sha256(runtimeJar),
-    processorHash: sha256(processorJar),
+    installMode,
+    ...(runtimeJar && processorJar ? {
+      runtimeJar,
+      processorJar,
+      runtimeHash: sha256(runtimeJar),
+      processorHash: sha256(processorJar),
+    } : {}),
+    ...(vendordepHash ? { vendordepHash } : {}),
     replacingManagedBlock: next.replacing,
   };
 }
@@ -261,22 +312,31 @@ export async function applyJavaSupportInstall(preview: InstallPreview): Promise<
   if (await fs.realpath(preview.projectRoot) !== preview.projectRoot) throw new Error("Linked Java project changed while support installation was open");
   const currentBuild = (await readBoundedRegularFile(preview.buildFile, MAX_BUILD_FILE_BYTES, "Robot build file")).toString("utf8");
   if (sha256(currentBuild) !== preview.buildHash) throw new Error("Robot build file changed before installation; review and try again");
+  if (preview.installMode === "vendordep"
+      && await matchingVendordepHash(preview.projectRoot) !== preview.vendordepHash) {
+    throw new Error("Bordeaux vendordep changed before installation; review and try again");
+  }
   await assertSafeSupportDirectory(preview.projectRoot);
   const supportDirectory = path.join(preview.projectRoot, ".bordeaux");
   const libraryDirectory = path.join(supportDirectory, "lib");
   await fs.mkdir(libraryDirectory, { recursive: true });
   const backupPath = path.join(supportDirectory, `${preview.buildFileName}.before-bordeaux`);
   if (!(await regularFile(backupPath))) await writeBufferAtomically(backupPath, Buffer.from(currentBuild, "utf8"));
-  await writeBufferAtomically(path.join(libraryDirectory, "bordeaux-runtime.jar"), preview.runtimeJar);
-  await writeBufferAtomically(path.join(libraryDirectory, "bordeaux-processor.jar"), preview.processorJar);
-  await writeBufferAtomically(path.join(supportDirectory, "bordeaux.gradle"), Buffer.from(gradleSupportScript(), "utf8"));
+  if (preview.installMode === "bundled") {
+    if (!preview.runtimeJar || !preview.processorJar) throw new Error("Bundled Java support preview is missing artifacts");
+    await writeBufferAtomically(path.join(libraryDirectory, "bordeaux-runtime.jar"), preview.runtimeJar);
+    await writeBufferAtomically(path.join(libraryDirectory, "bordeaux-processor.jar"), preview.processorJar);
+  }
+  await writeBufferAtomically(path.join(supportDirectory, "bordeaux.gradle"), Buffer.from(gradleSupportScript(preview.installMode), "utf8"));
   await writeBufferAtomically(path.join(supportDirectory, "INTEGRATION.md"), Buffer.from(integrationGuide(), "utf8"));
   await writeJsonAtomically(path.join(supportDirectory, "install.json"), {
     schemaVersion: "1.0",
     supportVersion: JAVA_SUPPORT_VERSION,
-    runtimeSha256: preview.runtimeHash,
-    processorSha256: preview.processorHash,
-    scriptSha256: sha256(gradleSupportScript()),
+    installMode: preview.installMode,
+    ...(preview.installMode === "vendordep"
+      ? { vendordepSha256: preview.vendordepHash }
+      : { runtimeSha256: preview.runtimeHash, processorSha256: preview.processorHash }),
+    scriptSha256: sha256(gradleSupportScript(preview.installMode)),
   });
   await writeBufferAtomically(preview.buildFile, Buffer.from(preview.nextBuildContents, "utf8"));
 }
@@ -409,10 +469,23 @@ export async function runJavaCatalogBuild(projectRoot: string, limits: { timeout
   finally { if (buildAdmission === admission) buildAdmission = null; }
 }
 
-export function installPreviewSummary(preview: InstallPreview): { buildFile: string; files: string[]; replacing: boolean } {
+export function installPreviewSummary(preview: InstallPreview): {
+  buildFile: string;
+  files: string[];
+  installMode: "bundled" | "vendordep";
+  replacing: boolean;
+} {
   return {
     buildFile: preview.buildFileName,
-    files: [".bordeaux/bordeaux.gradle", ".bordeaux/INTEGRATION.md", ".bordeaux/lib/bordeaux-runtime.jar", ".bordeaux/lib/bordeaux-processor.jar", ".bordeaux/install.json"],
+    files: [
+      ".bordeaux/bordeaux.gradle",
+      ".bordeaux/INTEGRATION.md",
+      ...(preview.installMode === "bundled"
+        ? [".bordeaux/lib/bordeaux-runtime.jar", ".bordeaux/lib/bordeaux-processor.jar"]
+        : []),
+      ".bordeaux/install.json",
+    ],
+    installMode: preview.installMode,
     replacing: preview.replacingManagedBlock,
   };
 }

@@ -2,6 +2,7 @@ import * as React from "react";
 import { AUTO } from "../lib/routineModel";
 import { PM } from "../lib/pathMath";
 import { UnitPrefs } from "../lib/unitPreferences";
+import { effectivePathConstraints, robotHardLimits } from "../../shared/robotLimits";
 import { FIELD_DIMS } from "./FieldView";
 import { UI } from "./ui";
 
@@ -19,7 +20,7 @@ import { UI } from "./ui";
   const wpName = (i, n) => i === 0 ? 'Start' : i === n - 1 ? 'End' : 'Waypoint ' + i;
 
   function ConstraintsBody({ c, robot, setC, moreLimits, setMoreLimits }) {
-    const hardLimits = PM.robotHardLimits(robot);
+    const hardLimits = robotHardLimits(robot);
     const rotation = moreLimits ? h('div', { className: 'grid2 compact-fields' },
       h(Num, { label: 'Max \u03c9', value: c.maxAngVel, unit: '\u00b0/s', step: 1, precision: 0, onChange: (v) => setC({ maxAngVel: v }) }),
       h(Num, { label: 'Max \u03b1', value: c.maxAngAccel, unit: '\u00b0/s\u00b2', step: 1, precision: 0, onChange: (v) => setC({ maxAngAccel: v }) })) : null;
@@ -28,9 +29,9 @@ import { UI } from "./ui";
         ? h(React.Fragment, null,
             h('div', { className: 'cgroup-h' }, 'Robot limits'),
             Stat3([
-              { v: hardLimits.maxSpeed.toFixed(1), k: 'M/S' },
-              { v: hardLimits.maxAccel.toFixed(1), k: 'M/S² ACCEL' },
-              { v: hardLimits.maxCornerAccel.toFixed(1), k: 'M/S² CORNER' },
+              { v: hardLimits.maxSpeedMps.toFixed(1), k: 'M/S' },
+              { v: hardLimits.maxAccelMps2.toFixed(1), k: 'M/S² ACCEL' },
+              { v: hardLimits.maxCornerAccelMps2.toFixed(1), k: 'M/S² CORNER' },
             ]))
         : h(React.Fragment, null,
             h('div', { className: 'cgroup-h' }, 'Translation'),
@@ -460,7 +461,7 @@ import { UI } from "./ui";
     const [jiggleStrokeTime, setJiggleStrokeTime] = React.useState(JIGGLE_DEFAULTS.strokeTimeS);
     const [jiggleError, setJiggleError] = React.useState(false);
     const wps = doc.waypoints;
-    const pathLimits = PM.effectiveConstraints(doc.constraints, robot);
+    const pathLimits = effectivePathConstraints(doc.constraints, robot);
     const isTank = drive === 'tank';
     const n = wps.length;
     const headingMode = isTank ? 'tangent' : (doc.headingMode || 'targets');
@@ -514,7 +515,7 @@ import { UI } from "./ui";
           h(Num, { label: 'Start vel', value: doc.startVel || 0, unit: 'm/s', min: 0, onChange: (v) => actions.setDoc({ startVel: v }) }),
           h(Num, { label: 'Goal vel', value: doc.goalVel || 0, unit: 'm/s', min: 0, onChange: (v) => actions.setDoc({ goalVel: v }) })),
         h('div', { style: { height: '2px' } }),
-        h('div', { className: 'cgroup-h' }, PM.robotHardLimits(robot) ? 'Hard limits' : 'Global constraints'),
+        h('div', { className: 'cgroup-h' }, robotHardLimits(robot) ? 'Hard limits' : 'Global constraints'),
         h(ConstraintsBody, {
           c: doc.constraints,
           robot,

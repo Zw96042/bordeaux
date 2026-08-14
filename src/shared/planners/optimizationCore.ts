@@ -9,17 +9,19 @@ import { enforceAngularTiming } from "./angularConstraints";
 import { indexIntervalPolicies, indexPointPolicies } from "./intervalPolicies";
 import { effectiveRanges } from "./rotationPriority";
 import { optimizeVelocities, remapTrajectoryTiming } from "./velocityOptimization";
+import { motorLimitedVelocityAfterDistance } from "../robotLimits";
 
 const R = (value: number, places = 4) => Number(value.toFixed(places));
 const EPSILON = 1e-9;
 
 function linearLimits(input: PlannerInput) {
-  const freeSpeed = Math.max(0.01, input.robot.maxSpeed || input.path.constraints.maxVel || 0.01);
+  const freeSpeed = Math.max(EPSILON, input.robot.maxSpeed || input.path.constraints.maxVel || EPSILON);
   return {
     freeSpeed,
-    velocity: Math.max(0.01, Math.min(freeSpeed, input.path.constraints.maxVel || freeSpeed)),
-    acceleration: Math.max(0.01, input.path.constraints.maxAccel || 0.01),
-    deceleration: Math.max(0.01, input.path.constraints.maxDecel ?? input.path.constraints.maxAccel ?? 0.01),
+    velocity: Math.max(EPSILON, Math.min(freeSpeed, input.path.constraints.maxVel || freeSpeed)),
+    acceleration: Math.max(EPSILON, input.path.constraints.maxAccel || EPSILON),
+    deceleration: Math.max(EPSILON, input.path.constraints.maxDecel ?? input.path.constraints.maxAccel ?? EPSILON),
+    robot: input.robot,
   };
 }
 
@@ -66,10 +68,28 @@ function countConstraintViolations(
     const distance = sample.s - previous.s;
     if (distance <= EPSILON) return;
     const acceleration = (sample.velocityMps ** 2 - previous.velocityMps ** 2) / (2 * distance);
-    const limit = acceleration >= 0
-      ? interval.acceleration * Math.max(0, Math.min(1, 1 - previous.velocityMps / interval.freeSpeed))
-      : interval.deceleration;
-    if (Math.abs(acceleration) > limit + Math.max(1e-3, limit * 1e-3)) violations += 1;
+    if (acceleration >= 0) {
+      const reachableVelocity = motorLimitedVelocityAfterDistance(
+        interval.robot,
+        previous.velocityMps,
+        distance,
+        interval.acceleration,
+      );
+      if (sample.velocityMps > reachableVelocity + Math.max(1e-3, reachableVelocity * 1e-3)) violations += 1;
+      return;
+    }
+    // Exported distance and velocity are rounded to four decimal places. Near
+    // free speed, the real acceleration budget can be smaller than the apparent
+    // acceleration introduced by that quantization, so compare against the
+    // smallest acceleration consistent with the serialized samples.
+    const squaredVelocityError = (Math.abs(previous.velocityMps) + Math.abs(sample.velocityMps)) * 1e-4 + 5e-9;
+    const minimumNumerator = Math.max(
+      0,
+      Math.abs(sample.velocityMps ** 2 - previous.velocityMps ** 2) - squaredVelocityError,
+    );
+    const minimumPlausibleAcceleration = minimumNumerator / (2 * (distance + 1e-4));
+    if (minimumPlausibleAcceleration > interval.deceleration
+        + Math.max(1e-3, interval.deceleration * 1e-3)) violations += 1;
   });
   return violations;
 }

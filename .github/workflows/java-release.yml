@@ -1,0 +1,62 @@
+name: Publish Java vendordep
+
+on:
+  push:
+    tags:
+      - "java-v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bordeaux-java-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/wrapper-validation@v4
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:java
+      - run: npm run test:java-vendordep
+      - name: Verify immutable release tag and license
+        run: node scripts/verify-java-release.mjs --publish
+      - name: Stage persistent Maven repository
+        env:
+          JAVA_SITE: ${{ runner.temp }}/bordeaux-java-maven
+        run: |
+          if git ls-remote --exit-code --heads origin java-maven >/dev/null; then
+            git fetch origin java-maven
+            git worktree add "$JAVA_SITE" origin/java-maven
+          else
+            git worktree add --detach "$JAVA_SITE"
+            git -C "$JAVA_SITE" switch --orphan java-maven
+            git -C "$JAVA_SITE" rm -rf .
+          fi
+          node scripts/stage-java-maven.mjs "$JAVA_SITE"
+          git -C "$JAVA_SITE" config user.name github-actions
+          git -C "$JAVA_SITE" config user.email github-actions@github.com
+          git -C "$JAVA_SITE" add --all
+          if ! git -C "$JAVA_SITE" diff --cached --quiet; then
+            git -C "$JAVA_SITE" commit -m "Publish BordeauxLib ${GITHUB_REF_NAME#java-v}"
+            git -C "$JAVA_SITE" push origin HEAD:java-maven
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BordeauxLib-${{ github.ref_name }}
+          if-no-files-found: error
+          path: java/build/release

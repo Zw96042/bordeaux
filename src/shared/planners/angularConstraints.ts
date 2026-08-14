@@ -1,11 +1,12 @@
 import type { PathDoc, PlannerResult, TrajectorySample } from "../types";
 import { indexIntervalPolicies } from "./intervalPolicies";
 import { effectiveRanges } from "./rotationPriority";
-import { orderedWaypointSampleIndices } from "./waypointSamples";
+import { authoredGeometryDistances, orderedWaypointSampleIndices } from "./waypointSamples";
 
 const DEG = Math.PI / 180;
 const EPSILON = 1e-9;
 const SAFETY_SCALE = 1.005;
+const NUMERICAL_SCALE_TOLERANCE = 1e-4;
 
 export type AngularRateKind = "acceleration" | "deceleration" | "reversal";
 
@@ -17,7 +18,11 @@ export function angularRateKind(previous: number, current: number): AngularRateK
 }
 
 function indexedLimits(path: PathDoc, samples: readonly TrajectorySample[], waypointSampleIndices?: readonly number[]) {
-  const ranges = effectiveRanges(path, samples, samples.at(-1)?.s ?? 0, waypointSampleIndices);
+  const arrivals = waypointSampleIndices?.length === path.waypoints.length
+    ? waypointSampleIndices
+    : orderedWaypointSampleIndices(path.waypoints, samples);
+  const authoredDistance = authoredGeometryDistances(samples).at(-1) ?? 0;
+  const ranges = effectiveRanges(path, samples, authoredDistance, arrivals);
   const policies = indexIntervalPolicies(samples.map((sample) => sample.f), ranges);
   return samples.map((_, index) => ({
     velocity: Math.min(path.constraints.maxAngVel, policies.maxAngVel[index]) * DEG,
@@ -37,14 +42,19 @@ function turnBoundaries(path: PathDoc, samples: readonly TrajectorySample[], way
   return boundaries;
 }
 
-function requiredTimeScale(path: PathDoc, samples: readonly TrajectorySample[], waypointSampleIndices?: readonly number[]): number {
+function requiredTimeScale(
+  path: PathDoc,
+  samples: readonly TrajectorySample[],
+  waypointSampleIndices?: readonly number[],
+  turnsExpanded = false,
+): number {
   const boundaries = turnBoundaries(path, samples, waypointSampleIndices);
   const limits = indexedLimits(path, samples, waypointSampleIndices);
   let scale = 1;
   for (let index = 1; index < samples.length; index += 1) {
     // A stopped turn owns the heading discontinuity at its waypoint. Moving
     // timing on either side is still checked; only the artificial boundary is skipped.
-    if (boundaries.has(index) || boundaries.has(index - 1)) continue;
+    if (!turnsExpanded && (boundaries.has(index) || boundaries.has(index - 1))) continue;
     const sample = samples[index];
     const previous = samples[index - 1];
     const dt = sample.t - previous.t;
@@ -68,14 +78,19 @@ function requiredTimeScale(path: PathDoc, samples: readonly TrajectorySample[], 
  * Uniform scaling preserves every linear and angular path shape while reducing
  * velocity by 1/scale and acceleration by 1/scale².
  */
-export function enforceAngularTiming(path: PathDoc, result: PlannerResult, afterRotationPriority = false): PlannerResult {
+export function enforceAngularTiming(
+  path: PathDoc,
+  result: PlannerResult,
+  afterRotationPriority = false,
+  turnsExpanded = false,
+): PlannerResult {
   if (result.samples.length < 2) return result;
   // Translation-priority heading is causally slewed by applyRotationPriority.
   // Stationary turns and jiggles have not been inserted yet at this stage, so
   // their presence must not disable enforcement on the moving trajectory.
   if (!afterRotationPriority && (path.ranges.some((range) => range.rotationPriority === "translation")
     || path.waypoints.some((waypoint) => waypoint.headingTransition?.rotationPriority === "translation"))) return result;
-  const required = requiredTimeScale(path, result.samples, result.waypointSampleIndices);
+  const required = requiredTimeScale(path, result.samples, result.waypointSampleIndices, turnsExpanded);
   if (!Number.isFinite(required)) {
     return {
       ...result,
@@ -86,7 +101,10 @@ export function enforceAngularTiming(path: PathDoc, result: PlannerResult, after
       }],
     };
   }
-  if (required <= 1 + EPSILON) return result;
+  // Exported samples round time and angular velocity independently. Rebuilding
+  // stationary-action rates can expose a sub-resolution excess here; scaling
+  // the entire moving prefix again would make adding a wait or jiggle change it.
+  if (required <= 1 + NUMERICAL_SCALE_TOLERANCE) return result;
 
   const scale = required * SAFETY_SCALE;
   const samples = result.samples.map((sample) => ({
@@ -113,7 +131,7 @@ export function enforceAngularTiming(path: PathDoc, result: PlannerResult, after
 }
 
 export function addAngularLimitDiagnostics(path: PathDoc, result: PlannerResult): PlannerResult {
-  if (result.samples.length < 2 || requiredTimeScale(path, result.samples, result.waypointSampleIndices) <= 1.02) return result;
+  if (result.samples.length < 2 || requiredTimeScale(path, result.samples, result.waypointSampleIndices, true) <= 1.02) return result;
   return {
     ...result,
     diagnostics: [...result.diagnostics, {

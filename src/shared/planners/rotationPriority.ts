@@ -139,6 +139,7 @@ function hasAngularViolation(
 ): boolean {
   const terminalLimits = angularLimits(path, ranges, 1);
   let previousAcceleration: number | undefined;
+  let previousIntervalS: number | undefined;
   for (let index = 0; index < samples.length; index += 1) {
     const sample = samples[index];
     const limits = index === 0
@@ -148,7 +149,11 @@ function hasAngularViolation(
     if (index === 0) continue;
     const previous = samples[index - 1];
     const dt = sample.t - previous.t;
-    if (dt <= EPSILON) continue;
+    if (dt <= EPSILON) {
+      previousAcceleration = undefined;
+      previousIntervalS = undefined;
+      continue;
+    }
     const acceleration = Math.abs(sample.angularVelocityRadps - previous.angularVelocityRadps) / dt;
     const reversing = Math.sign(sample.angularVelocityRadps) !== 0
       && Math.sign(previous.angularVelocityRadps) !== 0
@@ -160,11 +165,12 @@ function hasAngularViolation(
         : limits.deceleration;
     if (acceleration > limit * 1.02) return true;
     const signedAcceleration = (sample.angularVelocityRadps - previous.angularVelocityRadps) / dt;
-    if (previousAcceleration !== undefined && (path.constraints.maxAngJerk ?? 0) > 0) {
-      const jerk = Math.abs(signedAcceleration - previousAcceleration) / dt;
+    if (previousAcceleration !== undefined && previousIntervalS !== undefined && (path.constraints.maxAngJerk ?? 0) > 0) {
+      const jerk = Math.abs(signedAcceleration - previousAcceleration) / ((previousIntervalS + dt) / 2);
       if (jerk > path.constraints.maxAngJerk! * DEG * 1.02) return true;
     }
     previousAcceleration = signedAcceleration;
+    previousIntervalS = dt;
   }
   return false;
 }
