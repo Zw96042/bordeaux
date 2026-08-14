@@ -57,6 +57,7 @@ export interface JavaTrajectoryDocument {
     velocity: "meters_per_second";
     acceleration: "meters_per_second_squared";
   };
+  field: ReturnType<typeof buildBdxExport>["field"];
   robot: ReturnType<typeof buildBdxExport>["robot"];
   routine: JavaTrajectoryRoutine | null;
   paths: JavaTrajectoryPath[];
@@ -272,6 +273,7 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
       supportVersion: catalog.supportVersion,
       catalogHash: catalog.catalogHash,
     },
+    field: native.field,
     units: native.units,
     robot: native.robot,
     routine,

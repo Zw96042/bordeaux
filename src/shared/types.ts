@@ -400,8 +400,21 @@ export interface ProjectEditorState {
   javaProjectBookmarkId?: string;
 }
 
+export interface FieldReference {
+  id: string;
+  revision: string;
+  coordinateSchemaId: string;
+}
+
+export interface FieldMigrationRecord {
+  source: "legacy-unpinned";
+  assigned: FieldReference;
+}
+
 export interface BordeauxProject {
   schemaVersion: string;
+  field: FieldReference;
+  fieldMigration?: FieldMigrationRecord;
   name: string;
   robot: RobotConfig;
   paths: PathDoc[];
@@ -500,6 +513,7 @@ export interface PlannerOptimizationDiagnostics {
 export interface BdxExport {
   schemaVersion: string;
   generator: "bordeaux";
+  field: FieldReference;
   units: {
     distance: "meters";
     time: "seconds";

@@ -1,5 +1,6 @@
 import type { ValidationIssue, ValidationResult } from "./types";
 import { FIELD_H, FIELD_W } from "./math/fieldBounds";
+import { ACTIVE_FIELD_REFERENCE } from "./field/rebuilt2026";
 
 type RecordValue = Record<string, unknown>;
 
@@ -237,6 +238,22 @@ function validateProjectInner(project: unknown): ValidationResult {
   if (!isRecord(project)) return { ok: false, issues: [issue("$", "Project must be a JSON object")] };
 
   if (project.schemaVersion !== "1.0") issues.push(issue("$.schemaVersion", "Schema version must be 1.0"));
+  if (!isRecord(project.field)) issues.push(issue("$.field", "Field reference is required"));
+  else {
+    if (project.field.id !== ACTIVE_FIELD_REFERENCE.id) issues.push(issue("$.field.id", "Field ID is not supported"));
+    if (project.field.revision !== ACTIVE_FIELD_REFERENCE.revision) issues.push(issue("$.field.revision", "Field revision is not supported"));
+    if (project.field.coordinateSchemaId !== ACTIVE_FIELD_REFERENCE.coordinateSchemaId) issues.push(issue("$.field.coordinateSchemaId", "Coordinate schema is not supported"));
+  }
+  if (project.fieldMigration !== undefined) {
+    if (!isRecord(project.fieldMigration) || project.fieldMigration.source !== "legacy-unpinned" || !isRecord(project.fieldMigration.assigned)) {
+      issues.push(issue("$.fieldMigration", "Field migration record is invalid"));
+    } else if (!isRecord(project.field)
+      || project.fieldMigration.assigned.id !== project.field.id
+      || project.fieldMigration.assigned.revision !== project.field.revision
+      || project.fieldMigration.assigned.coordinateSchemaId !== project.field.coordinateSchemaId) {
+      issues.push(issue("$.fieldMigration.assigned", "Field migration assignment must match the project field reference"));
+    }
+  }
   if (typeof project.name !== "string" || !project.name.trim()) issues.push(issue("$.name", "Project name is required"));
   if (!["profiledSpline", "optimizedTrajectory"].includes(String(project.plannerId))) {
     issues.push(issue("$.plannerId", "Planner must be profiledSpline or optimizedTrajectory"));

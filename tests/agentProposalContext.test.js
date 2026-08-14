@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { agentProposalMatchesPublishedContext } from "../src/renderer/app/App";
+import { agentProposalMatchesPublishedContext, freshProject } from "../src/renderer/app/App";
+import { buildBdxExport } from "../src/shared/export/bdx";
+import { createDemoProject } from "../src/shared/project/defaults";
+import { validateProject } from "../src/shared/validation";
 
 describe("renderer agent proposal context", () => {
+  it("creates an immediately exportable project with the active field reference", () => {
+    const project = freshProject();
+
+    expect(validateProject(project)).toEqual({ ok: true, issues: [] });
+    expect(project.field).toEqual(createDemoProject().field);
+    expect(() => buildBdxExport(project)).not.toThrow();
+  });
+
   it("does not bless an unpublished project that keeps the same revision and active path", () => {
     const publishedProject = { name: "Published project" };
     const published = { revision: 4, project: publishedProject, activePathId: "path_a", editRevision: 8 };

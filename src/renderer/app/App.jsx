@@ -1,4 +1,5 @@
 import * as React from "react";
+import { FinalPlanning } from "../assets/final-planning";
 import { PathEdit } from "../assets/path-edit";
 import { PathPreview } from "../assets/path-preview";
 import { ContextInspector } from "../components/ContextInspector";
@@ -19,6 +20,7 @@ import {
   createRoutineId as routineId,
 } from "../../shared/project/ids";
 import { normalizeProject as normalizeProjectData } from "../../shared/project/normalize";
+import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
 
 // Bordeaux application root.
   const { useState, useRef, useEffect, useMemo, useCallback, useSyncExternalStore } = React;
@@ -97,6 +99,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const path = blankPath('NewPath');
     return {
       schemaVersion: '1.0',
+      field: { ...ACTIVE_FIELD_REFERENCE },
       name: 'Untitled',
       robot: { drive: 'swerve', w: 0.84, l: 0.84, heightM: 0.5, maxSpeed: 5.0 },
       paths: [path],
@@ -198,42 +201,79 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     return h(RoutineTransport, { run, time: playback.time, playing: playback.playing, controls: store, running });
   }
 
-  /** Keeps the last valid preview visible while new geometry is derived off-thread. */
-  function usePathPreview(doc, robot, plannerId, quality) {
+  /** Keeps the last valid interactive result visible while final planning runs independently. */
+  function useFinalPlanning(doc, robot, plannerId) {
     const previewer = useMemo(() => PathPreview.create(), []);
-    const fallback = useMemo(() => {
+    const planner = useMemo(() => FinalPlanning.create(), []);
+    const [initial] = useState(() => {
       try { return { path: doc, value: PM.derivePath(doc, robot, 14, plannerId), error: null }; }
       catch (error) { return { path: doc, value: null, error }; }
-    }, [doc, robot, plannerId]);
-    const lastValid = useRef(fallback.value ? { path: fallback.path, value: fallback.value } : null);
+    });
+    const lastValid = useRef(initial.value ? { path: initial.path, value: initial.value } : null);
+    const requestedRevision = useRef(0);
+    const [interactive, setInteractive] = useState(() => previewer.getSnapshot());
     const [snapshot, setSnapshot] = useState(() => ({
-      status: fallback.value ? 'ready' : 'error',
+      status: initial.value ? 'ready' : 'error',
       key: doc.id,
-      path: fallback.path,
-      value: fallback.value,
-      error: fallback.error,
-      errorPath: fallback.error ? fallback.path : null,
+      path: initial.path,
+      value: initial.value,
+      error: initial.error,
+      errorPath: initial.error ? initial.path : null,
       durationMs: 0,
     }));
 
     useEffect(() => previewer.retain(), [previewer]);
-    useEffect(() => previewer.subscribe(() => setSnapshot(previewer.getSnapshot())), [previewer]);
+    useEffect(() => previewer.subscribe(() => setInteractive(previewer.getSnapshot())), [previewer]);
     useEffect(() => {
-      previewer.request({ key: doc.id, path: doc, robot, plannerId, quality });
-    }, [previewer, doc, robot, plannerId, quality]);
+      requestedRevision.current = previewer.request({ key: doc.id, path: doc, robot, plannerId, quality: 'interactive' });
+    }, [previewer, doc, robot, plannerId]);
+    useEffect(() => {
+      if (interactive.revision !== requestedRevision.current || interactive.path !== doc) return undefined;
+      if (interactive.status === 'error') {
+        setSnapshot({
+          status: 'error', key: doc.id, path: lastValid.current?.path || doc, value: lastValid.current?.value || null,
+          error: interactive.error, errorPath: doc, durationMs: 0,
+        });
+        return undefined;
+      }
+      if (interactive.status !== 'ready' || !interactive.value) return undefined;
+      let active = true;
+      const interactiveResult = interactive.value;
+      lastValid.current = { path: doc, value: interactiveResult };
+      const request = planner.request(
+        { key: doc.id, path: doc, robot, plannerId },
+        { interactiveResult, deadline: 'common' },
+      );
+      setSnapshot({ status: 'pending', key: doc.id, path: doc, value: interactiveResult, error: null, errorPath: null, durationMs: 0 });
+      request.promise.then((result) => {
+        if (!active) return;
+        if (result.status === 'success') {
+          setSnapshot({ status: 'ready', key: doc.id, path: doc, value: result.value, error: null, errorPath: null, durationMs: result.durationMs || 0 });
+          return;
+        }
+        setSnapshot({
+          status: result.status,
+          key: doc.id,
+          path: doc,
+          value: result.fallback || interactiveResult,
+          error: new Error(result.fallbackReason),
+          errorPath: doc,
+          durationMs: 0,
+        });
+      });
+      return () => { active = false; request.cancel(); };
+    }, [planner, doc, robot, plannerId, interactive]);
 
     const current = snapshot.path === doc && snapshot.value
       ? { path: doc, value: snapshot.value }
-      : fallback.path === doc && fallback.value
-        ? { path: doc, value: fallback.value }
-        : null;
+      : null;
     if (current) lastValid.current = current;
     const displayed = current || lastValid.current;
     return {
       value: displayed && displayed.value,
       path: displayed && displayed.path,
-      error: snapshot.errorPath === doc ? snapshot.error : fallback.path === doc ? fallback.error : null,
-      pending: snapshot.status === 'pending',
+      error: snapshot.errorPath === doc ? snapshot.error : null,
+      pending: interactive.status === 'pending' || snapshot.status === 'pending',
       durationMs: snapshot.durationMs || 0,
     };
   }
@@ -625,7 +665,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }, []);
 
     // ---- derived path data ----
-    const derivation = usePathPreview(doc, robot, plannerId, 'final');
+    const derivation = useFinalPlanning(doc, robot, plannerId);
     if (!derivation.value) throw derivation.error || new Error('Could not derive the active path');
     const derived = derivation.value;
     const derivationDoc = derivation.path || doc;
@@ -1675,4 +1715,4 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     }
   }
 
-export { App, AppErrorBoundary, agentProposalMatchesPublishedContext };
+export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, freshProject };

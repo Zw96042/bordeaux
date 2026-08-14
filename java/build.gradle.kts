@@ -28,6 +28,13 @@ subprojects {
         useJUnitPlatform()
     }
 
+    tasks.withType<Jar>().configureEach {
+        from(rootProject.file("../LICENSE")) { into("META-INF") }
+        from(rootProject.file("../NOTICE")) { into("META-INF") }
+        from(rootProject.file("../RIGHTS.md")) { into("META-INF") }
+        from(rootProject.file("../licenses/OFL-1.1.txt")) { into("META-INF/licenses") }
+    }
+
     dependencies {
         "testImplementation"(platform("org.junit:junit-bom:5.11.4"))
         "testImplementation"("org.junit.jupiter:junit-jupiter")

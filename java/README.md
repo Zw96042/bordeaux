@@ -44,3 +44,7 @@ From this directory:
 `build` also writes the two installer artifacts expected by the desktop app: `dist/bordeaux-runtime.jar` and `dist/bordeaux-processor.jar`. Both include the source-retained annotation classes so the app's two-file Gradle installation works without a third annotations artifact; Jackson and WPILib remain supplied by the GradleRIO project.
 
 The only non-WPILib library declared directly is Jackson Databind 2.18.3, which WPILib already uses for JSON data. The explicit API gives the standalone runtime deterministic resource-limit behavior. The processor remains dependency-free, and top-level `Optional<T>` arguments are converted without an extra Jackson module.
+
+## License
+
+The Bordeaux Java robot-support source is licensed under the [Apache License 2.0](../LICENSE). The runtime and processor jars include the license and notice under `META-INF`; [the repository rights record](../RIGHTS.md) describes the separate Bordeaux identity and asset terms.

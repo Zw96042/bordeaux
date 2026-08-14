@@ -2,6 +2,12 @@ import { FIELD_H, FIELD_W } from "../math/fieldBounds";
 import type { FieldLandmark, FieldPack, FieldPoint, FieldRect } from "./types";
 
 export const REBUILT_2026_FIELD_REVISION = "2026-manual-tu19-welded-4";
+export const BORDEAUX_FIELD_COORDINATE_SCHEMA_ID = "bordeaux-field/1.0";
+export const ACTIVE_FIELD_REFERENCE = {
+  id: "2026-rebuilt",
+  revision: REBUILT_2026_FIELD_REVISION,
+  coordinateSchemaId: BORDEAUX_FIELD_COORDINATE_SCHEMA_ID,
+} as const;
 export const REBUILT_2026_FIELD_LENGTH_M = 16.541;
 export const REBUILT_2026_FIELD_WIDTH_M = 8.069;
 

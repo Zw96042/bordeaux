@@ -22,6 +22,7 @@ const trials = Number.parseInt(option("trials", process.env.BORDEAUX_BROWSER_TRI
 const latencySamples = option("latency-samples", process.env.BORDEAUX_BROWSER_LATENCY_SAMPLES || "24");
 const stressMs = option("stress-ms", process.env.BORDEAUX_BROWSER_STRESS_MS || "2000");
 const correctnessOnly = process.argv.includes("--correctness-only");
+const comparisonOnly = process.argv.includes("--comparison-only");
 const variantTimeoutMs = Number.parseInt(option("variant-timeout-ms", process.env.BORDEAUX_BROWSER_VARIANT_TIMEOUT_MS || "120000"), 10);
 const output = path.resolve(repository, option("output", ".benchmark-results/renderer-browser.json"));
 
@@ -256,10 +257,13 @@ try {
     buildVariant(baselineRef, "upstream"),
     buildVariant(candidateRef, "candidate"),
   ]);
-  const correctnessRun = await runVariant("candidate-correctness", candidateVariant, true, true);
-  const candidateChecks = correctnessRun.correctness || {};
-  const failedChecks = correctnessFailures(candidateChecks, candidateVariant.workerBundle);
-  if (failedChecks.length) throw new Error(`Candidate correctness checks failed: ${failedChecks.join(", ")}`);
+  let candidateChecks = null;
+  if (!comparisonOnly) {
+    const correctnessRun = await runVariant("candidate-correctness", candidateVariant, true, true);
+    candidateChecks = correctnessRun.correctness || {};
+    const failedChecks = correctnessFailures(candidateChecks, candidateVariant.workerBundle);
+    if (failedChecks.length) throw new Error(`Candidate correctness checks failed: ${failedChecks.join(", ")}`);
+  }
 
   const variantsByKey = { upstream: upstreamVariant, candidate: candidateVariant };
   const warmupOrder = ["upstream", "candidate"];
@@ -290,7 +294,9 @@ try {
       viewport: "1440x900 offscreen Electron compositor at 60 Hz",
       input: `mouse input at 120 Hz; ${latencySamples} isolated latency samples; ${stressMs} ms stress; ${trials} measured trials per variant`,
       execution: {
-        correctness: "candidate-only child before warmups; excluded from timing",
+        correctness: comparisonOnly
+          ? "skipped by --comparison-only; measured candidate worker transport remains required"
+          : "candidate-only child before warmups; excluded from timing",
         discardedWarmups: warmupOrder,
         measuredSchedule,
       },

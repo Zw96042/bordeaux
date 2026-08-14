@@ -47,6 +47,7 @@ export function buildBdxExport(project: BordeauxProject): BdxExport {
   return {
     schemaVersion: "1.1",
     generator: "bordeaux",
+    field: clone(project.field),
     units: {
       distance: "meters",
       time: "seconds",

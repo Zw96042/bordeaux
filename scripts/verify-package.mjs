@@ -15,7 +15,14 @@ const requiredEntries = [
   "node_modules/electron-updater/package.json",
   "node_modules/zod/package.json",
 ];
-const requiredResources = ["java/bordeaux-processor.jar", "java/bordeaux-runtime.jar"];
+const requiredResources = [
+  "java/bordeaux-processor.jar",
+  "java/bordeaux-runtime.jar",
+  "LICENSE",
+  "NOTICE",
+  "RIGHTS.md",
+  "licenses/OFL-1.1.txt",
+];
 
 function collectArchives(target, archives) {
   const stat = fs.statSync(target);

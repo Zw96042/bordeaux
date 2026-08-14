@@ -568,7 +568,9 @@ app.whenReady().then(async () => {
     await delay(500);
     const releaseFinal = await readProbe();
     const trace = await window.webContents.executeJavaScript("window.__rendererBenchmark.stopTrace()");
-    const releaseStable = trace.length > 0 && trace.every((point) => point.curveCorrect
+    const releaseIndex = trace.findIndex((point) => point.curveCorrect
+      && Math.hypot(point.x - release.x, point.y - release.y) <= 4);
+    const releaseStable = releaseIndex >= 0 && trace.slice(releaseIndex).every((point) => point.curveCorrect
       && Math.hypot(point.x - release.x, point.y - release.y) <= 4);
 
     await loadFixture();
@@ -955,9 +957,13 @@ app.whenReady().then(async () => {
       const value = await window.webContents.executeJavaScript("window.__rendererBenchmark.lastCorrect()");
       return value && Math.hypot(value.x - target.x, value.y - target.y) <= 1 ? value : null;
     }, 5000, "the final stress input's correct geometry record");
-    releaseMouse(target);
     const probe = await window.webContents.executeJavaScript("window.__rendererBenchmark.stop()");
     const timedTransport = await window.webContents.executeJavaScript("window.__rendererBenchmark.finishTimedTransport('stress')");
+    // End the measured drag window before pointer-up commits the edit and
+    // schedules a separate preview request. Otherwise that new request can be
+    // counted without having time to finish, making transport proof depend on
+    // worker scheduling at the exact instant of release.
+    releaseMouse(target);
     const applicationWorkerTransport = requireWorkerTransport
       ? preflightWorkerTransport
         && timedTransport.matchingWorkerResults >= 1

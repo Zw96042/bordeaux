@@ -57,6 +57,7 @@ describe("Java trajectory export", () => {
     const built = buildJavaTrajectory(project, generatedCatalog());
 
     expect(built.document.schemaVersion).toBe("bordeaux-trajectory/1.0");
+    expect(built.document.field).toEqual(project.field);
     expect(built.document.catalog.catalogHash).toMatch(/^sha256:/);
     expect(built.document.catalog.catalogId).toBe("competition-robot");
     expect(built.document.paths[0].events).toEqual([expect.objectContaining({

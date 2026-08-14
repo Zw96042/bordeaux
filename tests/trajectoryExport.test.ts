@@ -9,6 +9,49 @@ import { readProject, writeProject } from "../src/electron/projectFiles";
 import { validateProject } from "../src/shared/validation";
 
 describe("project files", () => {
+  it("pins the active field and coordinate revision in new projects", () => {
+    const project = createDemoProject();
+
+    expect(project.field).toEqual({
+      id: "2026-rebuilt",
+      revision: "2026-manual-tu19-welded-4",
+      coordinateSchemaId: "bordeaux-field/1.0",
+    });
+    expect(JSON.parse(encodeProjectFile(project).contents).field).toEqual(project.field);
+  });
+
+  it("records migration of legacy projects to the active field reference", () => {
+    const legacy = createDemoProject() as unknown as Record<string, unknown>;
+    delete legacy.field;
+
+    const decoded = decodeProjectValue(legacy);
+
+    expect(decoded.migrated).toBe(true);
+    expect(decoded.project.field).toEqual({
+      id: "2026-rebuilt",
+      revision: "2026-manual-tu19-welded-4",
+      coordinateSchemaId: "bordeaux-field/1.0",
+    });
+    expect(decoded.project.fieldMigration).toEqual({
+      source: "legacy-unpinned",
+      assigned: decoded.project.field,
+    });
+    const reopened = decodeProjectValue(JSON.parse(encodeProjectFile(decoded.project).contents));
+    expect(reopened.migrated).toBe(false);
+    expect(reopened.project.fieldMigration).toEqual(decoded.project.fieldMigration);
+  });
+
+  it.each([
+    [{ id: "2027-unknown", revision: "1", coordinateSchemaId: "bordeaux-field/1.0" }, "field ID"],
+    [{ id: "2026-rebuilt", revision: "future-revision", coordinateSchemaId: "bordeaux-field/1.0" }, "field revision"],
+    [{ id: "2026-rebuilt", revision: "2026-manual-tu19-welded-4", coordinateSchemaId: "future-coordinates/2.0" }, "coordinate schema"],
+  ])("rejects an unsupported %s with a compatibility error", (field, expectedPart) => {
+    const project = createDemoProject() as unknown as Record<string, unknown>;
+    project.field = field;
+
+    expect(() => decodeProjectValue(project)).toThrow(new RegExp(`compatibility.*${expectedPart}`, "i"));
+  });
+
   it("creates a valid project with durable editor context", () => {
     const project = createDemoProject();
     expect(validateProject(project)).toEqual({ ok: true, issues: [] });
@@ -53,6 +96,13 @@ describe("project files", () => {
     expect(() => buildBdxExport(project as unknown as ReturnType<typeof createDemoProject>)).toThrow(/Planner/);
   });
 
+  it("rejects canonical project state without its field reference", () => {
+    const project = createDemoProject() as unknown as Record<string, unknown>;
+    delete project.field;
+
+    expect(validateProject(project).issues).toContainEqual(expect.objectContaining({ path: "$.field", severity: "error" }));
+  });
+
   it("atomically round-trips the selected path and Java bookmark", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-project-test-"));
     const file = path.join(directory, "project.bordeaux.json");
@@ -88,6 +138,7 @@ describe("native trajectory export", () => {
     project.activeRoutineId = selectedRoutine.id;
     const exported = buildBdxExport(project);
     expect(exported.schemaVersion).toBe("1.1");
+    expect(exported.field).toEqual(project.field);
     expect(exported.routine).toEqual(selectedRoutine);
     expect(exported.paths[0].id).toBe(pathId);
     expect(exported.paths[0].samples.length).toBeGreaterThan(1);

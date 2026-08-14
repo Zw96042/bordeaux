@@ -1,4 +1,5 @@
 import type { BordeauxProject } from "../types";
+import { ACTIVE_FIELD_REFERENCE } from "../field/rebuilt2026";
 import { validateProject } from "../validation";
 import { normalizeProject } from "./normalize";
 
@@ -13,6 +14,20 @@ const TRANSIENT_EDITOR_KEYS = new Set(["_selAfter", "_selT", "_selM", "_selR"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function assertSupportedFieldReference(value: unknown): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) throw new Error("Bordeaux field compatibility error: the field reference must be an object.");
+  if (value.id !== ACTIVE_FIELD_REFERENCE.id) {
+    throw new Error(`Bordeaux field compatibility error: unsupported field ID ${JSON.stringify(value.id)}.`);
+  }
+  if (value.revision !== ACTIVE_FIELD_REFERENCE.revision) {
+    throw new Error(`Bordeaux field compatibility error: unsupported field revision ${JSON.stringify(value.revision)}.`);
+  }
+  if (value.coordinateSchemaId !== ACTIVE_FIELD_REFERENCE.coordinateSchemaId) {
+    throw new Error(`Bordeaux field compatibility error: unsupported coordinate schema ${JSON.stringify(value.coordinateSchemaId)}.`);
+  }
 }
 
 function hasNumericRoutineReference(nodes: unknown, depth = 0): boolean {
@@ -47,17 +62,24 @@ function needsV1Migration(value: Record<string, unknown>): boolean {
 }
 
 function validatedProject(value: unknown, migrated: boolean): DecodedProjectFile {
-  const project = normalizeProject(value);
+  const needsFieldMigration = isRecord(value) && Array.isArray(value.paths) && value.field === undefined;
+  const prepared = needsFieldMigration ? {
+    ...value,
+    field: { ...ACTIVE_FIELD_REFERENCE },
+    fieldMigration: { source: "legacy-unpinned", assigned: { ...ACTIVE_FIELD_REFERENCE } },
+  } : value;
+  const project = normalizeProject(prepared);
   const validation = validateProject(project);
   if (!validation.ok) {
     const message = validation.issues.map((item) => `${item.path}: ${item.message}`).join("\n");
     throw new Error(`Invalid Bordeaux project:\n${message}`);
   }
-  return { project: project as BordeauxProject, migrated };
+  return { project: project as BordeauxProject, migrated: migrated || needsFieldMigration };
 }
 
 export function decodeProjectValue(value: unknown): DecodedProjectFile {
   if (!isRecord(value)) return validatedProject(value, false);
+  assertSupportedFieldReference(value.field);
 
   if (value.schemaVersion !== undefined) {
     if (value.schemaVersion !== CURRENT_PROJECT_SCHEMA_VERSION) {

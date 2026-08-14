@@ -4,6 +4,7 @@
   "private": true,
   "productName": "Bordeaux",
   "author": "FRC Team 2468",
+  "license": "Apache-2.0",
   "description": "Lightweight desktop trajectory authoring and Java integration for FRC paths.",
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -13,7 +14,8 @@
     "build:java": "node scripts/build-java.mjs dist",
     "build:electron": "tsc -p tsconfig.electron.build.json",
     "benchmark:renderer:browser": "node scripts/benchmark-renderer-browser.mjs",
-    "test": "vitest run",
+    "test": "npm run verify:license && vitest run",
+    "test:benchmark:e2e": "node --test tests/rendererBrowserBenchmark.e2e.mjs",
     "test:java": "node scripts/build-java.mjs test",
     "test:java-integration": "npm run build && npm run test:java-integration:built",
     "test:java-integration:built": "node scripts/java-project-integration.mjs",
@@ -21,6 +23,7 @@
     "test:smoke:built": "node scripts/electron-smoke.mjs",
     "verify:renderer": "npm run build:renderer && node scripts/verify-renderer.mjs",
     "verify:package": "node scripts/verify-package.mjs",
+    "verify:license": "node scripts/verify-license.mjs",
     "verify:prerelease": "node scripts/verify-prerelease-version.mjs",
     "verify:release-tag": "node scripts/verify-release-tag.mjs",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.renderer.json --noEmit --pretty false && tsc -p tsconfig.electron.json --noEmit --pretty false",
@@ -93,6 +96,22 @@
         "filter": [
           "*.jar"
         ]
+      },
+      {
+        "from": "LICENSE",
+        "to": "LICENSE"
+      },
+      {
+        "from": "NOTICE",
+        "to": "NOTICE"
+      },
+      {
+        "from": "RIGHTS.md",
+        "to": "RIGHTS.md"
+      },
+      {
+        "from": "licenses/OFL-1.1.txt",
+        "to": "licenses/OFL-1.1.txt"
       }
     ],
     "mac": {

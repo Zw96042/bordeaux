@@ -1,5 +1,6 @@
 import { PM } from "../math/pm";
 import { FIELD_H, FIELD_W, clampWorldPoint } from "../math/fieldBounds";
+import { ACTIVE_FIELD_REFERENCE } from "../field/rebuilt2026";
 import { createPathId, createRoutineId } from "./ids";
 import type {
   BordeauxProject,
@@ -86,6 +87,7 @@ export function createDemoProject(): BordeauxProject {
   const path = blankPath("NewPath");
   return {
     schemaVersion: "1.0",
+    field: { ...ACTIVE_FIELD_REFERENCE },
     name: "Untitled",
     robot: { drive: "swerve", w: 0.84, l: 0.84, heightM: 0.5, maxSpeed: 5.0 },
     paths: [path],
