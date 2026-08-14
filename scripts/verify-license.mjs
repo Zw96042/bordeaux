@@ -58,7 +58,14 @@ requireText("RIGHTS.md", rights, [
   "Fonts",
   "Video and third-party media",
   "Provenance records",
+  "ssh2",
+  "licenses/ssh2-MIT.txt",
 ]);
+
+const ssh2License = readRequiredFile("licenses/ssh2-MIT.txt");
+if (createHash("sha256").update(ssh2License.trimEnd()).digest("hex") !== "d06b5d27bbbbe22c36b1fd88406b1208876e2d37d795f5b8eaed951a459a3111") {
+  throw new Error("licenses/ssh2-MIT.txt must match the license shipped by ssh2 1.17.0");
+}
 
 const fontDigests = {
   "5212942a-e8a9-49c9-9687-e590adce5f6e.woff2": "d44eb1936043a56038eb02dd70b243f379bef65783f94ec12f277550720411f1",
@@ -100,9 +107,12 @@ const lockfile = JSON.parse(readRequiredFile("package-lock.json"));
 if (lockfile.packages?.[""]?.license !== "Apache-2.0") {
   throw new Error("package-lock.json root package license must be Apache-2.0");
 }
+if (manifest.dependencies?.ssh2 !== "1.17.0" || lockfile.packages?.["node_modules/ssh2"]?.version !== "1.17.0") {
+  throw new Error("The reviewed ssh2 runtime dependency must remain pinned to 1.17.0");
+}
 
 const packagedRightsFiles = new Set((manifest.build?.extraResources ?? []).map((resource) => resource.from));
-for (const relativePath of ["LICENSE", "NOTICE", "RIGHTS.md", "licenses/OFL-1.1.txt"]) {
+for (const relativePath of ["LICENSE", "NOTICE", "RIGHTS.md", "licenses/OFL-1.1.txt", "licenses/ssh2-MIT.txt"]) {
   if (!packagedRightsFiles.has(relativePath)) {
     throw new Error(`package.json must include ${relativePath} in build.extraResources`);
   }

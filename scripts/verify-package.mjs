@@ -13,6 +13,7 @@ const requiredEntries = [
   rendererEntry,
   "node_modules/@modelcontextprotocol/server/package.json",
   "node_modules/electron-updater/package.json",
+  "node_modules/ssh2/package.json",
   "node_modules/zod/package.json",
 ];
 const requiredResources = [
@@ -22,6 +23,7 @@ const requiredResources = [
   "NOTICE",
   "RIGHTS.md",
   "licenses/OFL-1.1.txt",
+  "licenses/ssh2-MIT.txt",
 ];
 
 function collectArchives(target, archives) {

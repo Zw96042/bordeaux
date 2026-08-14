@@ -54,6 +54,14 @@ its provenance record identifies its source or creator, copyright owner,
 applicable license or written permission, allowed distribution, and a checksum.
 Absence of such a record grants no right to publish or reuse the file.
 
+## Runtime dependencies
+
+The desktop application uses `ssh2` 1.17.0 for its constrained SFTP client.
+`ssh2` remains under Brian White's MIT License, reproduced in
+[`licenses/ssh2-MIT.txt`](licenses/ssh2-MIT.txt). Its exact package and
+transitive dependency versions and integrity digests remain recorded in
+`package-lock.json`.
+
 ## Provenance records
 
 This file is the distribution-level rights index. Font provenance is recorded

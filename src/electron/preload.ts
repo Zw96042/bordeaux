@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { BordeauxProject } from "../shared/types";
 import type { AgentProposal, AgentSessionSnapshot } from "../shared/agent/types";
+import type { RobotEndpoint, RobotPairing, RobotProbe, RobotRuntimeStatus } from "./robotSftpTransport";
 
 const bordeauxAPI = {
   platform: process.platform,
@@ -19,6 +20,10 @@ const bordeauxAPI = {
   installJavaSupport: () => ipcRenderer.invoke("javaProject:installSupport"),
   buildJavaCatalog: () => ipcRenderer.invoke("javaProject:buildCatalog"),
   cancelJavaCatalogBuild: () => ipcRenderer.invoke("javaProject:cancelBuild"),
+  getRobotPairing: (): Promise<RobotPairing | null> => ipcRenderer.invoke("robot:getPairing"),
+  probeRobot: (endpoint: RobotEndpoint): Promise<RobotProbe> => ipcRenderer.invoke("robot:probe", endpoint),
+  confirmRobotPairing: (hostKeyFingerprint: string, runtimeId: string): Promise<RobotPairing> => ipcRenderer.invoke("robot:confirmPairing", hostKeyFingerprint, runtimeId),
+  inspectPairedRobot: (): Promise<RobotRuntimeStatus> => ipcRenderer.invoke("robot:inspect"),
   setDirty: (dirty: boolean) => ipcRenderer.send("project:setDirty", dirty),
   publishAgentSession: (snapshot: AgentSessionSnapshot) => ipcRenderer.send("agent:publishSession", snapshot),
   updateAgentProposalStatus: (proposalId: string, status: "applied" | "rejected" | "stale", revision?: number) => ipcRenderer.send("agent:proposalStatus", proposalId, status, revision),

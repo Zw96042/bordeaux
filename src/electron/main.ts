@@ -32,6 +32,15 @@ import { appUpdateChannel, AppUpdateController, usesGitHubAppUpdates } from "./a
 import { AgentSessionService } from "./agentSession";
 import { runAgentPlanningInWorker } from "./agentPlanningWorkerClient";
 import { serveBordeauxMcp } from "../mcp/server";
+import { readRobotPairing, writeRobotPairing } from "./robotPairings";
+import { connectRobotSftp } from "./robotSsh2Session";
+import {
+  BordeauxRobotTransport,
+  confirmRobotPairing,
+  type RobotEndpoint,
+  type RobotPairing,
+  type RobotProbe,
+} from "./robotSftpTransport";
 
 function ignoreClosedStandardStream(error: NodeJS.ErrnoException): void {
   if (error.code !== "EIO" && error.code !== "EPIPE") throw error;
@@ -78,6 +87,10 @@ let linkedJavaCatalog: JavaCommandCatalog | null = null;
 let linkedJavaIntegration: JavaIntegrationStatus | null = null;
 let javaConnectionGeneration = 0;
 let javaProjectBookmarks: JavaProjectBookmark[] = [];
+let robotPairing: RobotPairing | null = null;
+let pendingRobotProbe: RobotProbe | null = null;
+let robotProbeGeneration = 0;
+const robotTransport = new BordeauxRobotTransport(connectRobotSftp);
 const smokeDirectory = process.env.BORDEAUX_SMOKE_DIRECTORY;
 const mcpStdioMode = process.argv.includes("--mcp-stdio");
 const enableMcpAccessOnLaunch = process.argv.includes("--enable-mcp-access");
@@ -242,6 +255,11 @@ function javaProjectBookmarksFile(): string {
 function recentProjectsFile(): string {
   const directory = smokeDirectory ?? app.getPath("userData");
   return path.join(directory, "recent-projects.json");
+}
+
+function robotPairingFile(): string {
+  const directory = smokeDirectory ?? app.getPath("userData");
+  return path.join(directory, "robot-pairing.json");
 }
 
 function javaSupportArtifactsDirectory(): string {
@@ -947,6 +965,35 @@ handle("javaProject:buildCatalog", async () => {
   }
 });
 handle("javaProject:cancelBuild", () => ({ canceled: cancelJavaCatalogBuild() }));
+handle("robot:getPairing", () => robotPairing);
+handle("robot:probe", async (_event, rawEndpoint) => {
+  const generation = ++robotProbeGeneration;
+  pendingRobotProbe = null;
+  const endpoint = rawEndpoint as RobotEndpoint;
+  const probe = await robotTransport.probe(endpoint, { password: "" });
+  if (generation !== robotProbeGeneration) throw new Error("A newer robot probe replaced this result");
+  pendingRobotProbe = probe;
+  return probe;
+});
+handle("robot:confirmPairing", async (_event, rawFingerprint, rawRuntimeId) => {
+  if (!pendingRobotProbe || typeof rawFingerprint !== "string" || typeof rawRuntimeId !== "string") {
+    throw new Error("Probe the robot before confirming its identity");
+  }
+  const pairing = confirmRobotPairing({
+    probe: pendingRobotProbe,
+    acceptedHostKeyFingerprint: rawFingerprint,
+    acceptedRuntimeId: rawRuntimeId,
+  });
+  await writeRobotPairing(robotPairingFile(), pairing);
+  robotPairing = pairing;
+  pendingRobotProbe = null;
+  robotProbeGeneration += 1;
+  return pairing;
+});
+handle("robot:inspect", async () => {
+  if (!robotPairing) throw new Error("Pair a robot before inspecting its Bordeaux runtime");
+  return robotTransport.inspect(robotPairing, { password: "" });
+});
 handle("agent:getActiveProposal", () => agentSessions.getActiveProposal());
 handle("agent:getMcpStatus", () => ({ enabled: agentBridge?.enabled === true }));
 ipcMain.on("project:setDirty", (event, value) => { assertTrustedSender(event); dirty = value === true; });
@@ -989,6 +1036,12 @@ app.whenReady().then(async () => {
   } catch (error) {
     recentFiles = [];
     console.warn("Could not load recent Bordeaux projects:", error);
+  }
+  try {
+    robotPairing = await readRobotPairing(robotPairingFile());
+  } catch (error) {
+    robotPairing = null;
+    console.warn("Could not load the paired Bordeaux robot:", error);
   }
   agentBridge = new AgentBridgeServer(app.getPath("userData"), agentSessions);
   if (enableMcpAccessOnLaunch) await agentBridge.start();

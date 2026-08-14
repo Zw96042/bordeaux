@@ -1,0 +1,298 @@
+import { describe, expect, it } from "vitest";
+import { createServer } from "node:net";
+import {
+  BordeauxRobotTransport,
+  ROBOT_DEPLOYMENT_NAMESPACE,
+  ROBOT_PUSH_PROTOCOL_VERSION,
+  confirmRobotPairing,
+  type RobotRemoteFile,
+  type RobotProbe,
+  type RobotSftpSession,
+} from "../src/electron/robotSftpTransport";
+import { connectRobotSftp } from "../src/electron/robotSsh2Session";
+
+const probe: RobotProbe = {
+  endpoint: { host: "10.24.68.2", port: 22 },
+  hostKeyFingerprint: `SHA256:${"A".repeat(43)}`,
+  status: {
+    protocolVersion: ROBOT_PUSH_PROTOCOL_VERSION,
+    deploymentNamespace: ROBOT_DEPLOYMENT_NAMESPACE,
+    teamNumber: 2468,
+    runtimeId: "a0d7440d-d346-4ae4-a58b-7efd622b71d0",
+    disabled: true,
+    catalogId: "CompetitionRobot",
+    catalogHash: `sha256:${"a".repeat(64)}`,
+    supportVersion: "0.1.0",
+    fieldId: "frc-2026-rebuilt",
+    fieldRevision: "official-2026.1",
+    fieldCoordinateSchemaId: "wpilib-blue-origin-v1",
+    activeRevisionId: null,
+    activePayloadSha256: null,
+    health: ["ready: no active Bordeaux revision"],
+  },
+};
+
+describe("constrained robot SFTP transport", () => {
+  it("binds an explicitly accepted host key and runtime identity", () => {
+    const pairing = confirmRobotPairing({
+      probe,
+      acceptedHostKeyFingerprint: probe.hostKeyFingerprint,
+      acceptedRuntimeId: probe.status.runtimeId,
+      pairedAt: "2026-08-14T18:30:00.000Z",
+    });
+
+    expect(pairing).toEqual({
+      id: "robot-2468-a0d7440d",
+      teamNumber: 2468,
+      endpoint: probe.endpoint,
+      hostKeyFingerprint: probe.hostKeyFingerprint,
+      runtimeId: probe.status.runtimeId,
+      protocolVersion: ROBOT_PUSH_PROTOCOL_VERSION,
+      deploymentNamespace: ROBOT_DEPLOYMENT_NAMESPACE,
+      pairedAt: "2026-08-14T18:30:00.000Z",
+    });
+  });
+
+  it("probes only the fixed status file and returns the observed SSH identity", async () => {
+    const reads: RobotRemoteFile[] = [];
+    let closed = false;
+    const session: RobotSftpSession = {
+      hostKeyFingerprint: probe.hostKeyFingerprint,
+      read: async (file) => {
+        reads.push(file);
+        return Buffer.from(JSON.stringify(probe.status));
+      },
+      write: async () => { throw new Error("unexpected write"); },
+      exists: async () => false,
+      renameSameDirectory: async () => { throw new Error("unexpected rename"); },
+      remove: async () => undefined,
+      close: async () => { closed = true; },
+    };
+    const transport = new BordeauxRobotTransport(async () => session);
+
+    await expect(transport.probe(probe.endpoint, { password: "" })).resolves.toEqual(probe);
+    expect(reads).toEqual([{ kind: "status" }]);
+    expect(closed).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "SSH host key",
+      fingerprint: `SHA256:${"B".repeat(43)}`,
+      status: probe.status,
+    },
+    {
+      name: "Bordeaux runtime",
+      fingerprint: probe.hostKeyFingerprint,
+      status: { ...probe.status, runtimeId: "ec9a6647-01c9-4bb1-a238-018f085ad33f" },
+    },
+  ])("requires explicit re-pairing after the $name identity changes", async ({ fingerprint, status }) => {
+    const pairing = confirmRobotPairing({
+      probe,
+      acceptedHostKeyFingerprint: probe.hostKeyFingerprint,
+      acceptedRuntimeId: probe.status.runtimeId,
+    });
+    const session: RobotSftpSession = {
+      hostKeyFingerprint: fingerprint,
+      read: async () => Buffer.from(JSON.stringify(status)),
+      write: async () => undefined,
+      exists: async () => false,
+      renameSameDirectory: async () => undefined,
+      remove: async () => undefined,
+      close: async () => undefined,
+    };
+    const transport = new BordeauxRobotTransport(async (request) => {
+      expect(request.expectedHostKeyFingerprint).toBe(pairing.hostKeyFingerprint);
+      return session;
+    });
+
+    await expect(transport.inspect(pairing, { password: "" })).rejects.toMatchObject({
+      code: "re_pair_required",
+    });
+  });
+
+  it("reads back the exact temporary upload before a same-directory rename", async () => {
+    const pairing = confirmRobotPairing({
+      probe,
+      acceptedHostKeyFingerprint: probe.hostKeyFingerprint,
+      acceptedRuntimeId: probe.status.runtimeId,
+    });
+    const operations: string[] = [];
+    let uploaded: Buffer | undefined;
+    const session: RobotSftpSession = {
+      hostKeyFingerprint: pairing.hostKeyFingerprint,
+      read: async (file) => {
+        operations.push(`read:${file.kind}`);
+        if (file.kind === "status") return Buffer.from(JSON.stringify(probe.status));
+        if (file.kind === "incomingTemporary" && uploaded) return uploaded;
+        throw new Error("unexpected read");
+      },
+      write: async (file, contents) => {
+        operations.push(`write:${file.kind}`);
+        uploaded = Buffer.from(contents);
+      },
+      exists: async (file) => {
+        operations.push(`exists:${file.kind}`);
+        return false;
+      },
+      renameSameDirectory: async (from, to) => {
+        operations.push(`rename:${from.kind}->${to.kind}`);
+      },
+      remove: async (file) => { operations.push(`remove:${file.kind}`); },
+      close: async () => undefined,
+    };
+    const transport = new BordeauxRobotTransport(async () => session, () => "feedface");
+
+    await expect(transport.stageRevision(pairing, { password: "" }, {
+      nonce: "push-2026-08-14",
+      contents: Buffer.from("revision-envelope\n"),
+      sha256: "9e65848c141c882c831950e7093275b6406a9e9d1b0c214d4f6b2ba341ef1ca7",
+    })).resolves.toMatchObject({ state: "staged", nonce: "push-2026-08-14" });
+    expect(operations).toEqual([
+      "read:status",
+      "write:incomingTemporary",
+      "read:incomingTemporary",
+      "exists:incomingRevision",
+      "rename:incomingTemporary->incomingRevision",
+    ]);
+  });
+
+  it("rejects path-like activation nonces before opening SFTP", async () => {
+    const pairing = confirmRobotPairing({
+      probe,
+      acceptedHostKeyFingerprint: probe.hostKeyFingerprint,
+      acceptedRuntimeId: probe.status.runtimeId,
+    });
+    let connected = false;
+    const transport = new BordeauxRobotTransport(async () => {
+      connected = true;
+      throw new Error("unexpected connection");
+    });
+
+    await expect(transport.stageRevision(pairing, { password: "" }, {
+      nonce: "../../active.json",
+      contents: Buffer.from("revision-envelope\n"),
+      sha256: "9e65848c141c882c831950e7093275b6406a9e9d1b0c214d4f6b2ba341ef1ca7",
+    })).rejects.toMatchObject({ code: "invalid_request" });
+    expect(connected).toBe(false);
+  });
+
+  it("cleans up a temporary upload and redacts a failed atomic rename", async () => {
+    const pairing = confirmRobotPairing({
+      probe,
+      acceptedHostKeyFingerprint: probe.hostKeyFingerprint,
+      acceptedRuntimeId: probe.status.runtimeId,
+    });
+    let removed = false;
+    const session: RobotSftpSession = {
+      hostKeyFingerprint: pairing.hostKeyFingerprint,
+      read: async (file) => file.kind === "status"
+        ? Buffer.from(JSON.stringify(probe.status))
+        : Buffer.from("revision-envelope\n"),
+      write: async () => undefined,
+      exists: async () => false,
+      renameSameDirectory: async () => { throw new Error("rename failed password=team-secret"); },
+      remove: async () => { removed = true; },
+      close: async () => undefined,
+    };
+    const transport = new BordeauxRobotTransport(async () => session, () => "feedface");
+
+    const failure = await transport.stageRevision(pairing, { password: "team-secret" }, {
+      nonce: "push-rename-failure",
+      contents: Buffer.from("revision-envelope\n"),
+      sha256: "9e65848c141c882c831950e7093275b6406a9e9d1b0c214d4f6b2ba341ef1ca7",
+    }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: "transfer_failed" });
+    expect(String((failure as Error).message)).not.toContain("team-secret");
+    expect(removed).toBe(true);
+  });
+
+  it("cancels before opening a network connection", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(connectRobotSftp({
+      endpoint: { host: "127.0.0.1", port: 1 },
+      credentials: { password: "" },
+      signal: controller.signal,
+      timeoutMs: 1_000,
+    })).rejects.toMatchObject({ code: "cancelled" });
+  });
+
+  it("times out a peer that accepts TCP but never completes SSH", async () => {
+    const sockets = new Set<import("node:net").Socket>();
+    const server = createServer((socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test server did not bind TCP");
+    try {
+      await expect(connectRobotSftp({
+        endpoint: { host: "127.0.0.1", port: address.port },
+        credentials: { password: "" },
+        signal: new AbortController().signal,
+        timeoutMs: 25,
+      })).rejects.toMatchObject({ code: "timed_out" });
+    } finally {
+      sockets.forEach((socket) => socket.destroy());
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("attempts bounded temp cleanup when cancellation interrupts an upload", async () => {
+    const pairing = confirmRobotPairing({
+      probe,
+      acceptedHostKeyFingerprint: probe.hostKeyFingerprint,
+      acceptedRuntimeId: probe.status.runtimeId,
+    });
+    const controller = new AbortController();
+    let removed = false;
+    const session: RobotSftpSession = {
+      hostKeyFingerprint: pairing.hostKeyFingerprint,
+      read: async () => Buffer.from(JSON.stringify(probe.status)),
+      write: async () => {
+        controller.abort();
+        throw new Error("partial upload password=team-secret");
+      },
+      exists: async () => false,
+      renameSameDirectory: async () => undefined,
+      remove: async () => { removed = true; },
+      close: async () => undefined,
+    };
+    const transport = new BordeauxRobotTransport(async () => session, () => "feedface");
+
+    await expect(transport.stageRevision(pairing, { password: "team-secret" }, {
+      nonce: "push-cancelled",
+      contents: Buffer.from("revision-envelope\n"),
+      sha256: "9e65848c141c882c831950e7093275b6406a9e9d1b0c214d4f6b2ba341ef1ca7",
+    }, { signal: controller.signal })).rejects.toMatchObject({ code: "cancelled", message: "Robot transfer was cancelled" });
+    expect(removed).toBe(true);
+  });
+
+  it("reports SFTP unavailability without claiming it detected FMS", async () => {
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test server did not bind TCP");
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+
+    let failure: Error & { code?: string };
+    try {
+      await connectRobotSftp({
+        endpoint: { host: "127.0.0.1", port: address.port },
+        credentials: { password: "team-secret" },
+        signal: new AbortController().signal,
+        timeoutMs: 1_000,
+      });
+      throw new Error("Expected the closed test endpoint to be unavailable");
+    } catch (error) {
+      failure = error as Error & { code?: string };
+    }
+    expect(failure.code).toBe("unavailable");
+    expect(failure.message).toContain("SFTP to the robot is unavailable");
+    expect(failure.message).toContain("did not detect which network");
+    expect(failure.message).not.toContain("team-secret");
+  });
+});
