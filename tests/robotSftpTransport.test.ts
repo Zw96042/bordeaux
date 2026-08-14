@@ -343,7 +343,7 @@ describe("constrained robot SFTP transport", () => {
       acceptedHostKeyFingerprint: probe.hostKeyFingerprint,
       acceptedRuntimeId: probe.status.runtimeId,
     });
-    const rejected = {
+    let rejected = {
       protocolVersion: ROBOT_PUSH_PROTOCOL_VERSION,
       nonce: "push-rejected",
       state: "rejected",
@@ -376,6 +376,13 @@ describe("constrained robot SFTP transport", () => {
 
     await expect(transport.waitForActivation(pairing, { password: "" }, expectation))
       .resolves.toEqual({ state: "rejected", acknowledgement: rejected });
+
+    rejected = { ...rejected, boundary: "mailbox" };
+    await expect(transport.waitForActivation(pairing, { password: "" }, expectation))
+      .resolves.toEqual({ state: "rejected", acknowledgement: rejected });
+    rejected = { ...rejected, boundary: "retention" };
+    await expect(transport.waitForActivation(pairing, { password: "" }, expectation))
+      .rejects.toMatchObject({ code: "transfer_failed" });
 
     hasAcknowledgement = false;
     await expect(transport.waitForActivation(pairing, { password: "" }, expectation, {

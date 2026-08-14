@@ -167,6 +167,19 @@ describe("manual robot push operation", () => {
 
     await expect(operation.execute(transport)).resolves.toMatchObject({ state: "rejected", boundary: "activation" });
     transport.waitForActivation = async () => ({
+      state: "rejected",
+      acknowledgement: {
+        protocolVersion: ROBOT_PUSH_PROTOCOL_VERSION,
+        nonce: "push-1",
+        state: "rejected",
+        boundary: "mailbox",
+        message: "A retention control already uses this nonce",
+        runtimeId: pairing.runtimeId,
+        teamNumber: pairing.teamNumber,
+      },
+    });
+    await expect(operation.execute(transport)).resolves.toMatchObject({ state: "rejected", boundary: "mailbox" });
+    transport.waitForActivation = async () => ({
       state: "staged",
       boundary: "acknowledgement",
       message: "Acknowledgment timed out",

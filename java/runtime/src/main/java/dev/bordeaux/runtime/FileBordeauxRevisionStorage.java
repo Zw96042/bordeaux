@@ -114,6 +114,17 @@ final class FileBordeauxRevisionStorage implements BordeauxRevisionStorage {
     }
 
     @Override
+    public boolean revisionPresent(String revisionId) {
+        Path target = revisionsDirectory.resolve(digest(revisionId) + ".bdx");
+        try {
+            return Files.isRegularFile(target, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                    && Files.size(target) <= BordeauxRevisionReader.MAX_PAYLOAD_BYTES;
+        } catch (IOException exception) {
+            return false;
+        }
+    }
+
+    @Override
     public void writeState(byte[] state) {
         try {
             atomicWrite(stateFile, state, true);

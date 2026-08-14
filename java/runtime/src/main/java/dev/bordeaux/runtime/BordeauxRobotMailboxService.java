@@ -38,6 +38,7 @@ public final class BordeauxRobotMailboxService {
     private final BordeauxRevisionService revisions;
     private final BordeauxRobotStatusPublisher statusPublisher;
     private Boolean publishedDisabled;
+    private BordeauxRuntimeStatus publishedStatus;
 
     public BordeauxRobotMailboxService(BordeauxRevisionService revisions) {
         this(Path.of(BordeauxRobotStatusPublisher.PRODUCTION_DEPLOYMENT_NAMESPACE), revisions);
@@ -63,6 +64,7 @@ public final class BordeauxRobotMailboxService {
      */
     public synchronized void periodic() {
         boolean disabledAtStart = revisions.isDisabled();
+        ensureCurrentStatus();
         try {
             Map<String, List<Candidate>> grouped = new LinkedHashMap<>();
             for (Candidate candidate : candidates())
@@ -206,15 +208,21 @@ public final class BordeauxRobotMailboxService {
     }
 
     private void publishDisabledTransition() {
+        ensureCurrentStatus();
+    }
+
+    private void ensureCurrentStatus() {
         boolean current = revisions.isDisabled();
-        if (publishedDisabled == null || publishedDisabled.booleanValue() != current)
+        if (publishedStatus == null || publishedDisabled == null || publishedDisabled.booleanValue() != current) {
             publishCurrentStatus();
+        }
     }
 
     private void publishCurrentStatus() {
         BordeauxRuntimeStatus status = revisions.status();
         statusPublisher.publish(status);
         publishedDisabled = status.disabled();
+        publishedStatus = status;
     }
 
     private void writeAcknowledgement(String nonce, Outcome outcome) {
@@ -263,7 +271,8 @@ public final class BordeauxRobotMailboxService {
     }
 
     private byte[] serializeAcknowledgement(String nonce, Outcome outcome) {
-        BordeauxRuntimeStatus status = revisions.status();
+        BordeauxRuntimeStatus status = publishedStatus;
+        if (status == null) throw new BordeauxRuntimeException("Bordeaux robot status must be published before acknowledgments");
         ObjectNode document = MAPPER.createObjectNode();
         document.put("protocolVersion", BordeauxRobotStatusPublisher.PROTOCOL_VERSION);
         document.put("nonce", nonce);

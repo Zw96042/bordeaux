@@ -3,6 +3,7 @@ import { buildJavaRevision } from "../shared/export/javaRevision";
 import type { BuiltJavaTrajectory } from "../shared/export/javaTrajectory";
 import type {
   RobotActivationExpectation,
+  RobotActivationRejectionBoundary,
   RobotActivationResult,
   RobotCredentials,
   RobotPairing,
@@ -24,11 +25,11 @@ export interface RobotPushPreview {
 export type RobotPushProgress =
   | { operationId: string; state: "uploaded" | "staged" }
   | { operationId: string; state: "active" }
-  | { operationId: string; state: "rejected"; boundary: "activation"; message: string };
+  | { operationId: string; state: "rejected"; boundary: RobotActivationRejectionBoundary; message: string };
 
 export type RobotPushResult =
   | { operationId: string; state: "active"; acknowledgement: Extract<RobotActivationResult, { state: "active" }>["acknowledgement"] }
-  | { operationId: string; state: "rejected"; boundary: "activation"; message: string }
+  | { operationId: string; state: "rejected"; boundary: RobotActivationRejectionBoundary; message: string }
   | { operationId: string; state: "staged"; boundary: "acknowledgement"; message: string };
 
 export interface RobotPushTransport {
@@ -147,7 +148,7 @@ export function createRobotPushOperation(input: RobotPushInput): RobotPushOperat
         const result = {
           operationId: input.operationId,
           state: "rejected" as const,
-          boundary: "activation" as const,
+          boundary: activation.acknowledgement.boundary,
           message: activation.acknowledgement.message,
         };
         onProgress(result);

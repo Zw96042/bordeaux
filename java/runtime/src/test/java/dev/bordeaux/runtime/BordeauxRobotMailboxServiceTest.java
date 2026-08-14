@@ -16,7 +16,10 @@ import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -207,6 +210,61 @@ class BordeauxRobotMailboxServiceTest {
         assertFalse(Files.exists(namespace.resolve("inbox/collision.bordeaux-retention.json")));
     }
 
+    @Test
+    void reusesPublishedStatusIdentityForRejectedAcknowledgements() throws IOException {
+        Path namespace = namespace();
+        Path state = temporaryDirectory.resolve("state");
+        BordeauxRevisionService initial = new BordeauxRevisionService(state, 9604, () -> true, COMPATIBILITY);
+        BordeauxActivationAck active = initial.activate(writeStaged("counting-seed", null));
+        CountingStorage storage = new CountingStorage(new FileBordeauxRevisionStorage(state));
+        BordeauxRevisionService counted = new BordeauxRevisionService(state, 9604, () -> true, COMPATIBILITY, storage);
+        BordeauxRobotMailboxService mailbox = new BordeauxRobotMailboxService(namespace, counted);
+        Files.writeString(namespace.resolve("inbox/rejected-a.bordeaux-revision.json"), "{}", StandardCharsets.UTF_8);
+        Files.writeString(namespace.resolve("inbox/rejected-b.bordeaux-revision.json"), "{}", StandardCharsets.UTF_8);
+
+        mailbox.periodic();
+
+        assertEquals(active.revisionId(), counted.status().activeRevisionId());
+        assertEquals(2, storage.revisionMatches); // Initial status publication and the explicit status assertion only.
+        assertEquals(0, storage.revisionPresent);
+    }
+
+    @Test
+    void recoversExactRollbackAndPinAcknowledgementsAfterAcknowledgementWriteFailure() throws IOException {
+        Path namespace = namespace();
+        Path state = temporaryDirectory.resolve("state");
+        BordeauxRevisionService revisions = new BordeauxRevisionService(state, 9604, () -> true, COMPATIBILITY);
+        BordeauxActivationAck first = revisions.activate(writeStaged("recover-first", null));
+        BordeauxActivationAck second = revisions.activate(writeStaged("recover-second", first.revisionId()));
+
+        Files.writeString(namespace.resolve("inbox/recover-rollback.bordeaux-retention.json"), retention(
+                "recover-rollback", "rollback", second.revisionId(), first), StandardCharsets.UTF_8);
+        Files.createDirectory(namespace.resolve("acks/recover-rollback.json"));
+        assertThrows(BordeauxRuntimeException.class, () -> new BordeauxRobotMailboxService(namespace, revisions).periodic());
+        assertTrue(Files.exists(namespace.resolve("inbox/recover-rollback.bordeaux-retention.json")));
+        Files.delete(namespace.resolve("acks/recover-rollback.json"));
+
+        BordeauxRevisionService restarted = new BordeauxRevisionService(state, 9604, () -> true, COMPATIBILITY);
+        new BordeauxRobotMailboxService(namespace, restarted).periodic();
+        JsonNode rollback = MAPPER.readTree(Files.readAllBytes(namespace.resolve("acks/recover-rollback.json")));
+        assertEquals("active", rollback.path("state").textValue());
+        assertEquals("rollback", rollback.path("action").textValue());
+        assertEquals(first.revisionId(), rollback.path("revisionId").textValue());
+
+        Files.writeString(namespace.resolve("inbox/recover-pin.bordeaux-retention.json"), retention(
+                "recover-pin", "pin", first.revisionId(), first), StandardCharsets.UTF_8);
+        Files.createDirectory(namespace.resolve("acks/recover-pin.json"));
+        assertThrows(BordeauxRuntimeException.class, () -> new BordeauxRobotMailboxService(namespace, restarted).periodic());
+        Files.delete(namespace.resolve("acks/recover-pin.json"));
+
+        new BordeauxRobotMailboxService(namespace,
+                new BordeauxRevisionService(state, 9604, () -> true, COMPATIBILITY)).periodic();
+        JsonNode pin = MAPPER.readTree(Files.readAllBytes(namespace.resolve("acks/recover-pin.json")));
+        assertEquals("pinned", pin.path("state").textValue());
+        assertEquals("pin", pin.path("action").textValue());
+        assertEquals(first.revisionId(), pin.path("revisionId").textValue());
+    }
+
     private Path namespace() throws IOException {
         Path namespace = Files.createDirectory(temporaryDirectory.resolve("push-v1"));
         Files.createDirectory(namespace.resolve("inbox"));
@@ -271,5 +329,24 @@ class BordeauxRobotMailboxServiceTest {
 
     private static byte[] bytes(String value) {
         return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static final class CountingStorage implements BordeauxRevisionStorage {
+        private final BordeauxRevisionStorage delegate;
+        private int revisionMatches;
+        private int revisionPresent;
+
+        private CountingStorage(BordeauxRevisionStorage delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override public Optional<byte[]> readState() { return delegate.readState(); }
+        @Override public void writeRevision(String revisionId, byte[] payload) { delegate.writeRevision(revisionId, payload); }
+        @Override public byte[] readRevision(String revisionId, String payloadSha256) { return delegate.readRevision(revisionId, payloadSha256); }
+        @Override public void deleteRevision(String revisionId) { delegate.deleteRevision(revisionId); }
+        @Override public boolean revisionPresent(String revisionId) { revisionPresent++; return delegate.revisionPresent(revisionId); }
+        @Override public void writeState(byte[] state) { delegate.writeState(state); }
+        @Override public boolean revisionMatches(String revisionId, String payloadSha256) { revisionMatches++; return delegate.revisionMatches(revisionId, payloadSha256); }
+        @Override public <T> T withExclusiveLock(Supplier<T> action) { return delegate.withExclusiveLock(action); }
     }
 }

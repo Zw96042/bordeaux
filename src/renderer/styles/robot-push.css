@@ -232,7 +232,8 @@
   border-radius: 10px;
   background: #121720;
 }
-.robot-push-outcome.active {
+.robot-push-outcome.active,
+.robot-push-outcome.pinned {
   border-color: rgba(84, 202, 140, 0.35);
   background: rgba(39, 126, 80, 0.12);
 }

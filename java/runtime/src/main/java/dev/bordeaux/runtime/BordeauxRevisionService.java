@@ -232,22 +232,17 @@ public final class BordeauxRevisionService {
 
     private BordeauxRuntimeStatus status(RuntimeState state) {
         List<String> health = new ArrayList<>();
+        boolean activeRetained = state.active() != null
+                && storage.revisionMatches(state.active().revisionId(), state.active().payloadSha256());
         if (state.active() == null) health.add("ready: no active Bordeaux revision");
-        else if (storage.revisionMatches(
-                state.active().revisionId(), state.active().payloadSha256())) {
-            health.add("ready: active revision " + state.active().revisionId());
-        } else health.add("error: active revision payload is missing or corrupt");
+        else if (activeRetained) health.add("ready: active revision " + state.active().revisionId());
+        else health.add("error: active revision payload is missing or corrupt");
         if (cleanupWarning != null) health.add(cleanupWarning);
         List<BordeauxRevisionRetention.Entry> retained = new ArrayList<>();
         for (RevisionRef ref : state.tracked()) {
-            retained.add(
-                    new BordeauxRevisionRetention.Entry(
-                            ref.revisionId(),
-                            ref.payloadSha256(),
-                            storage.revisionMatches(ref.revisionId(), ref.payloadSha256())
-                                    ? "retained"
-                                    : "missing",
-                            ref.equals(state.pinned())));
+            boolean available = ref.equals(state.active()) ? activeRetained : storage.revisionPresent(ref.revisionId());
+            retained.add(new BordeauxRevisionRetention.Entry(
+                    ref.revisionId(), ref.payloadSha256(), available ? "retained" : "missing", ref.equals(state.pinned())));
         }
         return new BordeauxRuntimeStatus(
                 state.runtimeId(),

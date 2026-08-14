@@ -368,6 +368,9 @@ class BordeauxRevisionServiceTest {
         public void deleteRevision(String revisionId) { delegate.deleteRevision(revisionId); }
 
         @Override
+        public boolean revisionPresent(String revisionId) { return delegate.revisionPresent(revisionId); }
+
+        @Override
         public void writeState(byte[] state) {
             if (failState) throw new BordeauxRuntimeException("Injected active manifest move failure");
             delegate.writeState(state);
@@ -402,6 +405,9 @@ class BordeauxRevisionServiceTest {
 
         @Override
         public void deleteRevision(String revisionId) { delegate.deleteRevision(revisionId); }
+
+        @Override
+        public boolean revisionPresent(String revisionId) { return delegate.revisionPresent(revisionId); }
 
         @Override
         public void writeState(byte[] state) { delegate.writeState(state); }

@@ -15,6 +15,9 @@ interface BordeauxRevisionStorage {
     /** Deletes only the exact digest-derived revision file. It never enumerates or recursively removes paths. */
     void deleteRevision(String revisionId);
 
+    /** Checks only whether the exact digest-derived payload file is safe and within the storage bound. */
+    boolean revisionPresent(String revisionId);
+
     void writeState(byte[] state);
 
     boolean revisionMatches(String revisionId, String payloadSha256);

@@ -17,6 +17,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -234,6 +235,26 @@ class BordeauxRevisionRetentionTest {
                 BordeauxRevisionService.RECENT_LIMIT, List.of(first, secondPin)));
   }
 
+  @Test
+  void statusHashesOnlyTheActiveRevisionAndChecksInactiveRetentionByPresence() throws IOException {
+    BordeauxRevisionService initial = service(true);
+    List<BordeauxActivationAck> revisions = push(initial, 1, 5, null);
+    initial.applyRetention(
+        writeControl("count-pin", "pin", revisions.get(4).revisionId(), revisions.get(0)), "count-pin");
+    push(initial, 6, 10, revisions.get(4).revisionId());
+    CountingStorage storage =
+        new CountingStorage(new FileBordeauxRevisionStorage(temporaryDirectory.resolve("state")));
+    BordeauxRevisionService counted =
+        new BordeauxRevisionService(
+            temporaryDirectory.resolve("state"), 9604, () -> true, COMPATIBILITY, storage);
+
+    BordeauxRuntimeStatus status = counted.status();
+
+    assertEquals(6, status.retention().revisions().size());
+    assertEquals(1, storage.revisionMatches.get());
+    assertEquals(5, storage.revisionPresent.get());
+  }
+
   private BordeauxRevisionService service(boolean disabled) {
     return new BordeauxRevisionService(
         temporaryDirectory.resolve("state"), 9604, () -> disabled, COMPATIBILITY);
@@ -353,6 +374,11 @@ class BordeauxRevisionRetentionTest {
     }
 
     @Override
+    public boolean revisionPresent(String revisionId) {
+      return delegate.revisionPresent(revisionId);
+    }
+
+    @Override
     public void writeState(byte[] state) {
       delegate.writeState(state);
     }
@@ -365,6 +391,27 @@ class BordeauxRevisionRetentionTest {
     @Override
     public <T> T withExclusiveLock(Supplier<T> action) {
       return delegate.withExclusiveLock(action);
+    }
+  }
+
+  private static final class CountingStorage extends DelegatingStorage {
+    private final AtomicInteger revisionMatches = new AtomicInteger();
+    private final AtomicInteger revisionPresent = new AtomicInteger();
+
+    private CountingStorage(BordeauxRevisionStorage delegate) {
+      super(delegate);
+    }
+
+    @Override
+    public boolean revisionMatches(String revisionId, String payloadSha256) {
+      revisionMatches.incrementAndGet();
+      return super.revisionMatches(revisionId, payloadSha256);
+    }
+
+    @Override
+    public boolean revisionPresent(String revisionId) {
+      revisionPresent.incrementAndGet();
+      return super.revisionPresent(revisionId);
     }
   }
 }

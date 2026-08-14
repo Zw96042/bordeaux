@@ -82,9 +82,14 @@ export interface RobotRejectedAcknowledgement {
   teamNumber: number;
 }
 
+export type RobotActivationRejectionBoundary = "activation" | "mailbox";
+export type RobotRetentionRejectionBoundary = "retention" | "mailbox";
+type RobotActivationRejectedAcknowledgement = RobotRejectedAcknowledgement & { boundary: RobotActivationRejectionBoundary };
+type RobotRetentionRejectedAcknowledgement = RobotRejectedAcknowledgement & { boundary: RobotRetentionRejectionBoundary };
+
 export type RobotActivationResult =
   | { state: "active"; acknowledgement: RobotActiveAcknowledgement }
-  | { state: "rejected"; acknowledgement: RobotRejectedAcknowledgement }
+  | { state: "rejected"; acknowledgement: RobotActivationRejectedAcknowledgement }
   | { state: "staged"; boundary: "acknowledgement"; message: string };
 
 export type RobotRetentionAction = "rollback" | "pin";
@@ -127,7 +132,7 @@ export interface RobotRetentionPinnedAcknowledgement extends RobotRetentionAckno
 export type RobotRetentionResult =
   | { state: "active"; acknowledgement: RobotRetentionActiveAcknowledgement }
   | { state: "pinned"; acknowledgement: RobotRetentionPinnedAcknowledgement }
-  | { state: "rejected"; acknowledgement: RobotRejectedAcknowledgement }
+  | { state: "rejected"; acknowledgement: RobotRetentionRejectedAcknowledgement }
   | { state: "staged"; boundary: "acknowledgement"; message: string };
 
 export type RobotRemoteFile =
@@ -287,7 +292,7 @@ function parseActivationAcknowledgement(
   contents: Buffer,
   pairing: RobotPairing,
   expected: RobotActivationExpectation,
-): RobotActiveAcknowledgement | RobotRejectedAcknowledgement {
+): RobotActiveAcknowledgement | RobotActivationRejectedAcknowledgement {
   let raw: unknown;
   try { raw = JSON.parse(contents.toString("utf8")); }
   catch (error) { throw new RobotTransportError("transfer_failed", "Robot activation acknowledgment is not valid JSON", { cause: error }); }
@@ -301,14 +306,14 @@ function parseActivationAcknowledgement(
     throw new RobotTransportError("transfer_failed", "Robot activation acknowledgment identity does not match this push");
   }
   if (raw.state === "rejected") {
-    if (raw.boundary !== "activation") {
-      throw new RobotTransportError("transfer_failed", "Robot rejection did not identify the activation boundary");
+    if (raw.boundary !== "activation" && raw.boundary !== "mailbox") {
+      throw new RobotTransportError("transfer_failed", "Robot rejection did not identify the activation or mailbox boundary");
     }
     return {
       protocolVersion: ROBOT_PUSH_PROTOCOL_VERSION,
       nonce,
       state: "rejected",
-      boundary: "activation",
+      boundary: raw.boundary,
       message: requiredText(raw.message, "acknowledgment message", 512),
       runtimeId,
       teamNumber: pairing.teamNumber,
@@ -344,7 +349,7 @@ function parseRetentionAcknowledgement(
   contents: Buffer,
   pairing: RobotPairing,
   expected: RobotRetentionExpectation,
-): RobotRetentionActiveAcknowledgement | RobotRetentionPinnedAcknowledgement | RobotRejectedAcknowledgement {
+): RobotRetentionActiveAcknowledgement | RobotRetentionPinnedAcknowledgement | RobotRetentionRejectedAcknowledgement {
   let raw: unknown;
   try { raw = JSON.parse(contents.toString("utf8")); }
   catch (error) { throw new RobotTransportError("transfer_failed", "Robot retention acknowledgment is not valid JSON", { cause: error }); }
