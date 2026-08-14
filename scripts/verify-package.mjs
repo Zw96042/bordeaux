@@ -5,6 +5,9 @@ import path from "node:path";
 const MAX_ASAR_BYTES = 8 * 1024 * 1024;
 const rendererEntry = "dist-renderer/index.html";
 const repositoryManifest = JSON.parse(fs.readFileSync(path.resolve("package.json"), "utf8"));
+if (repositoryManifest.dependencies?.ssh2 === "1.17.0" && repositoryManifest.build?.npmRebuild !== false) {
+  throw new Error("ssh2 uses its reviewed JavaScript fallback; Electron packaging must not rebuild optional native accelerators");
+}
 const requiredEntries = [
   "package.json",
   repositoryManifest.main,
@@ -65,6 +68,10 @@ for (const archive of archives) {
   const entrySet = new Set(entries);
   for (const required of requiredEntries) {
     if (!entrySet.has(required)) throw new Error(`${archive} is missing required entry: ${required}`);
+  }
+  const optionalNativeSshEntry = entries.find((entry) => /^(?:node_modules\/(?:buildcheck|cpu-features|nan))(?:\/|$)/.test(entry));
+  if (optionalNativeSshEntry) {
+    throw new Error(`${archive} contains an excluded optional ssh2 native accelerator: ${optionalNativeSshEntry}`);
   }
 
   const forbidden = entries.find((entry) =>

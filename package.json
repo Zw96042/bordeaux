@@ -59,6 +59,7 @@
     "appId": "org.frc2468.bordeaux",
     "productName": "Bordeaux",
     "asar": true,
+    "npmRebuild": false,
     "electronUpdaterCompatibility": ">=2.16",
     "publish": {
       "provider": "github",
@@ -86,7 +87,14 @@
       "!**/tests/**",
       "!**/__tests__/**",
       "!**/*.test.*",
-      "!**/*.spec.*"
+      "!**/*.spec.*",
+      "!node_modules/buildcheck/**/*",
+      "!node_modules/cpu-features/**/*",
+      "!node_modules/nan/**/*",
+      "!node_modules/ssh2/.eslint*",
+      "!node_modules/ssh2/SFTP.md",
+      "!node_modules/ssh2/install.js",
+      "!node_modules/ssh2/util/**/*"
     ],
     "electronLanguages": [
       "en-US"
