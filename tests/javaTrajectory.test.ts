@@ -154,6 +154,19 @@ describe("Java trajectory export", () => {
     expect(() => buildJavaTrajectory(project, legacy)).toThrow(/condition catalog is stale.*schema 1\.1/i);
   });
 
+  it("treats a cleared optional marker condition as absent", () => {
+    const project = createDemoProject();
+    project.paths[0].markers = [{
+      id: "unconditional-score",
+      f: 0.5,
+      name: "Score",
+      invocation: { commandId: "frc.robot.AutoCommands#score", arguments: { sequence: "1", target: { level: "L4" } } },
+      schedule: { conditionId: undefined },
+    }];
+
+    expect(buildJavaTrajectory(project, generatedCatalog()).document.paths[0].events[0]).not.toHaveProperty("conditionId");
+  });
+
   it("blocks source-only, unresolved legacy, and schema-invalid commands", () => {
     const project = createDemoProject();
     project.paths[0].markers = [{ id: "legacy", f: 0.2, name: "Legacy", cmd: "shoot" }];

@@ -236,7 +236,7 @@ export function validateProjectJavaInvocations(project: BordeauxProject, catalog
   };
   project.paths.forEach((path, pathIndex) => path.markers.forEach((marker, markerIndex) => {
     const base = `$.paths[${pathIndex}].markers[${markerIndex}]`;
-    if (marker.schedule && Object.hasOwn(marker.schedule, "conditionId")) {
+    if (marker.schedule?.conditionId !== undefined) {
       validateCondition(marker.schedule.conditionId, `${base}.schedule.conditionId`, "Event schedule");
     }
     if (marker.actionIntent && !marker.invocation) {

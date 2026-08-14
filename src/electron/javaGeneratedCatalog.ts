@@ -208,7 +208,7 @@ export function parseGeneratedJavaCatalog(raw: unknown): GeneratedJavaCatalog {
       if (!/^[A-Za-z0-9_.:#()$,-]+$/.test(id)) throw new Error(`Generated Java catalog condition ID ${id} contains unsupported characters`);
       if (conditionIds.has(id)) throw new Error(`Generated Java catalog condition ID ${id} is duplicated`);
       if (ids.has(id)) throw new Error(`Generated Java catalog capability ID ${id} collides across commands and conditions`);
-      if (previousConditionId !== null && id.localeCompare(previousConditionId) <= 0) throw new Error("Generated Java catalog conditions must be sorted by ID");
+      if (previousConditionId !== null && id <= previousConditionId) throw new Error("Generated Java catalog conditions must be sorted by ID");
       conditionIds.add(id);
       previousConditionId = id;
       const source = record(condition.source);

@@ -96,6 +96,22 @@ describe("generated Java command catalogs", () => {
     expect(parseGeneratedJavaCatalog(value).conditions[0].source.line).toBe(1);
   });
 
+  it("accepts the annotation processor's locale-independent condition order", () => {
+    const value = catalog() as any;
+    value.schemaVersion = "1.1";
+    value.supportVersion = "0.2.0";
+    value.conditions = ["a#B", "a.B"].map((id) => ({
+      id,
+      label: id,
+      ownerType: "frc.robot.Conditions",
+      member: "ready",
+      source: { file: "frc/robot/Conditions.java", line: 0 },
+    }));
+    value.catalogHash = generatedCatalogHash(value.commands, value.conditions);
+
+    expect(parseGeneratedJavaCatalog(value).conditions.map((condition) => condition.id)).toEqual(["a#B", "a.B"]);
+  });
+
   it("rejects command and condition IDs that collide", () => {
     const value = catalog() as any;
     value.schemaVersion = "1.1";
