@@ -2,27 +2,30 @@ package dev.bordeaux.runtime;
 
 import java.util.Objects;
 
-/** Compiled robot identities a deployed revision must match before it can run. */
-public record BordeauxRuntimeCompatibility(
+/** Evidence returned only after a revision has become the active runtime revision. */
+public record BordeauxActivationAck(
+        String nonce,
+        String revisionId,
+        String payloadSha256,
         String catalogId,
         String catalogHash,
         String supportVersion,
-        String fieldId,
-        String fieldRevision,
-        String fieldCoordinateSchemaId) {
-    public BordeauxRuntimeCompatibility {
+        String runtimeId,
+        int teamNumber) {
+    public BordeauxActivationAck {
+        nonce = required(nonce, "nonce");
+        revisionId = hash(revisionId, "revisionId");
+        payloadSha256 = hash(payloadSha256, "payloadSha256");
         catalogId = required(catalogId, "catalogId");
         catalogHash = hash(catalogHash, "catalogHash");
         supportVersion = required(supportVersion, "supportVersion");
-        fieldId = required(fieldId, "fieldId");
-        fieldRevision = required(fieldRevision, "fieldRevision");
-        fieldCoordinateSchemaId = required(fieldCoordinateSchemaId, "fieldCoordinateSchemaId");
+        runtimeId = required(runtimeId, "runtimeId");
+        if (teamNumber <= 0) throw new IllegalArgumentException("teamNumber must be positive");
     }
 
     private static String required(String value, String name) {
         Objects.requireNonNull(value, name);
         if (value.isBlank()) throw new IllegalArgumentException(name + " is required");
-        if (value.length() > 256) throw new IllegalArgumentException(name + " exceeds 256 characters");
         return value;
     }
 

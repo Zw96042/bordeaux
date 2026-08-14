@@ -19,7 +19,7 @@ import java.util.HexFormat;
 /** Strict, bounded reader for the transportable Bordeaux revision envelope 1.0. */
 public final class BordeauxRevisionReader {
     static final int MAX_REVISION_BYTES = 24 * 1024 * 1024;
-    private static final int MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
+    static final int MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 
     private static final ObjectMapper MAPPER = new ObjectMapper(JsonFactory.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
