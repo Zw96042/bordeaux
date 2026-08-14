@@ -39,6 +39,22 @@ class BordeauxRevisionReaderTest {
     }
 
     @Test
+    void acceptsAuthoritativeCatalogSchemaAndSupportPairWhileDirectReadKeepsLegacyCompatibility() {
+        BordeauxRuntimeCompatibility current = new BordeauxRuntimeCompatibility(
+                CATALOG_ID, HASH, "0.2.0", "2026-rebuilt", "2026-manual-tu19-welded-4", "bordeaux-field/1.0");
+        String currentDocument = trajectory(",\"paths\":[{\"id\":\"auto\",\"name\":\"Auto\",\"totalTimeS\":1,\"samples\":[],\"events\":[]}]")
+                .replace("\"schemaVersion\":\"1.0\"", "\"schemaVersion\":\"1.1\"")
+                .replace("\"supportVersion\":\"0.1.0\"", "\"supportVersion\":\"0.2.0\"");
+
+        BordeauxTrajectoryReader.validateDocument(bytes(currentDocument), current);
+        assertEquals("auto", BordeauxTrajectoryReader.read(new ByteArrayInputStream(bytes(trajectory(
+                ",\"paths\":[{\"id\":\"auto\",\"name\":\"Auto\",\"totalTimeS\":1,\"samples\":[],\"events\":[]}]"))), "auto").id());
+        BordeauxRuntimeException mismatch = assertThrows(BordeauxRuntimeException.class,
+                () -> BordeauxTrajectoryReader.validateDocument(bytes(currentDocument.replace("\"schemaVersion\":\"1.1\"", "\"schemaVersion\":\"1.0\"")), current));
+        assertTrue(mismatch.getMessage().contains("schema/support"), mismatch::getMessage);
+    }
+
+    @Test
     void rejectsInvalidRoutineBranchesEvenWhenEveryPathIsOtherwiseValid() {
         String document = trajectory("""
                 ,"routine":{"name":"Auto","nodes":[{"id":"decision","type":"decision","cond":"ready",

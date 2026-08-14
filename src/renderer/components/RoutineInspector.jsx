@@ -29,7 +29,7 @@ import { UI } from "./ui";
   }
 
   function StepInspector(props) {
-    const { node, paths, acq, run, javaProject } = props;
+    const { node, paths, acq, run, javaProject, conditionOptions = [] } = props;
     if (!node) return null;
     const set = (patch) => acq.set(node.id, patch);
     const seg = run.segs.find((s) => s.nodeId === node.id);
@@ -53,8 +53,7 @@ import { UI } from "./ui";
       const out = acq.outcomes[node.id] || 'then';
       body = h(React.Fragment, null,
         h(Dropdown, { id: 'routine-condition', label: 'Condition ID', value: node.cond,
-          items: A.pickerItems(A.CONDITIONS, node.cond), placeholder: 'Choose a registered condition', icon: 'branch',
-          allowCustom: true, customLabel: 'Enter exact decision condition ID', customPlaceholder: 'Exact condition ID',
+          items: A.conditionPickerItems(conditionOptions, node.cond), placeholder: 'Choose a registered condition', icon: 'branch',
           onChange: (value) => set({ cond: value }) }),
         h('div', { className: 'grid2', style: { marginTop: '10px' } },
           h('div', null, FieldLabel('If true'), h('input', { className: 'textinput', 'aria-label': 'True branch label', value: node.thenLabel, spellCheck: false, onChange: (e) => set({ thenLabel: e.target.value }) })),

@@ -5,7 +5,7 @@ import path from "node:path";
 import type { JavaCommandCatalog, JavaIntegrationStatus } from "../shared/types";
 import { writeBufferAtomically, writeJsonAtomically } from "./projectFiles";
 
-export const JAVA_SUPPORT_VERSION = "0.1.0";
+export const JAVA_SUPPORT_VERSION = "0.2.0";
 const MAX_BUILD_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
 const MAX_BUILD_OUTPUT_BYTES = 1024 * 1024;
@@ -109,9 +109,9 @@ function gradleSupportScript(): string {
 function integrationGuide(): string {
   return `# Bordeaux Java integration\n\n` +
 `Bordeaux owns the JSON contract and generated bindings, but your robot project keeps ownership of subsystems and autonomous lifecycle.\n\n` +
-`1. Put \`@BordeauxCommand\` on public command factory methods. Add \`@BordeauxParam\` metadata to authored parameters.\n` +
-`2. In Bordeaux, run **Java > Build Command Catalog** and place generated commands on event markers.\n` +
-`3. Call \`dev.bordeaux.runtime.BordeauxBindings.generated(...)\` with instances of each non-static provider.\n` +
+`1. Put \`@BordeauxCommand\` on public command factory methods and \`@BordeauxCondition\` on public boolean predicates. Add \`@BordeauxParam\` metadata to authored parameters.\n` +
+`2. In Bordeaux, run **Java > Build Command Catalog**, then select generated commands and conditions.\n` +
+`3. Call \`dev.bordeaux.runtime.BordeauxBindings.generatedCapabilities(...)\` with instances of each non-static provider.\n` +
 `4. Open the exported JSON below WPILib's deploy directory and call \`BordeauxTrajectoryReader.read(input, pathId)\`.\n` +
 `5. Create \`BordeauxEventRunner\`, call \`periodic(elapsedSeconds)\` beside the path follower, and call \`endPath()\` when the path ends.\n\n` +
 `A minimal team-owned integration looks like this (replace \`actions\`, file name, and path ID with your code):\n\n` +
@@ -120,13 +120,13 @@ function integrationGuide(): string {
 `import dev.bordeaux.runtime.*;\n` +
 `import edu.wpi.first.wpilibj.Filesystem;\n` +
 `import java.nio.file.Files;\n\n` +
-`private final BordeauxCommandRegistry bordeauxRegistry =\n` +
-`    BordeauxBindings.generated(actions);\n` +
+`private final BordeauxCapabilities bordeauxCapabilities =\n` +
+`    BordeauxBindings.generatedCapabilities(actions);\n` +
 `private BordeauxEventRunner bordeauxEvents;\n\n` +
 `void startBordeauxPath(String fileName, String pathId) throws Exception {\n` +
 `  var file = Filesystem.getDeployDirectory().toPath().resolve("bordeaux").resolve(fileName);\n` +
 `  try (var input = Files.newInputStream(file)) {\n` +
-`    bordeauxEvents = new BordeauxEventRunner(BordeauxTrajectoryReader.read(input, pathId), bordeauxRegistry);\n` +
+`    bordeauxEvents = new BordeauxEventRunner(BordeauxTrajectoryReader.read(input, pathId), bordeauxCapabilities);\n` +
 `  }\n` +
 `}\n\n` +
 `void autonomousPeriodic(double elapsedSeconds) {\n` +
@@ -137,7 +137,7 @@ function integrationGuide(): string {
 `  bordeauxEvents = null;\n` +
 `}\n` +
 "```\n\n" +
-`Pass every non-static command provider to \`BordeauxBindings.generated(...)\`; provider order does not matter. Bordeaux intentionally does not edit \`RobotContainer\` or deploy robot code.\n`;
+`Pass every non-static command and condition provider to \`BordeauxBindings.generatedCapabilities(...)\`; provider order does not matter. Bordeaux intentionally does not edit \`RobotContainer\` or deploy robot code.\n`;
 }
 
 async function assertSafeSupportDirectory(projectRoot: string): Promise<void> {

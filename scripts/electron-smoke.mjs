@@ -66,8 +66,16 @@ public final class IdleCommand extends CommandBase {}
     }],
     source: { file: "src/main/java/frc/robot/LargeEnumCommand.java", line: 1 },
   }];
-  const catalogHash = `sha256:${createHash("sha256").update(canonicalJson(commands), "utf8").digest("hex")}`;
-  const smokeCatalog = { schemaVersion: "1.0", catalogId: "SmokeRobot", supportVersion: "0.1.0", catalogHash, commands };
+  const conditions = [{
+    id: "frc.robot.SmokeConditions#ready",
+    label: "Ready",
+    description: "Smoke robot is ready to run autonomous.",
+    ownerType: "frc.robot.SmokeConditions",
+    member: "ready",
+    source: { file: "src/main/java/frc/robot/SmokeConditions.java", line: 4 },
+  }];
+  const catalogHash = `sha256:${createHash("sha256").update(canonicalJson({ commands, conditions }), "utf8").digest("hex")}`;
+  const smokeCatalog = { schemaVersion: "1.1", catalogId: "SmokeRobot", supportVersion: "0.2.0", catalogHash, commands, conditions };
   const supportDirectory = path.join(smokeDirectory, "java-project", ".bordeaux");
   await fs.mkdir(supportDirectory, { recursive: true });
   await fs.writeFile(path.join(supportDirectory, "smoke-catalog.json"), `${JSON.stringify(smokeCatalog, null, 2)}\n`);

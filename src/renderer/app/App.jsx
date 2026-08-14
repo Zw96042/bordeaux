@@ -1652,7 +1652,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
               h(RoutineTransportPlayback, { store: routinePlaybackStore, run }),
               h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
             h('aside', { className: 'rail rail-r' + (selNode ? '' : ' collapsed'), 'aria-label': 'Routine step inspector' },
-              selNode && h(StepInspector, { node: selNode, paths: project.paths, acq, run, javaProject: { ...javaProjectState, link: linkJavaProject } })))
+              selNode && h(StepInspector, { node: selNode, paths: project.paths, acq, run, javaProject: { ...javaProjectState, link: linkJavaProject }, conditionOptions: AUTO.authoritativeConditions(javaProjectState.catalog) })))
         : h('main', { className: 'stage stage-plan', inert: derivationCurrent ? undefined : '', 'aria-disabled': derivationCurrent ? undefined : true },
             h('nav', { className: 'rail rail-l' + (outlineOpen ? '' : ' collapsed'), 'aria-label': 'Path outline' },
               h(Panels.Outline, { open: outlineOpen, setOpen: setOutlineOpen, doc: derivationDoc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot })),

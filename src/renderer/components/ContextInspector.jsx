@@ -734,6 +734,7 @@ import { UI } from "./ui";
       const catalog = javaProject && javaProject.catalog;
       const integration = javaProject && javaProject.integration;
       const commands = catalog ? catalog.commands || [] : [];
+      const conditionOptions = AUTO.authoritativeConditions(catalog);
       const recentProjects = javaProject && javaProject.recentProjects ? javaProject.recentProjects : [];
       const currentProject = recentProjects.find((project) => project.id === (javaProject && javaProject.bookmarkId));
       const invocationId = m.invocation && m.invocation.commandId ? m.invocation.commandId : (m.cmd && m.cmd !== 'none' ? m.cmd : '');
@@ -895,9 +896,8 @@ import { UI } from "./ui";
           h(Toggle, { on: schedule.endTimeS != null, ariaLabel: 'Limit event end time', onChange: (on) => actions.setMarker(sel.idx, { schedule: { ...schedule, endTimeS: on ? (derived.prof.totalTime || 0) : undefined } }) })),
         schedule.endTimeS != null && h(Num, { label: 'End path time', value: schedule.endTimeS, unit: 's', min: 0, max: derived.prof.totalTime || 0, step: 0.1, precision: 2, onChange: (v) => actions.setMarker(sel.idx, { schedule: { ...schedule, endTimeS: v } }) }),
         h(Dropdown, { id: 'event-condition-id', label: 'Condition ID · optional', value: schedule.conditionId || '',
-          items: AUTO.pickerItems(AUTO.CONDITIONS, schedule.conditionId || '', 'No condition'),
-          placeholder: 'Choose a registered condition', icon: 'branch', allowCustom: true,
-          customLabel: 'Enter exact event condition ID', customPlaceholder: 'Exact condition ID',
+          items: AUTO.conditionPickerItems(conditionOptions, schedule.conditionId || '', 'No condition'),
+          placeholder: 'Choose a generated condition', icon: 'branch',
           onChange: (value) => actions.setMarker(sel.idx, { schedule: { ...schedule, conditionId: value || undefined } }) }),
         h('div', { className: 'marker-position-group' },
           h('div', { className: 'fieldlabel' }, 'Position lock'),

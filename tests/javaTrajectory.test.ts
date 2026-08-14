@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildJavaTrajectory, javaTrajectoryFileName } from "../src/shared/export/javaTrajectory";
 import { blankPath, buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
-import type { AutonomousRoutine, JavaCommandCatalog } from "../src/shared/types";
+import type { AutonomousRoutine, JavaCommandCatalog, RoutineNode } from "../src/shared/types";
 
 function generatedCatalog(): JavaCommandCatalog {
   return {
@@ -10,12 +10,25 @@ function generatedCatalog(): JavaCommandCatalog {
     scannedAt: "2026-08-05T00:00:00.000Z",
     source: "generated",
     runtimeCommandCount: 1,
-    generatedSchemaVersion: "1.0",
+    generatedSchemaVersion: "1.1",
     catalogId: "competition-robot",
-    supportVersion: "0.1.0",
+    supportVersion: "0.2.0",
     catalogHash: `sha256:${"a".repeat(64)}`,
     authoritative: true,
     warnings: [],
+    conditions: [{
+      id: "frc.robot.Conditions#hasNote",
+      label: "Has note",
+      ownerType: "frc.robot.Conditions",
+      member: "hasNote",
+      source: { file: "src/main/java/frc/robot/Conditions.java", line: 14 },
+    }, {
+      id: "frc.robot.Conditions#ready",
+      label: "Ready",
+      ownerType: "frc.robot.Conditions",
+      member: "ready",
+      source: { file: "src/main/java/frc/robot/Conditions.java", line: 9 },
+    }],
     commands: [{
       id: "frc.robot.AutoCommands#score",
       label: "Score",
@@ -112,6 +125,33 @@ describe("Java trajectory export", () => {
     expect(routine.name).toBe(selectedRoutine.name);
     expect(routine.nodes[0]).toEqual(expect.objectContaining({ type: "decision", cond: "frc.robot.Conditions#hasNote" }));
     expect((routine.nodes[0] as { then: unknown[] }).then[0]).toEqual(expect.objectContaining({ cat: "command" }));
+  });
+
+  it("blocks blank, stale, and unregistered condition capabilities before export", () => {
+    const project = createDemoProject();
+    project.paths[0].markers = [{
+      id: "conditional-score",
+      f: 0.5,
+      name: "Score when ready",
+      invocation: { commandId: "frc.robot.AutoCommands#score", arguments: { sequence: "1", target: { level: "L4" } } },
+      schedule: { conditionId: "frc.robot.Conditions#missing" },
+    }];
+    expect(() => buildJavaTrajectory(project, generatedCatalog())).toThrow(/paths\[0\].markers\[0\].schedule\.conditionId.*not in the linked generated catalog/i);
+
+    const decision: Extract<RoutineNode, { type: "decision" }> = { id: "condition", type: "decision", cond: "", thenLabel: "yes", elseLabel: "no", then: [], else: [] };
+    project.routines[0].nodes = [decision];
+    project.paths[0].markers = [];
+    expect(() => buildJavaTrajectory(project, generatedCatalog())).toThrow(/routines\[0\].nodes\[0\].cond.*registered condition ID/i);
+
+    decision.cond = "frc.robot.Conditions#ready";
+    decision.then.push({ id: "nested", type: "decision", cond: "frc.robot.Conditions#missing", thenLabel: "yes", elseLabel: "no", then: [], else: [] });
+    expect(() => buildJavaTrajectory(project, generatedCatalog())).toThrow(/routines\[0\].nodes\[0\].then\[0\].cond.*not in the linked generated catalog/i);
+
+    decision.then = [];
+    const legacy = generatedCatalog();
+    legacy.generatedSchemaVersion = "1.0";
+    legacy.conditions = [];
+    expect(() => buildJavaTrajectory(project, legacy)).toThrow(/condition catalog is stale.*schema 1\.1/i);
   });
 
   it("blocks source-only, unresolved legacy, and schema-invalid commands", () => {

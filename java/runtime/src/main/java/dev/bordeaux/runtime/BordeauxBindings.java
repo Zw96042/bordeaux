@@ -20,6 +20,38 @@ public final class BordeauxBindings {
      * typed factory calls and the compiled catalog identity; this method only performs its fixed bootstrap.
      */
     public static BordeauxCommandRegistry generated(Object... providers) {
+        Object bindings = initialize(providers);
+        try {
+            Object result = bindings.getClass().getMethod("registry").invoke(bindings);
+            if (result instanceof BordeauxCommandRegistry registry) return registry;
+            throw new BordeauxRuntimeException("Generated Bordeaux bindings returned an invalid registry");
+        } catch (BordeauxRuntimeException exception) {
+            throw exception;
+        } catch (InvocationTargetException exception) {
+            throw generatedFailure(exception);
+        } catch (ReflectiveOperationException exception) {
+            throw new BordeauxRuntimeException("Could not initialize generated Bordeaux bindings: " + safeMessage(exception), exception);
+        }
+    }
+
+    /** Creates the generated command and condition capability set from team-owned provider instances. */
+    public static BordeauxCapabilities generatedCapabilities(Object... providers) {
+        Object bindings = initialize(providers);
+        try {
+            Method capabilities = bindings.getClass().getMethod("capabilities");
+            Object result = capabilities.invoke(bindings);
+            if (result instanceof BordeauxCapabilities generatedCapabilities) return generatedCapabilities;
+            throw new BordeauxRuntimeException("Generated Bordeaux bindings returned invalid capabilities");
+        } catch (BordeauxRuntimeException exception) {
+            throw exception;
+        } catch (InvocationTargetException exception) {
+            throw generatedFailure(exception);
+        } catch (ReflectiveOperationException exception) {
+            throw new BordeauxRuntimeException("Generated Bordeaux capabilities are missing; rebuild the catalog with support 0.2.0", exception);
+        }
+    }
+
+    private static Object initialize(Object... providers) {
         Object[] available = providers == null ? new Object[0] : providers.clone();
         for (int index = 0; index < available.length; index++) {
             if (available[index] == null) {
@@ -30,25 +62,24 @@ public final class BordeauxBindings {
             Class<?> bindingsType = Class.forName(GENERATED_BINDINGS);
             Constructor<?> constructor = generatedConstructor(bindingsType);
             Object bindings = constructor.newInstance(orderProviders(constructor.getParameterTypes(), available));
-            Method registry = bindingsType.getMethod("registry");
-            Object result = registry.invoke(bindings);
-            if (!(result instanceof BordeauxCommandRegistry commandRegistry)) {
-                throw new BordeauxRuntimeException("Generated Bordeaux bindings returned an invalid registry");
-            }
-            return commandRegistry;
+            return bindings;
         } catch (BordeauxRuntimeException exception) {
             throw exception;
         } catch (ClassNotFoundException exception) {
             throw new BordeauxRuntimeException(
                     "Generated Bordeaux bindings are missing; install support and run bordeauxCatalog", exception);
         } catch (InvocationTargetException exception) {
-            Throwable cause = exception.getCause();
-            if (cause instanceof BordeauxRuntimeException runtimeException) throw runtimeException;
-            throw new BordeauxRuntimeException("Generated Bordeaux bindings failed: " + safeMessage(cause), cause);
+            throw generatedFailure(exception);
         } catch (ReflectiveOperationException | LinkageError exception) {
             throw new BordeauxRuntimeException(
                     "Could not initialize generated Bordeaux bindings: " + safeMessage(exception), exception);
         }
+    }
+
+    private static BordeauxRuntimeException generatedFailure(InvocationTargetException exception) {
+        Throwable cause = exception.getCause();
+        if (cause instanceof BordeauxRuntimeException runtimeException) return runtimeException;
+        return new BordeauxRuntimeException("Generated Bordeaux bindings failed: " + safeMessage(cause), cause);
     }
 
     private static Constructor<?> generatedConstructor(Class<?> bindingsType) {

@@ -33,6 +33,21 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
         }
         reset();
     }
+
+    /** Uses one generated capability set and rejects every missing decision condition before the routine starts. */
+    public BordeauxRoutineRunner(BordeauxPathEvents document, BordeauxCapabilities capabilities) {
+        this(document, capabilities, BordeauxEventRunner.Scheduler.wpilib());
+    }
+
+    /** Uses one generated capability set and an explicit scheduler for integration testing. */
+    public BordeauxRoutineRunner(BordeauxPathEvents document, BordeauxCapabilities capabilities,
+            BordeauxEventRunner.Scheduler scheduler) {
+        this(document, Objects.requireNonNull(capabilities, "capabilities").commands(), capabilities.conditions(), scheduler);
+        if (!document.catalogId().equals(capabilities.catalogId()) || !document.catalogHash().equals(capabilities.catalogHash())) {
+            throw new BordeauxRuntimeException("Routine catalog does not match generated Bordeaux capabilities");
+        }
+        capabilities.conditions().preflight(decisionConditionIds(document.routine().nodes()));
+    }
     /** Resolves entry decisions and commands, returning the first path to run. */
     public Optional<String> start() {
         if (!active) throw new BordeauxRuntimeException("Routine runner is stopped; call reset() before start()");
@@ -89,6 +104,22 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
 
     private void prepend(List<BordeauxRoutineNode> nodes) {
         for (int index = nodes.size() - 1; index >= 0; index--) pending.addFirst(nodes.get(index));
+    }
+
+    private static List<String> decisionConditionIds(List<BordeauxRoutineNode> nodes) {
+        List<String> ids = new java.util.ArrayList<>();
+        collectDecisionConditionIds(nodes, ids);
+        return ids;
+    }
+
+    private static void collectDecisionConditionIds(List<BordeauxRoutineNode> nodes, List<String> ids) {
+        for (BordeauxRoutineNode node : nodes) {
+            if (node instanceof BordeauxRoutineNode.Decision decision) {
+                ids.add(decision.conditionId());
+                collectDecisionConditionIds(decision.whenTrue(), ids);
+                collectDecisionConditionIds(decision.whenFalse(), ids);
+            }
+        }
     }
 
     @Override

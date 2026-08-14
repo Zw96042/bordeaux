@@ -237,13 +237,30 @@ export interface JavaCommandDescriptor {
   };
 }
 
+/** A generated robot predicate that can be used by routine decisions and event schedules. */
+export interface JavaConditionDescriptor {
+  id: string;
+  label: string;
+  description?: string;
+  /** Team-authored natural-language aliases from the generated catalog. */
+  aliases?: string[];
+  /** Explicit capabilities such as game-piece; never inferred from the label. */
+  semanticTags?: string[];
+  ownerType: string;
+  member: string;
+  source: {
+    file: string;
+    line: number;
+  };
+}
+
 export interface JavaCommandCatalog {
   projectName: string;
   sourceFileCount: number;
   scannedAt: string;
   source?: "source" | "generated" | "mixed";
   runtimeCommandCount?: number;
-  generatedSchemaVersion?: "1.0";
+  generatedSchemaVersion?: "1.0" | "1.1";
   catalogId?: string;
   supportVersion?: string;
   catalogHash?: string;
@@ -251,6 +268,8 @@ export interface JavaCommandCatalog {
   semanticFingerprint?: string;
   authoritative?: boolean;
   commands: JavaCommandDescriptor[];
+  /** Empty for a legacy generated 1.0 command-only catalog. */
+  conditions?: JavaConditionDescriptor[];
   warnings: string[];
 }
 

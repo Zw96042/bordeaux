@@ -28,10 +28,38 @@ class BordeauxRuntimeTest {
     @Test
     void bootstrapsFinalRoundGeneratedBindingsByProviderType() {
         BordeauxCommandRegistry registry = BordeauxBindings.generated(new SecondProvider(), new FirstProvider());
+        BordeauxCapabilities capabilities = BordeauxBindings.generatedCapabilities(new SecondProvider(), new FirstProvider());
 
         assertEquals("test-bindings", registry.catalogId());
         assertEquals(HASH, registry.catalogHash());
+        assertEquals(registry.catalogHash(), capabilities.catalogHash());
         assertThrows(BordeauxRuntimeException.class, () -> BordeauxBindings.generated(new FirstProvider()));
+    }
+
+    @Test
+    void rejectsCapabilitiesWithMismatchedRegistryIdentity() {
+        BordeauxCommandRegistry commands = BordeauxCommandRegistry.builder().catalogId(CATALOG_ID).catalogHash(HASH).build();
+        BordeauxConditionRegistry conditions = BordeauxConditionRegistry.builder().catalogId(CATALOG_ID)
+                .catalogHash("sha256:" + "b".repeat(64)).build();
+
+        assertThrows(BordeauxRuntimeException.class, () -> new BordeauxCapabilities(commands, conditions));
+    }
+
+    @Test
+    void generatedCapabilitiesTakeAConditionBranchAndScheduleItsCommand() throws Exception {
+        BordeauxCapabilities capabilities = BordeauxBindings.generatedCapabilities(new FirstProvider(), new SecondProvider());
+        ObjectNode arguments = (ObjectNode) MAPPER.readTree("{}");
+        BordeauxRoutine routine = new BordeauxRoutine("Generated", List.of(
+                new BordeauxRoutineNode.Decision("ready", "ready", List.of(
+                        new BordeauxRoutineNode.Command("collect", "collect", arguments),
+                        new BordeauxRoutineNode.Path("next", "next-path")), List.of())));
+        BordeauxPathEvents document = new BordeauxPathEvents("start", "Start", 1,
+                capabilities.catalogId(), capabilities.catalogHash(), List.of(), List.of(), List.of(), routine);
+        RecordingScheduler scheduler = new RecordingScheduler();
+        BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, capabilities, scheduler);
+
+        assertEquals("next-path", runner.start().orElseThrow());
+        assertEquals(1, scheduler.scheduled.size());
     }
 
     record Target(String level, List<Integer> slots) {}
@@ -259,6 +287,27 @@ class BordeauxRuntimeTest {
         runner.start();
         assertEquals("path-c", runner.completePath("path-a").orElseThrow());
         assertThrows(BordeauxRuntimeException.class, () -> runner.completePath("wrong"));
+    }
+
+    @Test
+    void preflightsEveryDecisionAndOptionalMarkerConditionBeforeExecution() throws Exception {
+        ObjectNode arguments = (ObjectNode) MAPPER.readTree("{}");
+        BordeauxCapabilities capabilities = new BordeauxCapabilities(registry(new ArrayList<>(), "collect"),
+                BordeauxConditionRegistry.builder().catalogId(CATALOG_ID).catalogHash(HASH)
+                        .register("ready", () -> true).build());
+        BordeauxRoutine routine = new BordeauxRoutine("Preflight", List.of(
+                new BordeauxRoutineNode.Decision("first", "ready", List.of(), List.of(
+                        new BordeauxRoutineNode.Decision("nested", "missing", List.of(), List.of())))));
+        BordeauxPathEvents routinePath = new BordeauxPathEvents("auto", "Auto", 1, CATALOG_ID, HASH,
+                List.of(), List.of(), List.of(), routine);
+        BordeauxPathEvents eventPath = new BordeauxPathEvents("auto", "Auto", 1, CATALOG_ID, HASH,
+                List.of(new BordeauxEvent("marker", "Marker", 0, 0, "collect", arguments, false,
+                        BordeauxEvent.Trigger.TIME, null, null, "missing")));
+
+        assertThrows(BordeauxRuntimeException.class, () -> new BordeauxRoutineRunner(routinePath, capabilities,
+                new RecordingScheduler()));
+        assertThrows(BordeauxRuntimeException.class, () -> new BordeauxEventRunner(eventPath, capabilities,
+                new RecordingScheduler()));
     }
 
     @Test

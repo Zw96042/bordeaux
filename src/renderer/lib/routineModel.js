@@ -17,12 +17,6 @@ import { PM } from "./pathMath";
   };
   const CAT_LIST = ['command', 'terminate', 'sequence', 'generate', 'velocity'];
 
-  const CONDITIONS = [
-    { value: 'robot.ready', label: 'Robot ready', meta: 'Runtime condition ID' },
-    { value: 'vision.targetVisible', label: 'Vision target visible', meta: 'Runtime condition ID' },
-    { value: 'gamePiece.detected', label: 'Game piece detected', meta: 'Runtime condition ID' },
-    { value: 'path.clear', label: 'Path clear', meta: 'Runtime condition ID' },
-  ];
   const FUNCTIONS = [
     { value: 'GeneratePath', label: 'Generate path', meta: 'Runtime trajectory function' },
     { value: 'GenerateNearestGamePiece', label: 'Nearest game piece', meta: 'Runtime trajectory function' },
@@ -40,6 +34,24 @@ import { PM } from "./pathMath";
     const out = empty ? [{ value: '', label: empty, meta: 'No runtime reference' }, ...items] : [...items];
     if (value && !out.some((item) => item.value === value)) {
       out.unshift({ value, label: value, meta: 'Exact project reference', badge: 'custom' });
+    }
+    return out;
+  }
+
+  function authoritativeConditions(catalog) {
+    if (!catalog || catalog.authoritative !== true || catalog.generatedSchemaVersion !== '1.1') return [];
+    return (catalog.conditions || []).map((condition) => ({
+      value: condition.id,
+      label: condition.label,
+      meta: condition.description || condition.id,
+    }));
+  }
+
+  function conditionPickerItems(conditions, value, empty) {
+    const registered = conditions || [];
+    const out = [{ value: '', label: empty || 'Choose a registered condition', meta: 'No condition selected' }, ...registered];
+    if (value && !registered.some((condition) => condition.value === value)) {
+      out.splice(1, 0, { value, label: value, meta: 'Unavailable in the linked generated catalog; replace or remove it before export', badge: 'invalid' });
     }
     return out;
   }
@@ -68,7 +80,7 @@ import { PM } from "./pathMath";
   // ---- node factory ----
   function newNode(type, cat, pathRef) {
     if (type === 'path') return { id: uid('p'), type: 'path', ref: pathRef || '' };
-    if (type === 'decision') return { id: uid('d'), type: 'decision', cond: 'robot.ready', thenLabel: 'Yes', elseLabel: 'No', then: [], else: [] };
+    if (type === 'decision') return { id: uid('d'), type: 'decision', cond: '', thenLabel: 'Yes', elseLabel: 'No', then: [], else: [] };
     const c = cat || 'terminate';
     if (c === 'command') return { id: uid('c'), type: 'function', cat: 'command', title: 'Robot command', invocation: null };
     if (c === 'generate') return { id: uid('g'), type: 'function', cat: 'generate', funcRef: 'GeneratePath', trigger: 'On entry', params: [], note: '', preview: null };
@@ -184,7 +196,7 @@ import { PM } from "./pathMath";
     });
   }
 
-export const AUTO = { CATS, CAT_LIST, CONDITIONS, FUNCTIONS, TRIGGERS, pickerItems, SEQ_OPS, seqOp, nodeTitle, newNode, walk, findNode, countSteps, branchCount,
+export const AUTO = { CATS, CAT_LIST, FUNCTIONS, TRIGGERS, pickerItems, authoritativeConditions, conditionPickerItems, SEQ_OPS, seqOp, nodeTitle, newNode, walk, findNode, countSteps, branchCount,
     buildRun, poseAt, stepAt, fieldOverlay,
     update, remove, insertAfter, prepend, appendBranch, append, move, reorderRelative };
 

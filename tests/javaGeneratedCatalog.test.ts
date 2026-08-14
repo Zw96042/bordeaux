@@ -49,6 +49,113 @@ function catalog() {
 }
 
 describe("generated Java command catalogs", () => {
+  it("accepts a 1.1 catalog whose identity covers sorted condition capabilities", () => {
+    const value = catalog() as any;
+    value.schemaVersion = "1.1";
+    value.supportVersion = "0.2.0";
+    value.conditions = [{
+      id: "frc.robot.Conditions#hasNote",
+      label: "Has note",
+      description: "The robot currently holds a note.",
+      aliases: ["note", "piece"],
+      semanticTags: ["game-piece"],
+      ownerType: "frc.robot.Conditions",
+      member: "hasNote",
+      source: { file: "src/main/java/frc/robot/Conditions.java", line: 14 },
+    }, {
+      id: "frc.robot.Conditions#ready",
+      label: "Ready",
+      ownerType: "frc.robot.Conditions",
+      member: "ready",
+      source: { file: "src/main/java/frc/robot/Conditions.java", line: 9 },
+    }];
+    value.catalogHash = generatedCatalogHash(value.commands, value.conditions);
+
+    const parsed = parseGeneratedJavaCatalog(value);
+
+    expect(parsed.schemaVersion).toBe("1.1");
+    expect(parsed.conditions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "frc.robot.Conditions#hasNote", semanticTags: ["game-piece"] }),
+    ]));
+    expect(generatedCatalogHash(value.commands, [...value.conditions].reverse())).not.toBe(value.catalogHash);
+  });
+
+  it("normalizes the processor's unknown condition source line", () => {
+    const value = catalog() as any;
+    value.schemaVersion = "1.1";
+    value.supportVersion = "0.2.0";
+    value.conditions = [{
+      id: "frc.robot.Conditions#ready",
+      label: "Ready",
+      ownerType: "frc.robot.Conditions",
+      member: "ready",
+      source: { file: "frc/robot/Conditions.java", line: 0 },
+    }];
+    value.catalogHash = generatedCatalogHash(value.commands, value.conditions);
+
+    expect(parseGeneratedJavaCatalog(value).conditions[0].source.line).toBe(1);
+  });
+
+  it("rejects command and condition IDs that collide", () => {
+    const value = catalog() as any;
+    value.schemaVersion = "1.1";
+    value.supportVersion = "0.2.0";
+    value.conditions = [{
+      id: value.commands[0].id,
+      label: "Collision",
+      ownerType: "frc.robot.Conditions",
+      member: "collision",
+      source: { file: "frc/robot/Conditions.java", line: 0 },
+    }];
+    value.catalogHash = generatedCatalogHash(value.commands, value.conditions);
+
+    expect(() => parseGeneratedJavaCatalog(value)).toThrow(/capability ID.*collides/);
+  });
+
+  it("rejects 1.1 catalogs with duplicate, unsorted, or malformed conditions", () => {
+    const value = catalog() as any;
+    value.schemaVersion = "1.1";
+    value.supportVersion = "0.2.0";
+    value.conditions = [{
+      id: "frc.robot.Conditions#ready",
+      label: "Ready",
+      ownerType: "frc.robot.Conditions",
+      member: "ready",
+      source: { file: "src/main/java/frc/robot/Conditions.java", line: 9 },
+    }, {
+      id: "frc.robot.Conditions#hasNote",
+      label: "Has note",
+      ownerType: "frc.robot.Conditions",
+      member: "hasNote",
+      source: { file: "src/main/java/frc/robot/Conditions.java", line: 14 },
+    }];
+    value.catalogHash = generatedCatalogHash(value.commands, value.conditions);
+    expect(() => parseGeneratedJavaCatalog(value)).toThrow(/sorted/);
+
+    value.conditions.reverse();
+    value.conditions.push({ ...value.conditions[0] });
+    value.catalogHash = generatedCatalogHash(value.commands, value.conditions);
+    expect(() => parseGeneratedJavaCatalog(value)).toThrow(/duplicated/);
+
+    value.conditions = [{ ...value.conditions[0], aliases: Array.from({ length: 17 }, (_, index) => `alias-${index}`) }];
+    value.catalogHash = generatedCatalogHash(value.commands, value.conditions);
+    expect(() => parseGeneratedJavaCatalog(value)).toThrow(/aliases/);
+  });
+
+  it("requires the 1.1 catalog and 0.2.0 runtime contract together", () => {
+    const value = catalog() as any;
+    value.schemaVersion = "1.1";
+    value.supportVersion = "0.1.0";
+    value.conditions = [];
+    value.catalogHash = generatedCatalogHash(value.commands, value.conditions);
+
+    expect(() => parseGeneratedJavaCatalog(value)).toThrow(/schema 1\.1 requires its matching supported runtime version/);
+  });
+
+  it("continues to parse a legacy 1.0 command-only catalog", () => {
+    expect(parseGeneratedJavaCatalog(catalog())).toMatchObject({ schemaVersion: "1.0", conditions: [] });
+  });
+
   it("accepts bounded metadata and exact custom defaults", () => {
     const { commands: [command], catalogHash } = parseGeneratedJavaCatalog(catalog());
 

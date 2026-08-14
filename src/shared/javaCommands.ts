@@ -216,8 +216,29 @@ export function javaInvocationErrors(invocation: CommandInvocation, command: Jav
 export function validateProjectJavaInvocations(project: BordeauxProject, catalog: JavaCommandCatalog | null): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const commands = new Map((catalog?.commands ?? []).map((command) => [command.id, command]));
+  const conditions = new Map((catalog?.conditions ?? []).map((condition) => [condition.id, condition]));
+  const validateCondition = (conditionId: unknown, path: string, usage: string) => {
+    if (typeof conditionId !== "string" || !conditionId.trim()) {
+      issues.push({ path, message: `${usage} needs a registered condition ID`, severity: "error" });
+      return;
+    }
+    if (!/^[A-Za-z0-9_.:#()$,-]{1,256}$/.test(conditionId)) {
+      issues.push({ path, message: `${usage} condition ID is invalid`, severity: "error" });
+      return;
+    }
+    if (catalog?.generatedSchemaVersion !== "1.1") {
+      issues.push({ path, message: `${usage} condition catalog is stale; build generated catalog schema 1.1 before export`, severity: "error" });
+      return;
+    }
+    if (!conditions.has(conditionId)) {
+      issues.push({ path, message: `Condition ${conditionId} is not in the linked generated catalog`, severity: "error" });
+    }
+  };
   project.paths.forEach((path, pathIndex) => path.markers.forEach((marker, markerIndex) => {
     const base = `$.paths[${pathIndex}].markers[${markerIndex}]`;
+    if (marker.schedule && Object.hasOwn(marker.schedule, "conditionId")) {
+      validateCondition(marker.schedule.conditionId, `${base}.schedule.conditionId`, "Event schedule");
+    }
     if (marker.actionIntent && !marker.invocation) {
       issues.push({ path: `${base}.actionIntent`, message: `Action ${marker.actionIntent.semanticTag} is still an intent; bind it to a generated Java command before export`, severity: "error" });
       return;
@@ -249,6 +270,7 @@ export function validateProjectJavaInvocations(project: BordeauxProject, catalog
       const node = value;
       const base = `${path}[${index}]`;
       if (node.type === "decision") {
+        validateCondition(node.cond, `${base}.cond`, `Routine decision ${node.id}`);
         validateRoutineNodes(node.then, `${base}.then`);
         validateRoutineNodes(node.else, `${base}.else`);
       } else if (node.type === "function" && node.cat === "command") {

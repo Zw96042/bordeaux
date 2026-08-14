@@ -1,6 +1,7 @@
 package dev.bordeaux.processor;
 
 import dev.bordeaux.annotations.BordeauxCommand;
+import dev.bordeaux.annotations.BordeauxCondition;
 import dev.bordeaux.annotations.BordeauxParam;
 import java.io.IOException;
 import java.io.Writer;
@@ -52,12 +53,14 @@ public final class BordeauxProcessor extends AbstractProcessor {
     private static final int MAX_CATALOG_BYTES = 2 * 1024 * 1024;
     private final List<CommandMethod> collectedMethods = new ArrayList<>();
     private final Map<String, ExecutableElement> collectedIds = new HashMap<>();
+    private final List<ConditionMethod> collectedConditions = new ArrayList<>();
+    private final Map<String, ExecutableElement> collectedConditionIds = new HashMap<>();
     private boolean generated;
     private boolean invalid;
 
     @Override
     public Set<String> getSupportedAnnotationTypes() {
-        return Set.of(BordeauxCommand.class.getCanonicalName(), BordeauxParam.class.getCanonicalName());
+        return Set.of(BordeauxCommand.class.getCanonicalName(), BordeauxCondition.class.getCanonicalName(), BordeauxParam.class.getCanonicalName());
     }
 
     @Override
@@ -70,21 +73,25 @@ public final class BordeauxProcessor extends AbstractProcessor {
         if (generated) return false;
         if (roundEnvironment.processingOver()) {
             generated = true;
-            if (invalid || collectedMethods.isEmpty()) return false;
+            if (invalid || (collectedMethods.isEmpty() && collectedConditions.isEmpty())) return false;
             List<CommandMethod> methods = collectedMethods.stream()
                     .sorted(Comparator.comparing(CommandMethod::id)).toList();
+            List<ConditionMethod> conditions = collectedConditions.stream()
+                    .sorted(Comparator.comparing(ConditionMethod::id)).toList();
             try {
                 String commandsJson = commandsJson(methods);
-                if (commandsJson.getBytes(StandardCharsets.UTF_8).length > MAX_CATALOG_BYTES - 1_024) {
+                String conditionsJson = conditionsJson(conditions);
+                String semanticCatalog = "{\"commands\":" + commandsJson + ",\"conditions\":" + conditionsJson + "}";
+                if (semanticCatalog.getBytes(StandardCharsets.UTF_8).length > MAX_CATALOG_BYTES - 1_024) {
                     processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
-                            "Generated Bordeaux command catalog exceeds " + MAX_CATALOG_BYTES + " bytes");
+                            "Generated Bordeaux capability catalog exceeds " + MAX_CATALOG_BYTES + " bytes");
                     return true;
                 }
-                String catalogHash = semanticHash(commandsJson);
-                String catalogId = catalogId(methods);
+                String catalogHash = semanticHash(semanticCatalog);
+                String catalogId = catalogId(methods, conditions);
                 if (catalogId == null) return true;
-                writeCatalog(commandsJson, catalogId, catalogHash);
-                writeBindings(methods, catalogId, catalogHash);
+                writeCatalog(commandsJson, conditionsJson, catalogId, catalogHash);
+                writeBindings(methods, conditions, catalogId, catalogHash);
             } catch (IOException exception) {
                 processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
                         "Could not generate Bordeaux command metadata: " + exception.getMessage());
@@ -92,8 +99,9 @@ public final class BordeauxProcessor extends AbstractProcessor {
             return true;
         }
         Set<? extends Element> annotated = roundEnvironment.getElementsAnnotatedWith(BordeauxCommand.class);
-        if (annotated.isEmpty()) return false;
-        if (collectedMethods.size() + annotated.size() > MAX_COMMANDS) {
+        Set<? extends Element> annotatedConditions = roundEnvironment.getElementsAnnotatedWith(BordeauxCondition.class);
+        if (annotated.isEmpty() && annotatedConditions.isEmpty()) return false;
+        if (collectedMethods.size() + collectedConditions.size() + annotated.size() + annotatedConditions.size() > MAX_COMMANDS) {
             processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
                     "Bordeaux command count exceeds " + MAX_COMMANDS);
             invalid = true;
@@ -113,15 +121,86 @@ public final class BordeauxProcessor extends AbstractProcessor {
                 continue;
             }
             ExecutableElement previous = collectedIds.putIfAbsent(command.id(), method);
-            if (previous != null) {
-                error(method, "Duplicate Bordeaux command ID '" + command.id() + "'");
-                error(previous, "Duplicate Bordeaux command ID '" + command.id() + "'");
+            if (previous != null || collectedConditionIds.containsKey(command.id())) {
+                error(method, previous == null ? "Duplicate Bordeaux capability ID '" + command.id() + "'"
+                        : "Duplicate Bordeaux command ID '" + command.id() + "'");
+                if (previous != null) error(previous, "Duplicate Bordeaux command ID '" + command.id() + "'");
                 invalid = true;
                 continue;
             }
             collectedMethods.add(command);
         }
+        for (Element element : annotatedConditions) {
+            if (element.getKind() != ElementKind.METHOD) {
+                error(element, "@BordeauxCondition may only annotate methods");
+                invalid = true;
+                continue;
+            }
+            ExecutableElement method = (ExecutableElement) element;
+            ConditionMethod condition = inspectCondition(method);
+            if (condition == null) {
+                invalid = true;
+                continue;
+            }
+            ExecutableElement previous = collectedConditionIds.putIfAbsent(condition.id(), method);
+            if (previous != null || collectedIds.containsKey(condition.id())) {
+                error(method, "Duplicate Bordeaux capability ID '" + condition.id() + "'");
+                if (previous != null) error(previous, "Duplicate Bordeaux capability ID '" + condition.id() + "'");
+                invalid = true;
+                continue;
+            }
+            collectedConditions.add(condition);
+        }
         return true;
+    }
+
+    private ConditionMethod inspectCondition(ExecutableElement method) {
+        Elements elements = processingEnv.getElementUtils();
+        Types types = processingEnv.getTypeUtils();
+        TypeElement owner = (TypeElement) method.getEnclosingElement();
+        BordeauxCondition annotation = method.getAnnotation(BordeauxCondition.class);
+        boolean valid = true;
+        if (!method.getModifiers().contains(Modifier.PUBLIC)) {
+            error(method, "Bordeaux condition methods must be public"); valid = false;
+        }
+        if (!owner.getModifiers().contains(Modifier.PUBLIC)) {
+            error(owner, "Bordeaux condition provider types must be public"); valid = false;
+        }
+        if (!owner.getTypeParameters().isEmpty() || !method.getTypeParameters().isEmpty()) {
+            error(method, "Generic Bordeaux condition providers and methods are not supported"); valid = false;
+        }
+        if (!method.getParameters().isEmpty()) {
+            error(method, "Bordeaux condition methods must not declare parameters"); valid = false;
+        }
+        if (method.getReturnType().getKind() != TypeKind.BOOLEAN) {
+            error(method, "@BordeauxCondition method must return primitive boolean"); valid = false;
+        }
+        TypeElement runtimeException = elements.getTypeElement("java.lang.RuntimeException");
+        TypeElement errorType = elements.getTypeElement("java.lang.Error");
+        for (TypeMirror thrown : method.getThrownTypes()) {
+            if (types.isAssignable(thrown, runtimeException.asType()) || types.isAssignable(thrown, errorType.asType())) continue;
+            error(method, "Bordeaux condition methods must not declare checked exceptions"); valid = false;
+            break;
+        }
+        if (!method.getModifiers().contains(Modifier.STATIC)
+                && owner.getNestingKind().isNested() && !owner.getModifiers().contains(Modifier.STATIC)) {
+            error(owner, "Nested Bordeaux condition providers must be static"); valid = false;
+        }
+        String ownerName = owner.getQualifiedName().toString();
+        String id = annotation.id().isBlank() ? ownerName + "#" + method.getSimpleName() : annotation.id().trim();
+        if (id.length() > 256 || !id.matches("[A-Za-z0-9_.:#()$,-]+")) {
+            error(method, "Bordeaux condition ID must be 1-256 stable identifier characters"); valid = false;
+        }
+        if (annotation.label().length() > 256 || annotation.description().length() > 2_048) {
+            error(method, "Bordeaux condition labels and descriptions exceed catalog limits"); valid = false;
+        }
+        List<String> aliases = boundedTerms(method, annotation.aliases(), "condition aliases", false);
+        List<String> semanticTags = boundedTerms(method, annotation.semanticTags(), "condition semantic tags", true);
+        if (aliases == null || semanticTags == null) valid = false;
+        if (!valid) return null;
+        String label = annotation.label().isBlank() ? humanize(method.getSimpleName().toString()) : annotation.label();
+        return new ConditionMethod(id, label, annotation.description(), aliases, semanticTags, ownerName,
+                method.getSimpleName().toString(), method.getModifiers().contains(Modifier.STATIC));
     }
 
     private CommandMethod inspect(ExecutableElement method) {
@@ -570,9 +649,9 @@ public final class BordeauxProcessor extends AbstractProcessor {
                 value.getModifiers().contains(Modifier.PUBLIC) && value.getParameters().isEmpty());
     }
 
-    private String catalogId(List<CommandMethod> methods) {
+    private String catalogId(List<CommandMethod> methods, List<ConditionMethod> conditions) {
         String value = processingEnv.getOptions().get("bordeaux.catalogId");
-        if (value == null || value.isBlank()) value = methods.get(0).owner();
+        if (value == null || value.isBlank()) value = !methods.isEmpty() ? methods.get(0).owner() : conditions.get(0).owner();
         value = value.trim();
         if (value.length() > 256) {
             processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
@@ -582,19 +661,22 @@ public final class BordeauxProcessor extends AbstractProcessor {
         return value;
     }
 
-    private void writeCatalog(String commandsJson, String catalogId, String catalogHash) throws IOException {
+    private void writeCatalog(String commandsJson, String conditionsJson, String catalogId, String catalogHash) throws IOException {
         Filer filer = processingEnv.getFiler();
         try (Writer writer = filer.createResource(StandardLocation.CLASS_OUTPUT, "", "META-INF/bordeaux/commands.json").openWriter()) {
-            writer.write("{\n  \"schemaVersion\": \"1.0\",\n  \"catalogId\": " + quote(catalogId)
-                    + ",\n  \"supportVersion\": \"0.1.0\",\n  \"catalogHash\": " + quote(catalogHash)
-                    + ",\n  \"commands\": " + commandsJson + "\n}\n");
+            writer.write("{\n  \"schemaVersion\": \"1.1\",\n  \"catalogId\": " + quote(catalogId)
+                    + ",\n  \"supportVersion\": \"0.2.0\",\n  \"catalogHash\": " + quote(catalogHash)
+                    + ",\n  \"commands\": " + commandsJson + ",\n  \"conditions\": " + conditionsJson + "\n}\n");
         }
     }
 
-    private void writeBindings(List<CommandMethod> methods, String catalogId, String catalogHash) throws IOException {
+    private void writeBindings(List<CommandMethod> methods, List<ConditionMethod> conditions, String catalogId, String catalogHash) throws IOException {
         Map<String, String> providers = new LinkedHashMap<>();
         for (CommandMethod method : methods) {
             if (!method.isStatic()) providers.computeIfAbsent(method.owner(), ignored -> "provider" + providers.size());
+        }
+        for (ConditionMethod condition : conditions) {
+            if (!condition.isStatic()) providers.computeIfAbsent(condition.owner(), ignored -> "provider" + providers.size());
         }
         JavaFileObject source = processingEnv.getFiler().createSourceFile(GENERATED_PACKAGE + "." + GENERATED_CLASS);
         try (Writer writer = source.openWriter()) {
@@ -623,7 +705,16 @@ public final class BordeauxProcessor extends AbstractProcessor {
                 writer.write(method.parameters().stream().map(this::argumentExpression).reduce((a, b) -> a + ", " + b).orElse(""));
                 writer.write("));\n");
             }
-            writer.write("    return builder.build();\n  }\n}\n");
+            writer.write("    return builder.build();\n  }\n\n  public dev.bordeaux.runtime.BordeauxConditionRegistry conditions() {\n");
+            writer.write("    var builder = dev.bordeaux.runtime.BordeauxConditionRegistry.builder()"
+                    + ".catalogId(CATALOG_ID).catalogHash(CATALOG_HASH);\n");
+            for (ConditionMethod condition : conditions) {
+                writer.write("    builder.register(" + quoteJava(condition.id()) + ", () -> ");
+                writer.write(condition.isStatic() ? condition.owner() : providers.get(condition.owner()));
+                writer.write("." + condition.member() + "());\n");
+            }
+            writer.write("    return builder.build();\n  }\n\n  public dev.bordeaux.runtime.BordeauxCapabilities capabilities() {\n"
+                    + "    return new dev.bordeaux.runtime.BordeauxCapabilities(registry(), conditions());\n  }\n}\n");
         }
     }
 
@@ -663,6 +754,25 @@ public final class BordeauxProcessor extends AbstractProcessor {
             commands.add("{" + String.join(",", fields) + "}");
         }
         return "[" + String.join(",", commands) + "]";
+    }
+
+    private String conditionsJson(List<ConditionMethod> conditions) {
+        List<String> values = new ArrayList<>();
+        for (ConditionMethod condition : conditions) {
+            List<String> fields = new ArrayList<>();
+            if (!condition.aliases().isEmpty()) fields.add("\"aliases\":[" + condition.aliases().stream().map(BordeauxProcessor::quote).reduce((a, b) -> a + "," + b).orElse("") + "]");
+            fields.add("\"confidence\":\"confirmed\"");
+            if (!condition.description().isBlank()) fields.add("\"description\":" + quote(condition.description()));
+            fields.add("\"id\":" + quote(condition.id()));
+            fields.add("\"kind\":\"condition\"");
+            fields.add("\"label\":" + quote(condition.label()));
+            fields.add("\"member\":" + quote(condition.member()));
+            fields.add("\"ownerType\":" + quote(condition.owner()));
+            if (!condition.semanticTags().isEmpty()) fields.add("\"semanticTags\":[" + condition.semanticTags().stream().map(BordeauxProcessor::quote).reduce((a, b) -> a + "," + b).orElse("") + "]");
+            fields.add("\"source\":{\"file\":" + quote(condition.owner().replace('.', '/') + ".java") + ",\"line\":0}");
+            values.add("{" + String.join(",", fields) + "}");
+        }
+        return "[" + String.join(",", values) + "]";
     }
 
     private static String boundJson(Parameter parameter, String value) {
@@ -788,6 +898,10 @@ public final class BordeauxProcessor extends AbstractProcessor {
     private record CommandMethod(
             String id, String label, String description, List<String> aliases, List<String> semanticTags, String owner, String member,
             boolean isStatic, List<Parameter> parameters) {}
+
+    private record ConditionMethod(
+            String id, String label, String description, List<String> aliases, List<String> semanticTags, String owner,
+            String member, boolean isStatic) {}
 
     private record Parameter(
             String name, TypeMirror type, BordeauxParam metadata, String defaultValue, String schema) {}

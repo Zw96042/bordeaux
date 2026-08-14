@@ -1,6 +1,8 @@
 package dev.bordeaux.generated;
 
 import dev.bordeaux.runtime.BordeauxCommandRegistry;
+import dev.bordeaux.runtime.BordeauxCapabilities;
+import dev.bordeaux.runtime.BordeauxConditionRegistry;
 
 public final class BordeauxGeneratedBindings {
     public static class FirstProvider {}
@@ -20,6 +22,19 @@ public final class BordeauxGeneratedBindings {
         return BordeauxCommandRegistry.builder()
                 .catalogId("test-bindings")
                 .catalogHash("sha256:" + "a".repeat(64))
+                .register("collect", java.util.Set.of(), arguments -> new edu.wpi.first.wpilibj2.command.Command() {})
                 .build();
+    }
+
+    public BordeauxConditionRegistry conditions() {
+        return BordeauxConditionRegistry.builder()
+                .catalogId("test-bindings")
+                .catalogHash("sha256:" + "a".repeat(64))
+                .register("ready", () -> true)
+                .build();
+    }
+
+    public BordeauxCapabilities capabilities() {
+        return new BordeauxCapabilities(registry(), conditions());
     }
 }

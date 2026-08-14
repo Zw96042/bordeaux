@@ -61,7 +61,21 @@ public final class BordeauxEventRunner implements AutoCloseable {
             throw new BordeauxRuntimeException("Trajectory catalog hash " + path.catalogHash()
                     + " does not match robot registry " + registry.catalogHash());
         }
+        conditions.preflight(path.events().stream().map(BordeauxEvent::conditionId).toList());
         reset();
+    }
+
+    /** Constructs an event runner from the authoritative generated command and condition capability set. */
+    public BordeauxEventRunner(BordeauxPathEvents path, BordeauxCapabilities capabilities) {
+        this(path, capabilities, Scheduler.wpilib());
+    }
+
+    /** Constructs an event runner from generated capabilities and an explicit scheduler. */
+    public BordeauxEventRunner(BordeauxPathEvents path, BordeauxCapabilities capabilities, Scheduler scheduler) {
+        this(path, Objects.requireNonNull(capabilities, "capabilities").commands(), capabilities.conditions(), scheduler);
+        if (!path.catalogId().equals(capabilities.catalogId()) || !path.catalogHash().equals(capabilities.catalogHash())) {
+            throw new BordeauxRuntimeException("Trajectory catalog does not match generated Bordeaux capabilities");
+        }
     }
 
     /** Call once per robot loop with elapsed path time. All newly due events are caught up in order. */

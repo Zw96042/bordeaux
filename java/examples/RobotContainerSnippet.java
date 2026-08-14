@@ -1,7 +1,7 @@
 package frc.robot;
 
 import dev.bordeaux.runtime.BordeauxBindings;
-import dev.bordeaux.runtime.BordeauxCommandRegistry;
+import dev.bordeaux.runtime.BordeauxCapabilities;
 import dev.bordeaux.runtime.BordeauxEventRunner;
 import dev.bordeaux.runtime.BordeauxPathEvents;
 import dev.bordeaux.runtime.BordeauxTrajectoryReader;
@@ -12,18 +12,18 @@ import java.nio.file.Files;
 // Illustrative team-owned wiring. Bordeaux never edits RobotContainer.
 public final class RobotContainerSnippet {
     private final RobotCommands actions;
-    private final BordeauxCommandRegistry bordeauxCommands;
+    private final BordeauxCapabilities bordeauxCapabilities;
     private BordeauxEventRunner bordeauxEvents;
 
     public RobotContainerSnippet(RobotCommands.Superstructure superstructure) {
         actions = new RobotCommands(superstructure);
-        bordeauxCommands = BordeauxBindings.generated(actions);
+        bordeauxCapabilities = BordeauxBindings.generatedCapabilities(actions);
     }
 
     public void startPath(String fileName, String pathId) throws IOException {
         try (var input = Files.newInputStream(Filesystem.getDeployDirectory().toPath().resolve(fileName))) {
             BordeauxPathEvents path = BordeauxTrajectoryReader.read(input, pathId);
-            bordeauxEvents = new BordeauxEventRunner(path, bordeauxCommands);
+            bordeauxEvents = new BordeauxEventRunner(path, bordeauxCapabilities);
         }
     }
 

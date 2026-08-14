@@ -162,12 +162,20 @@ describe("Java command project discovery", () => {
         { name: "level", label: "Level", javaType: "int", role: "argument", schema: { kind: "integer", javaType: "int" } },
       ],
     }];
+    const conditions = [{
+      id: "auto.conditions#ready",
+      label: "Ready",
+      ownerType: "frc.robot.AutoCommands",
+      member: "ready",
+      source: { file: "src/main/java/frc/robot/AutoCommands.java", line: 12 },
+    }];
     await fs.writeFile(path.join(project, "build/bordeaux/catalog-v1.json"), JSON.stringify({
-      schemaVersion: "1.0",
+      schemaVersion: "1.1",
       catalogId: "robot-test",
-      supportVersion: "0.1.0",
-      catalogHash: generatedCatalogHash(commands),
+      supportVersion: "0.2.0",
+      catalogHash: generatedCatalogHash(commands, conditions),
       commands,
+      conditions,
     }));
 
     const catalog = await discoverJavaProject(project);
@@ -178,6 +186,7 @@ describe("Java command project discovery", () => {
     expect(catalog.commands.find((command) => command.id === "auto.score")).toMatchObject({ label: "Score at level", runtimeReady: true });
     expect(catalog.commands.some((command) => command.id.endsWith("#score"))).toBe(false);
     expect(catalog.commands.find((command) => command.id.endsWith("#intake"))).toMatchObject({ runtimeReady: false });
+    expect(catalog).toMatchObject({ generatedSchemaVersion: "1.1", conditions: [{ id: "auto.conditions#ready" }] });
   });
 
   it("previews the annotated command factories in the bundled template before a catalog build", async () => {

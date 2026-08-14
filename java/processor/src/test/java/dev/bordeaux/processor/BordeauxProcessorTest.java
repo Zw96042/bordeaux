@@ -61,9 +61,9 @@ class BordeauxProcessorTest {
 
         JsonNode catalog = MAPPER.readTree(Files.readString(
                 result.classes().resolve("META-INF/bordeaux/commands.json")));
-        assertEquals("1.0", catalog.path("schemaVersion").textValue());
+        assertEquals("1.1", catalog.path("schemaVersion").textValue());
         assertEquals("test-robot", catalog.path("catalogId").textValue());
-        assertEquals("0.1.0", catalog.path("supportVersion").textValue());
+        assertEquals("0.2.0", catalog.path("supportVersion").textValue());
         assertEquals("super.score", catalog.path("commands").get(0).path("id").textValue());
         assertEquals("shoot", catalog.path("commands").get(0).path("aliases").get(0).textValue());
         assertEquals("shoot-fuel", catalog.path("commands").get(0).path("semanticTags").get(0).textValue());
@@ -75,7 +75,7 @@ class BordeauxProcessorTest {
                 .filter(value -> value.path("name").textValue().equals("sequence")).findFirst().orElseThrow();
         assertEquals("integerString", sequence.path("schema").path("kind").textValue());
         assertTrue(sequence.path("max").isTextual());
-        assertEquals(canonicalHash(catalog.path("commands")), catalog.path("catalogHash").textValue());
+        assertEquals(canonicalHash(catalog.path("commands"), catalog.path("conditions")), catalog.path("catalogHash").textValue());
 
         String bindings = Files.readString(result.generated().resolve(
                 "dev/bordeaux/generated/BordeauxGeneratedBindings.java"));
@@ -91,6 +91,56 @@ class BordeauxProcessorTest {
         JsonNode secondCatalog = MAPPER.readTree(Files.readString(
                 second.classes().resolve("META-INF/bordeaux/commands.json")));
         assertEquals(catalog.path("catalogHash"), secondCatalog.path("catalogHash"));
+    }
+
+    @Test
+    void generatesAuthoritativeConditionsAndHashesTheirMetadata() throws Exception {
+        String source = """
+                package frc.robot;
+                import dev.bordeaux.annotations.*;
+                import edu.wpi.first.wpilibj2.command.Command;
+                public final class Capabilities {
+                  @BordeauxCommand(id="collect") public static Command collect() { return null; }
+                  @BordeauxCondition(id="ready", label="Ready to score", aliases={"armed"}, semanticTags={"ready-to-score"})
+                  public static boolean ready() { return true; }
+                }
+                """;
+        Compilation first = compile("frc/robot/Capabilities.java", source);
+        assertTrue(first.success(), first.messages());
+        JsonNode catalog = MAPPER.readTree(Files.readString(first.classes().resolve("META-INF/bordeaux/commands.json")));
+        assertEquals("ready", catalog.path("conditions").get(0).path("id").textValue());
+        assertEquals("Ready to score", catalog.path("conditions").get(0).path("label").textValue());
+        assertEquals(canonicalHash(catalog.path("commands"), catalog.path("conditions")), catalog.path("catalogHash").textValue());
+        String bindings = Files.readString(first.generated().resolve("dev/bordeaux/generated/BordeauxGeneratedBindings.java"));
+        assertTrue(bindings.contains("BordeauxConditionRegistry conditions()"));
+        assertTrue(bindings.contains("builder.register(\"ready\", () -> frc.robot.Capabilities.ready())"));
+        assertTrue(bindings.contains("BordeauxCapabilities capabilities()"));
+
+        Compilation changed = compile("frc/robot/Capabilities.java", source.replace("Ready to score", "Ready now"));
+        String changedHash = MAPPER.readTree(Files.readString(changed.classes().resolve("META-INF/bordeaux/commands.json")))
+                .path("catalogHash").textValue();
+        assertNotEquals(catalog.path("catalogHash").textValue(), changedHash);
+    }
+
+    @Test
+    void rejectsInvalidAndDuplicateConditionDeclarations() throws Exception {
+        Compilation result = compile("frc/robot/BadConditions.java", """
+                package frc.robot;
+                import dev.bordeaux.annotations.*;
+                public final class BadConditions {
+                  @BordeauxCondition(id="shared") public boolean first() { return true; }
+                  @BordeauxCondition(id="shared") public static boolean second() { return true; }
+                  @BordeauxCondition public Boolean boxed() { return true; }
+                  @BordeauxCondition public static boolean parameterized(boolean value) { return value; }
+                  @BordeauxCondition public static <T> boolean generic() { return true; }
+                  @BordeauxCondition public static boolean checked() throws java.io.IOException { return true; }
+                }
+                """);
+        assertFalse(result.success());
+        assertTrue(result.messages().contains("Duplicate Bordeaux capability ID 'shared'"), result.messages());
+        assertTrue(result.messages().contains("primitive boolean"), result.messages());
+        assertTrue(result.messages().contains("must not declare parameters"), result.messages());
+        assertTrue(result.messages().contains("Generic Bordeaux condition"), result.messages());
     }
 
     @Test
@@ -245,8 +295,11 @@ class BordeauxProcessorTest {
                 """.formatted(label);
     }
 
-    private static String canonicalHash(JsonNode commands) throws Exception {
-        String canonical = canonical(commands);
+    private static String canonicalHash(JsonNode commands, JsonNode conditions) throws Exception {
+        var catalog = MAPPER.createObjectNode();
+        catalog.set("commands", commands);
+        catalog.set("conditions", conditions);
+        String canonical = canonical(catalog);
         byte[] digest = MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(StandardCharsets.UTF_8));
         StringBuilder result = new StringBuilder("sha256:");
         for (byte value : digest) result.append(String.format("%02x", value & 0xff));

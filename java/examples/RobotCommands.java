@@ -1,6 +1,7 @@
 package frc.robot;
 
 import dev.bordeaux.annotations.BordeauxCommand;
+import dev.bordeaux.annotations.BordeauxCondition;
 import dev.bordeaux.annotations.BordeauxParam;
 import edu.wpi.first.wpilibj2.command.Command;
 import java.util.List;
@@ -29,8 +30,15 @@ public final class RobotCommands {
         return superstructure.score(target.level(), target.branches(), releaseDelayS);
     }
 
+    @BordeauxCondition(id = "superstructure.ready-to-score", label = "Ready to score")
+    public boolean readyToScore() {
+        return superstructure.readyToScore();
+    }
+
     // This placeholder represents the team's existing subsystem/API.
     public interface Superstructure {
         Command score(Level level, List<Integer> branches, double releaseDelayS);
+
+        boolean readyToScore();
     }
 }

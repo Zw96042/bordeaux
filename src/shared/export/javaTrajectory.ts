@@ -47,7 +47,7 @@ export interface JavaTrajectoryDocument {
   schemaVersion: "bordeaux-trajectory/1.0";
   generator: "bordeaux";
   catalog: {
-    schemaVersion: "1.0";
+    schemaVersion: "1.0" | "1.1";
     catalogId: string;
     supportVersion: string;
     catalogHash: string;
@@ -204,7 +204,7 @@ function assertRoutineNodeCount(routine: JavaTrajectoryRoutine | null): void {
 }
 
 export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaCommandCatalog): BuiltJavaTrajectory {
-  if (!catalog.authoritative || catalog.generatedSchemaVersion !== "1.0" || !catalog.catalogId || !catalog.supportVersion || !catalog.catalogHash) {
+  if (!catalog.authoritative || (catalog.generatedSchemaVersion !== "1.0" && catalog.generatedSchemaVersion !== "1.1") || !catalog.catalogId || !catalog.supportVersion || !catalog.catalogHash) {
     throw new Error("Build the annotated Java command catalog before exporting robot JSON");
   }
   const invocationIssues = validateProjectJavaInvocations(project, catalog);
@@ -225,7 +225,7 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
   assertRoutineNodeCount(routine);
   assertExportSize({
     catalog: {
-      schemaVersion: "1.0",
+      schemaVersion: catalog.generatedSchemaVersion,
       catalogId: catalog.catalogId,
       supportVersion: catalog.supportVersion,
       catalogHash: catalog.catalogHash,
@@ -286,7 +286,7 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
     schemaVersion: "bordeaux-trajectory/1.0",
     generator: "bordeaux",
     catalog: {
-      schemaVersion: "1.0",
+      schemaVersion: catalog.generatedSchemaVersion,
       catalogId: catalog.catalogId,
       supportVersion: catalog.supportVersion,
       catalogHash: catalog.catalogHash,

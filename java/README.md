@@ -4,31 +4,31 @@ This Java 17 bundle provides the robot-side half of Bordeaux commands for WPILib
 
 ## Modules
 
-- `annotations`: source-retained `@BordeauxCommand` and `@BordeauxParam` annotations.
-- `processor`: an aggregating annotation processor that validates authored factories and generates both `META-INF/bordeaux/commands.json` and direct-call `dev.bordeaux.generated.BordeauxGeneratedBindings`.
-- `runtime`: a bounded `bordeaux-trajectory/1.0` reader, generated registry API, exact argument conversion, and a jitter-safe WPILib command event runner.
+- `annotations`: source-retained `@BordeauxCommand`, `@BordeauxCondition`, and `@BordeauxParam` annotations.
+- `processor`: an aggregating annotation processor that validates authored factories and predicates, then generates both `META-INF/bordeaux/commands.json` and direct-call `dev.bordeaux.generated.BordeauxGeneratedBindings`.
+- `runtime`: a bounded `bordeaux-trajectory/1.0` reader, generated capabilities API, exact argument conversion, and a jitter-safe WPILib command event runner.
 
 The desktop app's **Install Java Support** action is the one supported integration path. It copies the runtime and processor jars into the linked robot project, adds one managed Gradle script, and creates the fixed `bordeauxCatalog` task. A separately published Gradle plugin is intentionally not maintained.
 
 Factories must be public methods on public provider types and return `edu.wpi.first.wpilibj2.command.Command`. Non-static providers are explicit constructor dependencies of the generated bindings, keeping subsystem ownership in `RobotContainer`. Supported authored values are numeric/boolean primitives and wrappers, strings, enums, exact `long`/`BigInteger`/`BigDecimal`, arrays, collections, string-key maps, optionals, records, and public Jackson-deserializable objects with mutable public data fields plus a public no-argument constructor. `char`/`Character`, unsupported, recursive, or opaque shapes fail compilation.
 
-Call `BordeauxBindings.generated(provider1, provider2, ...)` to construct the generated registry. Provider order does not matter. This fixed bootstrap avoids importing a class emitted during the processor's final aggregation round, while the generated class still owns direct typed calls and compiled catalog identity.
+Call `BordeauxBindings.generatedCapabilities(provider1, provider2, ...)` to construct the generated command and condition capabilities. Provider order does not matter. This fixed bootstrap avoids importing a class emitted during the processor's final aggregation round, while the generated class still owns direct typed calls and compiled catalog identity. `generated(...)` remains available for command-only integrations.
 
 See [`../examples/bordeaux-template-robot`](../examples/bordeaux-template-robot) for a complete GradleRIO project and [`examples`](examples) for integration snippets. The fixed `bordeauxCatalog` task copies the processor resource to `build/bordeaux/catalog-v1.json`, which is the only generated project file the app reads.
 
 ## Catalog identity
 
-Set `-Abordeaux.catalogId=<team-stable-id>` on `JavaCompile`; otherwise the first provider type is the fallback ID. The generated catalog uses `schemaVersion: "1.0"`, `supportVersion: "0.1.0"`, and a deterministic `catalogHash`. Both the ID and hash are compiled into `BordeauxGeneratedBindings` and its registry.
+Set `-Abordeaux.catalogId=<team-stable-id>` on `JavaCompile`; otherwise the first provider type is the fallback ID. The generated catalog uses `schemaVersion: "1.1"`, `supportVersion: "0.2.0"`, and a deterministic `catalogHash`. Both the ID and hash are compiled into `BordeauxGeneratedBindings` and its capabilities.
 
-The hash is `sha256:` plus lowercase SHA-256 of UTF-8 canonical JSON for the `commands` array only. Commands are sorted by ID and parameters by name. Canonical JSON recursively sorts every object key lexicographically, preserves array order, uses normal JSON string escaping, and contains no insignificant whitespace. A `bordeaux-trajectory/1.0` document carries the same ID and hash in `catalog`; `BordeauxEventRunner` rejects either mismatch before scheduling anything.
+The hash is `sha256:` plus lowercase SHA-256 of UTF-8 canonical JSON for `{commands,conditions}`. Both arrays are sorted by ID, command parameters by name, and canonical JSON recursively sorts every object key lexicographically. A `bordeaux-trajectory/1.0` document carries the same ID and hash in `catalog`; capability runners reject either mismatch and any unknown condition before scheduling anything.
 
 ## Runtime lifecycle
 
-Load one selected path with `BordeauxTrajectoryReader.read(input, pathIdOrName)`, construct `BordeauxEventRunner`, then call `periodic(elapsedS, measuredFraction)` from the normal robot loop. Time events use elapsed path time; position events use monotonic measured progress even on a time-followed section. Optional condition IDs are resolved through `BordeauxConditionRegistry`, and repeated events catch up through their authored end window without loop-jitter skips. Event IDs are required and duplicate IDs are rejected. Generated bindings reject missing, unknown, malformed, or out-of-range arguments again on the robot before creating a command.
+Load one selected path with `BordeauxTrajectoryReader.read(input, pathIdOrName)`, construct `BordeauxEventRunner` from generated capabilities, then call `periodic(elapsedS, measuredFraction)` from the normal robot loop. Time events use elapsed path time; position events use monotonic measured progress even on a time-followed section. Optional condition IDs are preflighted before the path starts, and repeated events catch up through their authored end window without loop-jitter skips. Event IDs are required and duplicate IDs are rejected. Generated bindings reject missing, unknown, malformed, or out-of-range arguments again on the robot before creating a command.
 
 For trajectory references, construct `BordeauxReferenceFollower` from that selected path and call `update(dtS, measuredXM, measuredYM)` each robot loop. Time sections advance on a section-local clock. Position sections advance monotonically from the measured field pose, use a short sample lookahead, and do not complete until the robot reaches the section endpoint. The returned `BordeauxSample` is a reference for the team's drivetrain controller; the runtime deliberately does not own drivetrain construction or odometry.
 
-For a multi-path autonomous routine, load the document with `BordeauxTrajectoryReader.readWithRoutine(...)`, then construct `BordeauxRoutineRunner` with that document, command registry, and condition registry. `start()` returns the first stable path ID. After that trajectory finishes, pass its ID to `completePath(...)`; the runner evaluates sensor decisions, schedules bound between-path commands, and returns the next path ID. An empty result means the routine is complete. This explicit routine API rejects simulation-only function steps, unknown path references, duplicate node IDs, and oversized trees, while the selected-path `read(...)` API remains compatible with older 1.0 exports containing simulation-only routine metadata.
+For a multi-path autonomous routine, load the document with `BordeauxTrajectoryReader.readWithRoutine(...)`, then construct `BordeauxRoutineRunner` with that document and generated capabilities. `start()` returns the first stable path ID. After that trajectory finishes, pass its ID to `completePath(...)`; the runner evaluates sensor decisions, schedules bound between-path commands, and returns the next path ID. An empty result means the routine is complete. Every decision condition is preflighted before `start()`. This explicit routine API rejects simulation-only function steps, unknown path references, duplicate node IDs, and oversized trees, while the selected-path `read(...)` API remains compatible with older 1.0 exports containing simulation-only routine metadata.
 
 `endPath()`, `stop()`, `close()`, and `reset()` cancel only commands from events that set `cancelOnPathEnd: true`; ordinary commands scheduled by an event are left alone. `reset()` also clears exactly-once state for another run. Elapsed time cannot move backward without a reset.
 
@@ -43,7 +43,7 @@ var namespace = Path.of(BordeauxRobotStatusPublisher.PRODUCTION_DEPLOYMENT_NAMES
 Files.createDirectories(namespace.resolve("inbox"));
 Files.createDirectories(namespace.resolve("acks"));
 var compatibility = new BordeauxRuntimeCompatibility(
-    commandRegistry.catalogId(), commandRegistry.catalogHash(), "0.1.0",
+    capabilities.catalogId(), capabilities.catalogHash(), "0.2.0",
     "2026-rebuilt", "2026-manual-tu19-welded-4", "bordeaux-field/1.0");
 var revisions = new BordeauxRevisionService(
     namespace.resolve("state"), 2468, DriverStation::isDisabled, compatibility);

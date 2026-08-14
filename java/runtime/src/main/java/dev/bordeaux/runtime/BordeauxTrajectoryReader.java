@@ -17,7 +17,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-/** Strict, bounded reader for Bordeaux native Java trajectory schema 1.0. */
+/** Strict, bounded reader for Bordeaux native Java trajectory documents and generated catalog identities. */
 public final class BordeauxTrajectoryReader {
     static final int MAX_BYTES = 16 * 1024 * 1024;
     static final int MAX_PATHS = 64;
@@ -202,11 +202,11 @@ public final class BordeauxTrajectoryReader {
             throw new BordeauxRuntimeException("$.generator must be exactly 'bordeaux'");
         }
         if (catalog == null) throw new BordeauxRuntimeException("$.catalog must be an object");
-        if (!"1.0".equals(text(catalog, "schemaVersion", "$.catalog"))) {
-            throw new BordeauxRuntimeException("$.catalog.schemaVersion must be exactly '1.0'");
-        }
-        if (!"0.1.0".equals(text(catalog, "supportVersion", "$.catalog"))) {
-            throw new BordeauxRuntimeException("$.catalog.supportVersion is not supported; expected '0.1.0'");
+        String catalogSchema = text(catalog, "schemaVersion", "$.catalog");
+        String supportVersion = text(catalog, "supportVersion", "$.catalog");
+        if (!(catalogSchema.equals("1.0") && supportVersion.equals("0.1.0"))
+                && !(catalogSchema.equals("1.1") && supportVersion.equals("0.2.0"))) {
+            throw new BordeauxRuntimeException("$.catalog must use supported schema/support pair 1.0/0.1.0 or 1.1/0.2.0");
         }
         String catalogId = text(catalog, "catalogId", "$.catalog");
         if (catalogId.length() > 256) {
@@ -387,12 +387,16 @@ public final class BordeauxTrajectoryReader {
     }
 
     private static void validateCatalog(ObjectNode catalog, BordeauxRuntimeCompatibility compatibility) {
-        if (!"1.0".equals(text(catalog, "schemaVersion", "$.catalog"))) {
-            throw new BordeauxRuntimeException("$.catalog.schemaVersion must be exactly '1.0'");
-        }
+        String schemaVersion = text(catalog, "schemaVersion", "$.catalog");
         String supportVersion = text(catalog, "supportVersion", "$.catalog");
-        if (!"0.1.0".equals(supportVersion)) {
-            throw new BordeauxRuntimeException("$.catalog.supportVersion is not supported; expected '0.1.0'");
+        String expectedSchema = switch (compatibility.supportVersion()) {
+            case "0.1.0" -> "1.0";
+            case "0.2.0" -> "1.1";
+            default -> throw new BordeauxRuntimeException("Compiled Bordeaux support version is not supported: " + compatibility.supportVersion());
+        };
+        if (!expectedSchema.equals(schemaVersion) || !compatibility.supportVersion().equals(supportVersion)) {
+            throw new BordeauxRuntimeException("$.catalog must exactly match compiled schema/support "
+                    + expectedSchema + "/" + compatibility.supportVersion());
         }
         String catalogId = text(catalog, "catalogId", "$.catalog");
         if (catalogId.length() > 256) throw new BordeauxRuntimeException("$.catalog.catalogId exceeds 256 characters");
