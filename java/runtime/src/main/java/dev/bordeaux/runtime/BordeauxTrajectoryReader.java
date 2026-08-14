@@ -92,7 +92,7 @@ public final class BordeauxTrajectoryReader {
             if (!pathIds.add(pathId)) throw new BordeauxRuntimeException("Duplicate path ID '" + pathId + "'");
             parsePath(path, compatibility.catalogId(), compatibility.catalogHash(), BordeauxRoutine.empty());
         }
-        parseRoutine(document.get("routine"), pathIds);
+        parseRoutine(document.get("routine"), pathIds, text(catalog, "schemaVersion", "$.catalog"));
     }
 
     /** Selects one path while tolerating legacy simulation-only routine nodes. */
@@ -205,8 +205,9 @@ public final class BordeauxTrajectoryReader {
         String catalogSchema = text(catalog, "schemaVersion", "$.catalog");
         String supportVersion = text(catalog, "supportVersion", "$.catalog");
         if (!(catalogSchema.equals("1.0") && supportVersion.equals("0.1.0"))
-                && !(catalogSchema.equals("1.1") && supportVersion.equals("0.2.0"))) {
-            throw new BordeauxRuntimeException("$.catalog must use supported schema/support pair 1.0/0.1.0 or 1.1/0.2.0");
+                && !(catalogSchema.equals("1.1") && supportVersion.equals("0.2.0"))
+                && !(catalogSchema.equals("1.2") && supportVersion.equals("0.3.0"))) {
+            throw new BordeauxRuntimeException("$.catalog must use supported schema/support pair 1.0/0.1.0, 1.1/0.2.0, or 1.2/0.3.0");
         }
         String catalogId = text(catalog, "catalogId", "$.catalog");
         if (catalogId.length() > 256) {
@@ -222,7 +223,7 @@ public final class BordeauxTrajectoryReader {
         if (idMatch == null && nameMatchCount != 1) {
             throw new BordeauxRuntimeException("Path selector '" + pathSelector + "' is ambiguous");
         }
-        BordeauxRoutine routine = includeRoutine ? parseRoutine(routineNode, pathIds) : BordeauxRoutine.empty();
+        BordeauxRoutine routine = includeRoutine ? parseRoutine(routineNode, pathIds, catalogSchema) : BordeauxRoutine.empty();
         return parsePath(selected, catalogId, catalogHash, routine);
     }
 
@@ -325,17 +326,17 @@ public final class BordeauxTrajectoryReader {
                 id, name, totalTimeS, catalogId, catalogHash, indexed.stream().map(IndexedEvent::event).toList(), samples, sections, routine);
     }
 
-    private static BordeauxRoutine parseRoutine(JsonNode value, Set<String> pathIds) {
+    private static BordeauxRoutine parseRoutine(JsonNode value, Set<String> pathIds, String catalogSchema) {
         if (value == null || value.isNull()) return BordeauxRoutine.empty();
         ObjectNode routine = requireObject(value, "$.routine must be an object or null");
         String name = text(routine, "name", "$.routine");
         JsonNode nodes = routine.get("nodes");
         if (nodes == null || !nodes.isArray()) throw new BordeauxRuntimeException("$.routine.nodes must be an array");
-        return new BordeauxRoutine(name, parseRoutineNodes(nodes, "$.routine.nodes", pathIds, new HashSet<>(), new int[] {0}));
+        return new BordeauxRoutine(name, parseRoutineNodes(nodes, "$.routine.nodes", pathIds, new HashSet<>(), new int[] {0}, catalogSchema));
     }
 
     private static List<BordeauxRoutineNode> parseRoutineNodes(JsonNode nodes, String path,
-            Set<String> pathIds, Set<String> nodeIds, int[] count) {
+            Set<String> pathIds, Set<String> nodeIds, int[] count, String catalogSchema) {
         List<BordeauxRoutineNode> parsed = new ArrayList<>();
         for (int index = 0; index < nodes.size(); index++) {
             if (++count[0] > MAX_ROUTINE_NODES) throw new BordeauxRuntimeException("Routine exceeds the node limit of " + MAX_ROUTINE_NODES);
@@ -357,14 +358,31 @@ public final class BordeauxTrajectoryReader {
                     throw new BordeauxRuntimeException(base + " decision branches must be arrays");
                 }
                 parsed.add(new BordeauxRoutineNode.Decision(id, condition,
-                        parseRoutineNodes(whenTrue, base + ".then", pathIds, nodeIds, count),
-                        parseRoutineNodes(whenFalse, base + ".else", pathIds, nodeIds, count)));
+                        parseRoutineNodes(whenTrue, base + ".then", pathIds, nodeIds, count, catalogSchema),
+                        parseRoutineNodes(whenFalse, base + ".else", pathIds, nodeIds, count, catalogSchema)));
             } else if ("function".equals(type) && "command".equals(text(node, "cat", base))) {
                 ObjectNode invocation = requireObject(node.get("invocation"), base + ".invocation must be an object");
                 ObjectNode arguments = requireObject(invocation.get("arguments"), base + ".invocation.arguments must be an object");
                 parsed.add(new BordeauxRoutineNode.Command(id, text(invocation, "commandId", base + ".invocation"), arguments));
+            } else if ("builtin".equals(type)) {
+                if (!"1.2".equals(catalogSchema)) {
+                    throw new BordeauxRuntimeException(base + " built-ins require catalog schema 1.2");
+                }
+                String builtInId = text(node, "builtinId", base);
+                if (!"bordeaux.wait".equals(builtInId)) {
+                    throw new BordeauxRuntimeException(base + ".builtinId must be the supported built-in 'bordeaux.wait'");
+                }
+                ObjectNode arguments = requireObject(node.get("arguments"), base + ".arguments must be an object");
+                if (arguments.size() != 1 || !arguments.has("durationS")) {
+                    throw new BordeauxRuntimeException(base + ".arguments must contain exactly durationS");
+                }
+                double durationS = finite(arguments.get("durationS"), base + ".arguments.durationS");
+                if (durationS < 0.02 || durationS > 15) {
+                    throw new BordeauxRuntimeException(base + ".arguments.durationS must be between 0.02 and 15 seconds");
+                }
+                parsed.add(new BordeauxRoutineNode.Wait(id, durationS));
             } else {
-                throw new BordeauxRuntimeException(base + " must be a path, decision, or bound command");
+                throw new BordeauxRuntimeException(base + " must be a path, decision, bound command, or supported built-in");
             }
         }
         return parsed;
@@ -392,6 +410,7 @@ public final class BordeauxTrajectoryReader {
         String expectedSchema = switch (compatibility.supportVersion()) {
             case "0.1.0" -> "1.0";
             case "0.2.0" -> "1.1";
+            case "0.3.0" -> "1.2";
             default -> throw new BordeauxRuntimeException("Compiled Bordeaux support version is not supported: " + compatibility.supportVersion());
         };
         if (!expectedSchema.equals(schemaVersion) || !compatibility.supportVersion().equals(supportVersion)) {

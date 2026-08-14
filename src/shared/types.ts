@@ -254,13 +254,22 @@ export interface JavaConditionDescriptor {
   };
 }
 
+/** A Bordeaux-owned routine capability with a closed, versioned contract. */
+export interface JavaBuiltInDescriptor {
+  id: "bordeaux.wait";
+  kind: "wait";
+  label: "Wait";
+  description: "Pause the routine before its next step.";
+  parameters: [JavaCommandParameter];
+}
+
 export interface JavaCommandCatalog {
   projectName: string;
   sourceFileCount: number;
   scannedAt: string;
   source?: "source" | "generated" | "mixed";
   runtimeCommandCount?: number;
-  generatedSchemaVersion?: "1.0" | "1.1";
+  generatedSchemaVersion?: "1.0" | "1.1" | "1.2";
   catalogId?: string;
   supportVersion?: string;
   catalogHash?: string;
@@ -270,6 +279,8 @@ export interface JavaCommandCatalog {
   commands: JavaCommandDescriptor[];
   /** Empty for a legacy generated 1.0 command-only catalog. */
   conditions?: JavaConditionDescriptor[];
+  /** Bordeaux-owned built-ins from the generated catalog's semantic identity. */
+  builtIns?: JavaBuiltInDescriptor[];
   warnings: string[];
 }
 
@@ -377,7 +388,14 @@ export interface RoutineDecisionNode {
   else: RoutineNode[];
 }
 
-export type RoutineNode = RoutineFunctionNode | RoutinePathNode | RoutineDecisionNode;
+export interface RoutineBuiltInNode {
+  id: string;
+  type: "builtin";
+  builtinId: "bordeaux.wait";
+  arguments: { durationS: number };
+}
+
+export type RoutineNode = RoutineFunctionNode | RoutinePathNode | RoutineDecisionNode | RoutineBuiltInNode;
 
 export interface AutonomousRoutine {
   /** Stable project-local identity. */

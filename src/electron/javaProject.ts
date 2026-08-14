@@ -686,6 +686,7 @@ export async function discoverJavaProject(inputPath: string): Promise<JavaComman
       catalogHash: generatedCatalog.catalogHash,
       authoritative: true,
       conditions: generatedCatalog.conditions,
+      builtIns: generatedCatalog.builtIns,
     } : { authoritative: false }),
     commands,
     warnings: [...new Set(warnings)].slice(0, 100),

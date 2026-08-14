@@ -59,6 +59,9 @@ import { UI } from "./ui";
       h('button', { className: 'rt-ch-row', type: 'button', onClick: () => onPick('decision') },
         h('span', { className: 'rt-ch-ic', style: { color: '#9aa3b0' } }, h(Icon, { name: 'branch', size: 16 })),
         h('span', { className: 'rt-ch-main' }, h('span', { className: 'rt-ch-t' }, 'Decision'), h('span', { className: 'rt-ch-d' }, 'Branch the routine on a condition'))),
+      h('button', { className: 'rt-ch-row', type: 'button', onClick: () => onPick('builtin', 'wait') },
+        h('span', { className: 'rt-ch-ic', style: { color: '#cf962f' } }, h(Icon, { name: 'pause', size: 16 })),
+        h('span', { className: 'rt-ch-main' }, h('span', { className: 'rt-ch-t' }, 'Wait'), h('span', { className: 'rt-ch-d' }, 'Pause the routine before its next step'))),
       h('div', { className: 'rt-ch-sec' }, 'Behavior'),
       h('button', { className: 'rt-ch-row function', type: 'button', onClick: () => setSub('function') },
         h('span', { className: 'rt-ch-ic', style: { color: 'var(--txt-2)' } }, h(Icon, { name: 'bolt', size: 16 })),
@@ -99,6 +102,8 @@ import { UI } from "./ui";
       meta = seg ? (fmt(seg.t1 - seg.t0) + '  ·  ' + UnitPrefs.format(seg.deriv.sample.length, 'm', 2)) : (doc ? 'not in run path' : 'unbound');
     } else if (node.type === 'decision') {
       icon = 'branch'; color = '#9aa3b0'; kindCls = 'decision'; meta = 'routes the run';
+    } else if (node.type === 'builtin') {
+      icon = 'pause'; color = '#cf962f'; kindCls = 'fn'; tag = 'Wait'; meta = fmt(node.arguments && node.arguments.durationS) + ' pause';
     } else {
       const C = A.CATS[node.cat]; icon = C.icon; color = C.color; kindCls = 'fn';
       tag = C.label;
@@ -121,7 +126,7 @@ import { UI } from "./ui";
         h('div', { className: 'rt-step-title' }, A.nodeTitle(node, paths)),
         h('div', { className: 'rt-step-meta' }, isCollapsed ? (A.branchCount(node.then) + A.branchCount(node.else)) + ' steps in 2 branches' : meta)),
       tag && h('span', { className: 'rt-step-tag', style: { color, borderColor: color } }, tag),
-      active && h('span', { className: 'rt-step-live' }, node.type === 'path' || node.cat === 'generate' ? 'running' : 'firing'),
+      active && h('span', { className: 'rt-step-live' }, node.type === 'path' || node.type === 'builtin' || node.cat === 'generate' ? 'running' : 'firing'),
       h('span', { className: 'rt-step-tools' },
         h('button', { className: 'rt-tool', type: 'button', title: 'Move step up', 'aria-label': 'Move step up', onClick: () => acq.move(node.id, -1) }, '\u2191'),
         h('button', { className: 'rt-tool', type: 'button', title: 'Move step down', 'aria-label': 'Move step down', onClick: () => acq.move(node.id, 1) }, '\u2193'),

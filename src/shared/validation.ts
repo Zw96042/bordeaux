@@ -224,6 +224,24 @@ function validateRoutineNodes(
       validateRoutineNodes(issues, node.else, `${base}.else`, pathIds, nodeIds, state, depth + 1);
       continue;
     }
+    if (node.type === "builtin") {
+      if (node.builtinId !== "bordeaux.wait") {
+        issues.push(issue(`${base}.builtinId`, "Routine built-in is not supported"));
+      }
+      if (!isRecord(node.arguments)) {
+        issues.push(issue(`${base}.arguments`, "Wait arguments are required"));
+      } else {
+        const names = Object.keys(node.arguments);
+        if (names.length !== 1 || names[0] !== "durationS") {
+          issues.push(issue(`${base}.arguments`, "Wait accepts only the durationS argument"));
+        }
+        const durationS = node.arguments.durationS;
+        if (!finite(durationS) || durationS < 0.02 || durationS > 15) {
+          issues.push(issue(`${base}.arguments.durationS`, "Wait duration must be a finite number from 0.02 to 15 seconds"));
+        }
+      }
+      continue;
+    }
     if (node.type !== "function") {
       issues.push(issue(`${base}.type`, "Routine node type is invalid"));
       return;

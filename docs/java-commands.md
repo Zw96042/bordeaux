@@ -19,13 +19,13 @@ The generated catalog is `build/bordeaux/catalog-v1.json`. Bordeaux rejects malf
 
 The installed `.bordeaux/INTEGRATION.md` contains the project-local handoff. Complete examples live in [`../java/examples`](../java/examples), and the Java API and lifecycle are documented in [`../java/README.md`](../java/README.md).
 
-In brief, call `BordeauxBindings.generatedCapabilities(...)` with the team-owned providers and load an exported path through `BordeauxTrajectoryReader`; use `readWithRoutine(...)` when running the exported Auto-tab routine. Pass those capabilities to `BordeauxEventRunner` and `BordeauxRoutineRunner`, so every command and condition ID is checked against the generated catalog before execution. For Auto-tab routines, `start()` returns the first path ID and `completePath(id)` evaluates decisions, runs between-path commands, and returns the next one. Call `endPath()` when a path ends; only event invocations authored with **Cancel at path end** are canceled.
+In brief, call `BordeauxBindings.generatedCapabilities(...)` with the team-owned providers and load an exported path through `BordeauxTrajectoryReader`; use `readWithRoutine(...)` when running the exported Auto-tab routine. Pass those capabilities to `BordeauxEventRunner` and `BordeauxRoutineRunner`, so every command and condition ID is checked against the generated catalog before execution. Routines without Wait can use `start()` and `completePath(id)`; routines with Wait use `startProgress()`, `completePathProgress(id)`, and caller-driven `periodic()` so waiting cannot be confused with completion. Call `endPath()` when a path ends; only event invocations authored with **Cancel at path end** are canceled.
 
 ## Contract invariants
 
-- Catalog schema: `1.1`; trajectory schema: `bordeaux-trajectory/1.0`; support version: `0.2.0`.
+- Catalog schema: `1.2`; trajectory schema: `bordeaux-trajectory/1.0`; support version: `0.3.0`.
 - The trajectory carries the stable catalog ID and semantic capability hash compiled into the robot capabilities; both must match before an event or routine can run.
-- `catalogHash` is SHA-256 of canonical JSON for `{commands,conditions}`, and both arrays are sorted by stable ID.
+- `catalogHash` is SHA-256 of canonical JSON for `{builtIns,commands,conditions}`; the built-in list contains the bounded `bordeaux.wait` contract, and the team capability arrays are sorted by stable ID.
 - Exact Java integers and decimals cross the JSON boundary as strings.
 - Event IDs are stable and unique within a path.
 - Bordeaux does not run Gradle until the user accepts the trust prompt, and it never performs robot deployment.

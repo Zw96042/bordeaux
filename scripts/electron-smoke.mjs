@@ -74,8 +74,12 @@ public final class IdleCommand extends CommandBase {}
     member: "ready",
     source: { file: "src/main/java/frc/robot/SmokeConditions.java", line: 4 },
   }];
-  const catalogHash = `sha256:${createHash("sha256").update(canonicalJson({ commands, conditions }), "utf8").digest("hex")}`;
-  const smokeCatalog = { schemaVersion: "1.1", catalogId: "SmokeRobot", supportVersion: "0.2.0", catalogHash, commands, conditions };
+  const builtIns = [{
+    id: "bordeaux.wait", kind: "wait", label: "Wait", description: "Pause the routine before its next step.",
+    parameters: [{ name: "durationS", label: "Duration", description: "Time to wait before continuing the routine.", unit: "s", defaultValue: 1, min: 0.02, max: 15, role: "argument", javaType: "double", schema: { kind: "number", javaType: "double" } }],
+  }];
+  const catalogHash = `sha256:${createHash("sha256").update(canonicalJson({ builtIns, commands, conditions }), "utf8").digest("hex")}`;
+  const smokeCatalog = { schemaVersion: "1.2", catalogId: "SmokeRobot", supportVersion: "0.3.0", catalogHash, commands, conditions, builtIns };
   const supportDirectory = path.join(smokeDirectory, "java-project", ".bordeaux");
   await fs.mkdir(supportDirectory, { recursive: true });
   await fs.writeFile(path.join(supportDirectory, "smoke-catalog.json"), `${JSON.stringify(smokeCatalog, null, 2)}\n`);

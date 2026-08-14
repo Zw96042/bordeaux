@@ -1,6 +1,7 @@
 package frc.robot.commands;
 
 import dev.bordeaux.annotations.BordeauxCommand;
+import dev.bordeaux.annotations.BordeauxCondition;
 import dev.bordeaux.annotations.BordeauxParam;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.Commands;
@@ -19,6 +20,14 @@ public final class ExampleCommands {
 
     public ExampleCommands(ExampleSubsystem subsystem) {
         this.subsystem = subsystem;
+    }
+
+    @BordeauxCondition(
+            id = "vision.targetVisible",
+            label = "Vision target visible",
+            description = "Example predicate used by the template routine decision")
+    public boolean targetVisible() {
+        return true;
     }
 
     @BordeauxCommand(

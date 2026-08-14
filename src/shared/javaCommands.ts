@@ -226,8 +226,8 @@ export function validateProjectJavaInvocations(project: BordeauxProject, catalog
       issues.push({ path, message: `${usage} condition ID is invalid`, severity: "error" });
       return;
     }
-    if (catalog?.generatedSchemaVersion !== "1.1") {
-      issues.push({ path, message: `${usage} condition catalog is stale; build generated catalog schema 1.1 before export`, severity: "error" });
+    if (catalog?.generatedSchemaVersion !== "1.1" && catalog?.generatedSchemaVersion !== "1.2") {
+      issues.push({ path, message: `${usage} condition catalog is stale; build generated catalog schema 1.1 or 1.2 before export`, severity: "error" });
       return;
     }
     if (!conditions.has(conditionId)) {
@@ -273,6 +273,15 @@ export function validateProjectJavaInvocations(project: BordeauxProject, catalog
         validateCondition(node.cond, `${base}.cond`, `Routine decision ${node.id}`);
         validateRoutineNodes(node.then, `${base}.then`);
         validateRoutineNodes(node.else, `${base}.else`);
+      } else if (node.type === "builtin") {
+        const durationS = node.arguments?.durationS;
+        if (catalog?.generatedSchemaVersion !== "1.2"
+          || !catalog.builtIns?.some((builtIn) => builtIn.id === "bordeaux.wait" && builtIn.kind === "wait")) {
+          issues.push({ path: `${base}.builtinId`, message: "Routine built-ins require generated catalog schema 1.2 with bordeaux.wait before export", severity: "error" });
+        }
+        if (node.builtinId !== "bordeaux.wait" || !Number.isFinite(durationS) || durationS < 0.02 || durationS > 15 || Object.keys(node.arguments ?? {}).length !== 1) {
+          issues.push({ path: `${base}.arguments`, message: "Wait must declare only a finite durationS from 0.02 to 15 seconds", severity: "error" });
+        }
       } else if (node.type === "function" && node.cat === "command") {
         if (!node.invocation) {
           issues.push({ path: `${base}.invocation`, message: "Between-path command must be bound before export", severity: "error" });

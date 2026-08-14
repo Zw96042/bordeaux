@@ -25,4 +25,13 @@ public sealed interface BordeauxRoutineNode {
             arguments = arguments.deepCopy();
         }
     }
+
+    /** The closed Bordeaux-owned wait built-in, evaluated from the caller's periodic loop. */
+    record Wait(String id, double durationS) implements BordeauxRoutineNode {
+        public Wait {
+            if (!Double.isFinite(durationS) || durationS < 0.02 || durationS > 15) {
+                throw new IllegalArgumentException("Wait duration must be finite and between 0.02 and 15 seconds");
+            }
+        }
+    }
 }

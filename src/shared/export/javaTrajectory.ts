@@ -47,7 +47,7 @@ export interface JavaTrajectoryDocument {
   schemaVersion: "bordeaux-trajectory/1.0";
   generator: "bordeaux";
   catalog: {
-    schemaVersion: "1.0" | "1.1";
+    schemaVersion: "1.0" | "1.1" | "1.2";
     catalogId: string;
     supportVersion: string;
     catalogHash: string;
@@ -181,6 +181,13 @@ function deployableRoutine(project: BordeauxProject, pathIds: Set<string>): Java
       if (!/^[A-Za-z0-9_.:#()$,-]{1,256}$/.test(node.cond)) throw new Error(`Routine decision ${node.id} needs a stable condition ID`);
       return { id: node.id, type: "decision", cond: node.cond, thenLabel: node.thenLabel, elseLabel: node.elseLabel, then: nodes(node.then), else: nodes(node.else) };
     }
+    if (node.type === "builtin") {
+      if (node.builtinId !== "bordeaux.wait" || !Number.isFinite(node.arguments.durationS) || node.arguments.durationS < 0.02 || node.arguments.durationS > 15
+        || Object.keys(node.arguments).length !== 1) {
+        throw new Error(`Routine built-in ${node.id} is invalid for Java export`);
+      }
+      return { id: node.id, type: "builtin", builtinId: "bordeaux.wait", arguments: { durationS: node.arguments.durationS } };
+    }
     if (node.cat !== "command" || !node.invocation) {
       throw new Error(`Routine function ${node.id} is simulation-only; use a bound Command step for Java export`);
     }
@@ -204,7 +211,7 @@ function assertRoutineNodeCount(routine: JavaTrajectoryRoutine | null): void {
 }
 
 export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaCommandCatalog): BuiltJavaTrajectory {
-  if (!catalog.authoritative || (catalog.generatedSchemaVersion !== "1.0" && catalog.generatedSchemaVersion !== "1.1") || !catalog.catalogId || !catalog.supportVersion || !catalog.catalogHash) {
+  if (!catalog.authoritative || (catalog.generatedSchemaVersion !== "1.0" && catalog.generatedSchemaVersion !== "1.1" && catalog.generatedSchemaVersion !== "1.2") || !catalog.catalogId || !catalog.supportVersion || !catalog.catalogHash) {
     throw new Error("Build the annotated Java command catalog before exporting robot JSON");
   }
   const invocationIssues = validateProjectJavaInvocations(project, catalog);
@@ -222,6 +229,11 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
     if (eventCount > MAX_EVENT_COUNT) throw new Error(`Java trajectory export exceeds ${MAX_EVENT_COUNT} events`);
   }
   const routine = deployableRoutine(project, new Set(sourcePaths.map((path) => path.id)));
+  if (routine && routine.nodes.some(function containsBuiltIn(node): boolean {
+    return node.type === "builtin" || (node.type === "decision" && [...node.then, ...node.else].some(containsBuiltIn));
+  }) && catalog.generatedSchemaVersion !== "1.2") {
+    throw new Error("Routine built-ins require generated catalog schema 1.2 before export");
+  }
   assertRoutineNodeCount(routine);
   assertExportSize({
     catalog: {

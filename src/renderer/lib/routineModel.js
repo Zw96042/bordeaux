@@ -39,7 +39,7 @@ import { PM } from "./pathMath";
   }
 
   function authoritativeConditions(catalog) {
-    if (!catalog || catalog.authoritative !== true || catalog.generatedSchemaVersion !== '1.1') return [];
+    if (!catalog || catalog.authoritative !== true || (catalog.generatedSchemaVersion !== '1.1' && catalog.generatedSchemaVersion !== '1.2')) return [];
     return (catalog.conditions || []).map((condition) => ({
       value: condition.id,
       label: condition.label,
@@ -71,6 +71,7 @@ import { PM } from "./pathMath";
   function nodeTitle(node, paths) {
     if (node.type === 'path') { const p = paths && paths.find((path) => path.id === node.ref); return p ? p.name : '(unbound path)'; }
     if (node.type === 'decision') return node.cond;
+    if (node.type === 'builtin') return node.builtinId === 'bordeaux.wait' ? 'Wait' : 'Unsupported built-in';
     if (node.cat === 'command') return node.title || (node.invocation && node.invocation.commandId) || 'Choose command';
     if (node.cat === 'generate') return node.funcRef || 'GeneratePath';
     if (node.cat === 'sequence') { const o = seqOp(node.op); return o.verb + (node.target ? ' · ' + node.target : ''); }
@@ -81,6 +82,7 @@ import { PM } from "./pathMath";
   function newNode(type, cat, pathRef) {
     if (type === 'path') return { id: uid('p'), type: 'path', ref: pathRef || '' };
     if (type === 'decision') return { id: uid('d'), type: 'decision', cond: '', thenLabel: 'Yes', elseLabel: 'No', then: [], else: [] };
+    if (type === 'builtin' && cat === 'wait') return { id: uid('wait'), type: 'builtin', builtinId: 'bordeaux.wait', arguments: { durationS: 1 } };
     const c = cat || 'terminate';
     if (c === 'command') return { id: uid('c'), type: 'function', cat: 'command', title: 'Robot command', invocation: null };
     if (c === 'generate') return { id: uid('g'), type: 'function', cat: 'generate', funcRef: 'GeneratePath', trigger: 'On entry', params: [], note: '', preview: null };
@@ -123,6 +125,8 @@ import { PM } from "./pathMath";
           collect(out === 'else' ? n.else : n.then);
         } else if (n.type === 'path') {
           flat.push({ node: n, kind: 'path' });
+        } else if (n.type === 'builtin') {
+          flat.push({ node: n, kind: 'wait' });
         } else if (n.cat === 'generate' && n.preview) {
           flat.push({ node: n, kind: 'gen' });
         } else {
@@ -145,6 +149,10 @@ import { PM } from "./pathMath";
         steps.push({ ...it, t0, t1, dur, segIdx: segs.length - 1, idxLabel, label, dist: dp.deriv.sample.length });
         lastPose = dp.pts[dp.pts.length - 1];
         t = t1;
+      } else if (it.kind === 'wait') {
+        const dur = Math.max(0, Number.isFinite(it.node.arguments && it.node.arguments.durationS) ? it.node.arguments.durationS : 0);
+        steps.push({ ...it, t0: t, t1: t + dur, dur, pose: lastPose });
+        t += dur;
       } else if (it.kind === 'event') {
         steps.push({ ...it, t0: t, t1: t + EVENT_DWELL, dur: EVENT_DWELL, pose: lastPose });
         t += EVENT_DWELL;

@@ -51,6 +51,7 @@ public final class BordeauxProcessor extends AbstractProcessor {
     private static final int MAX_OBJECT_FIELDS = 256;
     private static final int MAX_ENUM_VALUES = 1_024;
     private static final int MAX_CATALOG_BYTES = 2 * 1024 * 1024;
+    private static final String BUILT_INS_JSON = "[{\"description\":\"Pause the routine before its next step.\",\"id\":\"bordeaux.wait\",\"kind\":\"wait\",\"label\":\"Wait\",\"parameters\":[{\"defaultValue\":1,\"description\":\"Time to wait before continuing the routine.\",\"javaType\":\"double\",\"label\":\"Duration\",\"max\":15,\"min\":0.02,\"name\":\"durationS\",\"role\":\"argument\",\"schema\":{\"javaType\":\"double\",\"kind\":\"number\"},\"unit\":\"s\"}]}]";
     private final List<CommandMethod> collectedMethods = new ArrayList<>();
     private final Map<String, ExecutableElement> collectedIds = new HashMap<>();
     private final List<ConditionMethod> collectedConditions = new ArrayList<>();
@@ -81,7 +82,7 @@ public final class BordeauxProcessor extends AbstractProcessor {
             try {
                 String commandsJson = commandsJson(methods);
                 String conditionsJson = conditionsJson(conditions);
-                String semanticCatalog = "{\"commands\":" + commandsJson + ",\"conditions\":" + conditionsJson + "}";
+                String semanticCatalog = "{\"builtIns\":" + BUILT_INS_JSON + ",\"commands\":" + commandsJson + ",\"conditions\":" + conditionsJson + "}";
                 if (semanticCatalog.getBytes(StandardCharsets.UTF_8).length > MAX_CATALOG_BYTES - 1_024) {
                     processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
                             "Generated Bordeaux capability catalog exceeds " + MAX_CATALOG_BYTES + " bytes");
@@ -664,9 +665,9 @@ public final class BordeauxProcessor extends AbstractProcessor {
     private void writeCatalog(String commandsJson, String conditionsJson, String catalogId, String catalogHash) throws IOException {
         Filer filer = processingEnv.getFiler();
         try (Writer writer = filer.createResource(StandardLocation.CLASS_OUTPUT, "", "META-INF/bordeaux/commands.json").openWriter()) {
-            writer.write("{\n  \"schemaVersion\": \"1.1\",\n  \"catalogId\": " + quote(catalogId)
-                    + ",\n  \"supportVersion\": \"0.2.0\",\n  \"catalogHash\": " + quote(catalogHash)
-                    + ",\n  \"commands\": " + commandsJson + ",\n  \"conditions\": " + conditionsJson + "\n}\n");
+            writer.write("{\n  \"schemaVersion\": \"1.2\",\n  \"catalogId\": " + quote(catalogId)
+                    + ",\n  \"supportVersion\": \"0.3.0\",\n  \"catalogHash\": " + quote(catalogHash)
+                    + ",\n  \"builtIns\": " + BUILT_INS_JSON + ",\n  \"commands\": " + commandsJson + ",\n  \"conditions\": " + conditionsJson + "\n}\n");
         }
     }
 

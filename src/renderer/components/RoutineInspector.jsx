@@ -48,6 +48,16 @@ import { UI } from "./ui";
         h('button', { className: 'rt-openbtn', type: 'button', onClick: () => acq.openInEditor(node.ref) }, h(Icon, { name: 'route', size: 14 }), 'Open in path editor'),
         h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Remove from routine'));
 
+    } else if (node.type === 'builtin') {
+      icon = 'pause'; title = 'Wait'; tag = 'built-in'; accent = '#cf962f';
+      const durationS = node.arguments && node.arguments.durationS;
+      body = h(React.Fragment, null,
+        FieldLabel('Duration', h('span', { className: 'rt-scaleval' }, 's')),
+        h('input', { className: 'textinput', type: 'number', min: 0.02, max: 15, step: 0.01, 'aria-label': 'Wait duration in seconds', value: durationS,
+          onChange: (event) => set({ arguments: { durationS: Number(event.target.value) } }) }),
+        h('div', { className: 'seg-hint' }, 'Pause the routine for 0.02 to 15 seconds before the next step.'),
+        h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete wait'));
+
     } else if (node.type === 'decision') {
       icon = 'branch'; title = 'Decision'; tag = 'branch'; accent = '#9aa3b0';
       const out = acq.outcomes[node.id] || 'then';

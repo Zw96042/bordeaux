@@ -47,7 +47,7 @@ public final class BordeauxBindings {
         } catch (InvocationTargetException exception) {
             throw generatedFailure(exception);
         } catch (ReflectiveOperationException exception) {
-            throw new BordeauxRuntimeException("Generated Bordeaux capabilities are missing; rebuild the catalog with support 0.2.0", exception);
+            throw new BordeauxRuntimeException("Generated Bordeaux capabilities are missing; rebuild the catalog with support 0.3.0", exception);
         }
     }
 

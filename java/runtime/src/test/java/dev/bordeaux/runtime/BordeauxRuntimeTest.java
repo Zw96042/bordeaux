@@ -62,6 +62,64 @@ class BordeauxRuntimeTest {
         assertEquals(1, scheduler.scheduled.size());
     }
 
+    @Test
+    void waitsCallerDrivenAfterAGeneratedConditionBeforeSchedulingTheNextCommand() throws Exception {
+        BordeauxCapabilities capabilities = BordeauxBindings.generatedCapabilities(new FirstProvider(), new SecondProvider());
+        ObjectNode arguments = (ObjectNode) MAPPER.readTree("{}");
+        BordeauxRoutine routine = new BordeauxRoutine("Generated wait", List.of(
+                new BordeauxRoutineNode.Path("first", "path-a"),
+                new BordeauxRoutineNode.Decision("ready", "ready", List.of(
+                        new BordeauxRoutineNode.Wait("pause", 0.25),
+                        new BordeauxRoutineNode.Command("collect", "collect", arguments),
+                        new BordeauxRoutineNode.Path("next", "path-b")), List.of())));
+        BordeauxPathEvents document = new BordeauxPathEvents("path-a", "A", 1,
+                capabilities.catalogId(), capabilities.catalogHash(), List.of(), List.of(), List.of(), routine);
+        double[] time = {100};
+        RecordingScheduler scheduler = new RecordingScheduler();
+        BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, capabilities, scheduler, () -> time[0]);
+
+        assertEquals(new BordeauxRoutineProgress.Path("path-a"), runner.startProgress());
+        assertEquals(new BordeauxRoutineProgress.Waiting(0.25), runner.completePathProgress("path-a"));
+        assertThrows(BordeauxRuntimeException.class, runner::startProgress);
+        assertTrue(scheduler.scheduled.isEmpty());
+        time[0] = 100.24;
+        BordeauxRoutineProgress.Waiting waiting = (BordeauxRoutineProgress.Waiting) runner.periodic();
+        assertEquals(0.01, waiting.remainingS(), 1e-9);
+        assertTrue(scheduler.scheduled.isEmpty());
+        time[0] = 100.25;
+        assertEquals(new BordeauxRoutineProgress.Path("path-b"), runner.periodic());
+        assertEquals(1, scheduler.scheduled.size());
+        assertEquals(new BordeauxRoutineProgress.Complete(), runner.completePathProgress("path-b"));
+        assertThrows(BordeauxRuntimeException.class, () -> runner.start());
+    }
+
+    @Test
+    void readsOnlyTheClosedBoundedWaitBuiltIn() {
+        BordeauxPathEvents path = readWithRoutine("""
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
+                 "catalog":{"schemaVersion":"1.2","catalogId":"test-robot","supportVersion":"0.3.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "routine":{"name":"Wait","nodes":[
+                   {"id":"wait","type":"builtin","builtinId":"bordeaux.wait","arguments":{"durationS":0.25}}]},
+                 "paths":[{"id":"auto","name":"Auto","totalTimeS":1,"samples":[],"events":[]}]}
+                """);
+
+        assertEquals(new BordeauxRoutineNode.Wait("wait", 0.25), path.routine().nodes().get(0));
+        assertThrows(BordeauxRuntimeException.class, () -> readWithRoutine("""
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
+                 "catalog":{"schemaVersion":"1.2","catalogId":"test-robot","supportVersion":"0.3.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "routine":{"name":"Bad","nodes":[
+                   {"id":"wait","type":"builtin","builtinId":"other.wait","arguments":{"durationS":0.25}}]},
+                 "paths":[{"id":"auto","name":"Auto","totalTimeS":1,"samples":[],"events":[]}]}
+                """));
+        assertThrows(BordeauxRuntimeException.class, () -> readWithRoutine("""
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
+                 "catalog":{"schemaVersion":"1.2","catalogId":"test-robot","supportVersion":"0.3.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "routine":{"name":"Bad","nodes":[
+                   {"id":"wait","type":"builtin","builtinId":"bordeaux.wait","arguments":{"durationS":0.01,"extra":1}}]},
+                 "paths":[{"id":"auto","name":"Auto","totalTimeS":1,"samples":[],"events":[]}]}
+                """));
+    }
+
     record Target(String level, List<Integer> slots) {}
 
     @Test

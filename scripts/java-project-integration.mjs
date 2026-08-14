@@ -35,9 +35,11 @@ try {
   const catalog = await discoverJavaProject(fixtureRoot);
   const expectedIds = ["example.hold-output", "example.print-message", "example.set-output", "example.set-status"];
   const generatedIds = catalog.commands.filter((command) => command.runtimeReady).map((command) => command.id).sort();
+  const generatedConditionIds = (catalog.conditions ?? []).map((condition) => condition.id).sort();
   if (!catalog.authoritative || catalog.catalogId !== "BordeauxTemplateRobot" || !catalog.catalogHash
-      || JSON.stringify(generatedIds) !== JSON.stringify(expectedIds)) {
-    throw new Error(`Template catalog did not contain the expected runnable commands: ${generatedIds.join(", ")}`);
+      || JSON.stringify(generatedIds) !== JSON.stringify(expectedIds)
+      || JSON.stringify(generatedConditionIds) !== JSON.stringify(["vision.targetVisible"])) {
+    throw new Error(`Template catalog did not contain the expected generated capabilities (commands: ${generatedIds.join(", ")}; conditions: ${generatedConditionIds.join(", ")})`);
   }
   const structured = catalog.commands.find((command) => command.id === "example.set-output")?.parameters[0]?.schema;
   if (structured?.kind !== "object" || structured.fields?.length !== 2) {
@@ -45,6 +47,27 @@ try {
   }
   const projectFile = await fs.readFile(path.join(fixtureRoot, "BordeauxExample.bordeaux.json"), "utf8");
   const project = decodeProjectFile(projectFile).project;
+  project.paths[0].markers = [{
+    id: "integration-print",
+    f: 0.2,
+    name: "Print",
+    invocation: { commandId: "example.print-message", arguments: { message: "Hello from integration" } },
+  }, {
+    id: "integration-output",
+    f: 0.4,
+    name: "Output",
+    invocation: { commandId: "example.set-output", arguments: { request: { output: 0.35, signal: "READY" } } },
+  }, {
+    id: "integration-hold",
+    f: 0.6,
+    name: "Hold",
+    invocation: { commandId: "example.hold-output", arguments: { output: 0.25 }, cancelOnPathEnd: true },
+  }, {
+    id: "integration-status",
+    f: 0.8,
+    name: "Status",
+    invocation: { commandId: "example.set-status", arguments: { signal: "SCORE" } },
+  }];
   const trajectory = buildJavaTrajectory(project, catalog);
   if (trajectory.eventCount !== 4 || trajectory.document.paths[0]?.events.length !== 4) {
     throw new Error("Template Bordeaux project did not export all four example events");
@@ -59,7 +82,7 @@ try {
     maxBuffer: 2 * 1024 * 1024,
     timeout: 180_000,
   });
-  console.log(`Verified Bordeaux template robot (${catalog.catalogHash.slice(0, 19)}…, ${generatedIds.length} commands).`);
+  console.log(`Verified Bordeaux template robot (${catalog.catalogHash.slice(0, 19)}…, ${generatedIds.length} commands, ${generatedConditionIds.length} condition).`);
 } finally {
   await fs.rm(fixtureRoot, { recursive: true, force: true });
 }

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { compareExactDecimals, javaParameterValueError } from "../shared/javaCommands";
-import type { JavaCommandDescriptor, JavaCommandParameter, JavaConditionDescriptor, JavaValueSchema } from "../shared/types";
+import type { JavaBuiltInDescriptor, JavaCommandDescriptor, JavaCommandParameter, JavaConditionDescriptor, JavaValueSchema } from "../shared/types";
 
 const MAX_CATALOG_BYTES = 2 * 1024 * 1024;
 const MAX_COMMANDS = 5_000;
@@ -13,13 +13,33 @@ const MAX_OBJECT_FIELDS = 256;
 const MAX_ENUM_VALUES = 1_024;
 
 interface GeneratedJavaCatalog {
-  schemaVersion: "1.0" | "1.1";
+  schemaVersion: "1.0" | "1.1" | "1.2";
   catalogId: string;
   supportVersion: string;
   catalogHash: string;
   commands: JavaCommandDescriptor[];
   conditions: JavaConditionDescriptor[];
+  builtIns: JavaBuiltInDescriptor[];
 }
+
+const BORDEAUX_WAIT: JavaBuiltInDescriptor = {
+  id: "bordeaux.wait",
+  kind: "wait",
+  label: "Wait",
+  description: "Pause the routine before its next step.",
+  parameters: [{
+    name: "durationS",
+    label: "Duration",
+    description: "Time to wait before continuing the routine.",
+    unit: "s",
+    defaultValue: 1,
+    min: 0.02,
+    max: 15,
+    role: "argument",
+    javaType: "double",
+    schema: { kind: "number", javaType: "double" },
+  }],
+};
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -130,32 +150,41 @@ function canonicalJson(value: unknown): string {
   return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(",")}}`;
 }
 
-export function generatedCatalogHash(commands: unknown, conditions?: unknown): string {
-  const input = conditions === undefined ? commands : { commands, conditions };
+export function generatedCatalogHash(commands: unknown, conditions?: unknown, builtIns?: unknown): string {
+  const input = builtIns === undefined
+    ? conditions === undefined ? commands : { commands, conditions }
+    : { builtIns, commands, conditions };
   return `sha256:${createHash("sha256").update(canonicalJson(input), "utf8").digest("hex")}`;
 }
 
 export function parseGeneratedJavaCatalog(raw: unknown): GeneratedJavaCatalog {
   const value = record(raw);
   const schemaVersion = value?.schemaVersion;
-  if (!value || (schemaVersion !== "1.0" && schemaVersion !== "1.1") || !Array.isArray(value.commands) || value.commands.length > MAX_COMMANDS) {
-    throw new Error("Generated Java catalog must use schema version 1.0 or 1.1 and contain a bounded commands array");
+  if (!value || (schemaVersion !== "1.0" && schemaVersion !== "1.1" && schemaVersion !== "1.2") || !Array.isArray(value.commands) || value.commands.length > MAX_COMMANDS) {
+    throw new Error("Generated Java catalog must use schema version 1.0, 1.1, or 1.2 and contain a bounded commands array");
   }
   const supportVersion = text(value.supportVersion, "support version", 64);
-  if (!((schemaVersion === "1.0" && supportVersion === "0.1.0") || (schemaVersion === "1.1" && supportVersion === "0.2.0"))) {
+  if (!((schemaVersion === "1.0" && supportVersion === "0.1.0") || (schemaVersion === "1.1" && supportVersion === "0.2.0") || (schemaVersion === "1.2" && supportVersion === "0.3.0"))) {
     throw new Error(`Generated Java catalog schema ${schemaVersion} requires its matching supported runtime version`);
   }
   const catalogId = text(value.catalogId, "catalog ID", 256);
   const catalogHash = text(value.catalogHash, "catalog hash", 96);
   if (!/^sha256:[0-9a-f]{64}$/.test(catalogHash)) throw new Error("Generated Java catalog hash is invalid");
   if (schemaVersion === "1.0" && value.conditions !== undefined) throw new Error("Legacy generated Java catalog 1.0 cannot declare conditions");
-  if (schemaVersion === "1.1" && (!Array.isArray(value.conditions) || value.conditions.length > MAX_CONDITIONS)) {
-    throw new Error("Generated Java catalog 1.1 must contain a bounded conditions array");
+  if ((schemaVersion === "1.1" || schemaVersion === "1.2") && (!Array.isArray(value.conditions) || value.conditions.length > MAX_CONDITIONS)) {
+    throw new Error(`Generated Java catalog ${schemaVersion} must contain a bounded conditions array`);
   }
-  const rawConditions = schemaVersion === "1.1" ? value.conditions as unknown[] : [];
-  const expectedHash = schemaVersion === "1.1"
-    ? generatedCatalogHash(value.commands, rawConditions)
-    : generatedCatalogHash(value.commands);
+  if (schemaVersion !== "1.2" && value.builtIns !== undefined) throw new Error("Generated Java catalog built-ins require schema 1.2");
+  if (schemaVersion === "1.2" && (!Array.isArray(value.builtIns) || canonicalJson(value.builtIns) !== canonicalJson([BORDEAUX_WAIT]))) {
+    throw new Error("Generated Java catalog 1.2 must declare the exact Bordeaux-owned built-in capabilities");
+  }
+  const rawConditions = schemaVersion === "1.0" ? [] : value.conditions as unknown[];
+  const rawBuiltIns = schemaVersion === "1.2" ? value.builtIns as unknown[] : [];
+  const expectedHash = schemaVersion === "1.0"
+    ? generatedCatalogHash(value.commands)
+    : schemaVersion === "1.1"
+      ? generatedCatalogHash(value.commands, rawConditions)
+      : generatedCatalogHash(value.commands, rawConditions, rawBuiltIns);
   if (catalogHash !== expectedHash) throw new Error("Generated Java catalog hash does not match its declared capabilities");
   const ids = new Set<string>();
   const commands = value.commands.map((rawCommand) => {
@@ -200,7 +229,7 @@ export function parseGeneratedJavaCatalog(raw: unknown): GeneratedJavaCatalog {
   });
   const conditionIds = new Set<string>();
   let previousConditionId: string | null = null;
-  const conditions: JavaConditionDescriptor[] = schemaVersion === "1.1"
+  const conditions: JavaConditionDescriptor[] = schemaVersion !== "1.0"
     ? rawConditions.map((rawCondition) => {
       const condition = record(rawCondition);
       if (!condition) throw new Error("Generated Java catalog condition must be an object");
@@ -228,7 +257,17 @@ export function parseGeneratedJavaCatalog(raw: unknown): GeneratedJavaCatalog {
       };
     })
     : [];
-  return { schemaVersion, catalogId, supportVersion, catalogHash, commands, conditions };
+  return {
+    schemaVersion,
+    catalogId,
+    supportVersion,
+    catalogHash,
+    commands,
+    conditions,
+    builtIns: schemaVersion === "1.2"
+      ? [{ ...BORDEAUX_WAIT, parameters: [{ ...BORDEAUX_WAIT.parameters[0], schema: { ...BORDEAUX_WAIT.parameters[0].schema } }] }]
+      : [],
+  };
 }
 
 export async function readGeneratedJavaCatalog(projectRoot: string): Promise<GeneratedJavaCatalog | null> {

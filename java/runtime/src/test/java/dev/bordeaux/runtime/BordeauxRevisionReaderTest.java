@@ -55,6 +55,21 @@ class BordeauxRevisionReaderTest {
     }
 
     @Test
+    void validatesTheWaitBuiltInAgainstTheCurrentCatalogSchemaAndSupportPair() {
+        BordeauxRuntimeCompatibility current = new BordeauxRuntimeCompatibility(
+                CATALOG_ID, HASH, "0.3.0", "2026-rebuilt", "2026-manual-tu19-welded-4", "bordeaux-field/1.0");
+        String currentDocument = trajectory("""
+                ,"routine":{"name":"Wait","nodes":[
+                  {"id":"wait","type":"builtin","builtinId":"bordeaux.wait","arguments":{"durationS":0.25}}]}
+                ,"paths":[{"id":"auto","name":"Auto","totalTimeS":1,"samples":[],"events":[]}]
+                """)
+                .replace("\"schemaVersion\":\"1.0\"", "\"schemaVersion\":\"1.2\"")
+                .replace("\"supportVersion\":\"0.1.0\"", "\"supportVersion\":\"0.3.0\"");
+
+        BordeauxTrajectoryReader.validateDocument(bytes(currentDocument), current);
+    }
+
+    @Test
     void rejectsInvalidRoutineBranchesEvenWhenEveryPathIsOtherwiseValid() {
         String document = trajectory("""
                 ,"routine":{"name":"Auto","nodes":[{"id":"decision","type":"decision","cond":"ready",

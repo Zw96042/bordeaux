@@ -61,9 +61,11 @@ class BordeauxProcessorTest {
 
         JsonNode catalog = MAPPER.readTree(Files.readString(
                 result.classes().resolve("META-INF/bordeaux/commands.json")));
-        assertEquals("1.1", catalog.path("schemaVersion").textValue());
+        assertEquals("1.2", catalog.path("schemaVersion").textValue());
         assertEquals("test-robot", catalog.path("catalogId").textValue());
-        assertEquals("0.2.0", catalog.path("supportVersion").textValue());
+        assertEquals("0.3.0", catalog.path("supportVersion").textValue());
+        assertEquals("bordeaux.wait", catalog.path("builtIns").get(0).path("id").textValue());
+        assertEquals(0.02, catalog.path("builtIns").get(0).path("parameters").get(0).path("min").doubleValue());
         assertEquals("super.score", catalog.path("commands").get(0).path("id").textValue());
         assertEquals("shoot", catalog.path("commands").get(0).path("aliases").get(0).textValue());
         assertEquals("shoot-fuel", catalog.path("commands").get(0).path("semanticTags").get(0).textValue());
@@ -75,7 +77,7 @@ class BordeauxProcessorTest {
                 .filter(value -> value.path("name").textValue().equals("sequence")).findFirst().orElseThrow();
         assertEquals("integerString", sequence.path("schema").path("kind").textValue());
         assertTrue(sequence.path("max").isTextual());
-        assertEquals(canonicalHash(catalog.path("commands"), catalog.path("conditions")), catalog.path("catalogHash").textValue());
+        assertEquals(canonicalHash(catalog.path("builtIns"), catalog.path("commands"), catalog.path("conditions")), catalog.path("catalogHash").textValue());
 
         String bindings = Files.readString(result.generated().resolve(
                 "dev/bordeaux/generated/BordeauxGeneratedBindings.java"));
@@ -110,7 +112,7 @@ class BordeauxProcessorTest {
         JsonNode catalog = MAPPER.readTree(Files.readString(first.classes().resolve("META-INF/bordeaux/commands.json")));
         assertEquals("ready", catalog.path("conditions").get(0).path("id").textValue());
         assertEquals("Ready to score", catalog.path("conditions").get(0).path("label").textValue());
-        assertEquals(canonicalHash(catalog.path("commands"), catalog.path("conditions")), catalog.path("catalogHash").textValue());
+        assertEquals(canonicalHash(catalog.path("builtIns"), catalog.path("commands"), catalog.path("conditions")), catalog.path("catalogHash").textValue());
         String bindings = Files.readString(first.generated().resolve("dev/bordeaux/generated/BordeauxGeneratedBindings.java"));
         assertTrue(bindings.contains("BordeauxConditionRegistry conditions()"));
         assertTrue(bindings.contains("builder.register(\"ready\", () -> frc.robot.Capabilities.ready())"));
@@ -295,8 +297,9 @@ class BordeauxProcessorTest {
                 """.formatted(label);
     }
 
-    private static String canonicalHash(JsonNode commands, JsonNode conditions) throws Exception {
+    private static String canonicalHash(JsonNode builtIns, JsonNode commands, JsonNode conditions) throws Exception {
         var catalog = MAPPER.createObjectNode();
+        catalog.set("builtIns", builtIns);
         catalog.set("commands", commands);
         catalog.set("conditions", conditions);
         String canonical = canonical(catalog);
