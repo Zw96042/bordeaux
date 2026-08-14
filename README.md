@@ -2,6 +2,8 @@
 
 Bordeaux is a lightweight desktop editor for authoring robot paths, autonomous routines, and Java command events. The maintained planners are `profiledSpline` and `optimizedTrajectory`; both build on the repository's shared path math, constraints, and stationary-action postprocessor. The optimizer is a bounded smoothing pass over the profiled trajectory, not an external solver.
 
+Bordeaux is licensed under the [Apache License 2.0](LICENSE).
+
 LabVIEW 4.4 compatibility is preserved separately on the `archive/labview-4.4` branch and is intentionally absent from the main application.
 
 ## Develop
@@ -32,7 +34,7 @@ Installed GitHub builds update on version-derived beta or production channels; M
 
 ## Java robot integration
 
-Link a GradleRIO project in Bordeaux and use **Install Java Support**. This is the sole supported setup path: it installs bounded runtime/processor jars and a managed Gradle script in the robot project. See [java/README.md](java/README.md) for the generated command catalog and runtime APIs.
+After the first tagged Java release publishes the `java-maven` branch, install the WPILib vendordep from `https://raw.githubusercontent.com/Zw96042/bordeaux/java-maven/BordeauxLib2026.json`, then link the GradleRIO project in Bordeaux and choose **Install Java Support**. The app detects the vendordep and installs only its managed catalog configuration; it can fall back to bundled runtime and processor jars when the robot project must remain offline. See [java/README.md](java/README.md) for setup, generated command catalogs, and runtime APIs.
 
 ## Project files
 

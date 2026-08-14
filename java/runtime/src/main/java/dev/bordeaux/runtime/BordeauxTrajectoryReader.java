@@ -197,13 +197,62 @@ public final class BordeauxTrajectoryReader {
             if (!samples.isEmpty() && timeS < samples.get(samples.size() - 1).timeS() - 1e-9) {
                 throw new BordeauxRuntimeException("Path '" + id + "' sample times must be monotonic");
             }
-            samples.add(new BordeauxSample(index, timeS,
-                    nonnegativeFinite(sample.get("s"), "Path '" + id + "' sample " + index + " distance"),
-                    finiteInRange(sample.get("f"), "Path '" + id + "' sample " + index + " fraction", 0, 1),
-                    finite(sample.get("x"), "Path '" + id + "' sample " + index + " X"),
-                    finite(sample.get("y"), "Path '" + id + "' sample " + index + " Y"),
-                    finite(sample.get("headingRad"), "Path '" + id + "' sample " + index + " heading"),
-                    finite(sample.get("velocityMps"), "Path '" + id + "' sample " + index + " velocity")));
+            double distanceM = nonnegativeFinite(
+                    sample.get("s"), "Path '" + id + "' sample " + index + " distance");
+            double fraction = finiteInRange(
+                    sample.get("f"), "Path '" + id + "' sample " + index + " fraction", 0, 1);
+            if (!samples.isEmpty()
+                    && distanceM < samples.get(samples.size() - 1).distanceM() - 1e-9) {
+                throw new BordeauxRuntimeException("Path '" + id + "' sample distances must be monotonic");
+            }
+            if (!samples.isEmpty()
+                    && fraction < samples.get(samples.size() - 1).fraction() - 1e-9) {
+                throw new BordeauxRuntimeException("Path '" + id + "' sample fractions must be monotonic");
+            }
+            double xM = finite(sample.get("x"), "Path '" + id + "' sample " + index + " X");
+            double yM = finite(sample.get("y"), "Path '" + id + "' sample " + index + " Y");
+            double headingRad = finite(
+                    sample.get("headingRad"), "Path '" + id + "' sample " + index + " heading");
+            if (!samples.isEmpty()) {
+                BordeauxSample previous = samples.get(samples.size() - 1);
+                double spatialStepM = Math.hypot(xM - previous.xM(), yM - previous.yM());
+                double distanceStepM = distanceM - previous.distanceM();
+                double headingStepRad = Math.atan2(
+                        Math.sin(headingRad - previous.headingRad()),
+                        Math.cos(headingRad - previous.headingRad()));
+                if (spatialStepM > distanceStepM + 5e-4) {
+                    throw new BordeauxRuntimeException(
+                            "Path '" + id + "' sample distance cannot be shorter than its field displacement");
+                }
+                if ((spatialStepM > 1e-9 || distanceStepM > 1e-9
+                        || Math.abs(headingStepRad) > 1e-9)
+                        && timeS <= previous.timeS() + 1e-9) {
+                    throw new BordeauxRuntimeException(
+                            "Path '" + id + "' moving samples must advance time");
+                }
+            }
+            samples.add(new BordeauxSample(index, timeS, distanceM, fraction,
+                    xM, yM,
+                    headingRad,
+                    nonnegativeFinite(sample.get("velocityMps"), "Path '" + id + "' sample " + index + " velocity")));
+        }
+        if (!samples.isEmpty()) {
+            BordeauxSample first = samples.get(0);
+            BordeauxSample last = samples.get(samples.size() - 1);
+            if (Math.abs(first.timeS()) > 1e-9
+                    || Math.abs(first.distanceM()) > 1e-9
+                    || Math.abs(first.fraction()) > 1e-9) {
+                throw new BordeauxRuntimeException(
+                        "Path '" + id + "' samples must start at zero time, distance, and fraction");
+            }
+            if (Math.abs(last.timeS() - totalTimeS) > 1e-9) {
+                throw new BordeauxRuntimeException(
+                        "Path '" + id + "' final sample time must match totalTimeS");
+            }
+            if (last.distanceM() > 1e-9 && Math.abs(last.fraction() - 1) > 1e-9) {
+                throw new BordeauxRuntimeException(
+                        "Path '" + id + "' non-empty distance must end at fraction one");
+            }
         }
 
         List<BordeauxFollowSection> sections = new ArrayList<>();

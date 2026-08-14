@@ -4,6 +4,22 @@ import { getPlanner } from "../src/shared/planners";
 import { profiledSplinePlanner } from "../src/shared/planners/profiledSpline";
 import { applyStationaryActions } from "../src/shared/planners/stationaryActions";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
+import type { TrajectorySample } from "../src/shared/types";
+
+function measuredLinearJerk(samples: readonly TrajectorySample[]): number {
+  let maximum = 0;
+  for (let index = 2; index < samples.length; index += 1) {
+    const currentDt = samples[index].t - samples[index - 1].t;
+    const previousDt = samples[index - 1].t - samples[index - 2].t;
+    if (currentDt <= 1e-9 || previousDt <= 1e-9) continue;
+    maximum = Math.max(
+      maximum,
+      Math.abs(samples[index].accelerationMps2 - samples[index - 1].accelerationMps2)
+        / ((previousDt + currentDt) / 2),
+    );
+  }
+  return maximum;
+}
 
 function mixedActionProject() {
   const project = createDemoProject();
@@ -73,7 +89,7 @@ it("preserves the complete mixed stationary-action timeline", () => {
   // Single-pass assembly evaluates t + (d1 + d2) instead of the quadratic
   // (t + d1) + d2 suffix rewrites. IEEE-754 can differ below 1e-15 seconds,
   // so time and derived angular velocity use canonical parity below controller precision.
-  expect(canonicalDigest).toBe("1d2e8c7c97edb669e47d226be853f373c0b2737d5dde799c7aaedf0cbfc95189");
+  expect(canonicalDigest).toBe("ffec610d31f053d338ddc90ac150e6a11a954c0b22cdbd535e14e0373d2e1395");
 });
 
 it.each(["profiledSpline", "optimizedTrajectory"] as const)(
@@ -95,6 +111,37 @@ it.each(["profiledSpline", "optimizedTrajectory"] as const)(
       expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
       expect(result.markers[0].timeS).toBe(result.totalTimeS);
     }
+  },
+);
+
+it.each(["profiledSpline", "optimizedTrajectory"] as const)(
+  "generates jerk-limited jiggle strokes in %s",
+  (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxJerk = 10;
+    path.waypoints = buildWaypoints([
+      { x: 4, y: 4, theta: 0, thetaOn: true, stop: true, segType: "line" },
+      {
+        x: 4,
+        y: 4,
+        theta: 0,
+        thetaOn: true,
+        stop: true,
+        segType: "line",
+        jiggle: { distanceM: 0.1, strokes: 2, startDeg: 90, stepDeg: 180, strokeTimeS: 0.4 },
+      },
+    ]);
+
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+    const arrival = result.waypointSampleIndices!.at(-1)!;
+    const action = result.samples.slice(arrival);
+
+    expect(action.length).toBeGreaterThan(3);
+    expect(measuredLinearJerk(action)).toBeLessThanOrEqual(path.constraints.maxJerk + 1e-6);
+    expect(result.diagnostics.some((issue) => issue.message.includes("Linear jerk"))).toBe(false);
+    expect(result.totalTimeS).toBeGreaterThanOrEqual(2 * Math.cbrt(4.8));
   },
 );
 

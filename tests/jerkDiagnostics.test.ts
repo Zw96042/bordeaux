@@ -10,12 +10,13 @@ const PLANNERS: TrajectoryPlannerId[] = ["profiledSpline", "optimizedTrajectory"
 
 function measuredLinearJerk(samples: readonly TrajectorySample[]): number {
   let linear = 0;
-  for (let index = 1; index < samples.length; index += 1) {
+  for (let index = 2; index < samples.length; index += 1) {
     const sample = samples[index];
     const previous = samples[index - 1];
     const dt = sample.t - previous.t;
-    if (dt <= 1e-9) continue;
-    linear = Math.max(linear, Math.abs(sample.accelerationMps2 - previous.accelerationMps2) / dt);
+    const previousDt = previous.t - samples[index - 2].t;
+    if (dt <= 1e-9 || previousDt <= 1e-9) continue;
+    linear = Math.max(linear, Math.abs(sample.accelerationMps2 - previous.accelerationMps2) / ((previousDt + dt) / 2));
   }
   return linear;
 }
@@ -126,6 +127,31 @@ describe("final trajectory jerk diagnostics", () => {
       severity: "error",
       path: `paths.${path.name}.constraints.maxAngJerk`,
       message: "Angular jerk reaches 76.394 °/s³, above the maxAngJerk limit of 65.000 °/s³",
+    });
+  });
+
+  it("measures linear jerk between interval midpoints on nonuniform samples", () => {
+    const project = movingProject();
+    const path = project.paths[0];
+    path.constraints.maxJerk = 2.5;
+    const sample = (i: number, t: number, accelerationMps2: number): TrajectorySample => ({
+      i, t, accelerationMps2,
+      s: 0, f: i / 2, x: 0, y: 0, headingRad: 0,
+      velocityMps: 0, angularVelocityRadps: 0, curvatureInvM: 0,
+    });
+    const result = addJerkDiagnostics(path, {
+      planner: "profiledSpline",
+      totalTimeS: 3,
+      totalDistanceM: 0,
+      samples: [sample(0, 0, 0), sample(1, 1, 0), sample(2, 3, 4)],
+      markers: [],
+      diagnostics: [],
+    } satisfies PlannerResult);
+
+    expect(result.diagnostics).toContainEqual({
+      severity: "error",
+      path: `paths.${path.name}.constraints.maxJerk`,
+      message: "Linear jerk reaches 2.667 m/s³, above the maxJerk limit of 2.500 m/s³",
     });
   });
 

@@ -1,5 +1,5 @@
 dependencies {
-    api(project(":annotations"))
+    compileOnly(project(":annotations"))
 
     testImplementation(project(":runtime"))
     testImplementation("edu.wpi.first.wpilibNewCommands:wpilibNewCommands-java:2026.2.2")

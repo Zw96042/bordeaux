@@ -1,5 +1,6 @@
 import type { ValidationIssue, ValidationResult } from "./types";
 import { FIELD_H, FIELD_W } from "./math/fieldBounds";
+import { stoppedTangentHeadings } from "./math/pathTangents";
 
 type RecordValue = Record<string, unknown>;
 
@@ -259,12 +260,26 @@ function validateProjectInner(project: unknown): ValidationResult {
         validateFinite(issues, project.robot.driveModel.gearRatio, `${modelPath}.gearRatio`, "Drive gear ratio", { positive: true });
         validateFinite(issues, project.robot.driveModel.wheelDiameterM, `${modelPath}.wheelDiameterM`, "Drive wheel diameter", { positive: true });
         validateOptionalFinite(issues, project.robot.driveModel.motorMaxTorqueNm, `${modelPath}.motorMaxTorqueNm`, "Motor torque limit", { positive: true });
+        validateOptionalFinite(issues, project.robot.driveModel.motorStallCurrentA, `${modelPath}.motorStallCurrentA`, "Motor stall current", { positive: true });
+        validateOptionalFinite(issues, project.robot.driveModel.motorCurrentLimitA, `${modelPath}.motorCurrentLimitA`, "Motor current limit", { positive: true });
         validateOptionalFinite(issues, project.robot.driveModel.motorCount, `${modelPath}.motorCount`, "Drive motor count", { positive: true });
         validateOptionalFinite(issues, project.robot.driveModel.massKg, `${modelPath}.massKg`, "Robot mass", { positive: true });
         validateOptionalFinite(issues, project.robot.driveModel.moiKgM2, `${modelPath}.moiKgM2`, "Robot moment of inertia", { positive: true });
         validateOptionalFinite(issues, project.robot.driveModel.wheelbaseM, `${modelPath}.wheelbaseM`, "Wheelbase", { positive: true });
         validateOptionalFinite(issues, project.robot.driveModel.trackwidthM, `${modelPath}.trackwidthM`, "Trackwidth", { positive: true });
         validateOptionalFinite(issues, project.robot.driveModel.wheelFrictionCoefficient, `${modelPath}.wheelFrictionCoefficient`, "Wheel friction coefficient", { positive: true });
+        validateOptionalFinite(issues, project.robot.driveModel.batteryNominalVoltage, `${modelPath}.batteryNominalVoltage`, "Battery nominal voltage", { positive: true });
+        validateOptionalFinite(issues, project.robot.driveModel.batteryInternalResistanceOhm, `${modelPath}.batteryInternalResistanceOhm`, "Battery internal resistance", { positive: true });
+        const electricalValues = [
+          project.robot.driveModel.motorStallCurrentA,
+          project.robot.driveModel.motorCurrentLimitA,
+          project.robot.driveModel.batteryNominalVoltage,
+          project.robot.driveModel.batteryInternalResistanceOhm,
+        ];
+        const electricalValueCount = electricalValues.filter((value) => value !== undefined).length;
+        if (electricalValueCount > 0 && electricalValueCount < electricalValues.length) {
+          issues.push(issue(modelPath, "Battery modeling requires stall current, current limit, nominal voltage, and internal resistance together"));
+        }
         if (project.robot.driveModel.motorCount !== undefined && !Number.isInteger(project.robot.driveModel.motorCount)) {
           issues.push(issue(`${modelPath}.motorCount`, "Drive motor count must be an integer"));
         }
@@ -318,9 +333,10 @@ function validateProjectInner(project: unknown): ValidationResult {
       } else if (path.waypoints.length > MAX_PATH_ITEMS) {
         issues.push(issue(`${base}.waypoints`, `Path cannot contain more than ${MAX_PATH_ITEMS} waypoints`));
       } else {
-        const waypointCount = path.waypoints.length;
+        const waypoints = path.waypoints;
+        const waypointCount = waypoints.length;
         if (waypointCount < 2) issues.push(issue(`${base}.waypoints`, "Path must contain at least two waypoints"));
-        path.waypoints.forEach((waypoint, wi) => {
+        waypoints.forEach((waypoint, wi) => {
           const wpBase = `${base}.waypoints[${wi}]`;
           if (!isRecord(waypoint)) {
             issues.push(issue(wpBase, "Waypoint must be an object"));
@@ -394,6 +410,29 @@ function validateProjectInner(project: unknown): ValidationResult {
               validateFinite(issues, waypoint.turnInPlace.headingDeg, `${wpBase}.turnInPlace.headingDeg`, "Turn heading");
               if (waypoint.turnInPlace.direction !== undefined && !["shortest", "clockwise", "counterclockwise"].includes(String(waypoint.turnInPlace.direction))) issues.push(issue(`${wpBase}.turnInPlace.direction`, "Turn direction is invalid"));
               if (waypoint.stop !== true) issues.push(issue(`${wpBase}.turnInPlace`, "Turn in place requires a stopped waypoint"));
+            }
+          }
+          if (wi > 0 && wi < waypointCount - 1 && waypoint.stop === true && waypoint.turnInPlace === undefined) {
+            const tankDrive = isRecord(project.robot) && project.robot.drive === "tank";
+            const previous = waypoints[wi - 1];
+            const incomingMode = tankDrive
+              ? "tangent"
+              : isRecord(previous) ? previous.segmentHeadingMode ?? path.headingMode ?? "targets" : path.headingMode ?? "targets";
+            const outgoingMode = tankDrive ? "tangent" : waypoint.segmentHeadingMode ?? path.headingMode ?? "targets";
+            if (incomingMode === "tangent" && outgoingMode === "tangent") {
+              const headings = stoppedTangentHeadings(waypoints, wi);
+              if (headings) {
+                const delta = Math.abs(Math.atan2(
+                  Math.sin(headings.outgoing - headings.incoming),
+                  Math.cos(headings.outgoing - headings.incoming),
+                ));
+                if (delta > 2 * Math.PI / 180) {
+                  issues.push(issue(
+                    `${wpBase}.turnInPlace`,
+                    "A stopped tangent corner that changes direction requires a turn in place or aligned tangent handles",
+                  ));
+                }
+              }
             }
           }
           if (waypoint.jiggle !== undefined) {
@@ -516,8 +555,17 @@ function validateProjectInner(project: unknown): ValidationResult {
             if (!Number.isInteger(segmentIndex)) issues.push(issue(`${rangeBase}.${key}`, "Local constraint range segment must be an integer"));
             else if ((segmentIndex as number) < 0 || (segmentIndex as number) >= segmentCount) issues.push(issue(`${rangeBase}.${key}`, "Local constraint range segment is outside the path"));
           });
+        } else if (range.anchor === "wp") {
+          const waypointCount = Array.isArray(path.waypoints) ? path.waypoints.length : 0;
+          (["w0", "w1"] as const).forEach((key) => {
+            const waypointIndex = range[key];
+            if (!Number.isInteger(waypointIndex)) issues.push(issue(`${rangeBase}.${key}`, "Constraint range waypoint must be an integer"));
+            else if ((waypointIndex as number) < 0 || (waypointIndex as number) >= waypointCount) issues.push(issue(`${rangeBase}.${key}`, "Constraint range waypoint is outside the path"));
+          });
         }
         ["f0", "f1", "maxVel", "maxAccel", "maxAngVel", "maxAngAccel"].forEach((key) => validateFinite(issues, range[key], `${rangeBase}.${key}`, `Range ${key}`, key.startsWith("max") ? { positive: true } : {}));
+        if (finite(range.f0) && (range.f0 < 0 || range.f0 > 1)) issues.push(issue(`${rangeBase}.f0`, "Constraint range start fraction must be between 0 and 1"));
+        if (finite(range.f1) && (range.f1 < 0 || range.f1 > 1)) issues.push(issue(`${rangeBase}.f1`, "Constraint range end fraction must be between 0 and 1"));
         ["d0", "d1", "w0", "w1", "maxDecel"].forEach((key) => validateOptionalFinite(issues, range[key], `${rangeBase}.${key}`, `Range ${key}`, key === "maxDecel" ? { positive: true } : { nonnegative: true }));
         if (range.rotationPriority !== undefined && range.rotationPriority !== "heading" && range.rotationPriority !== "translation") {
           issues.push(issue(`${rangeBase}.rotationPriority`, "Timing priority must be heading or translation"));

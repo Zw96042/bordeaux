@@ -1,5 +1,12 @@
 import fs from "node:fs";
 import vm from "node:vm";
+import {
+  effectivePathConstraints,
+  motorAccelerationAtSpeed,
+  motorLimitedVelocityAfterDistance,
+  robotHardLimits,
+} from "../../src/shared/robotLimits";
+import { indexIntervalPolicies } from "../../src/shared/planners/intervalPolicies";
 
 interface LoadOptions {
   context?: Record<string, unknown>;
@@ -13,6 +20,14 @@ export function loadRendererExport<T>(url: URL, name: string, options: LoadOptio
   let source = fs.readFileSync(url, "utf8").replace(/^import .*;\r?\n/gm, "");
   for (const [from, to] of options.replacements ?? []) source = source.replace(from, to);
   source = source.replace(`export const ${name} =`, `window.${name} =`);
-  vm.runInNewContext(source, { ...options.context, window: rendererWindow });
+  vm.runInNewContext(source, {
+    effectiveConstraints: effectivePathConstraints,
+    indexIntervalPolicies,
+    motorAccelerationAtSpeed,
+    motorLimitedVelocityAfterDistance,
+    robotHardLimits,
+    ...options.context,
+    window: rendererWindow,
+  });
   return rendererWindow[name] as T;
 }

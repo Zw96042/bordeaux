@@ -3,6 +3,7 @@
 import { indexIntervalPolicies } from "../planners/intervalPolicies";
 import { firstHeadingAnchorInDistanceRange } from "../planners/headingTransitions";
 import { wrapRadians } from "./angles";
+import { motorLimitedVelocityAfterDistance, robotHardLimits } from "../robotLimits";
 
   // ---- geometry helpers ----
   const lerp = (a, b, t) => a + (b - a) * t;
@@ -56,9 +57,11 @@ import { wrapRadians } from "./angles";
     const Hcos = (b) => { let s = 0; const N = 24; for (let k = 0; k <= N; k++) { const t = k / N; const th = ph0 + (dphi - b) * t + b * t * t; const w = (k === 0 || k === N) ? 1 : (k % 2 ? 4 : 2); s += w * Math.cos(th); } return s / (3 * N); };
     // root of Hsin(b)=0 with the smallest |b| (closest to a gentle spiral)
     let best = null; const lo = -6 * Math.PI, hi = 6 * Math.PI, STEPS = 240; let pb = lo, pf = Hsin(lo);
+    if (Math.abs(pf) <= 1e-12) best = lo;
     for (let k = 1; k <= STEPS; k++) {
       const b = lo + (hi - lo) * k / STEPS, f = Hsin(b);
-      if (pf * f < 0) { let a = pb, bb = b, fa = pf; for (let it = 0; it < 44; it++) { const m = (a + bb) / 2, fm = Hsin(m); if (fa * fm <= 0) bb = m; else { a = m; fa = fm; } } const root = (a + bb) / 2; if (best === null || Math.abs(root) < Math.abs(best)) best = root; }
+      if (Math.abs(f) <= 1e-12) { if (best === null || Math.abs(b) < Math.abs(best)) best = b; }
+      else if (pf * f < 0) { let a = pb, bb = b, fa = pf; for (let it = 0; it < 44; it++) { const m = (a + bb) / 2, fm = Hsin(m); if (fa * fm <= 0) bb = m; else { a = m; fa = fm; } } const root = (a + bb) / 2; if (best === null || Math.abs(root) < Math.abs(best)) best = root; }
       pb = b; pf = f;
     }
     if (best === null) return null;
@@ -138,8 +141,20 @@ import { wrapRadians } from "./angles";
         } else {
           pos = bez(p0, c0, c1, p1, t);
           const d = bezD(p0, c0, c1, p1, t), dd = bezDD(p0, c0, c1, p1, t);
-          const speed2 = d.x * d.x + d.y * d.y, cross = d.x * dd.y - d.y * dd.x;
-          head = Math.atan2(d.y, d.x); curv = speed2 > 1e-9 ? Math.abs(cross) / Math.pow(speed2, 1.5) : 0;
+          const speed2 = d.x * d.x + d.y * d.y;
+          if (speed2 > 1e-12) head = Math.atan2(d.y, d.x);
+          else {
+            const before = bez(p0, c0, c1, p1, Math.max(0, t - 1e-4));
+            const after = bez(p0, c0, c1, p1, Math.min(1, t + 1e-4));
+            const hx = after.x - before.x, hy = after.y - before.y;
+            head = Math.hypot(hx, hy) > 1e-12 ? Math.atan2(hy, hx) : chordHeading(p0, p1);
+          }
+          const curvatureT = speed2 > 1e-12 ? t : (t <= 0.5 ? Math.min(1, t + 1e-4) : Math.max(0, t - 1e-4));
+          const curvatureD = speed2 > 1e-12 ? d : bezD(p0, c0, c1, p1, curvatureT);
+          const curvatureDD = speed2 > 1e-12 ? dd : bezDD(p0, c0, c1, p1, curvatureT);
+          const curvatureSpeed2 = curvatureD.x * curvatureD.x + curvatureD.y * curvatureD.y;
+          const cross = curvatureD.x * curvatureDD.y - curvatureD.y * curvatureDD.x;
+          curv = curvatureSpeed2 > 1e-12 ? Math.abs(cross) / Math.pow(curvatureSpeed2, 1.5) : 0;
         }
         pts.push({ x: pos.x, y: pos.y, seg: i, t, heading: head, curv, s: 0 });
       }
@@ -183,7 +198,7 @@ import { wrapRadians } from "./angles";
     const stopSet = new Set(opts.stopIdx || []);
     const v = new Array(n).fill(vmax);
     // curvature cap: v <= sqrt(aLat / k)
-    const aLat = Math.max(0.1, c.maxCentripetalAccel ?? c.maxAccel);
+    const aLat = Math.max(1e-9, c.maxCentripetalAccel ?? c.maxAccel);
     for (let i = 0; i < n; i++) {
       const k = pts[i].curv;
       if (k > 1e-4) v[i] = Math.min(v[i], Math.sqrt(aLat / k));
@@ -195,8 +210,8 @@ import { wrapRadians } from "./angles";
     // Per-interval limits, tightened by any overlapping constraint range (tightest wins).
     const ranges = opts.ranges || [];
     const totalS = pts[n - 1].s || 1;
-    const accelG = Math.max(0.1, c.maxAccel);
-    const decelG = (c.maxDecel != null && c.maxDecel > 0) ? c.maxDecel : accelG;
+    const accelG = Math.max(1e-9, c.maxAccel);
+    const decelG = Math.max(1e-9, (c.maxDecel != null && c.maxDecel > 0) ? c.maxDecel : accelG);
     const aFwd = new Array(n).fill(accelG), aBack = new Array(n).fill(decelG);
     const rangeAngV = new Array(n).fill(Infinity), rangeAngA = new Array(n).fill(Infinity);
     // Index i describes the interval (i - 1, i). Evaluating overlap instead of
@@ -222,17 +237,23 @@ import { wrapRadians } from "./angles";
     // omega = (dtheta/ds) * v ; enforce |omega| <= Wmax and |d omega/dt| <= Aang (memo §16)
     const rotLimited = new Array(n).fill(0);
     const head = opts.heading;
+    const headingBreaks = new Map((opts.headingBreaks || []).map((entry) => [entry.idx, entry.end]));
+    const headingDelta = (index) => {
+      if (!head || index <= 0 || index >= n) return 0;
+      const previous = headingBreaks.has(index - 1) ? headingBreaks.get(index - 1) : head[index - 1];
+      return angWrap(head[index] - previous);
+    };
     const Wmax = (c.maxAngVel || 0) * Math.PI / 180;
     const Aaccel = (c.maxAngAccel || 0) * Math.PI / 180;
     const Adecel = (c.maxAngDecel || c.maxAngAccel || 0) * Math.PI / 180;
-    if (head && head.length === n && Wmax > 1e-4) {
+    if (head && head.length === n && Wmax > 0) {
       const g = new Array(n).fill(0), dth = new Array(n).fill(0);
-      for (let i = 1; i < n; i++) { const ds = pts[i].s - pts[i - 1].s; const dd = angWrap(head[i] - head[i - 1]); dth[i] = Math.abs(dd); g[i] = ds > 1e-6 ? dd / ds : 0; }
+      for (let i = 1; i < n; i++) { const ds = pts[i].s - pts[i - 1].s; const dd = headingDelta(i); dth[i] = Math.abs(dd); g[i] = ds > 1e-6 ? dd / ds : 0; }
       g[0] = g[1] || 0;
       const w = new Array(n);
       for (let i = 0; i < n; i++) w[i] = Math.min(Wmax, rangeAngV[i]);
       stopSet.forEach(idx => { if (idx >= 0 && idx < n) w[idx] = 0; });
-      if (Aaccel > 1e-4 || Adecel > 1e-4) {
+      if (Aaccel > 0 || Adecel > 0) {
         for (let i = 1; i < n; i++) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i - 1] * w[i - 1] + 2 * Math.min(Aaccel, rangeAngA[i]) * dth[i])));
         for (let i = n - 2; i >= 0; i--) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i + 1] * w[i + 1] + 2 * Math.min(Adecel, rangeAngA[i + 1]) * dth[i + 1])));
       }
@@ -241,18 +262,20 @@ import { wrapRadians } from "./angles";
     // forward
     for (let i = 1; i < n; i++) {
       const ds = pts[i].s - pts[i - 1].s;
-      v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * aFwd[i] * ds)));
+      const reachableVelocity = opts.robot
+        ? motorLimitedVelocityAfterDistance(opts.robot, v[i - 1], ds, aFwd[i])
+        : Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * aFwd[i] * ds));
+      v[i] = Math.min(v[i], reachableVelocity);
     }
     // backward (dedicated deceleration limit, tightened by ranges)
     for (let i = n - 2; i >= 0; i--) {
       const ds = pts[i + 1].s - pts[i].s;
       v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i + 1] * v[i + 1] + 2 * aBack[i] * ds)));
     }
+    const linearProfile = v.slice();
     // Enforce angular acceleration in the generated timing itself. A changing
-    // heading gradient can violate alpha even when omega is below its cap;
-    // solve the adjacent-sample bound against the interval time, then repeat
-    // the linear accel passes because either constraint may tighten the other.
-    if (head && head.length === n && (Aaccel > 1e-4 || Adecel > 1e-4)) {
+    // heading gradient can violate alpha even when omega is below its cap.
+    if (head && head.length === n && (Aaccel > 0 || Adecel > 0)) {
       const intervalDt = (index, candidate, candidateIndex) => {
         const ds = pts[index].s - pts[index - 1].s;
         const before = candidateIndex === index - 1 ? candidate : v[index - 1];
@@ -262,7 +285,7 @@ import { wrapRadians } from "./angles";
       const intervalOmega = (index, candidate, candidateIndex) => {
         if (index <= 0 || index >= n) return 0;
         const dt = intervalDt(index, candidate, candidateIndex);
-        return dt > 1e-9 ? angWrap(head[index] - head[index - 1]) / dt : 0;
+        return dt > 1e-9 ? headingDelta(index) / dt : 0;
       };
       const angularBudget = (previousOmega, currentOmega, first, second) => {
         const reversing = Math.sign(previousOmega) !== 0 && Math.sign(currentOmega) !== 0 && Math.sign(previousOmega) !== Math.sign(currentOmega);
@@ -279,9 +302,6 @@ import { wrapRadians } from "./angles";
         };
         if (allowed(v[variableIndex])) return false;
         let low = 0, high = v[variableIndex];
-        // Find the candidate with the smallest adjacent omega delta. The
-        // relationship is unimodal even when the two intervals rotate in
-        // opposite directions, while an assumption that zero is feasible is not.
         let left = low, right = high;
         const difference = (candidate) => {
           const previousOmega = intervalOmega(previousInterval, candidate, variableInterval === previousInterval ? variableIndex : -1);
@@ -322,7 +342,10 @@ import { wrapRadians } from "./angles";
         }
         for (let i = 1; i < n; i++) {
           const ds = pts[i].s - pts[i - 1].s;
-          v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * aFwd[i] * ds)));
+          const reachableVelocity = opts.robot
+            ? motorLimitedVelocityAfterDistance(opts.robot, v[i - 1], ds, aFwd[i])
+            : Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * aFwd[i] * ds));
+          v[i] = Math.min(v[i], reachableVelocity);
         }
         for (let i = n - 2; i >= 0; i--) {
           const ds = pts[i + 1].s - pts[i].s;
@@ -330,13 +353,39 @@ import { wrapRadians } from "./angles";
         }
         if (!changed) break;
       }
+
+      // The local solve can become ill-conditioned at a stopped waypoint next
+      // to a sharp heading anchor. If one sample collapses by eight orders of
+      // magnitude, restore the feasible linear profile and use closed-form
+      // uniform scaling instead of emitting effectively infinite timestamps.
+      const collapsed = v.some((velocity, index) => linearProfile[index] > 1e-12
+        && velocity < linearProfile[index] * 1e-8);
+      if (collapsed) {
+        for (let index = 0; index < n; index++) v[index] = linearProfile[index];
+        const stableDt = (index) => 2 * (pts[index].s - pts[index - 1].s) / Math.max(1e-12, v[index - 1] + v[index]);
+        const stableOmega = (index) => {
+          const dt = stableDt(index);
+          return dt > 1e-12 ? headingDelta(index) / dt : 0;
+        };
+        let scale = 1;
+        for (let interval = 2; interval < n; interval++) {
+          if (translationPriority[interval - 1] || translationPriority[interval]) continue;
+          const dt = stableDt(interval);
+          if (dt <= 1e-12) continue;
+          const previousOmega = stableOmega(interval - 1), currentOmega = stableOmega(interval);
+          const limit = angularBudget(previousOmega, currentOmega, interval - 1, interval);
+          if (limit > 0) scale = Math.max(scale, Math.sqrt(Math.abs(currentOmega - previousOmega) / dt / limit));
+        }
+        if (scale > 1) for (let index = 0; index < n; index++) v[index] /= scale;
+      }
     }
     // time
     const t = new Array(n).fill(0);
     for (let i = 1; i < n; i++) {
       const ds = pts[i].s - pts[i - 1].s;
       const vm = (v[i] + v[i - 1]) / 2;
-      t[i] = t[i - 1] + (vm > 1e-4 ? ds / vm : 0);
+      if (ds > 1e-9 && vm <= 0) throw new Error(`Trajectory interval ${i - 1}-${i} has distance but no reachable velocity`);
+      t[i] = t[i - 1] + (vm > 0 ? ds / vm : 0);
     }
     // Stationary turns happen after arrival and before any wait.
     const turns = [], turnDelay = new Map(); let terminalDelay = 0;
@@ -844,8 +893,11 @@ import { wrapRadians } from "./angles";
     const dwell = [], turns = [];
     doc.waypoints.forEach((w, k) => { if (w.stop && w.wait > 0) dwell.push({ idx: wpIdx[k], wait: w.wait }); });
     if (!(options && options.skipStationaryActions)) doc.waypoints.forEach((w, k) => { if (w.stop && w.turnInPlace) turns.push({ idx: wpIdx[k], start: k > 0 ? head[Math.max(0, wpIdx[k] - 1)] : head[0], end: w.turnInPlace.headingDeg * D2R, direction: w.turnInPlace.direction, maxAngVel: doc.constraints.maxAngVel, maxAngAccel: Math.min(doc.constraints.maxAngAccel, doc.constraints.maxAngDecel || doc.constraints.maxAngAccel), maxAngJerk: doc.constraints.maxAngJerk }); });
-    const physicalModel = robot?.driveModel?.motorMaxTorqueNm > 0 && robot?.driveModel?.massKg > 0;
-    const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns, motorMaxSpeed: physicalModel ? cap : 0 });
+    const physicalModel = robotHardLimits(robot);
+    const headingBreaks = doc.waypoints.flatMap((w, k) => w.stop && w.turnInPlace
+      ? [{ idx: wpIdx[k], end: w.turnInPlace.headingDeg * D2R }]
+      : []);
+    const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, headingBreaks, dwell, turns, robot: physicalModel && physicalModel.sagCoefficient > 0 ? robot : null });
     const mtr = metrics(pts, prof, anchors, mode);
     const warnings = analyze(pts, prof, mtr, robot || {});
     doc.waypoints.slice(0, -1).forEach((w, segment) => {

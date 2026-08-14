@@ -25,6 +25,7 @@ jobs:
       - run: npm run test:java
       - run: npm run build
       - run: npm run test:java-integration:built
+      - run: npm run test:java-vendordep
       - run: npm audit --audit-level=high
       - name: Configure Electron sandbox
         run: |

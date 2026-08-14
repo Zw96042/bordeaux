@@ -1090,7 +1090,7 @@ handle("javaProject:installSupport", async () => {
         type: "warning",
         title: summary.replacing ? "Update Bordeaux Java support" : "Install Bordeaux Java support",
         message: summary.replacing ? "Replace the managed Bordeaux support files?" : "Add Bordeaux support to this GradleRIO project?",
-        detail: `Bordeaux will ${summary.replacing ? "replace its managed block in" : "add one managed block to"} ${summary.buildFile}, preserve a one-time backup, and write:\n\n${summary.files.join("\n")}\n\nIt will not modify RobotContainer or deploy robot code.`,
+        detail: `Dependency source: ${summary.installMode === "vendordep" ? "the installed BordeauxLib vendordep" : "offline support jars bundled with Bordeaux"}.\n\nBordeaux will ${summary.replacing ? "replace its managed block in" : "add one managed block to"} ${summary.buildFile}, preserve a one-time backup, and write:\n\n${summary.files.join("\n")}\n\nIt will not modify RobotContainer or deploy robot code.`,
         buttons: ["Cancel", summary.replacing ? "Update Support" : "Install Support"],
         defaultId: 0,
         cancelId: 0,

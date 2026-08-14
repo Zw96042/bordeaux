@@ -1,4 +1,6 @@
 import type { TrajectorySample } from "../types";
+import { motorLimitedVelocityAfterDistance } from "../robotLimits";
+import type { RobotConfig } from "../types";
 
 const EPSILON = 1e-9;
 const CONSTRAINT_SAFETY = 0.995;
@@ -9,6 +11,7 @@ export interface LinearVelocityLimit {
   velocity: number;
   acceleration: number;
   deceleration: number;
+  robot: RobotConfig;
 }
 
 export interface LinearVelocityProfile {
@@ -25,13 +28,16 @@ function enforceLinearLimits(
     for (let index = 1; index < samples.length; index += 1) {
       const ds = Math.max(0, samples[index].s - samples[index - 1].s);
       const interval = limits.intervals[index];
-      const availableAcceleration = interval.acceleration
-        * Math.max(0, Math.min(1, 1 - velocities[index - 1] / interval.freeSpeed))
-        * CONSTRAINT_SAFETY;
+      const reachableVelocity = motorLimitedVelocityAfterDistance(
+        interval.robot,
+        velocities[index - 1],
+        ds,
+        interval.acceleration,
+      );
       velocities[index] = Math.min(
         velocities[index],
         interval.velocity,
-        Math.sqrt(velocities[index - 1] ** 2 + 2 * availableAcceleration * ds),
+        velocities[index - 1] + (reachableVelocity - velocities[index - 1]) * CONSTRAINT_SAFETY,
       );
     }
 

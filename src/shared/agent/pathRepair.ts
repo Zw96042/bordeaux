@@ -5,9 +5,9 @@ import { analyzePath } from "./pathAnalysis";
 import type { PathAnalysis, PathAnalysisFinding, RepairCandidate } from "./types";
 
 function findingRatio(finding: PathAnalysisFinding | undefined): number {
-  if (!finding?.measured) return finding ? 1 : 0;
+  if (finding?.measured === undefined) return finding ? 1 : 0;
   if (finding.kind === "geometry" && finding.limit !== undefined) return Math.max(0, finding.limit - finding.measured);
-  if (!finding.limit) return finding ? 1 : 0;
+  if (finding.limit === undefined) return finding ? 1 : 0;
   return Math.max(0, finding.measured / finding.limit - 1);
 }
 
@@ -20,9 +20,11 @@ function targetImproved(before: PathAnalysis, after: PathAnalysis, ids: readonly
   return ids.every((id) => {
     const beforeFinding = before.findings.find((item) => item.id === id);
     const afterFinding = after.findings.find((item) => item.id === id);
-    return !afterFinding
-      || severityRank(afterFinding) < severityRank(beforeFinding)
-      || findingRatio(afterFinding) <= findingRatio(beforeFinding) * 0.75;
+    if (!afterFinding) return true;
+    const beforeSeverity = severityRank(beforeFinding);
+    const afterSeverity = severityRank(afterFinding);
+    if (afterSeverity !== beforeSeverity) return afterSeverity < beforeSeverity;
+    return findingRatio(afterFinding) <= findingRatio(beforeFinding) * 0.75;
   });
 }
 

@@ -34,6 +34,14 @@ describe("robot footprint geometry", () => {
     expect(convexPolygonClearance(robotFootprintAt(project.robot, { x: 0.75, y: 0, headingRad: 0 }), obstacle)).toBeLessThan(0);
   });
 
+  it("reports the full minimum translation when one convex polygon contains another", () => {
+    const inner = boundsPolygon({ min: { x: 0, y: -0.5 }, max: { x: 1, y: 0.5 } });
+    const outer = boundsPolygon({ min: { x: -10, y: -2 }, max: { x: 10, y: 2 } });
+
+    expect(convexPolygonClearance(inner, outer)).toBeCloseTo(-2.5);
+    expect(convexPolygonClearance(outer, inner)).toBeCloseTo(-2.5);
+  });
+
   it("accepts a configured convex trapezoid and uses its exact barrier slice", () => {
     const project = createDemoProject();
     project.robot.l = 1;

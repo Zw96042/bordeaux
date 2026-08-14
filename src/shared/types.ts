@@ -35,7 +35,12 @@ export interface RobotConfig {
   driveModel?: {
     motorId: string;
     motorFreeRpm: number;
+    /** Published per-motor stall torque at the nominal voltage. */
     motorMaxTorqueNm?: number;
+    /** Published per-motor stall current. Enables current and battery-sag modeling. */
+    motorStallCurrentA?: number;
+    /** Configured per-motor current limit. */
+    motorCurrentLimitA?: number;
     motorCount?: number;
     gearRatio: number;
     wheelDiameterM: number;
@@ -44,6 +49,10 @@ export interface RobotConfig {
     wheelbaseM?: number;
     trackwidthM?: number;
     wheelFrictionCoefficient?: number;
+    /** Open-circuit voltage; motor specifications are interpreted at the FRC-standard 12 V. */
+    batteryNominalVoltage?: number;
+    /** Whole-robot battery and wiring resistance used for loaded-voltage sag. */
+    batteryInternalResistanceOhm?: number;
   };
   maxSpeed: number;
 }

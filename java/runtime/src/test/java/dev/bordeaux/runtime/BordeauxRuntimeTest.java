@@ -230,6 +230,82 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void rejectsTrajectorySamplesThatBreakFollowerProgressInvariants() {
+        String start = """
+                {"i":0,"t":0,"s":0,"f":0,"x":0,"y":0,"headingRad":0,"velocityMps":0},
+                {"i":1,"t":0.5,"s":1,"f":0.5,"x":1,"y":0,"headingRad":0,"velocityMps":1},
+                """;
+
+        BordeauxRuntimeException distance = assertThrows(BordeauxRuntimeException.class,
+                () -> readSamples(1, start + """
+                        {"i":2,"t":1,"s":0.9,"f":1,"x":2,"y":0,"headingRad":0,"velocityMps":0}
+                        """));
+        assertTrue(distance.getMessage().contains("distances must be monotonic"));
+
+        BordeauxRuntimeException fraction = assertThrows(BordeauxRuntimeException.class,
+                () -> readSamples(1, start + """
+                        {"i":2,"t":1,"s":2,"f":0.4,"x":2,"y":0,"headingRad":0,"velocityMps":0}
+                        """));
+        assertTrue(fraction.getMessage().contains("fractions must be monotonic"));
+
+        BordeauxRuntimeException velocity = assertThrows(BordeauxRuntimeException.class,
+                () -> readSamples(1, """
+                        {"i":0,"t":0,"s":0,"f":0,"x":0,"y":0,"headingRad":0,"velocityMps":-1},
+                        {"i":1,"t":1,"s":1,"f":1,"x":1,"y":0,"headingRad":0,"velocityMps":0}
+                        """));
+        assertTrue(velocity.getMessage().contains("velocity must be finite and nonnegative"));
+
+        BordeauxRuntimeException origin = assertThrows(BordeauxRuntimeException.class,
+                () -> readSamples(1, """
+                        {"i":0,"t":0.1,"s":0,"f":0,"x":0,"y":0,"headingRad":0,"velocityMps":0},
+                        {"i":1,"t":1,"s":1,"f":1,"x":1,"y":0,"headingRad":0,"velocityMps":0}
+                        """));
+        assertTrue(origin.getMessage().contains("must start at zero"));
+
+        BordeauxRuntimeException duration = assertThrows(BordeauxRuntimeException.class,
+                () -> readSamples(1, """
+                        {"i":0,"t":0,"s":0,"f":0,"x":0,"y":0,"headingRad":0,"velocityMps":0},
+                        {"i":1,"t":0.9,"s":1,"f":1,"x":1,"y":0,"headingRad":0,"velocityMps":0}
+                        """));
+        assertTrue(duration.getMessage().contains("must match totalTimeS"));
+
+        BordeauxRuntimeException endpoint = assertThrows(BordeauxRuntimeException.class,
+                () -> readSamples(1, """
+                        {"i":0,"t":0,"s":0,"f":0,"x":0,"y":0,"headingRad":0,"velocityMps":0},
+                        {"i":1,"t":1,"s":1,"f":0.9,"x":1,"y":0,"headingRad":0,"velocityMps":0}
+                        """));
+        assertTrue(endpoint.getMessage().contains("must end at fraction one"));
+
+        BordeauxRuntimeException displacement = assertThrows(BordeauxRuntimeException.class,
+                () -> readSamples(1, """
+                        {"i":0,"t":0,"s":0,"f":0,"x":0,"y":0,"headingRad":0,"velocityMps":0},
+                        {"i":1,"t":1,"s":0.5,"f":1,"x":1,"y":0,"headingRad":0,"velocityMps":0}
+                        """));
+        assertTrue(displacement.getMessage().contains("cannot be shorter than its field displacement"));
+
+        BordeauxRuntimeException zeroDurationMotion = assertThrows(BordeauxRuntimeException.class,
+                () -> readSamples(1, """
+                        {"i":0,"t":0,"s":0,"f":0,"x":0,"y":0,"headingRad":0,"velocityMps":0},
+                        {"i":1,"t":0,"s":1,"f":1,"x":1,"y":0,"headingRad":0,"velocityMps":0}
+                        """));
+        assertTrue(zeroDurationMotion.getMessage().contains("moving samples must advance time"));
+
+        BordeauxRuntimeException zeroDurationTurn = assertThrows(BordeauxRuntimeException.class,
+                () -> readSamples(1, """
+                        {"i":0,"t":0,"s":0,"f":0,"x":0,"y":0,"headingRad":0,"velocityMps":0},
+                        {"i":1,"t":0,"s":0,"f":0,"x":0,"y":0,"headingRad":1,"velocityMps":0}
+                        """));
+        assertTrue(zeroDurationTurn.getMessage().contains("moving samples must advance time"));
+
+        BordeauxPathEvents wrappedHeading = readSamples(1, """
+                {"i":0,"t":0,"s":0,"f":0,"x":0,"y":0,"headingRad":3.141592653589793,"velocityMps":0},
+                {"i":1,"t":0,"s":0,"f":0,"x":0,"y":0,"headingRad":-3.141592653589793,"velocityMps":0},
+                {"i":2,"t":1,"s":1,"f":1,"x":1,"y":0,"headingRad":-3.141592653589793,"velocityMps":0}
+                """);
+        assertEquals(3, wrappedHeading.samples().size());
+    }
+
+    @Test
     void streamsPathsWhilePreservingIdPrecedenceOverAnEarlierNameMatch() {
         BordeauxPathEvents path = read("""
                 {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
@@ -493,6 +569,27 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void timeFollowingInterpolatesReferencesBetweenExportSamples() {
+        List<BordeauxSample> samples = List.of(
+                new BordeauxSample(0, 0, 0, 0, 0, 0, Math.toRadians(170), 0),
+                new BordeauxSample(1, 0.5, 1, 0.5, 1, 2, Math.toRadians(-170), 2),
+                new BordeauxSample(2, 1, 2, 1, 2, 4, Math.toRadians(-160), 0));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "time", "Time", 1, CATALOG_ID, HASH, List.of(), samples,
+                List.of(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.TIME, 0, 2)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        BordeauxSample reference = follower.update(0.25, 0, 0);
+
+        assertEquals(0.25, reference.timeS(), 1e-9);
+        assertEquals(0.5, reference.xM(), 1e-9);
+        assertEquals(1, reference.yM(), 1e-9);
+        assertEquals(Math.PI, reference.headingRad(), 1e-9);
+        assertEquals(1, reference.velocityMps(), 1e-9);
+        assertFalse(follower.isFinished());
+    }
+
+    @Test
     void completesATerminalPositionWaitUsingTheTrailingTimeSection() {
         List<BordeauxSample> samples = List.of(
                 new BordeauxSample(0, 0, 0, 0, 0, 0, 0, 1),
@@ -635,6 +732,47 @@ class BordeauxRuntimeTest {
         assertEquals(25_002, follower.update(0.02, 250, 0).index());
         assertTrue(follower.lastSearchSamples() < 200,
                 "spatial lookup should inspect a bounded subset of a long path");
+    }
+
+    @Test
+    void pathRunnerKeepsReferenceFollowingAndMeasuredEventProgressSeparate() {
+        ObjectNode arguments = MAPPER.createObjectNode().put("count", "3");
+        List<BordeauxSample> samples = List.of(
+                new BordeauxSample(0, 0, 0, 0, 0, 0, 0, 0),
+                new BordeauxSample(1, 0.5, 1, 0.5, 1, 0, 0, 1),
+                new BordeauxSample(2, 1, 2, 1, 2, 0, 0, 0));
+        BordeauxEvent event = new BordeauxEvent(
+                "measured", "Measured progress", 0, 0.4, "event", arguments, false,
+                BordeauxEvent.Trigger.POSITION, null, null, null);
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "path", "Path", 1, CATALOG_ID, HASH, List.of(event), samples,
+                List.of(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 2)));
+        List<String> created = new ArrayList<>();
+        BordeauxCommandRegistry registry = BordeauxCommandRegistry.builder()
+                .catalogId(CATALOG_ID).catalogHash(HASH)
+                .register("event", Set.of("count"), args -> {}, args -> {
+                    created.add("event-" + args.requireLong("count", "1", "5"));
+                    return new TestCommand("event");
+                })
+                .build();
+        BordeauxPathRunner runner = new BordeauxPathRunner(
+                path, registry, new RecordingScheduler());
+
+        BordeauxSample lookahead = runner.update(0.02, 0, 0, 0);
+        assertTrue(lookahead.fraction() >= 0.4, "position following should return a lookahead reference");
+        assertTrue(created.isEmpty(), "lookahead reference progress must not fire measured-position events");
+
+        runner.update(0.02, 0, 0, 0.4);
+        assertEquals(List.of("event-3"), created);
+        assertEquals(0.04, runner.elapsedS(), 1e-9);
+        assertEquals(1, runner.firedEventCount());
+
+        runner.end();
+        runner.end();
+        assertThrows(BordeauxRuntimeException.class, () -> runner.update(0.02, 0, 0, 0.4));
+        runner.reset();
+        assertEquals(0, runner.elapsedS());
+        assertEquals(0, runner.firedEventCount());
     }
 
     @Test
@@ -964,6 +1102,14 @@ class BordeauxRuntimeTest {
     private static BordeauxPathEvents readWithRoutine(String json) {
         return BordeauxTrajectoryReader.readWithRoutine(
                 new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), "auto");
+    }
+
+    private static BordeauxPathEvents readSamples(double totalTimeS, String samples) {
+        return read("""
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
+                 "catalog":{"schemaVersion":"1.0","catalogId":"test-robot","supportVersion":"0.1.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "paths":[{"id":"auto","name":"Auto","totalTimeS":%s,"samples":[%s],"events":[]}]}
+                """.formatted(totalTimeS, samples));
     }
 
     private static BordeauxPathEvents readRoutineWithLaterEvent(String eventJson) {

@@ -3,6 +3,7 @@ import { PointerDrag } from "../hooks/usePointerDrag";
 import { parseFiniteDraftNumber } from "../lib/numericDraft";
 import { PM } from "../lib/pathMath";
 import { UnitPrefs } from "../lib/unitPreferences";
+import { robotHardLimits } from "../../shared/robotLimits";
 import { UI } from "./ui";
 
 // Bordeaux Robot config page (project-global).
@@ -13,10 +14,10 @@ import { UI } from "./ui";
   // Published 12 V free speeds from the manufacturers' product documentation.
   const DRIVE_MOTORS = [
     { value: 'custom', label: 'Custom motor', meta: 'Enter its published free speed' },
-    { value: 'rev-neo', label: 'REV NEO V1.1', meta: '5,676 RPM', rpm: 5676, torque: 2.6 },
-    { value: 'rev-vortex', label: 'REV NEO Vortex', meta: '6,784 RPM', rpm: 6784, torque: 3.6 },
-    { value: 'ctre-kraken-x60', label: 'CTRE Kraken X60', meta: '6,000 RPM', rpm: 6000, torque: 7.09 },
-    { value: 'ctre-falcon-500', label: 'CTRE Falcon 500', meta: '6,380 RPM', rpm: 6380, torque: 4.69 },
+    { value: 'rev-neo', label: 'REV NEO V1.1', meta: '5,676 RPM', rpm: 5676, torque: 2.6, stallCurrent: 105 },
+    { value: 'rev-vortex', label: 'REV NEO Vortex', meta: '6,784 RPM', rpm: 6784, torque: 3.6, stallCurrent: 211 },
+    { value: 'ctre-kraken-x60', label: 'CTRE Kraken X60', meta: '6,000 RPM', rpm: 6000, torque: 7.09, stallCurrent: 366 },
+    { value: 'ctre-falcon-500', label: 'CTRE Falcon 500', meta: '6,380 RPM', rpm: 6380, torque: 4.69, stallCurrent: 257 },
   ];
 
   const footprintFor = (shape, w, l, preset) => {
@@ -44,7 +45,7 @@ import { UI } from "./ui";
   };
 
   // big numeric field with drag-to-scrub on the label
-  function BigNum({ label, value, onChange, unit, imperialUnit = unit === 'm' ? 'in' : undefined, step = 0.01, min, max, precision = 2 }) {
+  function BigNum({ label, value, onChange, unit, imperialUnit = unit === 'm' ? 'in' : undefined, step = 0.01, min, max, precision = 2, placeholder = '' }) {
     const [edit, setEdit] = useState(null);
     const [error, setError] = useState('');
     const cancelEdit = useRef(false);
@@ -74,10 +75,10 @@ import { UI } from "./ui";
     const display = edit != null ? edit : (typeof displayValue === 'number' ? displayValue.toFixed(precision) : '');
     return h('div', { className: 'rp-big', onPointerDown: (e) => { if (e.target.tagName !== 'INPUT') start(e); } },
       h('input', {
-        value: display, inputMode: 'decimal', 'aria-label': label, min, max, step,
+        value: display, placeholder, inputMode: 'decimal', 'aria-label': label, min, max, step,
         'data-project-draft': true, 'aria-invalid': !!error,
         onChange: (e) => { setEdit(e.target.value); if (error) setError(''); },
-        onFocus: (e) => { cancelEdit.current = false; if (edit == null) setEdit(String(displayValue)); requestAnimationFrame(() => e.target.select()); },
+        onFocus: (e) => { cancelEdit.current = false; if (edit == null) setEdit(typeof displayValue === 'number' ? String(displayValue) : ''); requestAnimationFrame(() => e.target.select()); },
         onBlur: (e) => { const committed = cancelEdit.current || commitEdit(e.target.value); cancelEdit.current = false; if (committed) setEdit(null); },
         onKeyDown: (e) => {
           if (e.key === 'Enter') e.currentTarget.blur();
@@ -146,12 +147,12 @@ import { UI } from "./ui";
       wheelFrictionCoefficient: 1.2,
     };
     const driveModel = { ...fallbackDriveModel, ...(robot.driveModel || {}) };
-    const chassisFreeSpeed = (model) => model.motorFreeRpm / 60 * Math.PI * model.wheelDiameterM / model.gearRatio;
-    const hardLimits = PM.robotHardLimits(robot);
+    const hardLimits = robotHardLimits(robot);
     const setDriveModel = (patch) => {
       const next = { ...driveModel, ...patch };
-      if (![next.motorFreeRpm, next.gearRatio, next.wheelDiameterM].every((value) => Number.isFinite(value) && value > 0)) return;
-      const maxSpeed = chassisFreeSpeed(next);
+      const nextLimits = robotHardLimits({ ...robot, driveModel: next });
+      if (!nextLimits) return;
+      const maxSpeed = nextLimits.maxSpeedMps;
       const nextPlanning = planning.intake && planning.intake.maxCollectSpeedMps > maxSpeed
         ? { ...planning, intake: { ...planning.intake, maxCollectSpeedMps: maxSpeed } }
         : planning;
@@ -159,7 +160,9 @@ import { UI } from "./ui";
     };
     const driveFields = [
       { label: 'Motor free speed', value: driveModel.motorFreeRpm, unit: 'RPM', min: 100, max: 30000, precision: 0, step: 25, onChange: (value) => setDriveModel({ motorId: 'custom', motorFreeRpm: value }) },
-      { label: 'Motor torque limit', value: driveModel.motorMaxTorqueNm, unit: 'N·m', min: 0.1, max: 20, precision: 2, step: 0.05, onChange: (value) => setDriveModel({ motorId: 'custom', motorMaxTorqueNm: value }) },
+      { label: 'Motor stall torque', value: driveModel.motorMaxTorqueNm, unit: 'N·m', min: 0.1, max: 20, precision: 2, step: 0.05, onChange: (value) => setDriveModel({ motorId: 'custom', motorMaxTorqueNm: value }) },
+      { label: 'Motor stall current', value: driveModel.motorStallCurrentA, unit: 'A', min: 1, max: 1000, precision: 0, step: 1, placeholder: 'Add', onChange: (value) => setDriveModel({ motorId: 'custom', motorStallCurrentA: value }) },
+      { label: 'Motor current limit', value: driveModel.motorCurrentLimitA, unit: 'A', min: 1, max: 500, precision: 0, step: 1, placeholder: 'Add', onChange: (value) => setDriveModel({ motorCurrentLimitA: value }) },
       { label: 'Drive reduction', value: driveModel.gearRatio, unit: ':1', min: 0.1, max: 50, precision: 2, step: 0.05, onChange: (value) => setDriveModel({ gearRatio: value }) },
       { label: 'Wheel diameter', value: driveModel.wheelDiameterM, unit: 'm', imperialUnit: 'in', min: 0.02, max: 0.5, precision: 4, step: 0.001, onChange: (value) => setDriveModel({ wheelDiameterM: value }) },
       { label: 'Drive motors', value: driveModel.motorCount, min: 2, max: 12, precision: 0, step: 1, onChange: (value) => setDriveModel({ motorCount: Math.round(value) }) },
@@ -168,6 +171,8 @@ import { UI } from "./ui";
       { label: 'Wheelbase', value: driveModel.wheelbaseM, unit: 'm', imperialUnit: 'in', min: 0.1, max: robot.l, precision: 3, step: 0.01, onChange: (value) => setDriveModel({ wheelbaseM: value }) },
       { label: 'Trackwidth', value: driveModel.trackwidthM, unit: 'm', imperialUnit: 'in', min: 0.1, max: robot.w, precision: 3, step: 0.01, onChange: (value) => setDriveModel({ trackwidthM: value }) },
       { label: 'Wheel friction', value: driveModel.wheelFrictionCoefficient, unit: 'μ', min: 0.1, max: 3, precision: 2, step: 0.05, onChange: (value) => setDriveModel({ wheelFrictionCoefficient: value }) },
+      { label: 'Open-circuit voltage', value: driveModel.batteryNominalVoltage, unit: 'V', min: 6, max: 16, precision: 1, step: 0.1, placeholder: 'Add', onChange: (value) => setDriveModel({ batteryNominalVoltage: value }) },
+      { label: 'Battery + wiring resistance', value: driveModel.batteryInternalResistanceOhm, unit: 'Ω', min: 0.001, max: 0.1, precision: 3, step: 0.001, placeholder: 'Add', onChange: (value) => setDriveModel({ batteryInternalResistanceOhm: value }) },
     ];
     const intake = planning.intake;
     const shooter = planning.shooter;
@@ -321,14 +326,17 @@ import { UI } from "./ui";
             h('div', { className: 'rp-sec' },
               h('div', { className: 'rp-sech' }, 'Performance'),
               h(Dropdown, { id: 'robot-drive-motor', label: 'Drive motor', value: driveModel.motorId, items: DRIVE_MOTORS,
-                onChange: (motorId) => { const preset = DRIVE_MOTORS.find((motor) => motor.value === motorId); setDriveModel({ motorId, ...(preset && preset.rpm ? { motorFreeRpm: preset.rpm, motorMaxTorqueNm: preset.torque } : {}) }); } }),
+                onChange: (motorId) => { const preset = DRIVE_MOTORS.find((motor) => motor.value === motorId); setDriveModel({ motorId, ...(preset && preset.rpm ? { motorFreeRpm: preset.rpm, motorMaxTorqueNm: preset.torque, motorStallCurrentA: preset.stallCurrent, motorCurrentLimitA: 60, batteryNominalVoltage: 12, batteryInternalResistanceOhm: 0.02 } : {}) }); } }),
               h('div', { className: 'rp-two rp-drive-model' },
                 driveFields.map((field) => h('div', { className: 'rp-field', key: field.label }, h('div', { className: 'rp-flabel' }, field.label), h(BigNum, field)))),
               !hardLimits && h('button', { className: 'rp-add-profile', type: 'button', onClick: () => setDriveModel({}) }, 'Use physical limits'),
               hardLimits && h('div', { className: 'rp-hard-limits' },
-                [['Top speed', hardLimits.maxSpeed, 'm/s', 2], ['Linear accel', hardLimits.maxAccel, 'm/s²', 2], ['Corner accel', hardLimits.maxCornerAccel, 'm/s²', 2], ['Angular speed', hardLimits.maxAngVel, '°/s', 0]].map(([label, value, unit, precision]) =>
+                [['Top speed', hardLimits.maxSpeedMps, 'm/s', 2], ['Linear accel', hardLimits.maxAccelMps2, 'm/s²', 2], ['Corner accel', hardLimits.maxCornerAccelMps2, 'm/s²', 2], ['Angular speed', hardLimits.maxAngularSpeedDegps, '°/s', 0]].map(([label, value, unit, precision]) =>
                   h('div', { className: 'rp-drive-result', key: label }, h('span', null, label), h('strong', null, UnitPrefs.fromCanonical(value, unit).toFixed(precision), h('small', null, ' ' + UnitPrefs.label(unit)))))),
-              h('div', { className: 'rp-note' }, h(Icon, { name: 'info', size: 14 }), 'Robot limits. Path ranges only tighten them.'))),
+              h('div', { className: 'rp-note' }, h(Icon, { name: 'info', size: 14 }),
+                hardLimits && hardLimits.sagCoefficient > 0
+                  ? 'Acceleration includes torque-speed, current limiting, and battery sag. Regeneration and scrub are omitted.'
+                  : 'Add current and battery fields to model sag.'))),
 
             mcpEnabled && h('div', { className: 'rp-sec rp-agent' },
               h('div', { className: 'rp-sech' }, 'Agent planning profile'),

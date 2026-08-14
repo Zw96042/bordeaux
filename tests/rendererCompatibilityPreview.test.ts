@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import { PM } from "../src/shared/math/pm";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
 import { getPlanner } from "../src/shared/planners";
+import {
+  effectivePathConstraints,
+  robotHardLimits as sharedRobotHardLimits,
+} from "../src/shared/robotLimits";
 // @ts-expect-error The renderer worker is shipped as an untyped JavaScript module.
 import { processPathPreviewJob, processRoutinePreviewJob } from "../src/renderer/assets/path-preview-worker";
 import { loadRendererExport } from "./helpers/loadRendererExport";
@@ -22,16 +26,23 @@ function rendererMath() {
     derivePath(path: unknown, robot: unknown, perSegment: number, plannerId: string): {
       planner: string;
       sample: { pts: Array<Point & { s: number }>; length: number };
-      prof: { totalTime: number };
-      metrics: { v: number[]; accel: number[]; omega: number[]; curv: number[] };
+      prof: {
+        t: number[];
+        v: number[];
+        totalTime: number;
+        jiggles?: Array<{ t0: number; t1: number; strokeDuration: number; jerkLimited: boolean }>;
+      };
+      metrics: { v: number[]; accel: number[]; omega: number[]; curv: number[]; head: number[] };
       markers?: Array<{ timeS: number; fraction: number }>;
       playback?: {
         pts: Point[];
         prof: { t: number[]; v: number[]; totalTime: number };
         metrics: { accel: number[]; omega: number[]; curv: number[] };
       };
+      anchors: unknown;
+      mode: string;
     };
-    poseAtTime(time: number, points: Point[], profile: unknown, anchors: unknown, mode: string, reverse: boolean): { heading: number } | null;
+    poseAtTime(time: number, points: Point[], profile: unknown, anchors: unknown, mode: string, reverse: boolean): { x: number; y: number; heading: number; speed: number } | null;
   }>(new URL("../src/renderer/lib/pathMath.js", import.meta.url), "PM", { context: { console } });
 }
 
@@ -91,6 +102,36 @@ describe("renderer application", () => {
     }
   });
 
+  it("keeps the renderer-local translation-priority fallback from overshooting a settled heading", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "targets";
+    path.constraints.maxAngVel = 720;
+    path.constraints.maxAngAccel = 360;
+    path.constraints.maxAngDecel = 360;
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 4, theta: -45, thetaOn: true, segType: "line" },
+      { x: 16, y: 4, theta: 0, thetaOn: true, stop: true, segType: "line" },
+    ]);
+    path.targets = [{ f: 0.1, deg: 0 }];
+    path.ranges = [{
+      anchor: "param",
+      f0: 0,
+      f1: 1,
+      maxVel: path.constraints.maxVel,
+      maxAccel: path.constraints.maxAccel,
+      maxDecel: path.constraints.maxDecel,
+      maxAngVel: path.constraints.maxAngVel,
+      maxAngAccel: path.constraints.maxAngAccel,
+      rotationPriority: "translation",
+    }];
+
+    const local = rendererMath().derivePath(path, project.robot, 150, "profiledSpline");
+    const settled = local.metrics.head.slice(Math.ceil(local.metrics.head.length * 0.1));
+
+    expect(Math.max(...settled)).toBeLessThanOrEqual(0.5 * Math.PI / 180);
+  });
+
   it.each([2, 56])("keeps shared and renderer clothoid endpoints exact at density %s", (samplesPerSegment) => {
     const project = createDemoProject();
     const path = project.paths[0];
@@ -107,6 +148,174 @@ describe("renderer application", () => {
       expect(shared[index * samplesPerSegment]).toMatchObject({ x: waypoint.x, y: waypoint.y });
       expect(renderer[index * samplesPerSegment]).toMatchObject({ x: waypoint.x, y: waypoint.y });
     });
+  });
+
+  it("uses the exact symmetric clothoid root instead of falling back to Bezier geometry", () => {
+    const angle = 30 * Math.PI / 180;
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      {
+        x: 2, y: 4, segType: "clothoid",
+        nextC: { x: 2 + Math.cos(-angle), y: 4 + Math.sin(-angle) },
+      },
+      {
+        x: 6, y: 4,
+        prevC: { x: 6 - Math.cos(angle), y: 4 - Math.sin(angle) },
+      },
+    ]);
+
+    const shared = PM.sample(path.waypoints, 56).pts.map((point) => point.curv);
+    const renderer = rendererMath().derivePath(path, project.robot, 56, "profiledSpline")
+      .sample.pts.map((point) => point.curv ?? 0);
+    expect(Math.max(...shared) - Math.min(...shared)).toBeLessThan(1e-9);
+    expect(Math.max(...renderer) - Math.min(...renderer)).toBeLessThan(1e-9);
+  });
+
+  it("derives a finite higher-order tangent from collapsed Bezier endpoint handles", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      { x: 2, y: 2, nextC: { x: 2, y: 2 } },
+      { x: 6, y: 4, prevC: { x: 4, y: 4 } },
+    ]);
+
+    const shared = PM.sample(path.waypoints, 56).pts;
+    const renderer = rendererMath().derivePath(path, project.robot, 56, "profiledSpline").sample.pts;
+    const expected = Math.PI / 4;
+    expect(shared[0].heading).toBeCloseTo(expected, 3);
+    expect(renderer[0].heading).toBeCloseTo(expected, 3);
+    expect(shared.every((point) => Number.isFinite(point.heading + point.curv))).toBe(true);
+    expect(renderer.every((point) => Number.isFinite(point.heading! + point.curv!))).toBe(true);
+  });
+
+  it("keeps renderer-local acceleration ranges on the same overlapping intervals as shared math", () => {
+    const project = createDemoProject();
+    project.robot.driveModel = {
+      motorId: "test",
+      motorFreeRpm: 6000,
+      motorMaxTorqueNm: 3,
+      motorStallCurrentA: 300,
+      motorCurrentLimitA: 60,
+      motorCount: 4,
+      gearRatio: 6.75,
+      wheelDiameterM: 0.1016,
+      massKg: 54,
+      moiKgM2: 6.35,
+      wheelbaseM: 0.66,
+      trackwidthM: 0.66,
+      wheelFrictionCoefficient: 1.2,
+      batteryNominalVoltage: 12,
+      batteryInternalResistanceOhm: 0.02,
+    };
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 4, stop: true, segType: "line" },
+      { x: 16, y: 4, stop: true, segType: "line" },
+    ]);
+    path.ranges = [{
+      anchor: "param",
+      f0: 0.35,
+      f1: 0.65,
+      maxVel: path.constraints.maxVel,
+      maxAccel: 0.5,
+      maxDecel: path.constraints.maxDecel,
+      maxAngVel: path.constraints.maxAngVel,
+      maxAngAccel: path.constraints.maxAngAccel,
+    }];
+
+    const hardLimits = sharedRobotHardLimits(project.robot)!;
+    const physicalRobot = { ...project.robot, maxSpeed: hardLimits.maxSpeedMps };
+    const physicalPath = { ...path, constraints: effectivePathConstraints(path.constraints, physicalRobot) };
+    const shared = PM.derivePath(physicalPath, physicalRobot, 56, {});
+    const renderer = rendererMath().derivePath(path, project.robot, 56, "profiledSpline");
+    expect(renderer.prof.totalTime).toBeCloseTo(shared.prof.totalTime, 9);
+  });
+
+  it("keeps renderer-local legacy physical timing aligned with the shared profiled planner", () => {
+    const project = createDemoProject();
+    project.robot.driveModel = {
+      motorId: "test",
+      motorFreeRpm: 6000,
+      motorMaxTorqueNm: 1,
+      motorCount: 4,
+      gearRatio: 10,
+      wheelDiameterM: 0.1,
+      massKg: 40,
+      moiKgM2: 10,
+      wheelbaseM: 0.6,
+      trackwidthM: 0.8,
+      wheelFrictionCoefficient: 0.5,
+    };
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, stop: true, segType: "line" },
+      { x: 7, y: 1, stop: true, segType: "line" },
+    ]);
+
+    const hardLimits = sharedRobotHardLimits(project.robot)!;
+    const physicalRobot = { ...project.robot, maxSpeed: hardLimits.maxSpeedMps };
+    const physicalPath = { ...path, constraints: effectivePathConstraints(path.constraints, physicalRobot) };
+    const shared = PM.derivePath(physicalPath, physicalRobot, 56, {});
+    const renderer = rendererMath().derivePath(path, project.robot, 56, "profiledSpline");
+
+    expect(renderer.prof.totalTime).toBeCloseTo(shared.prof.totalTime, 9);
+  });
+
+  it.each([false, true])("keeps renderer-local physical timing aligned across seeded electrical=%s variations", (electrical) => {
+    for (let caseIndex = 0; caseIndex < 32; caseIndex += 1) {
+      const project = createDemoProject();
+      project.robot.driveModel = {
+        motorId: "audit",
+        motorFreeRpm: 5000 + caseIndex * 53,
+        motorMaxTorqueNm: 2.5 + caseIndex * 0.07,
+        motorCount: 4,
+        gearRatio: 5.2 + caseIndex % 7 * 0.45,
+        wheelDiameterM: 0.08 + caseIndex % 5 * 0.011,
+        massKg: 42 + caseIndex % 9 * 2.5,
+        moiKgM2: 5 + caseIndex % 6 * 0.6,
+        wheelbaseM: 0.55,
+        trackwidthM: 0.62,
+        wheelFrictionCoefficient: 0.8 + caseIndex % 8 * 0.1,
+        ...(electrical ? {
+          motorStallCurrentA: 150 + caseIndex * 5,
+          motorCurrentLimitA: 35 + caseIndex % 8 * 7,
+          batteryNominalVoltage: 10.5 + caseIndex % 6 * 0.4,
+          batteryInternalResistanceOhm: 0.008 + caseIndex % 7 * 0.004,
+        } : {}),
+      };
+      const path = project.paths[0];
+      path.headingMode = "tangent";
+      path.waypoints = buildWaypoints([
+        { x: 1, y: 4, stop: true, segType: "line" },
+        { x: 16, y: 4, stop: true, segType: "line" },
+      ]);
+      path.ranges = [{
+        anchor: "param",
+        f0: 0.15 + caseIndex % 4 * 0.03,
+        f1: 0.65 + caseIndex % 5 * 0.04,
+        maxVel: 1.5 + caseIndex % 6 * 0.35,
+        maxAccel: 0.4 + caseIndex % 9 * 0.25,
+        maxDecel: 0.5 + caseIndex % 7 * 0.3,
+        maxAngVel: path.constraints.maxAngVel,
+        maxAngAccel: path.constraints.maxAngAccel,
+      }];
+
+      const hardLimits = sharedRobotHardLimits(project.robot)!;
+      const physicalRobot = { ...project.robot, maxSpeed: hardLimits.maxSpeedMps };
+      const physicalPath = { ...path, constraints: effectivePathConstraints(path.constraints, physicalRobot) };
+      const shared = PM.derivePath(physicalPath, physicalRobot, 24, {});
+      const renderer = rendererMath().derivePath(path, project.robot, 24, "profiledSpline");
+      const context = `case ${caseIndex}`;
+
+      expect(renderer.prof.totalTime, context).toBeCloseTo(shared.prof.totalTime, 9);
+      expect(renderer.metrics.v, context).toHaveLength(shared.metrics.v.length);
+      renderer.metrics.v.forEach((velocity, index) => {
+        expect(velocity, `${context} velocity ${index}`).toBeCloseTo(shared.metrics.v[index], 9);
+      });
+    }
   });
 
   it("uses shared optimized timing, velocities, playback, and marker times", () => {
@@ -161,7 +370,7 @@ describe("renderer application", () => {
       ["angular", (candidate: typeof path) => { candidate.constraints.maxAngVel = 30; candidate.constraints.maxAngAccel = 30; candidate.constraints.maxAngDecel = 20; }],
       ["wait", (candidate: typeof path) => { candidate.waypoints[1].stop = true; candidate.waypoints[1].wait = 1; }],
       ["turn", (candidate: typeof path) => { candidate.waypoints.at(-1)!.stop = true; candidate.waypoints.at(-1)!.turnInPlace = { headingDeg: 45, direction: "shortest" }; }],
-      ["jiggle", (candidate: typeof path) => { candidate.waypoints.at(-1)!.stop = true; candidate.waypoints.at(-1)!.jiggle = { distanceM: 0.2, strokes: 2, startDeg: 0, stepDeg: 90, strokeTimeS: 0.4 }; }],
+      ["jiggle", (candidate: typeof path) => { candidate.constraints.maxJerk = 10; candidate.waypoints.at(-1)!.stop = true; candidate.waypoints.at(-1)!.jiggle = { distanceM: 0.2, strokes: 2, startDeg: 0, stepDeg: 90, strokeTimeS: 0.4 }; }],
       ["translation priority", (candidate: typeof path) => { candidate.ranges = [{ anchor: "param", f0: 0.2, f1: 0.8, maxVel: 4.2, maxAccel: 2, maxDecel: 2, maxAngVel: 180, maxAngAccel: 720, rotationPriority: "translation" }]; }],
     ] as const) {
       const candidate = structuredClone(path);
@@ -185,6 +394,40 @@ describe("renderer application", () => {
       expect(actual.playback?.metrics.curv, name).toEqual(expected.samples.map((sample) => sample.curvatureInvM));
       expect(actual.markers, name).toEqual(expected.markers);
     }
+  });
+
+  it("uses a jerk-limited jiggle phase in renderer-local playback", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxJerk = 10;
+    path.waypoints = buildWaypoints([
+      { x: 2, y: 4, theta: 0, thetaOn: true, stop: true, segType: "line" },
+      {
+        x: 6,
+        y: 4,
+        theta: 0,
+        thetaOn: true,
+        stop: true,
+        segType: "line",
+        jiggle: { distanceM: 0.1, strokes: 2, startDeg: 90, stepDeg: 180, strokeTimeS: 0.4 },
+      },
+    ]);
+    const math = rendererMath();
+    const local = math.derivePath(path, project.robot, 56, "profiledSpline");
+    const jiggle = local.prof.jiggles![0];
+    const pose = math.poseAtTime(
+      jiggle.t0 + jiggle.strokeDuration * 0.25,
+      local.sample.pts,
+      local.prof,
+      local.anchors,
+      local.mode,
+      false,
+    );
+
+    expect(jiggle.jerkLimited).toBe(true);
+    expect(jiggle.strokeDuration).toBeGreaterThanOrEqual(Math.cbrt(4.8));
+    expect([pose!.x, pose!.y, pose!.heading, pose!.speed].every(Number.isFinite)).toBe(true);
   });
 
   it.each(["profiledSpline", "optimizedTrajectory"] as const)("matches shared %s output with a physical drive model", (plannerId) => {
@@ -227,7 +470,7 @@ describe("renderer application", () => {
 
     const expected = expectPlannerPreviewParity(path, project.robot, plannerId, "physical drive model");
     if (plannerId === "optimizedTrajectory") {
-      expect(expected.totalTimeS).toBe(5.5556);
+      expect(expected.totalTimeS).toBe(5.5793);
       expect(expected.samples[166].velocityMps).toBe(3.8555);
     }
   });

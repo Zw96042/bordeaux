@@ -23,6 +23,7 @@ import {
   createRoutineId as routineId,
 } from "../../shared/project/ids";
 import { normalizeProject as normalizeProjectData } from "../../shared/project/normalize";
+import { effectivePathConstraints } from "../../shared/robotLimits";
 
 // Bordeaux application root.
   const { useState, useRef, useEffect, useMemo, useCallback, useSyncExternalStore } = React;
@@ -1116,7 +1117,7 @@ import { normalizeProject as normalizeProjectData } from "../../shared/project/n
     const addRange = useCallback((f0, f1) => commit((d) => {
       if (!d.ranges) d.ranges = [];
       const a = Math.max(0, Math.min(f0, f1)), b = Math.min(1, Math.max(f0, f1));
-      const c = PM.effectiveConstraints(d.constraints, robot);
+      const c = effectivePathConstraints(d.constraints, robot);
       // purely where it was drawn (percent of path), inheriting the robot limits
       d.ranges.push({ f0: a, f1: b, anchor: 'param', maxVel: c.maxVel, maxAccel: c.maxAccel, maxDecel: (c.maxDecel != null ? c.maxDecel : c.maxAccel), maxAngVel: c.maxAngVel, maxAngAccel: c.maxAngAccel });
       d._selR = d.ranges.length - 1; return d;

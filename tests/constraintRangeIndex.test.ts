@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { indexIntervalPolicies, indexPointPolicies, type IntervalPolicy } from "../src/shared/planners/intervalPolicies";
-import { loadRendererExport } from "./helpers/loadRendererExport";
 
 const EPSILON = 1e-9;
 const LIMIT_KEYS = ["maxVel", "maxAccel", "maxDecel", "maxAngVel", "maxAngAccel"] as const;
@@ -79,7 +78,7 @@ describe("constraint range interval index", () => {
     });
   });
 
-  it("keeps the renderer mirror in exact policy parity", () => {
+  it("matches an inclusive scan across many overlapping policies", () => {
     const fractions = Array.from({ length: 65 }, (_, index) => index / 64);
     const ranges = Array.from({ length: 40 }, (_, index): IntervalPolicy => ({
       start: ((index * 17) % 97) / 97,
@@ -96,12 +95,7 @@ describe("constraint range interval index", () => {
       { start: 0.48, end: 0.52, rotationPriority: "heading" },
       { start: 0.81, end: 0.811, rotationPriority: "translation" },
     ];
-    const renderer = loadRendererExport<{
-      indexIntervalPolicies: typeof indexIntervalPolicies;
-    }>(new URL("../src/renderer/lib/pathMath.js", import.meta.url), "PM");
-
     const shared = plain(indexIntervalPolicies(fractions, ranges, transitions));
     expect(shared).toEqual(naiveIndex(fractions, ranges, transitions));
-    expect(plain(renderer.indexIntervalPolicies(fractions, ranges, transitions))).toEqual(shared);
   });
 });

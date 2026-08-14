@@ -1,3 +1,3 @@
 rootProject.name = "bordeaux-java"
 
-include("annotations", "processor", "runtime")
+include("annotations", "processor", "runtime", "vendor")
