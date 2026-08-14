@@ -8,6 +8,7 @@ import com.fasterxml.jackson.core.StreamReadFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -34,6 +35,65 @@ public final class BordeauxTrajectoryReader {
             .build());
 
     private BordeauxTrajectoryReader() {}
+
+    /**
+     * Validates every exported path and every deployable routine branch against the compiled robot identity.
+     * This does not create commands or select a path.
+     */
+    public static void validateDocument(byte[] contents, BordeauxRuntimeCompatibility compatibility) {
+        if (contents == null) throw new BordeauxRuntimeException("Trajectory contents are required");
+        if (compatibility == null) throw new BordeauxRuntimeException("Runtime compatibility is required");
+        ObjectNode document = readDocument(contents);
+        String schemaVersion = text(document, "schemaVersion", "$");
+        if (!"bordeaux-trajectory/1.0".equals(schemaVersion)) {
+            throw new BordeauxRuntimeException("$.schemaVersion must be exactly 'bordeaux-trajectory/1.0'");
+        }
+        if (!"bordeaux".equals(text(document, "generator", "$"))) {
+            throw new BordeauxRuntimeException("$.generator must be exactly 'bordeaux'");
+        }
+        ObjectNode catalog = requireObject(document.get("catalog"), "$.catalog must be an object");
+        validateCatalog(catalog, compatibility);
+        ObjectNode field = requireObject(document.get("field"), "$.field must be an object");
+        validateField(field, compatibility, "$.field");
+
+        JsonNode paths = document.get("paths");
+        if (paths == null || !paths.isArray()) throw new BordeauxRuntimeException("$.paths must be an array");
+        if (paths.isEmpty()) throw new BordeauxRuntimeException("$.paths must contain at least one path");
+        Set<String> pathIds = new HashSet<>();
+        Set<String> eventIds = new HashSet<>();
+        int sampleCount = 0;
+        int eventCount = 0;
+        for (int index = 0; index < paths.size(); index++) {
+            if (index >= MAX_PATHS) throw new BordeauxRuntimeException("$.paths exceeds the limit of " + MAX_PATHS);
+            ObjectNode path = requireObject(paths.get(index), "$.paths[" + index + "] must be an object");
+            JsonNode samples = path.get("samples");
+            if (samples == null || !samples.isArray()) {
+                throw new BordeauxRuntimeException("$.paths[" + index + "].samples must be an array");
+            }
+            JsonNode events = path.get("events");
+            if (events == null || !events.isArray()) {
+                throw new BordeauxRuntimeException("$.paths[" + index + "].events must be an array");
+            }
+            sampleCount += samples.size();
+            eventCount += events.size();
+            if (sampleCount > MAX_SAMPLES) {
+                throw new BordeauxRuntimeException("Trajectory exceeds the sample limit of " + MAX_SAMPLES);
+            }
+            if (eventCount > MAX_EVENTS) {
+                throw new BordeauxRuntimeException("Trajectory exceeds the event limit of " + MAX_EVENTS);
+            }
+            for (int eventIndex = 0; eventIndex < events.size(); eventIndex++) {
+                ObjectNode event = requireObject(events.get(eventIndex),
+                        "$.paths[" + index + "].events[" + eventIndex + "] must be an object");
+                String eventId = text(event, "eventId", "$.paths[" + index + "].events[" + eventIndex + "]");
+                if (!eventIds.add(eventId)) throw new BordeauxRuntimeException("Duplicate event ID '" + eventId + "'");
+            }
+            String pathId = text(path, "id", "$.paths[" + index + "]");
+            if (!pathIds.add(pathId)) throw new BordeauxRuntimeException("Duplicate path ID '" + pathId + "'");
+            parsePath(path, compatibility.catalogId(), compatibility.catalogHash(), BordeauxRoutine.empty());
+        }
+        parseRoutine(document.get("routine"), pathIds);
+    }
 
     /** Selects one path while tolerating legacy simulation-only routine nodes. */
     public static BordeauxPathEvents read(InputStream input, String pathSelector) {
@@ -308,6 +368,59 @@ public final class BordeauxTrajectoryReader {
             }
         }
         return parsed;
+    }
+
+    private static ObjectNode readDocument(byte[] contents) {
+        try (JsonParser parser = MAPPER.createParser(new BoundedInputStream(
+                new ByteArrayInputStream(contents), MAX_BYTES))) {
+            JsonNode node = MAPPER.readTree(parser);
+            ObjectNode document = requireObject(node, "$ must be a JSON object");
+            if (parser.nextToken() != null) {
+                throw new BordeauxRuntimeException("Could not parse Bordeaux trajectory JSON: trailing JSON value");
+            }
+            return document;
+        } catch (BordeauxRuntimeException exception) {
+            throw exception;
+        } catch (IOException exception) {
+            throw new BordeauxRuntimeException("Could not parse Bordeaux trajectory JSON: " + exception.getMessage(), exception);
+        }
+    }
+
+    private static void validateCatalog(ObjectNode catalog, BordeauxRuntimeCompatibility compatibility) {
+        if (!"1.0".equals(text(catalog, "schemaVersion", "$.catalog"))) {
+            throw new BordeauxRuntimeException("$.catalog.schemaVersion must be exactly '1.0'");
+        }
+        String supportVersion = text(catalog, "supportVersion", "$.catalog");
+        if (!"0.1.0".equals(supportVersion)) {
+            throw new BordeauxRuntimeException("$.catalog.supportVersion is not supported; expected '0.1.0'");
+        }
+        String catalogId = text(catalog, "catalogId", "$.catalog");
+        if (catalogId.length() > 256) throw new BordeauxRuntimeException("$.catalog.catalogId exceeds 256 characters");
+        String catalogHash = text(catalog, "catalogHash", "$.catalog");
+        if (!catalogHash.matches("sha256:[0-9a-f]{64}")) {
+            throw new BordeauxRuntimeException("$.catalog.catalogHash must use sha256:<64 lowercase hex characters>");
+        }
+        if (!compatibility.catalogId().equals(catalogId)) {
+            throw new BordeauxRuntimeException("Trajectory catalog ID does not match the compiled robot catalog");
+        }
+        if (!compatibility.catalogHash().equals(catalogHash)) {
+            throw new BordeauxRuntimeException("Trajectory catalog hash does not match the compiled robot catalog");
+        }
+        if (!compatibility.supportVersion().equals(supportVersion)) {
+            throw new BordeauxRuntimeException("Trajectory catalog support version does not match the compiled robot support");
+        }
+    }
+
+    private static void validateField(ObjectNode field, BordeauxRuntimeCompatibility compatibility, String path) {
+        if (!compatibility.fieldId().equals(text(field, "id", path))) {
+            throw new BordeauxRuntimeException("Trajectory field ID does not match the compiled robot field");
+        }
+        if (!compatibility.fieldRevision().equals(text(field, "revision", path))) {
+            throw new BordeauxRuntimeException("Trajectory field revision does not match the compiled robot field");
+        }
+        if (!compatibility.fieldCoordinateSchemaId().equals(text(field, "coordinateSchemaId", path))) {
+            throw new BordeauxRuntimeException("Trajectory field coordinate schema does not match the compiled robot field");
+        }
     }
 
     private static ObjectNode requireObject(JsonNode node, String message) {

@@ -7,6 +7,8 @@ import type { BordeauxProject, CommandInvocation, FollowMode, JavaCommandCatalog
 
 const MAX_SAMPLE_COUNT = 100_000;
 const MAX_EVENT_COUNT = 2_000;
+const MAX_PATH_COUNT = 64;
+const MAX_ROUTINE_NODE_COUNT = 2_000;
 const MAX_EXPORT_BYTES = 16 * 1024 * 1024;
 
 export interface JavaTrajectoryEvent {
@@ -187,6 +189,20 @@ function deployableRoutine(project: BordeauxProject, pathIds: Set<string>): Java
   return { name: routine.name, nodes: nodes(routine.nodes) };
 }
 
+function assertRoutineNodeCount(routine: JavaTrajectoryRoutine | null): void {
+  if (!routine) return;
+  let count = 0;
+  const pending = [...routine.nodes];
+  while (pending.length > 0) {
+    const node = pending.pop()!;
+    count += 1;
+    if (count > MAX_ROUTINE_NODE_COUNT) {
+      throw new Error(`Java trajectory export exceeds ${MAX_ROUTINE_NODE_COUNT} routine nodes`);
+    }
+    if (node.type === "decision") pending.push(...node.then, ...node.else);
+  }
+}
+
 export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaCommandCatalog): BuiltJavaTrajectory {
   if (!catalog.authoritative || catalog.generatedSchemaVersion !== "1.0" || !catalog.catalogId || !catalog.supportVersion || !catalog.catalogHash) {
     throw new Error("Build the annotated Java command catalog before exporting robot JSON");
@@ -194,6 +210,7 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
   const invocationIssues = validateProjectJavaInvocations(project, catalog);
   if (invocationIssues.length > 0) throw new Error(invocationIssues.map((item) => `${item.path}: ${item.message}`).join("\n"));
   const sourcePaths = project.paths.filter((path) => path.exportable !== false);
+  if (sourcePaths.length > MAX_PATH_COUNT) throw new Error(`Java trajectory export exceeds ${MAX_PATH_COUNT} paths`);
   let baseSampleCount = 0;
   for (const path of sourcePaths) {
     baseSampleCount += Math.max(0, path.waypoints.length - 1) * DEFAULT_SAMPLES_PER_SEGMENT + 1;
@@ -205,6 +222,7 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
     if (eventCount > MAX_EVENT_COUNT) throw new Error(`Java trajectory export exceeds ${MAX_EVENT_COUNT} events`);
   }
   const routine = deployableRoutine(project, new Set(sourcePaths.map((path) => path.id)));
+  assertRoutineNodeCount(routine);
   assertExportSize({
     catalog: {
       schemaVersion: "1.0",

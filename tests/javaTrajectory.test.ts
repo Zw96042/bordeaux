@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildJavaTrajectory, javaTrajectoryFileName } from "../src/shared/export/javaTrajectory";
-import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
+import { blankPath, buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
 import type { AutonomousRoutine, JavaCommandCatalog } from "../src/shared/types";
 
 function generatedCatalog(): JavaCommandCatalog {
@@ -205,5 +205,23 @@ describe("Java trajectory export", () => {
     })));
 
     expect(() => buildJavaTrajectory(project, generatedCatalog())).toThrow("exceeds 100000 samples");
+  });
+
+  it("rejects more paths and routine nodes than the robot runtime accepts", () => {
+    const pathProject = createDemoProject();
+    pathProject.paths = Array.from({ length: 65 }, (_, index) => ({
+      ...blankPath(`Path ${index}`),
+      id: `path_${index}`,
+    }));
+    pathProject.editor = { activePathId: pathProject.paths[0].id };
+    expect(() => buildJavaTrajectory(pathProject, generatedCatalog())).toThrow("exceeds 64 paths");
+
+    const routineProject = createDemoProject();
+    routineProject.routines[0].nodes = Array.from({ length: 2_001 }, (_, index) => ({
+      id: `path_node_${index}`,
+      type: "path" as const,
+      ref: routineProject.paths[0].id,
+    }));
+    expect(() => buildJavaTrajectory(routineProject, generatedCatalog())).toThrow("exceeds 2000 routine nodes");
   });
 });
