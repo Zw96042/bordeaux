@@ -14,6 +14,7 @@
     "build:java": "node scripts/build-java.mjs dist",
     "build:electron": "tsc -p tsconfig.electron.build.json",
     "benchmark:renderer:browser": "node scripts/benchmark-renderer-browser.mjs",
+    "certify:field": "npm run build:electron && node scripts/certify-field.mjs",
     "test": "npm run verify:license && vitest run",
     "test:benchmark:e2e": "node --test tests/rendererBrowserBenchmark.e2e.mjs",
     "test:java": "node scripts/build-java.mjs test",

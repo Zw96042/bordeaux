@@ -45,6 +45,7 @@ jobs:
       - run: npm run verify:release-tag
       - run: npm test
       - run: npm run typecheck
+      - run: npm run certify:field
       - run: npm run test:java
         if: matrix.platform == 'linux'
       - name: Require macOS signing and notarization credentials

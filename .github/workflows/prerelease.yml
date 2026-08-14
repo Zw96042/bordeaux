@@ -59,6 +59,7 @@ jobs:
           if [ "$status" -ne 2 ]; then exit "$status"; fi
       - run: npm test
       - run: npm run typecheck
+      - run: npm run certify:field
       - run: npm run test:java
       - run: npm run build
       - name: Configure Electron sandbox
