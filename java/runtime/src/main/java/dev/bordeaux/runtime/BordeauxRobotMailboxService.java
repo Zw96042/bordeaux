@@ -36,6 +36,7 @@ public final class BordeauxRobotMailboxService {
     private final Path acknowledgements;
     private final BordeauxRevisionService revisions;
     private final BordeauxRobotStatusPublisher statusPublisher;
+    private Boolean publishedDisabled;
 
     /** Uses the fixed production Bordeaux deployment namespace. */
     public BordeauxRobotMailboxService(BordeauxRevisionService revisions) {
@@ -55,12 +56,13 @@ public final class BordeauxRobotMailboxService {
         this.statusPublisher = new BordeauxRobotStatusPublisher(root);
     }
 
-    /** Processes the bounded inbox once, then publishes the current status even when a candidate is rejected. */
+    /** Processes the bounded inbox once and publishes status only after a mode transition or activation. */
     public synchronized void periodic() {
+        boolean disabledAtStart = revisions.isDisabled();
         try {
-            for (Path candidate : candidates()) process(candidate);
+            for (Path candidate : candidates()) process(candidate, disabledAtStart);
         } finally {
-            statusPublisher.publish(revisions.status());
+            publishDisabledTransition();
         }
     }
 
@@ -85,14 +87,16 @@ public final class BordeauxRobotMailboxService {
         return candidates;
     }
 
-    private void process(Path candidate) {
+    private void process(Path candidate, boolean disabledAtStart) {
         Matcher matcher = REVISION_FILE.matcher(candidate.getFileName().toString());
         if (!matcher.matches() || !candidate.getParent().equals(inbox)) {
             throw new BordeauxRuntimeException("Bordeaux inbox candidate path is invalid");
         }
         String nonce = matcher.group(1);
         Outcome outcome;
-        if (Files.isSymbolicLink(candidate) || !Files.isRegularFile(candidate, LinkOption.NOFOLLOW_LINKS)) {
+        if (!disabledAtStart || !revisions.isDisabled()) {
+            outcome = Outcome.rejected("Bordeaux revision activation is allowed only while the robot is disabled");
+        } else if (Files.isSymbolicLink(candidate) || !Files.isRegularFile(candidate, LinkOption.NOFOLLOW_LINKS)) {
             outcome = Outcome.rejected("Bordeaux inbox candidate must be a regular file");
         } else {
             try {
@@ -102,13 +106,27 @@ public final class BordeauxRobotMailboxService {
                     outcome = Outcome.active(revisions.activate(candidate, nonce));
                 }
             } catch (BordeauxRuntimeException activationFailure) {
-                outcome = recoverOrReject(candidate, nonce, activationFailure);
+                outcome = revisions.isDisabled()
+                        ? recoverOrReject(candidate, nonce, activationFailure)
+                        : Outcome.rejected("Bordeaux revision activation is allowed only while the robot is disabled");
             } catch (IOException exception) {
                 outcome = Outcome.rejected("Could not inspect the bounded Bordeaux inbox candidate");
             }
         }
+        if (outcome.active()) publishCurrentStatus();
         writeAcknowledgement(nonce, outcome);
         removeCandidate(candidate);
+    }
+
+    private void publishDisabledTransition() {
+        boolean currentDisabled = revisions.isDisabled();
+        if (publishedDisabled == null || publishedDisabled.booleanValue() != currentDisabled) publishCurrentStatus();
+    }
+
+    private void publishCurrentStatus() {
+        BordeauxRuntimeStatus status = revisions.status();
+        statusPublisher.publish(status);
+        publishedDisabled = status.disabled();
     }
 
     private Outcome recoverOrReject(Path candidate, String nonce, BordeauxRuntimeException activationFailure) {

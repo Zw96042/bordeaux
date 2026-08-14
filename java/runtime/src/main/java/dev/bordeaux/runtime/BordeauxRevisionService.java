@@ -153,6 +153,10 @@ public final class BordeauxRevisionService {
         }
     }
 
+    boolean isDisabled() {
+        return disabled.getAsBoolean();
+    }
+
     private static void requireExpectedNonce(BordeauxRevision revision, String expectedNonce) {
         if (expectedNonce != null && !expectedNonce.equals(revision.activationNonce())) {
             throw new BordeauxRuntimeException("Bordeaux revision activation nonce does not match its inbox file name");

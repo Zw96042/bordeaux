@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
@@ -53,6 +54,31 @@ class BordeauxRobotMailboxServiceTest {
         assertFalse(Files.exists(inbox));
         JsonNode status = MAPPER.readTree(Files.readAllBytes(namespace.resolve("status.json")));
         assertEquals(acknowledgement.path("revisionId").textValue(), status.path("activeRevisionId").textValue());
+
+        FileTime unchangedMarker = FileTime.fromMillis(1_000);
+        Files.setLastModifiedTime(namespace.resolve("status.json"), unchangedMarker);
+        mailbox.periodic();
+        assertEquals(unchangedMarker, Files.getLastModifiedTime(namespace.resolve("status.json")));
+    }
+
+    @Test
+    void enabledPeriodicRejectsAnAlreadyAcceptedEnvelopeWithoutRecoveringItAsActive() throws IOException {
+        Path namespace = namespace();
+        AtomicBoolean disabled = new AtomicBoolean(true);
+        BordeauxRevisionService revisions = new BordeauxRevisionService(
+                temporaryDirectory.resolve("state"), 9604, disabled::get, COMPATIBILITY);
+        BordeauxActivationAck prior = revisions.activate(writeStaged("nonce-prior", null));
+        Path replay = namespace.resolve("inbox/nonce-prior.bordeaux-revision.json");
+        Files.writeString(replay, envelope("nonce-prior", null), StandardCharsets.UTF_8);
+        disabled.set(false);
+
+        new BordeauxRobotMailboxService(namespace, revisions).periodic();
+
+        JsonNode acknowledgement = MAPPER.readTree(Files.readAllBytes(namespace.resolve("acks/nonce-prior.json")));
+        assertEquals("rejected", acknowledgement.path("state").textValue());
+        assertTrue(acknowledgement.path("message").textValue().contains("disabled"));
+        assertFalse(Files.exists(replay));
+        assertEquals(prior.revisionId(), revisions.status().activeRevisionId());
     }
 
     @Test
