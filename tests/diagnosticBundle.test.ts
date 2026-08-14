@@ -16,7 +16,7 @@ function input(overrides: Partial<DiagnosticBundleInput> = {}): DiagnosticBundle
     generatedAt: "2026-08-14T19:20:00.000Z",
     app: { version: "0.2.0-beta.1", build: "development", channel: "beta" },
     os: { platform: "test-platform", release: "test-release", arch: "test-arch" },
-    fieldPin: { id: "frc-2026-rebuilt", revision: "official-2026.1", coordinateSchemaId: "wpilib-blue-origin-v1" },
+    fieldPin: { id: "2026-rebuilt", revision: "2026-manual-tu19-welded-4", coordinateSchemaId: "bordeaux-field/1.0" },
     catalog: { schemaVersion: "1.2", catalogId: "competition-robot", catalogHash: hash, supportVersion: "0.2.0" },
     export: { state: "generated", sha256: hash, pathCount: 2, eventCount: 3, sampleCount: 48 },
     routinePreflight: { state: "passed", issueCount: 0 },
@@ -71,9 +71,9 @@ describe("beta diagnostic bundle", () => {
     "arch": "test-arch"
   },
   "fieldPin": {
-    "id": "frc-2026-rebuilt",
-    "revision": "official-2026.1",
-    "coordinateSchemaId": "wpilib-blue-origin-v1"
+    "id": "2026-rebuilt",
+    "revision": "2026-manual-tu19-welded-4",
+    "coordinateSchemaId": "bordeaux-field/1.0"
   },
   "catalog": {
     "schemaVersion": "1.2",
@@ -113,7 +113,7 @@ describe("beta diagnostic bundle", () => {
       generatedAt: "2026-08-14T19:20:00.000Z",
       app: { version: "0.2.0-beta.1", build: "development", channel: "beta" },
       os: { platform: "test-platform", release: "test-release", arch: "test-arch" },
-      fieldPin: { id: "frc-2026-rebuilt", revision: "official-2026.1", coordinateSchemaId: "wpilib-blue-origin-v1" },
+      fieldPin: { id: "2026-rebuilt", revision: "2026-manual-tu19-welded-4", coordinateSchemaId: "bordeaux-field/1.0" },
       catalog: { schemaVersion: "1.2", catalogId: "competition-robot", catalogHash: hash, supportVersion: "0.2.0" },
       export: { state: "generated", sha256: hash, pathCount: 2, eventCount: 3, sampleCount: 48 },
       routinePreflight: { state: "passed", issueCount: 0 },
@@ -189,9 +189,10 @@ describe("beta diagnostic bundle", () => {
 
   it("copies a valid field identity even when an export cannot be built", () => {
     expect(diagnosticFieldPin({
-      field: { id: "frc-2026-rebuilt", revision: "official-2026.1", coordinateSchemaId: "wpilib-blue-origin-v1" },
+      field: { id: "2026-rebuilt", revision: "2026-manual-tu19-welded-4", coordinateSchemaId: "bordeaux-field/1.0" },
       paths: [{ name: "must not be copied" }],
-    })).toEqual({ id: "frc-2026-rebuilt", revision: "official-2026.1", coordinateSchemaId: "wpilib-blue-origin-v1" });
-    expect(diagnosticFieldPin({ field: { id: "bad field id", revision: "official-2026.1", coordinateSchemaId: "wpilib-blue-origin-v1" } })).toBeNull();
+    })).toEqual({ id: "2026-rebuilt", revision: "2026-manual-tu19-welded-4", coordinateSchemaId: "bordeaux-field/1.0" });
+    expect(diagnosticFieldPin({ field: { id: "bad field id", revision: "2026-manual-tu19-welded-4", coordinateSchemaId: "bordeaux-field/1.0" } })).toBeNull();
+    expect(diagnosticFieldPin({ field: { id: "PrivateStrategy", revision: "ScoutNotes", coordinateSchemaId: "Secret" } })).toBeNull();
   });
 });

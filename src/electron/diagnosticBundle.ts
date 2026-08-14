@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { ACTIVE_FIELD_REFERENCE } from "../shared/field/rebuilt2026";
 
 export const DIAGNOSTIC_FILE_NAME = "bordeaux-beta-diagnostic.json";
 
@@ -61,6 +62,14 @@ function teamNumber(value: number): number {
   return value;
 }
 
+function fieldPin(value: DiagnosticBundleInput["fieldPin"] & object): NonNullable<DiagnosticBundleInput["fieldPin"]> {
+  if (value.id !== ACTIVE_FIELD_REFERENCE.id || value.revision !== ACTIVE_FIELD_REFERENCE.revision
+    || value.coordinateSchemaId !== ACTIVE_FIELD_REFERENCE.coordinateSchemaId) {
+    throw new Error("Diagnostic field identity is invalid");
+  }
+  return { ...ACTIVE_FIELD_REFERENCE };
+}
+
 function identity(value: DiagnosticRobotPushIdentity) {
   return {
     teamNumber: teamNumber(value.teamNumber),
@@ -103,11 +112,7 @@ export function buildDiagnosticBundle(input: DiagnosticBundleInput): string {
     generatedAt: time(input.generatedAt),
     app: { version: text(app.version, "app version"), build: app.build, channel: app.channel },
     os: { platform: text(os.platform, "platform"), release: text(os.release, "release"), arch: text(os.arch, "architecture") },
-    fieldPin: input.fieldPin === null ? null : {
-      id: text(input.fieldPin.id, "field ID"),
-      revision: text(input.fieldPin.revision, "field revision"),
-      coordinateSchemaId: text(input.fieldPin.coordinateSchemaId, "field coordinate schema"),
-    },
+    fieldPin: input.fieldPin === null ? null : fieldPin(input.fieldPin),
     catalog: input.catalog === null ? null : {
       schemaVersion: input.catalog.schemaVersion,
       catalogId: text(input.catalog.catalogId, "catalog ID"),
@@ -144,11 +149,7 @@ export function diagnosticFieldPin(project: unknown): DiagnosticBundleInput["fie
     return null;
   }
   try {
-    return {
-      id: text(field.id, "field ID"),
-      revision: text(field.revision, "field revision"),
-      coordinateSchemaId: text(field.coordinateSchemaId, "field coordinate schema"),
-    };
+    return fieldPin({ id: field.id, revision: field.revision, coordinateSchemaId: field.coordinateSchemaId });
   } catch {
     return null;
   }
