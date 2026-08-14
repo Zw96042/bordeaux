@@ -4,7 +4,9 @@ import { writeJsonAtomically } from "./projectFiles";
 import {
   ROBOT_DEPLOYMENT_NAMESPACE,
   ROBOT_PUSH_PROTOCOL_VERSION,
+  confirmRobotPairing,
   type RobotPairing,
+  type RobotProbe,
 } from "./robotSftpTransport";
 
 const STORAGE_VERSION = 1;
@@ -60,4 +62,59 @@ export async function writeRobotPairing(filePath: string, pairing: RobotPairing)
   const normalized = normalizePairing(pairing);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await writeJsonAtomically(filePath, { version: STORAGE_VERSION, pairing: normalized });
+}
+
+/** Serializes the deliberate probe/confirm transition without exposing SFTP operations to callers. */
+export class RobotPairingController {
+  private pairing: RobotPairing | null;
+  private pendingProbe: RobotProbe | null = null;
+  private probeGeneration = 0;
+  private confirming = false;
+
+  constructor(initial: RobotPairing | null = null, private readonly now = () => new Date().toISOString()) {
+    this.pairing = initial;
+  }
+
+  current(): RobotPairing | null {
+    return this.pairing;
+  }
+
+  async probe(operation: () => Promise<RobotProbe>): Promise<RobotProbe> {
+    if (this.confirming) throw new Error("The current robot pairing confirmation is still being saved");
+    const generation = ++this.probeGeneration;
+    this.pendingProbe = null;
+    const probe = await operation();
+    if (generation !== this.probeGeneration) throw new Error("A newer robot probe replaced this result");
+    this.pendingProbe = probe;
+    return probe;
+  }
+
+  async confirm(
+    acceptedHostKeyFingerprint: string,
+    acceptedRuntimeId: string,
+    persist: (pairing: RobotPairing) => Promise<void>,
+  ): Promise<RobotPairing> {
+    if (this.confirming) throw new Error("The current robot pairing confirmation is still being saved");
+    const probe = this.pendingProbe;
+    if (!probe) throw new Error("Probe the robot before confirming its identity");
+    const pairing = confirmRobotPairing({
+      probe,
+      acceptedHostKeyFingerprint,
+      acceptedRuntimeId,
+      pairedAt: this.now(),
+    });
+    this.confirming = true;
+    this.pendingProbe = null;
+    this.probeGeneration += 1;
+    try {
+      await persist(pairing);
+      this.pairing = pairing;
+      return pairing;
+    } catch (error) {
+      this.pendingProbe = probe;
+      throw error;
+    } finally {
+      this.confirming = false;
+    }
+  }
 }

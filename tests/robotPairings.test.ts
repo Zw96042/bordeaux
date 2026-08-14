@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readRobotPairing, writeRobotPairing } from "../src/electron/robotPairings";
-import type { RobotPairing } from "../src/electron/robotSftpTransport";
+import { RobotPairingController, readRobotPairing, writeRobotPairing } from "../src/electron/robotPairings";
+import type { RobotPairing, RobotProbe } from "../src/electron/robotSftpTransport";
 
 const temporaryDirectories: string[] = [];
 
@@ -35,5 +35,45 @@ describe("robot pairing storage", () => {
     await writeRobotPairing(file, pairing);
 
     await expect(readRobotPairing(file)).resolves.toEqual(pairing);
+  });
+
+  it("does not let a newer probe interleave with a pairing being persisted", async () => {
+    const probe: RobotProbe = {
+      endpoint: pairing.endpoint,
+      hostKeyFingerprint: pairing.hostKeyFingerprint,
+      status: {
+        protocolVersion: pairing.protocolVersion,
+        deploymentNamespace: pairing.deploymentNamespace,
+        teamNumber: pairing.teamNumber,
+        runtimeId: pairing.runtimeId,
+        disabled: true,
+        catalogId: "CompetitionRobot",
+        catalogHash: `sha256:${"a".repeat(64)}`,
+        supportVersion: "0.1.0",
+        fieldId: "frc-2026-rebuilt",
+        fieldRevision: "official-2026.1",
+        fieldCoordinateSchemaId: "wpilib-blue-origin-v1",
+        activeRevisionId: null,
+        activePayloadSha256: null,
+        health: ["ready: no active Bordeaux revision"],
+      },
+    };
+    const controller = new RobotPairingController(null, () => pairing.pairedAt);
+    await controller.probe(async () => probe);
+    let finishWrite!: () => void;
+    const writeStarted = new Promise<void>((resolve) => { finishWrite = resolve; });
+    let persistStarted!: () => void;
+    const persisting = new Promise<void>((resolve) => { persistStarted = resolve; });
+    const confirmation = controller.confirm(probe.hostKeyFingerprint, probe.status.runtimeId, async () => {
+      persistStarted();
+      await writeStarted;
+    });
+    await persisting;
+
+    await expect(controller.probe(async () => ({ ...probe, endpoint: { host: "roborio-2468-frc.local", port: 22 } })))
+      .rejects.toThrow(/confirmation is still being saved/i);
+    finishWrite();
+    await expect(confirmation).resolves.toEqual(pairing);
+    expect(controller.current()).toEqual(pairing);
   });
 });

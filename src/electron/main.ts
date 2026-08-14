@@ -32,14 +32,11 @@ import { appUpdateChannel, AppUpdateController, usesGitHubAppUpdates } from "./a
 import { AgentSessionService } from "./agentSession";
 import { runAgentPlanningInWorker } from "./agentPlanningWorkerClient";
 import { serveBordeauxMcp } from "../mcp/server";
-import { readRobotPairing, writeRobotPairing } from "./robotPairings";
+import { RobotPairingController, readRobotPairing, writeRobotPairing } from "./robotPairings";
 import { connectRobotSftp } from "./robotSsh2Session";
 import {
   BordeauxRobotTransport,
-  confirmRobotPairing,
   type RobotEndpoint,
-  type RobotPairing,
-  type RobotProbe,
 } from "./robotSftpTransport";
 
 function ignoreClosedStandardStream(error: NodeJS.ErrnoException): void {
@@ -87,9 +84,7 @@ let linkedJavaCatalog: JavaCommandCatalog | null = null;
 let linkedJavaIntegration: JavaIntegrationStatus | null = null;
 let javaConnectionGeneration = 0;
 let javaProjectBookmarks: JavaProjectBookmark[] = [];
-let robotPairing: RobotPairing | null = null;
-let pendingRobotProbe: RobotProbe | null = null;
-let robotProbeGeneration = 0;
+let robotPairings = new RobotPairingController();
 const robotTransport = new BordeauxRobotTransport(connectRobotSftp);
 const smokeDirectory = process.env.BORDEAUX_SMOKE_DIRECTORY;
 const mcpStdioMode = process.argv.includes("--mcp-stdio");
@@ -965,32 +960,19 @@ handle("javaProject:buildCatalog", async () => {
   }
 });
 handle("javaProject:cancelBuild", () => ({ canceled: cancelJavaCatalogBuild() }));
-handle("robot:getPairing", () => robotPairing);
+handle("robot:getPairing", () => robotPairings.current());
 handle("robot:probe", async (_event, rawEndpoint) => {
-  const generation = ++robotProbeGeneration;
-  pendingRobotProbe = null;
   const endpoint = rawEndpoint as RobotEndpoint;
-  const probe = await robotTransport.probe(endpoint, { password: "" });
-  if (generation !== robotProbeGeneration) throw new Error("A newer robot probe replaced this result");
-  pendingRobotProbe = probe;
-  return probe;
+  return robotPairings.probe(() => robotTransport.probe(endpoint, { password: "" }));
 });
 handle("robot:confirmPairing", async (_event, rawFingerprint, rawRuntimeId) => {
-  if (!pendingRobotProbe || typeof rawFingerprint !== "string" || typeof rawRuntimeId !== "string") {
+  if (typeof rawFingerprint !== "string" || typeof rawRuntimeId !== "string") {
     throw new Error("Probe the robot before confirming its identity");
   }
-  const pairing = confirmRobotPairing({
-    probe: pendingRobotProbe,
-    acceptedHostKeyFingerprint: rawFingerprint,
-    acceptedRuntimeId: rawRuntimeId,
-  });
-  await writeRobotPairing(robotPairingFile(), pairing);
-  robotPairing = pairing;
-  pendingRobotProbe = null;
-  robotProbeGeneration += 1;
-  return pairing;
+  return robotPairings.confirm(rawFingerprint, rawRuntimeId, (pairing) => writeRobotPairing(robotPairingFile(), pairing));
 });
 handle("robot:inspect", async () => {
+  const robotPairing = robotPairings.current();
   if (!robotPairing) throw new Error("Pair a robot before inspecting its Bordeaux runtime");
   return robotTransport.inspect(robotPairing, { password: "" });
 });
@@ -1038,9 +1020,9 @@ app.whenReady().then(async () => {
     console.warn("Could not load recent Bordeaux projects:", error);
   }
   try {
-    robotPairing = await readRobotPairing(robotPairingFile());
+    robotPairings = new RobotPairingController(await readRobotPairing(robotPairingFile()));
   } catch (error) {
-    robotPairing = null;
+    robotPairings = new RobotPairingController();
     console.warn("Could not load the paired Bordeaux robot:", error);
   }
   agentBridge = new AgentBridgeServer(app.getPath("userData"), agentSessions);
