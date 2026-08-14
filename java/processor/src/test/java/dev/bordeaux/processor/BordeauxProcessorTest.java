@@ -39,6 +39,29 @@ class BordeauxProcessorTest {
     Path temporaryDirectory;
 
     @Test
+    void generatesTheOwnedWaitCatalogWithoutTeamAnnotations() throws Exception {
+        Compilation result = compile("frc/robot/PlainRobot.java", """
+                package frc.robot;
+                public final class PlainRobot {}
+                """);
+        assertTrue(result.success(), result.messages());
+
+        JsonNode catalog = MAPPER.readTree(Files.readString(
+                result.classes().resolve("META-INF/bordeaux/commands.json")));
+        assertEquals("1.2", catalog.path("schemaVersion").textValue());
+        assertEquals("0.3.0", catalog.path("supportVersion").textValue());
+        assertEquals("test-robot", catalog.path("catalogId").textValue());
+        assertEquals(0, catalog.path("commands").size());
+        assertEquals(0, catalog.path("conditions").size());
+        assertEquals("bordeaux.wait", catalog.path("builtIns").get(0).path("id").textValue());
+
+        String bindings = Files.readString(result.generated().resolve(
+                "dev/bordeaux/generated/BordeauxGeneratedBindings.java"));
+        assertTrue(bindings.contains("BordeauxGeneratedBindings()"));
+        assertTrue(bindings.contains("BordeauxCapabilities capabilities()"));
+    }
+
+    @Test
     void generatesDeterministicCatalogAndDirectProviderBindings() throws Exception {
         String source = """
                 package frc.robot;

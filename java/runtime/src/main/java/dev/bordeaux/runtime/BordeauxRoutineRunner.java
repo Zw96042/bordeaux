@@ -138,7 +138,12 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
                 scheduler.schedule(command);
                 commandCount++;
             } else if (node instanceof BordeauxRoutineNode.Wait wait) {
-                waitDeadlineS = now() + wait.durationS();
+                double startedAtS = now();
+                double deadlineS = startedAtS + wait.durationS();
+                if (!Double.isFinite(deadlineS) || deadlineS <= startedAtS) {
+                    throw new BordeauxRuntimeException("Routine clock is too large to schedule a finite wait deadline");
+                }
+                waitDeadlineS = deadlineS;
                 return new BordeauxRoutineProgress.Waiting(wait.durationS());
             }
         }

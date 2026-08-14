@@ -61,7 +61,9 @@ public final class BordeauxProcessor extends AbstractProcessor {
 
     @Override
     public Set<String> getSupportedAnnotationTypes() {
-        return Set.of(BordeauxCommand.class.getCanonicalName(), BordeauxCondition.class.getCanonicalName(), BordeauxParam.class.getCanonicalName());
+        // The owned built-in catalog exists even when a team declares no Bordeaux annotations.
+        // Returning false from every processing round keeps unrelated annotations available to their processors.
+        return Set.of("*");
     }
 
     @Override
@@ -74,7 +76,7 @@ public final class BordeauxProcessor extends AbstractProcessor {
         if (generated) return false;
         if (roundEnvironment.processingOver()) {
             generated = true;
-            if (invalid || (collectedMethods.isEmpty() && collectedConditions.isEmpty())) return false;
+            if (invalid) return false;
             List<CommandMethod> methods = collectedMethods.stream()
                     .sorted(Comparator.comparing(CommandMethod::id)).toList();
             List<ConditionMethod> conditions = collectedConditions.stream()
@@ -86,18 +88,18 @@ public final class BordeauxProcessor extends AbstractProcessor {
                 if (semanticCatalog.getBytes(StandardCharsets.UTF_8).length > MAX_CATALOG_BYTES - 1_024) {
                     processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
                             "Generated Bordeaux capability catalog exceeds " + MAX_CATALOG_BYTES + " bytes");
-                    return true;
+                    return false;
                 }
                 String catalogHash = semanticHash(semanticCatalog);
                 String catalogId = catalogId(methods, conditions);
-                if (catalogId == null) return true;
+                if (catalogId == null) return false;
                 writeCatalog(commandsJson, conditionsJson, catalogId, catalogHash);
                 writeBindings(methods, conditions, catalogId, catalogHash);
             } catch (IOException exception) {
                 processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
                         "Could not generate Bordeaux command metadata: " + exception.getMessage());
             }
-            return true;
+            return false;
         }
         Set<? extends Element> annotated = roundEnvironment.getElementsAnnotatedWith(BordeauxCommand.class);
         Set<? extends Element> annotatedConditions = roundEnvironment.getElementsAnnotatedWith(BordeauxCondition.class);
@@ -106,7 +108,7 @@ public final class BordeauxProcessor extends AbstractProcessor {
             processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
                     "Bordeaux command count exceeds " + MAX_COMMANDS);
             invalid = true;
-            return true;
+            return false;
         }
 
         for (Element element : annotated) {
@@ -152,7 +154,7 @@ public final class BordeauxProcessor extends AbstractProcessor {
             }
             collectedConditions.add(condition);
         }
-        return true;
+        return false;
     }
 
     private ConditionMethod inspectCondition(ExecutableElement method) {
@@ -652,7 +654,15 @@ public final class BordeauxProcessor extends AbstractProcessor {
 
     private String catalogId(List<CommandMethod> methods, List<ConditionMethod> conditions) {
         String value = processingEnv.getOptions().get("bordeaux.catalogId");
-        if (value == null || value.isBlank()) value = !methods.isEmpty() ? methods.get(0).owner() : conditions.get(0).owner();
+        if (value == null || value.isBlank()) {
+            if (!methods.isEmpty()) value = methods.get(0).owner();
+            else if (!conditions.isEmpty()) value = conditions.get(0).owner();
+            else {
+                processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
+                        "A Wait-only Bordeaux catalog requires -Abordeaux.catalogId=<stable-id>");
+                return null;
+            }
+        }
         value = value.trim();
         if (value.length() > 256) {
             processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,

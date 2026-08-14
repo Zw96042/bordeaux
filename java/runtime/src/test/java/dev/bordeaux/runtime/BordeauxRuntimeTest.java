@@ -15,10 +15,13 @@ import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Assumptions;
 
 class BordeauxRuntimeTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -91,6 +94,40 @@ class BordeauxRuntimeTest {
         assertEquals(1, scheduler.scheduled.size());
         assertEquals(new BordeauxRoutineProgress.Complete(), runner.completePathProgress("path-b"));
         assertThrows(BordeauxRuntimeException.class, () -> runner.start());
+    }
+
+    @Test
+    void executesDesktopExportedWaitRoutine() throws Exception {
+        String fixture = System.getenv("BORDEAUX_WAIT_INTEGRATION_FIXTURE");
+        Assumptions.assumeTrue(fixture != null && !fixture.isBlank(),
+                "Run through scripts/java-project-integration.mjs with a desktop-exported fixture");
+        BordeauxPathEvents document;
+        try (var input = Files.newInputStream(Path.of(fixture))) {
+            document = BordeauxTrajectoryReader.readWithRoutine(input, "integration-path");
+        }
+        BordeauxCapabilities capabilities = BordeauxBindings.generatedCapabilities(new FirstProvider(), new SecondProvider());
+        RecordingScheduler scheduler = new RecordingScheduler();
+        double[] time = {10};
+        BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, capabilities, scheduler, () -> time[0]);
+
+        assertEquals(new BordeauxRoutineProgress.Path("integration-path"), runner.startProgress());
+        assertEquals(new BordeauxRoutineProgress.Waiting(0.25), runner.completePathProgress("integration-path"));
+        assertTrue(scheduler.scheduled.isEmpty());
+        time[0] = 10.25;
+        assertEquals(new BordeauxRoutineProgress.Complete(), runner.periodic());
+        assertEquals(1, scheduler.scheduled.size());
+    }
+
+    @Test
+    void rejectsAClockThatCannotProduceAFiniteWaitDeadline() throws Exception {
+        BordeauxCapabilities capabilities = BordeauxBindings.generatedCapabilities(new FirstProvider(), new SecondProvider());
+        BordeauxRoutine routine = new BordeauxRoutine("Wait", List.of(new BordeauxRoutineNode.Wait("wait", 15)));
+        BordeauxPathEvents document = new BordeauxPathEvents("path", "Path", 1,
+                capabilities.catalogId(), capabilities.catalogHash(), List.of(), List.of(), List.of(), routine);
+        BordeauxRoutineRunner runner = new BordeauxRoutineRunner(
+                document, capabilities, new RecordingScheduler(), () -> Double.MAX_VALUE);
+
+        assertThrows(BordeauxRuntimeException.class, runner::startProgress);
     }
 
     @Test

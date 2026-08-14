@@ -10,6 +10,7 @@ const require = createRequire(import.meta.url);
 const { applyJavaSupportInstall, prepareJavaSupportInstall, runJavaCatalogBuild } = require("../dist-electron/electron/javaSupport.js");
 const { discoverJavaProject } = require("../dist-electron/electron/javaProject.js");
 const { buildJavaTrajectory, javaTrajectoryFileName } = require("../dist-electron/shared/export/javaTrajectory.js");
+const { createDemoProject } = require("../dist-electron/shared/project/defaults.js");
 const { decodeProjectFile } = require("../dist-electron/shared/project/fileFormat.js");
 const execFileAsync = promisify(execFile);
 
@@ -82,7 +83,70 @@ try {
     maxBuffer: 2 * 1024 * 1024,
     timeout: 180_000,
   });
+
+  const waitProject = createDemoProject();
+  waitProject.paths[0].id = "integration-path";
+  waitProject.editor.activePathId = "integration-path";
+  waitProject.routines[0].nodes = [{
+    id: "integration-path-node",
+    type: "path",
+    ref: "integration-path",
+  }, {
+    id: "integration-ready",
+    type: "decision",
+    cond: "ready",
+    thenLabel: "ready",
+    elseLabel: "not ready",
+    then: [{
+      id: "integration-wait",
+      type: "builtin",
+      builtinId: "bordeaux.wait",
+      arguments: { durationS: 0.25 },
+    }, {
+      id: "integration-collect",
+      type: "function",
+      cat: "command",
+      invocation: { commandId: "collect", arguments: {} },
+    }],
+    else: [],
+  }];
+  const runtimeCatalog = {
+    projectName: "Runtime integration",
+    sourceFileCount: 1,
+    scannedAt: new Date(0).toISOString(),
+    authoritative: true,
+    generatedSchemaVersion: "1.2",
+    catalogId: "test-bindings",
+    supportVersion: "0.3.0",
+    catalogHash: `sha256:${"a".repeat(64)}`,
+    commands: [{
+      id: "collect", label: "Collect", ownerType: "integration.Commands", member: "collect",
+      kind: "factory", confidence: "confirmed", runtimeReady: true, parameters: [],
+      source: { file: "integration/Commands.java", line: 1 },
+    }],
+    conditions: [{
+      id: "ready", label: "Ready", ownerType: "integration.Conditions", member: "ready",
+      source: { file: "integration/Conditions.java", line: 1 },
+    }],
+    builtIns: catalog.builtIns,
+    warnings: [],
+  };
+  const waitFixture = path.join(fixtureRoot, "desktop-wait-integration.bordeaux.json");
+  await fs.writeFile(waitFixture, buildJavaTrajectory(waitProject, runtimeCatalog).contents);
+  await execFileAsync(path.join(repositoryRoot, "java", process.platform === "win32" ? "gradlew.bat" : "gradlew"), [
+    "-p", path.join(repositoryRoot, "java"),
+    ":runtime:test",
+    "--tests", "dev.bordeaux.runtime.BordeauxRuntimeTest.executesDesktopExportedWaitRoutine",
+    "--no-daemon",
+    "--console=plain",
+  ], {
+    cwd: repositoryRoot,
+    env: { ...process.env, BORDEAUX_WAIT_INTEGRATION_FIXTURE: waitFixture },
+    maxBuffer: 2 * 1024 * 1024,
+    timeout: 180_000,
+  });
   console.log(`Verified Bordeaux template robot (${catalog.catalogHash.slice(0, 19)}…, ${generatedIds.length} commands, ${generatedConditionIds.length} condition).`);
+  console.log("Verified desktop-exported path → generated condition → Wait → generated command runtime flow.");
 } finally {
   await fs.rm(fixtureRoot, { recursive: true, force: true });
 }
