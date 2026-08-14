@@ -76,6 +76,44 @@ final class FileBordeauxRevisionStorage implements BordeauxRevisionStorage {
     }
 
     @Override
+    public byte[] readRevision(String revisionId, String payloadSha256) {
+        Path target = revisionsDirectory.resolve(digest(revisionId) + ".bdx");
+        try {
+            if (!Files.isRegularFile(target, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                throw new BordeauxRuntimeException("Retained Bordeaux revision payload is missing");
+            }
+            byte[] contents;
+            try (InputStream input = Files.newInputStream(target)) {
+                contents = input.readNBytes(BordeauxRevisionReader.MAX_PAYLOAD_BYTES + 1);
+            }
+            if (contents.length > BordeauxRevisionReader.MAX_PAYLOAD_BYTES) {
+                throw new BordeauxRuntimeException("Retained Bordeaux revision exceeds the payload size limit");
+            }
+            if (!payloadSha256.equals(sha256(contents))) {
+                throw new BordeauxRuntimeException("Retained Bordeaux revision payload is missing or corrupt");
+            }
+            return contents;
+        } catch (BordeauxRuntimeException exception) {
+            throw exception;
+        } catch (IOException exception) {
+            throw new BordeauxRuntimeException("Could not read retained Bordeaux revision", exception);
+        }
+    }
+
+    @Override
+    public void deleteRevision(String revisionId) {
+        Path target = revisionsDirectory.resolve(digest(revisionId) + ".bdx");
+        try {
+            if (Files.isSymbolicLink(target)) {
+                throw new BordeauxRuntimeException("Retained Bordeaux revision must not be a symbolic link");
+            }
+            Files.deleteIfExists(target);
+        } catch (IOException exception) {
+            throw new BordeauxRuntimeException("Could not remove released Bordeaux revision " + revisionId, exception);
+        }
+    }
+
+    @Override
     public void writeState(byte[] state) {
         try {
             atomicWrite(stateFile, state, true);
@@ -119,6 +157,14 @@ final class FileBordeauxRevisionStorage implements BordeauxRevisionStorage {
             throw new BordeauxRuntimeException("Could not lock the Bordeaux runtime state directory", exception);
         } finally {
             processLock.unlock();
+        }
+    }
+
+    private static String sha256(byte[] contents) {
+        try {
+            return "sha256:" + HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(contents));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new BordeauxRuntimeException("SHA-256 is unavailable", exception);
         }
     }
 

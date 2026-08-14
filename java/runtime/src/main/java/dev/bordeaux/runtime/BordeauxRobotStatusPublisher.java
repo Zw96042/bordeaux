@@ -88,6 +88,14 @@ public final class BordeauxRobotStatusPublisher {
         else document.put("activeRevisionId", status.activeRevisionId());
         if (status.activePayloadSha256() == null) document.putNull("activePayloadSha256");
         else document.put("activePayloadSha256", status.activePayloadSha256());
+        ObjectNode retention = document.putObject("retention");
+        retention.put("recentLimit", status.retention().recentLimit());
+        ArrayNode revisions = retention.putArray("revisions");
+        status.retention().revisions().forEach(entry -> revisions.addObject()
+                .put("revisionId", entry.revisionId())
+                .put("payloadSha256", entry.payloadSha256())
+                .put("availability", entry.availability())
+                .put("pinned", entry.pinned()));
         ArrayNode health = document.putArray("health");
         status.health().forEach(health::add);
         try {

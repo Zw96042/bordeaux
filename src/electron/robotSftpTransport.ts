@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 
 export const ROBOT_PUSH_PROTOCOL_VERSION = "bordeaux-robot-push/1.0" as const;
+export const ROBOT_RETENTION_PROTOCOL_VERSION = "bordeaux-retention/1.0" as const;
 export const ROBOT_DEPLOYMENT_NAMESPACE = "/home/lvuser/deploy/bordeaux/push-v1" as const;
 
 export interface RobotEndpoint {
@@ -23,6 +24,19 @@ export interface RobotRuntimeStatus {
   activeRevisionId: string | null;
   activePayloadSha256: string | null;
   health: string[];
+  retention?: RobotRevisionRetention;
+}
+
+export interface RobotRevisionRetentionEntry {
+  revisionId: string;
+  payloadSha256: string;
+  availability: "retained" | "missing";
+  pinned: boolean;
+}
+
+export interface RobotRevisionRetention {
+  recentLimit: 5;
+  revisions: RobotRevisionRetentionEntry[];
 }
 
 export interface RobotProbe {
@@ -62,7 +76,7 @@ export interface RobotRejectedAcknowledgement {
   protocolVersion: typeof ROBOT_PUSH_PROTOCOL_VERSION;
   nonce: string;
   state: "rejected";
-  boundary: "activation";
+  boundary: "activation" | "retention" | "mailbox";
   message: string;
   runtimeId: string;
   teamNumber: number;
@@ -73,10 +87,55 @@ export type RobotActivationResult =
   | { state: "rejected"; acknowledgement: RobotRejectedAcknowledgement }
   | { state: "staged"; boundary: "acknowledgement"; message: string };
 
+export type RobotRetentionAction = "rollback" | "pin";
+
+export interface RobotRetentionExpectation {
+  nonce: string;
+  action: RobotRetentionAction;
+  expectedActiveRevisionId: string | null;
+  target: Pick<RobotRevisionRetentionEntry, "revisionId" | "payloadSha256">;
+  catalogId: string;
+  catalogHash: string;
+  supportVersion: string;
+}
+
+interface RobotRetentionAcknowledgementIdentity {
+  protocolVersion: typeof ROBOT_PUSH_PROTOCOL_VERSION;
+  nonce: string;
+  action: RobotRetentionAction;
+  revisionId: string;
+  payloadSha256: string;
+  catalogId: string;
+  catalogHash: string;
+  supportVersion: string;
+  runtimeId: string;
+  teamNumber: number;
+}
+
+export interface RobotRetentionActiveAcknowledgement extends RobotRetentionAcknowledgementIdentity {
+  protocolVersion: typeof ROBOT_PUSH_PROTOCOL_VERSION;
+  state: "active";
+  action: "rollback";
+}
+
+export interface RobotRetentionPinnedAcknowledgement extends RobotRetentionAcknowledgementIdentity {
+  protocolVersion: typeof ROBOT_PUSH_PROTOCOL_VERSION;
+  state: "pinned";
+  action: "pin";
+}
+
+export type RobotRetentionResult =
+  | { state: "active"; acknowledgement: RobotRetentionActiveAcknowledgement }
+  | { state: "pinned"; acknowledgement: RobotRetentionPinnedAcknowledgement }
+  | { state: "rejected"; acknowledgement: RobotRejectedAcknowledgement }
+  | { state: "staged"; boundary: "acknowledgement"; message: string };
+
 export type RobotRemoteFile =
   | { kind: "status" }
   | { kind: "incomingTemporary"; nonce: string; token: string }
   | { kind: "incomingRevision"; nonce: string }
+  | { kind: "incomingRetentionTemporary"; nonce: string; token: string }
+  | { kind: "incomingRetention"; nonce: string }
   | { kind: "acknowledgement"; nonce: string };
 
 export interface RobotSftpSession {
@@ -123,6 +182,7 @@ export class RobotTransportError extends Error {
 const MAX_STATUS_BYTES = 64 * 1024;
 const MAX_ACKNOWLEDGEMENT_BYTES = 64 * 1024;
 const MAX_REVISION_BYTES = 24 * 1024 * 1024;
+const MAX_RETENTION_CONTROL_BYTES = 16 * 1024;
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const SSH_FINGERPRINT = /^SHA256:[A-Za-z0-9+/]{20,128}$/;
@@ -145,6 +205,34 @@ function nullableHash(value: unknown, name: string): string | null {
   const text = requiredText(value, name, 71);
   if (!SHA256.test(text)) throw new Error(`Robot status ${name} is invalid`);
   return text;
+}
+
+function parseRetention(value: unknown): RobotRevisionRetention | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || value.recentLimit !== 5 || !Array.isArray(value.revisions) || value.revisions.length > 6) {
+    throw new Error("Robot status retention is invalid");
+  }
+  let pinned = 0;
+  const revisionIds = new Set<string>();
+  const payloads = new Set<string>();
+  const revisions = value.revisions.map((entry) => {
+    if (!isRecord(entry) || (entry.availability !== "retained" && entry.availability !== "missing")
+      || typeof entry.pinned !== "boolean") {
+      throw new Error("Robot status retention revision is invalid");
+    }
+    const revisionId = nullableHash(entry.revisionId, "retention revisionId");
+    const payloadSha256 = nullableHash(entry.payloadSha256, "retention payloadSha256");
+    if (!revisionId || !payloadSha256 || revisionIds.has(revisionId) || payloads.has(payloadSha256)) {
+      throw new Error("Robot status retention revisions must have distinct valid revision and payload hashes");
+    }
+    revisionIds.add(revisionId);
+    payloads.add(payloadSha256);
+    if (entry.pinned) pinned += 1;
+    const availability: RobotRevisionRetentionEntry["availability"] = entry.availability === "retained" ? "retained" : "missing";
+    return { revisionId, payloadSha256, availability, pinned: entry.pinned };
+  });
+  if (pinned > 1) throw new Error("Robot status retention can contain at most one pinned revision");
+  return { recentLimit: 5, revisions };
 }
 
 function parseRobotStatus(contents: Buffer): RobotRuntimeStatus {
@@ -171,6 +259,11 @@ function parseRobotStatus(contents: Buffer): RobotRuntimeStatus {
     || raw.health.some((item) => typeof item !== "string" || item.length === 0 || item.length > 512)) {
     throw new Error("Robot status health is invalid");
   }
+  const retention = parseRetention(raw.retention);
+  if (retention && activeRevisionId !== null && !retention.revisions.some((entry) =>
+    entry.revisionId === activeRevisionId && entry.payloadSha256 === activePayloadSha256)) {
+    throw new Error("Robot status retention does not include the active revision identity");
+  }
   return {
     protocolVersion: ROBOT_PUSH_PROTOCOL_VERSION,
     deploymentNamespace: ROBOT_DEPLOYMENT_NAMESPACE,
@@ -186,6 +279,7 @@ function parseRobotStatus(contents: Buffer): RobotRuntimeStatus {
     activeRevisionId,
     activePayloadSha256,
     health: [...raw.health] as string[],
+    retention,
   };
 }
 
@@ -244,6 +338,66 @@ function parseActivationAcknowledgement(
     runtimeId,
     teamNumber: pairing.teamNumber,
   };
+}
+
+function parseRetentionAcknowledgement(
+  contents: Buffer,
+  pairing: RobotPairing,
+  expected: RobotRetentionExpectation,
+): RobotRetentionActiveAcknowledgement | RobotRetentionPinnedAcknowledgement | RobotRejectedAcknowledgement {
+  let raw: unknown;
+  try { raw = JSON.parse(contents.toString("utf8")); }
+  catch (error) { throw new RobotTransportError("transfer_failed", "Robot retention acknowledgment is not valid JSON", { cause: error }); }
+  if (!isRecord(raw) || raw.protocolVersion !== ROBOT_PUSH_PROTOCOL_VERSION) {
+    throw new RobotTransportError("transfer_failed", "Robot retention acknowledgment protocol is invalid");
+  }
+  const nonce = requiredText(raw.nonce, "retention acknowledgment nonce");
+  const runtimeId = requiredText(raw.runtimeId, "retention acknowledgment runtimeId", 64);
+  if (!RUNTIME_ID.test(runtimeId) || runtimeId !== pairing.runtimeId
+    || raw.teamNumber !== pairing.teamNumber || nonce !== expected.nonce) {
+    throw new RobotTransportError("transfer_failed", "Robot retention acknowledgment identity does not match this operation");
+  }
+  if (raw.state === "rejected") {
+    if (raw.boundary !== "retention" && raw.boundary !== "mailbox") {
+      throw new RobotTransportError("transfer_failed", "Robot rejection did not identify the retention or mailbox boundary");
+    }
+    return {
+      protocolVersion: ROBOT_PUSH_PROTOCOL_VERSION,
+      nonce,
+      state: "rejected",
+      boundary: raw.boundary,
+      message: requiredText(raw.message, "retention acknowledgment message", 512),
+      runtimeId,
+      teamNumber: pairing.teamNumber,
+    };
+  }
+  const expectedState = expected.action === "rollback" ? "active" : "pinned";
+  if (raw.state !== expectedState || raw.action !== expected.action) {
+    throw new RobotTransportError("transfer_failed", "Robot retention acknowledgment action does not match the reviewed operation");
+  }
+  const actual = {
+    revisionId: requiredText(raw.revisionId, "retention acknowledgment revisionId", 71),
+    payloadSha256: requiredText(raw.payloadSha256, "retention acknowledgment payloadSha256", 71),
+    catalogId: requiredText(raw.catalogId, "retention acknowledgment catalogId"),
+    catalogHash: requiredText(raw.catalogHash, "retention acknowledgment catalogHash", 71),
+    supportVersion: requiredText(raw.supportVersion, "retention acknowledgment supportVersion", 64),
+  };
+  if (!SHA256.test(actual.revisionId) || !SHA256.test(actual.payloadSha256) || !SHA256.test(actual.catalogHash)
+    || actual.revisionId !== expected.target.revisionId || actual.payloadSha256 !== expected.target.payloadSha256
+    || actual.catalogId !== expected.catalogId || actual.catalogHash !== expected.catalogHash
+    || actual.supportVersion !== expected.supportVersion) {
+    throw new RobotTransportError("transfer_failed", "Robot retention acknowledgment does not match the reviewed target");
+  }
+  const identity = {
+    protocolVersion: ROBOT_PUSH_PROTOCOL_VERSION,
+    nonce,
+    ...actual,
+    runtimeId,
+    teamNumber: pairing.teamNumber,
+  };
+  return expected.action === "rollback"
+    ? { ...identity, state: "active", action: "rollback" }
+    : { ...identity, state: "pinned", action: "pin" };
 }
 
 function waitForPoll(milliseconds: number, signal: AbortSignal): Promise<void> {
@@ -336,21 +490,61 @@ export class BordeauxRobotTransport {
     revision: { nonce: string; contents: Buffer; sha256: string },
     options: { signal?: AbortSignal; timeoutMs?: number; onState?: (state: "uploaded" | "staged") => void } = {},
   ): Promise<{ state: "staged"; nonce: string; sha256: string; size: number }> {
+    return this.stageEnvelope(pairing, credentials, revision, options, {
+      temporary: (nonce, token) => ({ kind: "incomingTemporary", nonce, token }),
+      destination: (nonce) => ({ kind: "incomingRevision", nonce }),
+      name: "Revision envelope",
+      stagedName: "revision",
+      cancelledMessage: "Robot transfer was cancelled",
+      maxBytes: MAX_REVISION_BYTES,
+    });
+  }
+
+  async stageRetention(
+    pairing: RobotPairing,
+    credentials: RobotCredentials,
+    control: { nonce: string; contents: Buffer; sha256: string },
+    options: { signal?: AbortSignal; timeoutMs?: number; onState?: (state: "uploaded" | "staged") => void } = {},
+  ): Promise<{ state: "staged"; nonce: string; sha256: string; size: number }> {
+    return this.stageEnvelope(pairing, credentials, control, options, {
+      temporary: (nonce, token) => ({ kind: "incomingRetentionTemporary", nonce, token }),
+      destination: (nonce) => ({ kind: "incomingRetention", nonce }),
+      name: "Retention control",
+      stagedName: "retention control",
+      cancelledMessage: "Robot retention transfer was cancelled",
+      maxBytes: MAX_RETENTION_CONTROL_BYTES,
+    });
+  }
+
+  private async stageEnvelope(
+    pairing: RobotPairing,
+    credentials: RobotCredentials,
+    envelope: { nonce: string; contents: Buffer; sha256: string },
+    options: { signal?: AbortSignal; timeoutMs?: number; onState?: (state: "uploaded" | "staged") => void },
+    files: {
+      temporary: (nonce: string, token: string) => RobotRemoteFile;
+      destination: (nonce: string) => RobotRemoteFile;
+      name: string;
+      stagedName: string;
+      cancelledMessage: string;
+      maxBytes: number;
+    },
+  ): Promise<{ state: "staged"; nonce: string; sha256: string; size: number }> {
     validateEndpoint(pairing.endpoint);
-    if (!FILE_TOKEN.test(revision.nonce)) {
-      throw new RobotTransportError("invalid_request", "Revision nonce cannot be used as a Bordeaux inbox file name");
+    if (!FILE_TOKEN.test(envelope.nonce)) {
+      throw new RobotTransportError("invalid_request", `${files.name} nonce cannot be used as a Bordeaux inbox file name`);
     }
-    if (!Buffer.isBuffer(revision.contents) || revision.contents.length === 0 || revision.contents.length > MAX_REVISION_BYTES) {
-      throw new RobotTransportError("invalid_request", `Revision envelope must contain 1-${MAX_REVISION_BYTES} bytes`);
+    if (!Buffer.isBuffer(envelope.contents) || envelope.contents.length === 0 || envelope.contents.length > files.maxBytes) {
+      throw new RobotTransportError("invalid_request", `${files.name} must contain 1-${files.maxBytes} bytes`);
     }
-    if (!SHA256_HEX.test(revision.sha256)
-      || createHash("sha256").update(revision.contents).digest("hex") !== revision.sha256) {
-      throw new RobotTransportError("invalid_request", "Revision envelope SHA-256 does not match its exact bytes");
+    if (!SHA256_HEX.test(envelope.sha256)
+      || createHash("sha256").update(envelope.contents).digest("hex") !== envelope.sha256) {
+      throw new RobotTransportError("invalid_request", `${files.name} SHA-256 does not match its exact bytes`);
     }
     const token = this.temporaryToken();
     if (!/^[a-f0-9]{8,64}$/.test(token)) throw new Error("Temporary upload token source returned an invalid token");
-    const temporary: RobotRemoteFile = { kind: "incomingTemporary", nonce: revision.nonce, token };
-    const destination: RobotRemoteFile = { kind: "incomingRevision", nonce: revision.nonce };
+    const temporary = files.temporary(envelope.nonce, token);
+    const destination = files.destination(envelope.nonce);
     const signal = options.signal ?? new AbortController().signal;
     const session = await this.connect({
       endpoint: pairing.endpoint,
@@ -370,24 +564,24 @@ export class BordeauxRobotTransport {
         throw new RobotTransportError("re_pair_required", "The paired Bordeaux runtime identity changed; explicitly re-pair this robot before transferring data");
       }
       uploadAttempted = true;
-      await session.write(temporary, revision.contents, signal);
-      const readBack = await session.read(temporary, revision.contents.length, signal);
+      await session.write(temporary, envelope.contents, signal);
+      const readBack = await session.read(temporary, envelope.contents.length, signal);
       const readBackHash = createHash("sha256").update(readBack).digest("hex");
-      if (readBack.length !== revision.contents.length || readBackHash !== revision.sha256) {
-        throw new RobotTransportError("transfer_failed", "Robot upload read-back did not match the staged revision bytes");
+      if (readBack.length !== envelope.contents.length || readBackHash !== envelope.sha256) {
+        throw new RobotTransportError("transfer_failed", `Robot upload read-back did not match the staged ${files.stagedName} bytes`);
       }
       options.onState?.("uploaded");
       if (await session.exists(destination, signal)) {
-        throw new RobotTransportError("transfer_failed", "A robot inbox revision already uses this activation nonce");
+        throw new RobotTransportError("transfer_failed", `A robot inbox ${files.stagedName} already uses this activation nonce`);
       }
       await session.renameSameDirectory(temporary, destination, signal);
       staged = true;
       options.onState?.("staged");
-      return { state: "staged", nonce: revision.nonce, sha256: revision.sha256, size: revision.contents.length };
+      return { state: "staged", nonce: envelope.nonce, sha256: envelope.sha256, size: envelope.contents.length };
     } catch (error) {
       if (error instanceof RobotTransportError) throw error;
-      if (signal.aborted) throw new RobotTransportError("cancelled", "Robot transfer was cancelled", { cause: error });
-      throw new RobotTransportError("transfer_failed", "The constrained SFTP transfer failed before the revision was staged", { cause: error });
+      if (signal.aborted) throw new RobotTransportError("cancelled", files.cancelledMessage, { cause: error });
+      throw new RobotTransportError("transfer_failed", `The constrained SFTP transfer failed before the ${files.stagedName} was staged`, { cause: error });
     } finally {
       if (uploadAttempted && !staged) {
         try { await session.remove(temporary, signal); }
@@ -446,6 +640,66 @@ export class BordeauxRobotTransport {
             state: "staged",
             boundary: "acknowledgement",
             message: "The revision is staged, but Bordeaux did not receive the nonce-bound robot acknowledgment before the timeout",
+          };
+        }
+        await waitForPoll(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())), signal);
+      }
+    } finally {
+      await session.close();
+    }
+  }
+
+  async waitForRetention(
+    pairing: RobotPairing,
+    credentials: RobotCredentials,
+    expected: RobotRetentionExpectation,
+    options: { signal?: AbortSignal; timeoutMs?: number; pollIntervalMs?: number } = {},
+  ): Promise<RobotRetentionResult> {
+    validateEndpoint(pairing.endpoint);
+    if (!FILE_TOKEN.test(expected.nonce) || (expected.action !== "rollback" && expected.action !== "pin")
+      || !SHA256.test(expected.target.revisionId) || !SHA256.test(expected.target.payloadSha256)
+      || !SHA256.test(expected.catalogHash) || (expected.expectedActiveRevisionId !== null && !SHA256.test(expected.expectedActiveRevisionId))) {
+      throw new RobotTransportError("invalid_request", "Robot retention expectation is invalid");
+    }
+    const signal = options.signal ?? new AbortController().signal;
+    const timeoutMs = options.timeoutMs ?? 15_000;
+    const pollIntervalMs = options.pollIntervalMs ?? 250;
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || !Number.isFinite(pollIntervalMs) || pollIntervalMs < 0) {
+      throw new RobotTransportError("invalid_request", "Robot acknowledgment timing is invalid");
+    }
+    const session = await this.connect({
+      endpoint: pairing.endpoint,
+      credentials,
+      expectedHostKeyFingerprint: pairing.hostKeyFingerprint,
+      signal,
+      timeoutMs: Math.max(1_000, timeoutMs),
+    });
+    const acknowledgement: RobotRemoteFile = { kind: "acknowledgement", nonce: expected.nonce };
+    const deadline = Date.now() + timeoutMs;
+    try {
+      if (session.hostKeyFingerprint !== pairing.hostKeyFingerprint) {
+        throw new RobotTransportError("re_pair_required", "The robot SSH host key changed; explicitly re-pair this robot before transferring data");
+      }
+      const status = parseRobotStatus(await session.read({ kind: "status" }, MAX_STATUS_BYTES, signal));
+      if (status.runtimeId !== pairing.runtimeId || status.teamNumber !== pairing.teamNumber) {
+        throw new RobotTransportError("re_pair_required", "The paired Bordeaux runtime identity changed; explicitly re-pair this robot before transferring data");
+      }
+      while (true) {
+        if (signal.aborted) throw new RobotTransportError("cancelled", "Waiting for robot retention acknowledgment was cancelled");
+        if (await session.exists(acknowledgement, signal)) {
+          const parsed = parseRetentionAcknowledgement(
+            await session.read(acknowledgement, MAX_ACKNOWLEDGEMENT_BYTES, signal), pairing, expected,
+          );
+          if (parsed.state === "rejected") return { state: "rejected", acknowledgement: parsed };
+          return parsed.state === "active"
+            ? { state: "active", acknowledgement: parsed }
+            : { state: "pinned", acknowledgement: parsed };
+        }
+        if (Date.now() >= deadline) {
+          return {
+            state: "staged",
+            boundary: "acknowledgement",
+            message: "The retention control is staged, but Bordeaux did not receive the nonce-bound robot acknowledgment before the timeout",
           };
         }
         await waitForPoll(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())), signal);

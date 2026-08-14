@@ -204,6 +204,22 @@ class BordeauxRevisionServiceTest {
     }
 
     @Test
+    void rejectsMalformedVersionTwoAcknowledgementStateWithABoundedRuntimeError() throws IOException {
+        Path stateDirectory = temporaryDirectory.resolve("state");
+        Files.createDirectories(stateDirectory);
+        Files.writeString(stateDirectory.resolve("runtime-state.json"), """
+                {"version":2,"runtimeId":"00000000-0000-0000-0000-000000000001",
+                "activeRevisionId":null,"activePayloadSha256":null,"recentNonces":[],"latestActivation":[]}
+                """, StandardCharsets.UTF_8);
+
+        BordeauxRuntimeException exception = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxRevisionService(stateDirectory, 9604, () -> true, COMPATIBILITY).status());
+
+        assertTrue(exception.getMessage().contains("Persisted Bordeaux runtime state is invalid"), exception::getMessage);
+        assertTrue(exception.getMessage().contains("latest activation"), exception::getMessage);
+    }
+
+    @Test
     void serializesCompareAndSwapAcrossServiceInstances() throws Exception {
         Path state = temporaryDirectory.resolve("state");
         new BordeauxRevisionService(state, 9604, () -> true, COMPATIBILITY).status();
@@ -344,6 +360,14 @@ class BordeauxRevisionServiceTest {
         }
 
         @Override
+        public byte[] readRevision(String revisionId, String payloadSha256) {
+            return delegate.readRevision(revisionId, payloadSha256);
+        }
+
+        @Override
+        public void deleteRevision(String revisionId) { delegate.deleteRevision(revisionId); }
+
+        @Override
         public void writeState(byte[] state) {
             if (failState) throw new BordeauxRuntimeException("Injected active manifest move failure");
             delegate.writeState(state);
@@ -372,6 +396,12 @@ class BordeauxRevisionServiceTest {
 
         @Override
         public void writeRevision(String revisionId, byte[] payload) { delegate.writeRevision(revisionId, payload); }
+
+        @Override
+        public byte[] readRevision(String revisionId, String payloadSha256) { return delegate.readRevision(revisionId, payloadSha256); }
+
+        @Override
+        public void deleteRevision(String revisionId) { delegate.deleteRevision(revisionId); }
 
         @Override
         public void writeState(byte[] state) { delegate.writeState(state); }

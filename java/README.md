@@ -36,6 +36,8 @@ For a multi-path autonomous routine, load the document with `BordeauxTrajectoryR
 
 Teams that opt into desktop-to-robot pushes provision `/home/lvuser/deploy/bordeaux/push-v1` with `inbox` and `acks` subdirectories, construct `BordeauxRevisionService` with their disabled supplier and compiled compatibility, then construct `BordeauxRobotMailboxService`. Call `periodic()` from `robotPeriodic` so `status.json` follows enabled transitions immediately; unchanged loops do not rewrite it. It accepts only the nonce-bound revision files written by Bordeaux, rejects activation unless the robot is disabled, writes nonce-bound acknowledgments and state-changing status updates atomically, and never starts a listener, watcher, command, or network connection. The mailbox leaves a candidate in place if acknowledgment publication fails, so the next robot-loop poll can recover the persisted activation acknowledgment safely.
 
+The same mailbox accepts only strict nonce-bound `*.bordeaux-retention.json` controls for explicit disabled-only rollback and pin actions. Runtime state retains the five newest accepted revisions plus one older pinned revision, reports their exact retained/missing/pinned state in `status.json`, and only ever removes a digest-derived immutable payload after its replacement manifest is durable. It does not enumerate or recursively delete revision storage, so files from an older or unknown manifest are never swept up by retention cleanup.
+
 ```java
 var namespace = Path.of(BordeauxRobotStatusPublisher.PRODUCTION_DEPLOYMENT_NAMESPACE);
 Files.createDirectories(namespace.resolve("inbox"));

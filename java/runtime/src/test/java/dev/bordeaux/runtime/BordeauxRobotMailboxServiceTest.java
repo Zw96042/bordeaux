@@ -177,6 +177,36 @@ class BordeauxRobotMailboxServiceTest {
         assertTrue(Files.isRegularFile(namespace.resolve("status.json")));
     }
 
+    @Test
+    void processesNonceBoundRollbackAndPinControlsAndRejectsFilenameCollisions() throws IOException {
+        Path namespace = namespace();
+        BordeauxRevisionService revisions = revisions(true);
+        BordeauxActivationAck first = revisions.activate(writeStaged("seed-first", null));
+        BordeauxActivationAck second = revisions.activate(writeStaged("seed-second", first.revisionId()));
+        Files.writeString(namespace.resolve("inbox/rollback.bordeaux-retention.json"), retention(
+                "rollback", "rollback", second.revisionId(), first), StandardCharsets.UTF_8);
+
+        new BordeauxRobotMailboxService(namespace, revisions).periodic();
+
+        JsonNode rollback = MAPPER.readTree(Files.readAllBytes(namespace.resolve("acks/rollback.json")));
+        assertEquals("active", rollback.path("state").textValue());
+        assertEquals("rollback", rollback.path("action").textValue());
+        assertEquals(first.revisionId(), revisions.status().activeRevisionId());
+        assertEquals(first.revisionId(), MAPPER.readTree(Files.readAllBytes(namespace.resolve("status.json")))
+                .path("retention").path("revisions").get(0).path("revisionId").textValue());
+
+        Files.writeString(namespace.resolve("inbox/collision.bordeaux-revision.json"), envelope("collision", first.revisionId()));
+        Files.writeString(namespace.resolve("inbox/collision.bordeaux-retention.json"), retention(
+                "collision", "pin", first.revisionId(), first));
+        new BordeauxRobotMailboxService(namespace, revisions).periodic();
+
+        JsonNode collision = MAPPER.readTree(Files.readAllBytes(namespace.resolve("acks/collision.json")));
+        assertEquals("rejected", collision.path("state").textValue());
+        assertEquals("mailbox", collision.path("boundary").textValue());
+        assertFalse(Files.exists(namespace.resolve("inbox/collision.bordeaux-revision.json")));
+        assertFalse(Files.exists(namespace.resolve("inbox/collision.bordeaux-retention.json")));
+    }
+
     private Path namespace() throws IOException {
         Path namespace = Files.createDirectory(temporaryDirectory.resolve("push-v1"));
         Files.createDirectory(namespace.resolve("inbox"));
@@ -215,6 +245,13 @@ class BordeauxRobotMailboxServiceTest {
                 "activation":{"nonce":"%s","expectedActiveRevisionId":%s}}
                 """.formatted(revisionId(payload), sha256(payload), HASH, encoded, nonce,
                         expectedActiveRevisionId == null ? "null" : "\"" + expectedActiveRevisionId + "\"");
+    }
+
+    private static String retention(String nonce, String action, String expectedActiveRevisionId, BordeauxActivationAck target) {
+        return """
+                {"protocolVersion":"bordeaux-retention/1.0","action":"%s","nonce":"%s",
+                "expectedActiveRevisionId":"%s","target":{"revisionId":"%s","payloadSha256":"%s"}}
+                """.formatted(action, nonce, expectedActiveRevisionId, target.revisionId(), target.payloadSha256());
     }
 
     private static String revisionId(String payload) {

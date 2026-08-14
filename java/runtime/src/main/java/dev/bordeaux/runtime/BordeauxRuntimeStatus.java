@@ -16,7 +16,16 @@ public record BordeauxRuntimeStatus(
         String fieldCoordinateSchemaId,
         String activeRevisionId,
         String activePayloadSha256,
-        List<String> health) {
+        List<String> health,
+        BordeauxRevisionRetention retention) {
+    public BordeauxRuntimeStatus(
+            String runtimeId, int teamNumber, boolean disabled, String catalogId, String catalogHash, String supportVersion,
+            String fieldId, String fieldRevision, String fieldCoordinateSchemaId, String activeRevisionId,
+            String activePayloadSha256, List<String> health) {
+        this(runtimeId, teamNumber, disabled, catalogId, catalogHash, supportVersion, fieldId, fieldRevision,
+                fieldCoordinateSchemaId, activeRevisionId, activePayloadSha256, health,
+                new BordeauxRevisionRetention(BordeauxRevisionService.RECENT_LIMIT, List.of()));
+    }
     public BordeauxRuntimeStatus {
         runtimeId = required(runtimeId, "runtimeId");
         if (teamNumber <= 0) throw new IllegalArgumentException("teamNumber must be positive");
@@ -34,6 +43,7 @@ public record BordeauxRuntimeStatus(
             throw new IllegalArgumentException("health must contain at most "
                     + BordeauxRevisionService.MAX_STATUS_HEALTH + " bounded messages");
         }
+        retention = Objects.requireNonNull(retention, "retention");
     }
 
     private static String required(String value, String name) {

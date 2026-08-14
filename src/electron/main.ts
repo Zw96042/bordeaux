@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { javaTrajectoryFileName, type BuiltJavaTrajectory } from "../shared/export/javaTrajectory";
+import { buildJavaRevision } from "../shared/export/javaRevision";
 import { javaCatalogSemanticSignature } from "../shared/agent/catalogSignature";
 import type { BordeauxProject, JavaCommandCatalog, JavaIntegrationStatus } from "../shared/types";
 import type { AgentSessionSnapshot } from "../shared/agent/types";
@@ -34,6 +35,7 @@ import { runAgentPlanningInWorker } from "./agentPlanningWorkerClient";
 import { serveBordeauxMcp } from "../mcp/server";
 import { RobotPairingController, readRobotPairing, writeRobotPairing } from "./robotPairings";
 import { createRobotPushOperation, type RobotPushOperation, type RobotPushProgress } from "./robotPush";
+import { createRobotRetentionOperation, type RobotRetentionOperation, type RobotRetentionProgress } from "./robotRetention";
 import { connectRobotSftp } from "./robotSsh2Session";
 import {
   BordeauxRobotTransport,
@@ -87,8 +89,12 @@ let javaConnectionGeneration = 0;
 let javaProjectBookmarks: JavaProjectBookmark[] = [];
 let robotPairings = new RobotPairingController();
 const robotTransport = new BordeauxRobotTransport(connectRobotSftp);
-let pendingRobotPush: RobotPushOperation | null = null;
-let activeRobotPush: { operationId: string; controller: AbortController } | null = null;
+type PendingRobotOperation =
+  | { kind: "push"; operation: RobotPushOperation }
+  | { kind: "retention"; operation: RobotRetentionOperation };
+type ActiveRobotOperation = { operationId: string; controller: AbortController; kind: PendingRobotOperation["kind"] };
+let pendingRobotOperation: PendingRobotOperation | null = null;
+let activeRobotPush: ActiveRobotOperation | null = null;
 let robotPushPreparationGeneration = 0;
 const smokeDirectory = process.env.BORDEAUX_SMOKE_DIRECTORY;
 const mcpStdioMode = process.argv.includes("--mcp-stdio");
@@ -102,7 +108,7 @@ function clearLinkedJavaProject(): void {
   linkedJavaProjectBookmarkId = null;
   linkedJavaCatalog = null;
   linkedJavaIntegration = null;
-  pendingRobotPush = null;
+  pendingRobotOperation = null;
   robotPushPreparationGeneration += 1;
   agentSessions.refreshJavaCatalog();
 }
@@ -147,7 +153,7 @@ function showUpdateMessage(options: Electron.MessageBoxOptions): Promise<Electro
 function stopBackgroundServices(): Promise<void> {
   cancelJavaCatalogBuild(true);
   activeRobotPush?.controller.abort();
-  pendingRobotPush = null;
+  pendingRobotOperation = null;
   robotPushPreparationGeneration += 1;
   rejectProposalReceipts("Bordeaux is shutting down.");
   if (backgroundShutdownPromise) return backgroundShutdownPromise;
@@ -1001,7 +1007,7 @@ handle("robot:confirmPairing", async (_event, rawFingerprint, rawRuntimeId) => {
   }
   if (activeRobotPush) throw new Error("Wait for the current robot push to finish before changing its pairing");
   const pairing = await robotPairings.confirm(rawFingerprint, rawRuntimeId, (confirmed) => writeRobotPairing(robotPairingFile(), confirmed));
-  pendingRobotPush = null;
+  pendingRobotOperation = null;
   robotPushPreparationGeneration += 1;
   return pairing;
 });
@@ -1009,6 +1015,74 @@ handle("robot:inspect", async () => {
   const robotPairing = robotPairings.current();
   if (!robotPairing) throw new Error("Pair a robot before inspecting its Bordeaux runtime");
   return robotTransport.inspect(robotPairing, { password: "" });
+});
+handle("robot:inspectRetention", async (_event, rawProject) => {
+  const robotPairing = robotPairings.current();
+  if (!robotPairing) throw new Error("Pair a robot before inspecting revision retention");
+  if (!linkedJavaCatalog || !linkedJavaIntegration || !linkedJavaProjectBookmarkId) {
+    throw new Error("Link a Java robot project before inspecting revision retention");
+  }
+  const project = rawProject as BordeauxProject;
+  if (project.editor?.javaProjectBookmarkId !== linkedJavaProjectBookmarkId) {
+    throw new Error("The linked Java project does not match this Bordeaux project; relink it before inspecting retention");
+  }
+  if (!linkedJavaIntegration.installed || linkedJavaIntegration.supportVersion !== linkedJavaCatalog.supportVersion) {
+    throw new Error("Install matching Bordeaux Java support and rebuild the command catalog before inspecting retention");
+  }
+  const catalog = linkedJavaCatalog;
+  const connectionGeneration = javaConnectionGeneration;
+  const status = await robotTransport.inspect(robotPairing, { password: "" });
+  if (status.catalogId !== catalog.catalogId || status.catalogHash !== catalog.catalogHash || status.supportVersion !== catalog.supportVersion) {
+    throw new Error("The robot command catalog or Bordeaux support version does not match this project");
+  }
+  const trajectory = await buildJavaTrajectoryOffThread(project, catalog);
+  if (connectionGeneration !== javaConnectionGeneration || catalog !== linkedJavaCatalog || robotPairings.current() !== robotPairing) {
+    throw new Error("The paired robot or linked Java project changed while inspecting retention; inspect it again");
+  }
+  return { status, localRevisionId: buildJavaRevision(trajectory, { nonce: "retention-inspect", expectedActiveRevisionId: status.activeRevisionId }).revisionId };
+});
+handle("robot:prepareRetention", async (_event, rawProject, rawAction, rawTarget) => {
+  if (activeRobotPush) throw new Error("Wait for the current robot operation to finish before preparing retention");
+  const robotPairing = robotPairings.current();
+  if (!robotPairing) throw new Error("Pair a robot before preparing revision retention");
+  if (!linkedJavaCatalog || !linkedJavaIntegration || !linkedJavaProjectBookmarkId) {
+    throw new Error("Link a Java robot project before preparing revision retention");
+  }
+  const preparationGeneration = ++robotPushPreparationGeneration;
+  pendingRobotOperation = null;
+  if (rawAction !== "rollback" && rawAction !== "pin") throw new Error("Choose a valid revision retention action");
+  if (!rawTarget || typeof rawTarget !== "object" || typeof (rawTarget as { revisionId?: unknown }).revisionId !== "string"
+    || typeof (rawTarget as { payloadSha256?: unknown }).payloadSha256 !== "string") {
+    throw new Error("Choose a retained robot revision before preparing retention");
+  }
+  const project = rawProject as BordeauxProject;
+  if (project.editor?.javaProjectBookmarkId !== linkedJavaProjectBookmarkId) {
+    throw new Error("The linked Java project does not match this Bordeaux project; relink it before preparing retention");
+  }
+  if (!linkedJavaIntegration.installed || linkedJavaIntegration.supportVersion !== linkedJavaCatalog.supportVersion) {
+    throw new Error("Install matching Bordeaux Java support and rebuild the command catalog before changing retention");
+  }
+  const catalog = linkedJavaCatalog;
+  const connectionGeneration = javaConnectionGeneration;
+  const status = await robotTransport.inspect(robotPairing, { password: "" });
+  if (preparationGeneration !== robotPushPreparationGeneration || connectionGeneration !== javaConnectionGeneration
+    || catalog !== linkedJavaCatalog || robotPairings.current() !== robotPairing) {
+    throw new Error("The paired robot or linked Java project changed while preparing retention; review it again");
+  }
+  if (status.catalogId !== catalog.catalogId || status.catalogHash !== catalog.catalogHash || status.supportVersion !== catalog.supportVersion) {
+    throw new Error("The robot command catalog or Bordeaux support version does not match this project");
+  }
+  const operationId = `retention-${randomBytes(12).toString("hex")}`;
+  const operation = createRobotRetentionOperation({
+    operationId,
+    nonce: operationId,
+    action: rawAction,
+    pairing: robotPairing,
+    status,
+    target: rawTarget as { revisionId: string; payloadSha256: string },
+  });
+  pendingRobotOperation = { kind: "retention", operation };
+  return operation.preview;
 });
 handle("robot:preparePush", async (_event, rawProject) => {
   if (activeRobotPush) throw new Error("Wait for the current robot push to finish before preparing another one");
@@ -1018,7 +1092,7 @@ handle("robot:preparePush", async (_event, rawProject) => {
     throw new Error("Link a Java robot project before preparing a push");
   }
   const preparationGeneration = ++robotPushPreparationGeneration;
-  pendingRobotPush = null;
+  pendingRobotOperation = null;
   if (!linkedJavaIntegration.installed || linkedJavaIntegration.supportVersion !== linkedJavaCatalog.supportVersion) {
     throw new Error("Install matching Bordeaux Java support and rebuild the command catalog before pushing");
   }
@@ -1035,7 +1109,7 @@ handle("robot:preparePush", async (_event, rawProject) => {
     throw new Error("The linked Java project changed while preparing the push; review it again");
   }
   const operationId = `push-${randomBytes(12).toString("hex")}`;
-  pendingRobotPush = createRobotPushOperation({
+  const operation = createRobotPushOperation({
     operationId,
     nonce: operationId,
     projectName: project.name,
@@ -1043,18 +1117,19 @@ handle("robot:preparePush", async (_event, rawProject) => {
     status,
     trajectory,
   });
-  return pendingRobotPush.preview;
+  pendingRobotOperation = { kind: "push", operation };
+  return operation.preview;
 });
 handle("robot:confirmPush", async (event, rawOperationId) => {
-  if (typeof rawOperationId !== "string" || !pendingRobotPush
-    || pendingRobotPush.preview.operationId !== rawOperationId) {
+  if (typeof rawOperationId !== "string" || !pendingRobotOperation || pendingRobotOperation.kind !== "push"
+    || pendingRobotOperation.operation.preview.operationId !== rawOperationId) {
     throw new Error("The reviewed robot push is no longer current; prepare it again");
   }
   if (activeRobotPush) throw new Error("A robot push is already in progress");
-  const operation = pendingRobotPush;
-  pendingRobotPush = null;
+  const operation = pendingRobotOperation.operation;
+  pendingRobotOperation = null;
   const controller = new AbortController();
-  activeRobotPush = { operationId: rawOperationId, controller };
+  activeRobotPush = { operationId: rawOperationId, controller, kind: "push" };
   let latestState: string = "review";
   const publish = (progress: RobotPushProgress) => {
     latestState = progress.state;
@@ -1084,12 +1159,62 @@ handle("robot:confirmPush", async (event, rawOperationId) => {
 });
 handle("robot:cancelPush", (_event, rawOperationId) => {
   if (typeof rawOperationId !== "string") return { canceled: false };
-  if (pendingRobotPush?.preview.operationId === rawOperationId) {
-    pendingRobotPush = null;
+  if (pendingRobotOperation?.kind === "push" && pendingRobotOperation.operation.preview.operationId === rawOperationId) {
+    pendingRobotOperation = null;
     robotPushPreparationGeneration += 1;
     return { canceled: true, boundary: "review" };
   }
-  if (activeRobotPush?.operationId === rawOperationId) {
+  if (activeRobotPush?.kind === "push" && activeRobotPush.operationId === rawOperationId) {
+    activeRobotPush.controller.abort();
+    return { canceled: true, boundary: "upload" };
+  }
+  return { canceled: false };
+});
+handle("robot:confirmRetention", async (event, rawOperationId) => {
+  if (typeof rawOperationId !== "string" || !pendingRobotOperation || pendingRobotOperation.kind !== "retention"
+    || pendingRobotOperation.operation.preview.operationId !== rawOperationId) {
+    throw new Error("The reviewed robot retention operation is no longer current; prepare it again");
+  }
+  if (activeRobotPush) throw new Error("A robot operation is already in progress");
+  const operation = pendingRobotOperation.operation;
+  pendingRobotOperation = null;
+  const controller = new AbortController();
+  activeRobotPush = { operationId: rawOperationId, controller, kind: "retention" };
+  let latestState = "review";
+  const publish = (progress: RobotRetentionProgress) => {
+    latestState = progress.state;
+    if (!event.sender.isDestroyed()) event.sender.send("robot:retentionState", progress);
+  };
+  try {
+    return await operation.execute(robotTransport, publish, { signal: controller.signal });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "The robot retention operation failed";
+    if (latestState === "staged") {
+      return {
+        operationId: rawOperationId,
+        state: "staged",
+        boundary: "acknowledgement",
+        message: `The retention control remains staged, but Bordeaux could not confirm it: ${message}`,
+      };
+    }
+    return {
+      operationId: rawOperationId,
+      state: controller.signal.aborted ? "cancelled" : "failed",
+      boundary: latestState === "uploaded" ? "staging" : "upload",
+      message,
+    };
+  } finally {
+    if (activeRobotPush?.operationId === rawOperationId) activeRobotPush = null;
+  }
+});
+handle("robot:cancelRetention", (_event, rawOperationId) => {
+  if (typeof rawOperationId !== "string") return { canceled: false };
+  if (pendingRobotOperation?.kind === "retention" && pendingRobotOperation.operation.preview.operationId === rawOperationId) {
+    pendingRobotOperation = null;
+    robotPushPreparationGeneration += 1;
+    return { canceled: true, boundary: "review" };
+  }
+  if (activeRobotPush?.kind === "retention" && activeRobotPush.operationId === rawOperationId) {
     activeRobotPush.controller.abort();
     return { canceled: true, boundary: "upload" };
   }

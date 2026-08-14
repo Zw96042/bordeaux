@@ -11,7 +11,20 @@ public record BordeauxActivationAck(
         String catalogHash,
         String supportVersion,
         String runtimeId,
-        int teamNumber) {
+        int teamNumber,
+        String action) {
+    public BordeauxActivationAck(
+            String nonce,
+            String revisionId,
+            String payloadSha256,
+            String catalogId,
+            String catalogHash,
+            String supportVersion,
+            String runtimeId,
+            int teamNumber) {
+        this(nonce, revisionId, payloadSha256, catalogId, catalogHash, supportVersion, runtimeId, teamNumber, null);
+    }
+
     public BordeauxActivationAck {
         nonce = required(nonce, "nonce");
         revisionId = hash(revisionId, "revisionId");
@@ -21,6 +34,9 @@ public record BordeauxActivationAck(
         supportVersion = required(supportVersion, "supportVersion");
         runtimeId = required(runtimeId, "runtimeId");
         if (teamNumber <= 0) throw new IllegalArgumentException("teamNumber must be positive");
+        if (action != null && !action.equals("rollback") && !action.equals("pin")) {
+            throw new IllegalArgumentException("action must be rollback, pin, or null");
+        }
     }
 
     private static String required(String value, String name) {

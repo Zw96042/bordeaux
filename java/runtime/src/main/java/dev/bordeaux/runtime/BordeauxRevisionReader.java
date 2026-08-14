@@ -156,6 +156,20 @@ public final class BordeauxRevisionReader {
         }
     }
 
+    /** Recomputes the immutable revision ID for an already-retained payload against compiled compatibility. */
+    static String revisionIdForPayload(byte[] payload, BordeauxRuntimeCompatibility compatibility) {
+        String payloadSha256 = sha256(payload);
+        ObjectNode catalog = JsonNodeFactory.instance.objectNode();
+        catalog.put("catalogId", compatibility.catalogId());
+        catalog.put("catalogHash", compatibility.catalogHash());
+        catalog.put("supportVersion", compatibility.supportVersion());
+        ObjectNode field = JsonNodeFactory.instance.objectNode();
+        field.put("id", compatibility.fieldId());
+        field.put("revision", compatibility.fieldRevision());
+        field.put("coordinateSchemaId", compatibility.fieldCoordinateSchemaId());
+        return revisionId(payloadSha256, catalog, field);
+    }
+
     private static String sha256(byte[] value) {
         try {
             return "sha256:" + HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value));

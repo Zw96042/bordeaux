@@ -159,6 +159,143 @@ describe("constrained robot SFTP transport", () => {
     ]);
   });
 
+  it("validates optional bounded retention status without treating an older runtime as empty", async () => {
+    const session = (status: unknown): RobotSftpSession => ({
+      hostKeyFingerprint: probe.hostKeyFingerprint,
+      read: async () => Buffer.from(JSON.stringify(status)),
+      write: async () => undefined,
+      exists: async () => false,
+      renameSameDirectory: async () => undefined,
+      remove: async () => undefined,
+      close: async () => undefined,
+    });
+    const legacy = await new BordeauxRobotTransport(async () => session(probe.status)).probe(probe.endpoint, { password: "" });
+    expect(legacy.status.retention).toBeUndefined();
+
+    const malformed = { ...probe.status, retention: { recentLimit: 5, revisions: [{ revisionId: `sha256:${"b".repeat(64)}`, payloadSha256: `sha256:${"c".repeat(64)}`, availability: "retained", pinned: true }, { revisionId: `sha256:${"d".repeat(64)}`, payloadSha256: `sha256:${"c".repeat(64)}`, availability: "retained", pinned: true }] } };
+    await expect(new BordeauxRobotTransport(async () => session(malformed)).probe(probe.endpoint, { password: "" })).rejects.toThrow(/retention/i);
+
+    const duplicateRevision = { ...probe.status, retention: { recentLimit: 5, revisions: [{ revisionId: `sha256:${"b".repeat(64)}`, payloadSha256: `sha256:${"c".repeat(64)}`, availability: "retained", pinned: false }, { revisionId: `sha256:${"b".repeat(64)}`, payloadSha256: `sha256:${"d".repeat(64)}`, availability: "retained", pinned: false }] } };
+    await expect(new BordeauxRobotTransport(async () => session(duplicateRevision)).probe(probe.endpoint, { password: "" })).rejects.toThrow(/retention/i);
+
+    const activeMismatch = { ...probe.status, activeRevisionId: `sha256:${"b".repeat(64)}`, activePayloadSha256: `sha256:${"c".repeat(64)}`, retention: { recentLimit: 5, revisions: [{ revisionId: `sha256:${"b".repeat(64)}`, payloadSha256: `sha256:${"d".repeat(64)}`, availability: "retained", pinned: false }] } };
+    await expect(new BordeauxRobotTransport(async () => session(activeMismatch)).probe(probe.endpoint, { password: "" })).rejects.toThrow(/retention.*active/i);
+
+    const overLimit = { ...probe.status, retention: { recentLimit: 5, revisions: Array.from({ length: 7 }, (_, index) => ({ revisionId: `sha256:${String(index).repeat(64)}`, payloadSha256: `sha256:${String(index).repeat(64)}`, availability: "retained", pinned: false })) } };
+    await expect(new BordeauxRobotTransport(async () => session(overLimit)).probe(probe.endpoint, { password: "" })).rejects.toThrow(/retention/i);
+  });
+
+  it("stages exact retention control bytes through a separate fixed inbox file", async () => {
+    const pairing = confirmRobotPairing({
+      probe,
+      acceptedHostKeyFingerprint: probe.hostKeyFingerprint,
+      acceptedRuntimeId: probe.status.runtimeId,
+    });
+    const operations: string[] = [];
+    let uploaded: Buffer | undefined;
+    const session: RobotSftpSession = {
+      hostKeyFingerprint: pairing.hostKeyFingerprint,
+      read: async (file) => {
+        operations.push(`read:${file.kind}`);
+        if (file.kind === "status") return Buffer.from(JSON.stringify(probe.status));
+        if (file.kind === "incomingRetentionTemporary" && uploaded) return uploaded;
+        throw new Error("unexpected read");
+      },
+      write: async (file, contents) => { operations.push(`write:${file.kind}`); uploaded = Buffer.from(contents); },
+      exists: async (file) => { operations.push(`exists:${file.kind}`); return false; },
+      renameSameDirectory: async (from, to) => { operations.push(`rename:${from.kind}->${to.kind}`); },
+      remove: async () => undefined,
+      close: async () => undefined,
+    };
+    const control = Buffer.from('{"protocolVersion":"bordeaux-retention/1.0"}');
+    const transport = new BordeauxRobotTransport(async () => session, () => "feedface");
+    await expect(transport.stageRetention(pairing, { password: "" }, {
+      nonce: "retention-2026-08-14",
+      contents: control,
+      sha256: "37fce6c7b66f56310a6a679d31009048733686dd0730af7ef9d6e3ee2c9b05d0",
+    })).resolves.toMatchObject({ state: "staged", nonce: "retention-2026-08-14" });
+    expect(operations).toEqual([
+      "read:status",
+      "write:incomingRetentionTemporary",
+      "read:incomingRetentionTemporary",
+      "exists:incomingRetention",
+      "rename:incomingRetentionTemporary->incomingRetention",
+    ]);
+  });
+
+  it("rejects a retention control above the runtime's 16 KiB limit before opening SFTP", async () => {
+    const pairing = confirmRobotPairing({
+      probe,
+      acceptedHostKeyFingerprint: probe.hostKeyFingerprint,
+      acceptedRuntimeId: probe.status.runtimeId,
+    });
+    let connected = false;
+    const transport = new BordeauxRobotTransport(async () => {
+      connected = true;
+      throw new Error("unexpected connection");
+    });
+    await expect(transport.stageRetention(pairing, { password: "" }, {
+      nonce: "retention-too-large",
+      contents: Buffer.alloc(16 * 1024 + 1),
+      sha256: "a".repeat(64),
+    })).rejects.toMatchObject({ code: "invalid_request" });
+    expect(connected).toBe(false);
+  });
+
+  it("accepts only the exact action-bound retention acknowledgment", async () => {
+    const pairing = confirmRobotPairing({
+      probe,
+      acceptedHostKeyFingerprint: probe.hostKeyFingerprint,
+      acceptedRuntimeId: probe.status.runtimeId,
+    });
+    let acknowledgement: Record<string, unknown> = {
+      protocolVersion: ROBOT_PUSH_PROTOCOL_VERSION,
+      nonce: "retention-ack",
+      state: "pinned",
+      action: "pin",
+      revisionId: `sha256:${"b".repeat(64)}`,
+      payloadSha256: `sha256:${"c".repeat(64)}`,
+      catalogId: probe.status.catalogId,
+      catalogHash: probe.status.catalogHash,
+      supportVersion: probe.status.supportVersion,
+      runtimeId: probe.status.runtimeId,
+      teamNumber: probe.status.teamNumber,
+    };
+    const session: RobotSftpSession = {
+      hostKeyFingerprint: pairing.hostKeyFingerprint,
+      read: async (file) => file.kind === "status" ? Buffer.from(JSON.stringify(probe.status)) : Buffer.from(JSON.stringify(acknowledgement)),
+      write: async () => undefined,
+      exists: async () => true,
+      renameSameDirectory: async () => undefined,
+      remove: async () => undefined,
+      close: async () => undefined,
+    };
+    const transport = new BordeauxRobotTransport(async () => session);
+    const expectation = {
+      nonce: acknowledgement.nonce as string,
+      action: "pin" as const,
+      expectedActiveRevisionId: null,
+      target: { revisionId: acknowledgement.revisionId as string, payloadSha256: acknowledgement.payloadSha256 as string },
+      catalogId: acknowledgement.catalogId as string,
+      catalogHash: acknowledgement.catalogHash as string,
+      supportVersion: acknowledgement.supportVersion as string,
+    };
+    await expect(transport.waitForRetention(pairing, { password: "" }, expectation)).resolves.toEqual({ state: "pinned", acknowledgement });
+    await expect(transport.waitForRetention(pairing, { password: "" }, { ...expectation, action: "rollback" })).rejects.toMatchObject({ code: "transfer_failed" });
+    acknowledgement = {
+      protocolVersion: ROBOT_PUSH_PROTOCOL_VERSION,
+      nonce: expectation.nonce,
+      state: "rejected",
+      boundary: "mailbox",
+      message: "A revision control with this nonce already exists",
+      runtimeId: pairing.runtimeId,
+      teamNumber: pairing.teamNumber,
+    };
+    await expect(transport.waitForRetention(pairing, { password: "" }, expectation)).resolves.toMatchObject({ state: "rejected", acknowledgement: { boundary: "mailbox" } });
+    acknowledgement = { ...acknowledgement, boundary: "activation" };
+    await expect(transport.waitForRetention(pairing, { password: "" }, expectation)).rejects.toMatchObject({ code: "transfer_failed" });
+  });
+
   it("accepts active only from the exact nonce-bound runtime acknowledgment", async () => {
     const pairing = confirmRobotPairing({
       probe,

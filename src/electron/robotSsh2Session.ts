@@ -28,6 +28,11 @@ function remotePath(file: RobotRemoteFile): string {
       return path.posix.join(ROBOT_DEPLOYMENT_NAMESPACE, "inbox", `.bordeaux-${file.nonce}-${file.token}.tmp`);
     case "incomingRevision":
       return path.posix.join(ROBOT_DEPLOYMENT_NAMESPACE, "inbox", `${file.nonce}.bordeaux-revision.json`);
+    case "incomingRetentionTemporary":
+      if (!/^[a-f0-9]{8,64}$/.test(file.token)) throw new RobotTransportError("invalid_request", "Remote Bordeaux temporary token is invalid");
+      return path.posix.join(ROBOT_DEPLOYMENT_NAMESPACE, "inbox", `.bordeaux-${file.nonce}-${file.token}.retention.tmp`);
+    case "incomingRetention":
+      return path.posix.join(ROBOT_DEPLOYMENT_NAMESPACE, "inbox", `${file.nonce}.bordeaux-retention.json`);
     case "acknowledgement":
       return path.posix.join(ROBOT_DEPLOYMENT_NAMESPACE, "acks", `${file.nonce}.json`);
   }
@@ -124,7 +129,9 @@ class Ssh2RobotSession implements RobotSftpSession {
   }
 
   write(file: RobotRemoteFile, contents: Buffer, signal: AbortSignal): Promise<void> {
-    if (file.kind !== "incomingTemporary") throw new RobotTransportError("invalid_request", "Bordeaux can write only a temporary inbox file");
+    if (file.kind !== "incomingTemporary" && file.kind !== "incomingRetentionTemporary") {
+      throw new RobotTransportError("invalid_request", "Bordeaux can write only a temporary inbox file");
+    }
     if (signal.aborted && !this.sessionSignal.aborted) throw new RobotTransportError("cancelled", "SFTP to the robot was cancelled");
     return callbackOperation(this.sessionSignal, this.timedOut, (callback) => {
       this.sftp.writeFile(remotePath(file), contents, { flag: "wx", mode: 0o600 }, callback);
@@ -149,8 +156,10 @@ class Ssh2RobotSession implements RobotSftpSession {
   }
 
   renameSameDirectory(from: RobotRemoteFile, to: RobotRemoteFile, signal: AbortSignal): Promise<void> {
-    if (from.kind !== "incomingTemporary" || to.kind !== "incomingRevision" || from.nonce !== to.nonce) {
-      throw new RobotTransportError("invalid_request", "Bordeaux atomic rename must keep one revision inside its inbox directory");
+    const validRevisionRename = from.kind === "incomingTemporary" && to.kind === "incomingRevision";
+    const validRetentionRename = from.kind === "incomingRetentionTemporary" && to.kind === "incomingRetention";
+    if ((!validRevisionRename && !validRetentionRename) || from.nonce !== to.nonce) {
+      throw new RobotTransportError("invalid_request", "Bordeaux atomic rename must keep one fixed control file inside its inbox directory");
     }
     const source = remotePath(from);
     const destination = remotePath(to);
@@ -164,7 +173,9 @@ class Ssh2RobotSession implements RobotSftpSession {
   }
 
   remove(file: RobotRemoteFile, signal: AbortSignal): Promise<void> {
-    if (file.kind !== "incomingTemporary") throw new RobotTransportError("invalid_request", "Bordeaux cleanup can remove only a temporary inbox file");
+    if (file.kind !== "incomingTemporary" && file.kind !== "incomingRetentionTemporary") {
+      throw new RobotTransportError("invalid_request", "Bordeaux cleanup can remove only a temporary inbox file");
+    }
     if (signal.aborted && !this.sessionSignal.aborted) throw new RobotTransportError("cancelled", "SFTP to the robot was cancelled");
     return callbackOperation(this.sessionSignal, this.timedOut, (callback) => this.sftp.unlink(remotePath(file), callback));
   }
