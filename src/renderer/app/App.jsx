@@ -1646,7 +1646,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
         : page === 'auto'
         ? h('main', { className: 'stage stage-auto' },
             h('nav', { className: 'rail rail-l', 'aria-label': 'Autonomous routine steps' },
-              h(RoutinePanelPlayback, { store: routinePlaybackStore, routine, run, paths: project.paths, selId: routineSel, onSelect: setRoutineSel, acq })),
+              h(RoutinePanelPlayback, { store: routinePlaybackStore, routine, run, paths: project.paths, selId: routineSel, onSelect: setRoutineSel, acq, catalog: javaProjectState.catalog })),
             h('div', { className: 'fieldcol' },
               h(RoutineFieldPlayback, { store: routinePlaybackStore, run, selectedId: routineSel, doc, derived, sel: { kind: null, idx: -1 }, tool: 'select', view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: autoFieldActions }),
               h(RoutineTransportPlayback, { store: routinePlaybackStore, run }),

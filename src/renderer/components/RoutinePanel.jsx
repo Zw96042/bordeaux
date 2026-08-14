@@ -39,55 +39,39 @@ import { UI } from "./ui";
   }
 
   // ---- inline Add Step chooser (expands in-flow; never floats over the canvas) ----
-  function Chooser({ onPick }) {
-    const [sub, setSub] = useState(null);
-    const cap = (c) => { const C = A.CATS[c]; return h('button', { key: c, type: 'button', className: 'rt-ch-cap', onClick: () => onPick('function', c) },
-      h('span', { className: 'rt-ch-ic', style: { color: C.color } }, h(Icon, { name: C.icon, size: 15 })),
-      h('span', { className: 'rt-ch-capt' }, C.label),
-      h('span', { className: 'rt-ch-capd' }, C.blurb)); };
-    if (sub === 'function') {
-      return h('div', { className: 'rt-chooser' },
-        h('button', { className: 'rt-ch-back', type: 'button', onClick: () => setSub(null) },
-          h('span', { className: 'rt-ch-backic' }, h(Icon, { name: 'chevron', size: 14 })), 'Function modifies execution'),
-        A.CAT_LIST.map(cap));
-    }
+  function Chooser({ onPick, waitAvailable }) {
     return h('div', { className: 'rt-chooser' },
-      h('div', { className: 'rt-ch-sec' }, 'Structure'),
-      h('button', { className: 'rt-ch-row', type: 'button', onClick: () => onPick('path') },
-        h('span', { className: 'rt-ch-ic', style: { color: 'var(--accent)' } }, h(Icon, { name: 'route', size: 16 })),
-        h('span', { className: 'rt-ch-main' }, h('span', { className: 'rt-ch-t' }, 'Path'), h('span', { className: 'rt-ch-d' }, 'Follow a planned trajectory'))),
-      h('button', { className: 'rt-ch-row', type: 'button', onClick: () => onPick('decision') },
-        h('span', { className: 'rt-ch-ic', style: { color: '#9aa3b0' } }, h(Icon, { name: 'branch', size: 16 })),
-        h('span', { className: 'rt-ch-main' }, h('span', { className: 'rt-ch-t' }, 'Decision'), h('span', { className: 'rt-ch-d' }, 'Branch the routine on a condition'))),
-      h('button', { className: 'rt-ch-row', type: 'button', onClick: () => onPick('builtin', 'wait') },
-        h('span', { className: 'rt-ch-ic', style: { color: '#cf962f' } }, h(Icon, { name: 'pause', size: 16 })),
-        h('span', { className: 'rt-ch-main' }, h('span', { className: 'rt-ch-t' }, 'Wait'), h('span', { className: 'rt-ch-d' }, 'Pause the routine before its next step'))),
-      h('div', { className: 'rt-ch-sec' }, 'Behavior'),
-      h('button', { className: 'rt-ch-row function', type: 'button', onClick: () => setSub('function') },
-        h('span', { className: 'rt-ch-ic', style: { color: 'var(--txt-2)' } }, h(Icon, { name: 'bolt', size: 16 })),
-        h('span', { className: 'rt-ch-main' }, h('span', { className: 'rt-ch-t' }, 'Functions'), h('span', { className: 'rt-ch-d' }, 'Robot behavior and runtime actions')),
-        h('span', { className: 'rt-ch-more' }, h(Icon, { name: 'chevron', size: 18 }))));
+      h('div', { className: 'rt-ch-sec' }, 'Add step'),
+      A.AUTHORABLE_STEPS.map((step) => {
+        const unavailable = step.id === 'wait' && !waitAvailable;
+        return h('button', { key: step.id, className: 'rt-ch-row', type: 'button', disabled: unavailable,
+          title: unavailable ? 'Build and link a generated Java catalog with bordeaux.wait to add Wait.' : undefined,
+          onClick: () => !unavailable && onPick(step.type, step.cat) },
+        h('span', { className: 'rt-ch-ic', style: { color: step.color } }, h(Icon, { name: step.icon, size: 16 })),
+        h('span', { className: 'rt-ch-main' }, h('span', { className: 'rt-ch-t' }, step.label),
+          h('span', { className: 'rt-ch-d' }, unavailable ? 'Unavailable until the linked generated catalog provides bordeaux.wait' : step.description)));
+      }));
   }
 
-  function AddStep({ onPick, variant, label }) {
+  function AddStep({ onPick, variant, label, waitAvailable }) {
     const [open, setOpen] = useState(false);
     const pick = (type, cat) => { onPick(type, cat); setOpen(false); };
     if (variant === 'gap') {
       return h('div', { className: 'rt-gap' + (open ? ' open' : '') },
         h('button', { className: 'rt-gap-btn', type: 'button', title: 'Insert step here', 'aria-label': open ? 'Close step chooser' : 'Insert step here', 'aria-expanded': open, onClick: () => setOpen((o) => !o) }, h(Icon, { name: open ? 'x' : 'plus', size: 13 })),
-        open && h(Chooser, { onPick: pick }));
+        open && h(Chooser, { onPick: pick, waitAvailable }));
     }
     return h('div', { className: 'rt-addwrap' },
       h('button', { className: 'rt-add' + (open ? ' on' : ''), type: 'button', onClick: () => setOpen((o) => !o) },
         h(Icon, { name: open ? 'x' : 'plus', size: 14 }), open ? 'Choose a step' : (label || 'Add step')),
-      open && h(Chooser, { onPick: pick }));
+      open && h(Chooser, { onPick: pick, waitAvailable }));
   }
 
   function Grip(props) { return h('button', { className: 'rt-grip', type: 'button', title: 'Drag to reorder', 'aria-label': 'Drag step to reorder', onPointerDown: props.onPointerDown, onClick: (e) => e.stopPropagation() }, h(Icon, { name: 'drag', size: 13 })); }
 
   // ---- one step card ----
   function StepCard(props) {
-    const { node, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction, nested } = props;
+    const { node, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction, nested, waitAvailable } = props;
     const sel = selId === node.id;
     const active = activeId === node.id;
     const fired = firedIds.has(node.id) && !active;
@@ -97,7 +81,10 @@ import { UI } from "./ui";
 
     const seg = run.segs.find((s) => s.nodeId === node.id);
     let icon, color, meta, tag, kindCls;
-    if (node.type === 'path') {
+    const deployment = A.nodeDeploymentState(node);
+    if (!deployment.deployable) {
+      icon = 'info'; color = '#d2655f'; kindCls = 'fn'; tag = 'Legacy — cannot deploy'; meta = deployment.legacy ? 'Replace or remove this legacy step before export' : 'This unsupported step can be removed but cannot deploy';
+    } else if (node.type === 'path') {
       const doc = paths.find((path) => path.id === node.ref); icon = 'route'; color = 'var(--accent)'; kindCls = 'path';
       meta = seg ? (fmt(seg.t1 - seg.t0) + '  ·  ' + UnitPrefs.format(seg.deriv.sample.length, 'm', 2)) : (doc ? 'not in run path' : 'unbound');
     } else if (node.type === 'decision') {
@@ -105,7 +92,7 @@ import { UI } from "./ui";
     } else if (node.type === 'builtin') {
       icon = 'pause'; color = '#cf962f'; kindCls = 'fn'; tag = 'Wait'; meta = fmt(node.arguments && node.arguments.durationS) + ' pause';
     } else {
-      const C = A.CATS[node.cat]; icon = C.icon; color = C.color; kindCls = 'fn';
+      const C = A.CATS[node.cat] || { icon: 'info', color: '#d2655f', label: 'Unknown step' }; icon = C.icon; color = C.color; kindCls = 'fn';
       tag = C.label;
       if (node.cat === 'generate') meta = (seg ? fmt(seg.t1 - seg.t0) + ' · ' : '') + 'runtime · ' + node.trigger;
       else meta = node.trigger;
@@ -150,19 +137,20 @@ import { UI } from "./ui";
               h('span', { className: 'rt-brcount' }, cnt),
               out === br && h('span', { className: 'rt-brlive' }, 'sim')),
             h('div', { className: 'rt-brbody' },
-              (node[br] || []).map((cn) => h(StepCard, { key: cn.id, node: cn, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction: cn.type === 'function', nested: true })),
-              h(AddStep, { variant: 'end', label: 'Add to branch', onPick: (t, c) => acq.addBranch(node.id, br, t, c) })));
+              (Array.isArray(node[br]) ? node[br] : []).map((cn, index) => h(StepCard, { key: cn.id || index, node: cn, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction: cn.type === 'function', nested: true, waitAvailable })),
+              h(AddStep, { variant: 'end', label: 'Add to branch', waitAvailable, onPick: (t, c) => acq.addBranch(node.id, br, t, c) })));
         })));
   }
 
-  function EmptyState({ acq }) {
+  function EmptyState({ acq, waitAvailable }) {
     return h('div', { className: 'rt-empty' },
       h('div', { className: 'rt-empty-t' }, 'No steps yet'),
-      h(AddStep, { variant: 'end', label: 'Add first step', onPick: (t, c) => acq.addEnd(t, c) }));
+      h(AddStep, { variant: 'end', label: 'Add first step', waitAvailable, onPick: (t, c) => acq.addEnd(t, c) }));
   }
 
   function RoutinePanel(props) {
-    const { routine, run, paths, selId, onSelect, acq, time, running } = props;
+    const { routine, run, paths, selId, onSelect, acq, time, running, catalog } = props;
+    const waitAvailable = A.hasWaitBuiltIn(catalog);
     const dnd = useDnd(acq);
     const [collapsed, setCollapsed] = useState(() => new Set());
     const toggleCollapse = (id) => setCollapsed((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -174,13 +162,13 @@ import { UI } from "./ui";
     return h('div', { className: 'rt-panel' + (dnd.drag ? ' dragging' : '') },
       h('div', { className: 'rt-scroll' },
         routine.nodes.length === 0
-          ? h(EmptyState, { acq })
+          ? h(EmptyState, { acq, waitAvailable })
           : h('div', { className: 'rt-list' },
-              h(AddStep, { variant: 'gap', onPick: (t, c) => acq.prepend(t, c) }),
-              routine.nodes.map((n, index) => h(React.Fragment, { key: n.id },
-                h(StepCard, { node: n, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction: n.type === 'function' }),
-                index < routine.nodes.length - 1 && h(AddStep, { variant: 'gap', onPick: (t, c) => acq.addAfter(n.id, t, c) }))),
-              h(AddStep, { variant: 'end', onPick: (t, c) => acq.addEnd(t, c) }))));
+              h(AddStep, { variant: 'gap', waitAvailable, onPick: (t, c) => acq.prepend(t, c) }),
+              routine.nodes.map((n, index) => h(React.Fragment, { key: n.id || index },
+                h(StepCard, { node: n, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction: n.type === 'function', waitAvailable }),
+                index < routine.nodes.length - 1 && h(AddStep, { variant: 'gap', waitAvailable, onPick: (t, c) => acq.addAfter(n.id, t, c) }))),
+              h(AddStep, { variant: 'end', waitAvailable, onPick: (t, c) => acq.addEnd(t, c) }))));
   }
 
 export { RoutinePanel };

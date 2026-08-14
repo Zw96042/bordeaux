@@ -151,8 +151,8 @@ describe("Bordeaux-owned routine built-ins", () => {
   it("offers Wait in the routine chooser and gives it a bounded inspector control", () => {
     const panel = fs.readFileSync(path.join(process.cwd(), "src/renderer/components/RoutinePanel.jsx"), "utf8");
     const inspector = fs.readFileSync(path.join(process.cwd(), "src/renderer/components/RoutineInspector.jsx"), "utf8");
-    expect(panel).toContain("onPick('builtin', 'wait')");
-    expect(panel).toContain("'Wait'");
+    expect(panel).toContain("A.AUTHORABLE_STEPS");
+    expect(panel).toContain("waitAvailable");
     expect(inspector).toContain("node.type === 'builtin'");
     expect(inspector).toContain("Wait duration in seconds");
     expect(inspector).toContain("min: 0.02, max: 15");

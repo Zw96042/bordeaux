@@ -31,6 +31,19 @@ import { UI } from "./ui";
   function StepInspector(props) {
     const { node, paths, acq, run, javaProject, conditionOptions = [] } = props;
     if (!node) return null;
+    const deployment = A.nodeDeploymentState(node);
+    if (!deployment.deployable) {
+      const title = deployment.legacy ? (deployment.label || 'Legacy step') : 'Unsupported step';
+      return h('div', { className: 'ctxinsp' },
+        h('div', { className: 'ctxinsp-hd' },
+          h('span', { className: 'ctxinsp-ic', style: { background: 'color-mix(in srgb, #d2655f 16%, transparent)', color: '#d2655f' } }, h(Icon, { name: 'info', size: 15 })),
+          h('span', { className: 'ctxinsp-t', title }, title),
+          h('span', { className: 'ctxinsp-tag' }, 'Legacy — cannot deploy'),
+          h('button', { className: 'ctxinsp-x', type: 'button', title: 'Close', 'aria-label': 'Close step inspector', onClick: () => acq.select(null) }, h(Icon, { name: 'x', size: 14 }))),
+        h('div', { className: 'ctxinsp-body' },
+          h('div', { className: 'rt-callout' }, h(Icon, { name: 'info', size: 14 }), 'This saved step has no Bordeaux beta export contract. Replace it with a Path, Decision, Command, or available Wait, or remove it before export.'),
+          h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Remove unsupported step')));
+    }
     const set = (patch) => acq.set(node.id, patch);
     const seg = run.segs.find((s) => s.nodeId === node.id);
     let icon = 'dot', title = '', tag = null, accent = 'var(--accent)', body = null;

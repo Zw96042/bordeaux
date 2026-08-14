@@ -6,7 +6,6 @@ import type {
   JavaCommandDescriptor,
   JavaCommandParameter,
   JavaValueSchema,
-  RoutineNode,
   ValidationIssue,
 } from "./types";
 import { activeRoutine } from "./project/routines";
@@ -265,36 +264,66 @@ export function validateProjectJavaInvocations(project: BordeauxProject, catalog
       issues.push({ path: invocationBase, message, severity: "error" });
     }
   }));
-  const validateRoutineNodes = (nodes: RoutineNode[], path: string) => {
+  // This is the single export boundary for routine nodes. Loading deliberately keeps
+  // older and future node shapes intact, while exporting the active routine reports
+  // every incompatible branch in one pass instead of failing at the first serializer error.
+  const exportablePathIds = new Set(project.paths.filter((path) => path.exportable !== false).map((path) => path.id));
+  const validateRoutineNodes = (nodes: unknown, path: string): void => {
+    if (!Array.isArray(nodes)) {
+      issues.push({ path, message: "Routine branch must be an array of deployable steps", severity: "error" });
+      return;
+    }
     nodes.forEach((value, index) => {
-      const node = value;
       const base = `${path}[${index}]`;
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        issues.push({ path: base, message: "Routine step is malformed and cannot deploy", severity: "error" });
+        return;
+      }
+      const node = value as Record<string, unknown>;
+      const nodeId = typeof node.id === "string" && node.id ? node.id : "unknown";
+      if (node.type === "path") {
+        if (typeof node.ref !== "string" || !exportablePathIds.has(node.ref)) {
+          issues.push({ path: `${base}.ref`, message: "Routine path reference must identify an exported path", severity: "error" });
+        }
+        return;
+      }
       if (node.type === "decision") {
-        validateCondition(node.cond, `${base}.cond`, `Routine decision ${node.id}`);
+        validateCondition(node.cond, `${base}.cond`, `Routine decision ${nodeId}`);
         validateRoutineNodes(node.then, `${base}.then`);
         validateRoutineNodes(node.else, `${base}.else`);
-      } else if (node.type === "builtin") {
-        const durationS = node.arguments?.durationS;
+        return;
+      }
+      if (node.type === "builtin") {
+        const argumentsValue = node.arguments;
+        const durationS = argumentsValue && typeof argumentsValue === "object" && !Array.isArray(argumentsValue)
+          ? (argumentsValue as Record<string, unknown>).durationS : undefined;
         if (catalog?.generatedSchemaVersion !== "1.2"
           || !catalog.builtIns?.some((builtIn) => builtIn.id === "bordeaux.wait" && builtIn.kind === "wait")) {
           issues.push({ path: `${base}.builtinId`, message: "Routine built-ins require generated catalog schema 1.2 with bordeaux.wait before export", severity: "error" });
         }
-        if (node.builtinId !== "bordeaux.wait" || !Number.isFinite(durationS) || durationS < 0.02 || durationS > 15 || Object.keys(node.arguments ?? {}).length !== 1) {
+        if (node.builtinId !== "bordeaux.wait" || !Number.isFinite(durationS) || (durationS as number) < 0.02 || (durationS as number) > 15
+          || !argumentsValue || typeof argumentsValue !== "object" || Array.isArray(argumentsValue) || Object.keys(argumentsValue).length !== 1) {
           issues.push({ path: `${base}.arguments`, message: "Wait must declare only a finite durationS from 0.02 to 15 seconds", severity: "error" });
         }
-      } else if (node.type === "function" && node.cat === "command") {
-        if (!node.invocation) {
-          issues.push({ path: `${base}.invocation`, message: "Between-path command must be bound before export", severity: "error" });
-          return;
-        }
-        const command = commands.get(node.invocation.commandId);
-        if (!command) {
-          issues.push({ path: `${base}.invocation.commandId`, message: `Command ${node.invocation.commandId} is not in the linked generated catalog`, severity: "error" });
-          return;
-        }
-        javaInvocationErrors(node.invocation, command).forEach((message) =>
-          issues.push({ path: `${base}.invocation`, message, severity: "error" }));
+        return;
       }
+      if (node.type !== "function" || node.cat !== "command") {
+        issues.push({ path: base, message: "Legacy or unsupported routine step cannot deploy; replace it with a Path, Decision, Command, or Wait", severity: "error" });
+        return;
+      }
+      const invocation = node.invocation;
+      if (!invocation || typeof invocation !== "object" || Array.isArray(invocation)) {
+        issues.push({ path: `${base}.invocation`, message: "Between-path command must be bound before export", severity: "error" });
+        return;
+      }
+      const typedInvocation = invocation as CommandInvocation;
+      const command = commands.get(typedInvocation.commandId);
+      if (!command) {
+        issues.push({ path: `${base}.invocation.commandId`, message: `Command ${String(typedInvocation.commandId)} is not in the linked generated catalog`, severity: "error" });
+        return;
+      }
+      javaInvocationErrors(typedInvocation, command).forEach((message) =>
+        issues.push({ path: `${base}.invocation`, message, severity: "error" }));
     });
   };
   const routine = activeRoutine(project);

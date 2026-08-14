@@ -16,6 +16,12 @@ import { PM } from "./pathMath";
     velocity:  { id: 'velocity',  label: 'Velocity',  icon: 'gauge',    color: '#2bb3c4', blurb: 'Scale drive velocities live' },
   };
   const CAT_LIST = ['command', 'terminate', 'sequence', 'generate', 'velocity'];
+  const AUTHORABLE_STEPS = [
+    { id: 'path', type: 'path', label: 'Path', description: 'Follow a planned trajectory', icon: 'route', color: 'var(--accent)' },
+    { id: 'decision', type: 'decision', label: 'Decision', description: 'Branch the routine on a condition', icon: 'branch', color: '#9aa3b0' },
+    { id: 'command', type: 'function', cat: 'command', label: 'Command', description: 'Run a generated robot command between paths', icon: 'bolt', color: '#4fbf78' },
+    { id: 'wait', type: 'builtin', cat: 'wait', label: 'Wait', description: 'Pause the routine before its next step', icon: 'pause', color: '#cf962f' },
+  ];
 
   const FUNCTIONS = [
     { value: 'GeneratePath', label: 'Generate path', meta: 'Runtime trajectory function' },
@@ -56,6 +62,25 @@ import { PM } from "./pathMath";
     return out;
   }
 
+  function hasWaitBuiltIn(catalog) {
+    return Boolean(catalog && catalog.authoritative === true && catalog.generatedSchemaVersion === '1.2'
+      && Array.isArray(catalog.builtIns)
+      && catalog.builtIns.some((builtIn) => builtIn && builtIn.id === 'bordeaux.wait' && builtIn.kind === 'wait'));
+  }
+
+  function authorableSteps(catalog) {
+    return AUTHORABLE_STEPS.filter((step) => step.id !== 'wait' || hasWaitBuiltIn(catalog));
+  }
+
+  function nodeDeploymentState(node) {
+    if (!node || typeof node !== 'object') return { deployable: false, legacy: false, label: 'Unknown step' };
+    if (node.type === 'path' || node.type === 'decision') return { deployable: true, legacy: false };
+    if (node.type === 'builtin' && node.builtinId === 'bordeaux.wait') return { deployable: true, legacy: false };
+    if (node.type === 'function' && node.cat === 'command') return { deployable: true, legacy: false };
+    if (node.type === 'function' && CATS[node.cat]) return { deployable: false, legacy: true, label: CATS[node.cat].label };
+    return { deployable: false, legacy: false, label: 'Unknown step' };
+  }
+
   // ---- Sequence is a CORE Autonomous Routine feature: orchestration ops, robot-independent ----
   const SEQ_OPS = [
     { id: 'skip',    label: 'Skip path',         verb: 'Skip',        blurb: 'Skip the next path in the routine' },
@@ -69,13 +94,14 @@ import { PM } from "./pathMath";
 
   // ---- display title for any node ----
   function nodeTitle(node, paths) {
+    if (!node || typeof node !== 'object') return 'Unknown step';
     if (node.type === 'path') { const p = paths && paths.find((path) => path.id === node.ref); return p ? p.name : '(unbound path)'; }
-    if (node.type === 'decision') return node.cond;
+    if (node.type === 'decision') return node.cond || 'Choose condition';
     if (node.type === 'builtin') return node.builtinId === 'bordeaux.wait' ? 'Wait' : 'Unsupported built-in';
     if (node.cat === 'command') return node.title || (node.invocation && node.invocation.commandId) || 'Choose command';
     if (node.cat === 'generate') return node.funcRef || 'GeneratePath';
     if (node.cat === 'sequence') { const o = seqOp(node.op); return o.verb + (node.target ? ' · ' + node.target : ''); }
-    return node.title || CATS[node.cat].label;
+    return node.title || (CATS[node.cat] && CATS[node.cat].label) || 'Unknown step';
   }
 
   // ---- node factory ----
@@ -93,7 +119,7 @@ import { PM } from "./pathMath";
 
   // ---- walk every node (incl. branch children) ----
   function walk(nodes, fn, depth, branch) {
-    (nodes || []).forEach((n) => {
+    (Array.isArray(nodes) ? nodes : []).forEach((n) => {
       fn(n, depth || 0, branch || null);
       if (n.type === 'decision') { walk(n.then, fn, (depth || 0) + 1, 'then'); walk(n.else, fn, (depth || 0) + 1, 'else'); }
     });
@@ -204,7 +230,7 @@ import { PM } from "./pathMath";
     });
   }
 
-export const AUTO = { CATS, CAT_LIST, FUNCTIONS, TRIGGERS, pickerItems, authoritativeConditions, conditionPickerItems, SEQ_OPS, seqOp, nodeTitle, newNode, walk, findNode, countSteps, branchCount,
+export const AUTO = { CATS, CAT_LIST, AUTHORABLE_STEPS, FUNCTIONS, TRIGGERS, pickerItems, authoritativeConditions, conditionPickerItems, hasWaitBuiltIn, authorableSteps, nodeDeploymentState, SEQ_OPS, seqOp, nodeTitle, newNode, walk, findNode, countSteps, branchCount,
     buildRun, poseAt, stepAt, fieldOverlay,
     update, remove, insertAfter, prepend, appendBranch, append, move, reorderRelative };
 
