@@ -316,6 +316,11 @@ export function validateProjectJavaInvocations(project: BordeauxProject, catalog
         issues.push({ path: `${base}.invocation`, message: "Between-path command must be bound before export", severity: "error" });
         return;
       }
+      const invocationArguments = (invocation as Record<string, unknown>).arguments;
+      if (!invocationArguments || typeof invocationArguments !== "object" || Array.isArray(invocationArguments)) {
+        issues.push({ path: `${base}.invocation.arguments`, message: "Between-path command arguments must be an object", severity: "error" });
+        return;
+      }
       const typedInvocation = invocation as CommandInvocation;
       const command = commands.get(typedInvocation.commandId);
       if (!command) {

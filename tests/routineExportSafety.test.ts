@@ -37,6 +37,7 @@ describe("routine export safety", () => {
         { id: "unknown", type: "future" },
         { id: "bad-path", type: "path", ref: "missing-path" },
         { id: "bad-wait", type: "builtin", builtinId: "bordeaux.wait", arguments: { durationS: 0.01 } },
+        { id: "bad-command", type: "function", cat: "command", invocation: { commandId: "robot.Commands#score" } },
       ],
     }] as never;
 
@@ -46,6 +47,7 @@ describe("routine export safety", () => {
       "$.routines[0].nodes[0].else[0]",
       "$.routines[0].nodes[0].else[1].ref",
       "$.routines[0].nodes[0].else[2].arguments",
+      "$.routines[0].nodes[0].else[3].invocation.arguments",
     ]));
     expect(() => buildJavaTrajectory(project, catalog())).toThrow(/nodes\[0\]\.then\[0\][\s\S]*nodes\[0\]\.else\[2\]\.arguments/);
   });
