@@ -1,0 +1,68 @@
+{
+  "schemaVersion": "bordeaux-corridor/1.0",
+  "corpusId": "bordeaux-authored-tactical-v1",
+  "sourceFixedGeometry": {
+    "file": "fixed-geometry.json",
+    "sha256": "sha256:a2ec48576a7c9d4fcc89103ed6b4a139ddb0169fa55b75846c02531c708b8545"
+  },
+  "sourceProject": {
+    "file": "corpus.bordeaux.json",
+    "sha256": "sha256:787f068012a9d03247b447fccc9d7f4a12a5c5b8b03dc35bd3b36461dbd93015"
+  },
+  "validation": {
+    "maximumDenseStepM": 0.02,
+    "maximumDenseStepS": 0.02,
+    "maximumSourceStepM": 0.1,
+    "endpointPositionToleranceM": 0.03,
+    "endpointHeadingToleranceDeg": 2,
+    "gateToleranceM": 0.000001,
+    "stopPositionToleranceM": 0.04,
+    "stopVelocityToleranceMps": 0.05,
+    "candidateCentripetalRelativeTolerance": 0.025,
+    "candidateAdjacentCentripetalRelativeTolerance": 0.27
+  },
+  "leaderboard": {
+    "drive": "swerve"
+  },
+  "cases": [
+    {
+      "id": "corridor-blue-table-trench",
+      "pathId": "corpus-blue-table-trench",
+      "deterministicSeed": 2026081511,
+      "centerlineToFootprintBoundaryM": 1.05,
+      "gates": [
+        { "id": "blue-table-trench", "bounds": { "xMin": 12.9, "xMax": 13.65, "yMin": 0.2, "yMax": 1.1 } },
+        { "id": "blue-table-exit", "bounds": { "xMin": 10.8, "xMax": 12, "yMin": 0.8, "yMax": 1.8 } }
+      ],
+      "stops": [],
+      "eventOrder": ["approach-trench", "clear-trench"]
+    },
+    {
+      "id": "corridor-neutral-slalom",
+      "pathId": "corpus-neutral-slalom",
+      "deterministicSeed": 2026081512,
+      "centerlineToFootprintBoundaryM": 1.1,
+      "gates": [
+        { "id": "slalom-entry", "bounds": { "xMin": 9.2, "xMax": 10.2, "yMin": 2.15, "yMax": 3.15 } },
+        { "id": "slalom-center", "bounds": { "xMin": 7.95, "xMax": 8.95, "yMin": 3.55, "yMax": 4.55 } },
+        { "id": "slalom-exit", "bounds": { "xMin": 6.6, "xMax": 7.6, "yMin": 4.75, "yMax": 5.75 } }
+      ],
+      "stops": [],
+      "eventOrder": ["slalom-entry", "slalom-exit"]
+    },
+    {
+      "id": "corridor-neutral-stop",
+      "pathId": "corpus-neutral-stop",
+      "deterministicSeed": 2026081513,
+      "centerlineToFootprintBoundaryM": 1.05,
+      "gates": [
+        { "id": "neutral-stop", "bounds": { "xMin": 8.7, "xMax": 9.6, "yMin": 4.6, "yMax": 5.5 } },
+        { "id": "neutral-stop-exit", "bounds": { "xMin": 7.2, "xMax": 8.2, "yMin": 3.1, "yMax": 4.1 } }
+      ],
+      "stops": [
+        { "waypointIndex": 1, "waitS": 0.15 }
+      ],
+      "eventOrder": ["stop-arrival", "stop-departure"]
+    }
+  ]
+}

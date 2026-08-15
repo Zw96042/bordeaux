@@ -19,6 +19,8 @@ const STOP_VELOCITY_TOLERANCE_MPS = 0.05;
 const CONSTRAINT_ABSOLUTE_TOLERANCE = 0.03;
 const CONSTRAINT_RELATIVE_TOLERANCE = 0.01;
 const CENTRIPETAL_RELATIVE_TOLERANCE = 0.025;
+export const CANDIDATE_CENTRIPETAL_RELATIVE_TOLERANCE = 0.025;
+export const CANDIDATE_ADJACENT_CENTRIPETAL_RELATIVE_TOLERANCE = 0.27;
 const MAX_ISSUES = 64;
 const SHA256 = /^sha256:[a-f0-9]{64}$/;
 export const FIXED_GEOMETRY_V1_SHA256 = "sha256:a2ec48576a7c9d4fcc89103ed6b4a139ddb0169fa55b75846c02531c708b8545";
@@ -180,7 +182,7 @@ export function normalizeTrajectoryCandidate(candidate: unknown): TrajectoryNorm
   };
 }
 
-function denseTrajectory(trajectory: NormalizedTrajectory): NormalizedTrajectory | null {
+export function densifyNormalizedTrajectory(trajectory: NormalizedTrajectory): NormalizedTrajectory | null {
   let projected = 1;
   for (let index = 1; index < trajectory.samples.length; index += 1) {
     const first = trajectory.samples[index - 1];
@@ -273,6 +275,35 @@ function tolerance(limit: number): number {
   return CONSTRAINT_ABSOLUTE_TOLERANCE + Math.abs(limit) * CONSTRAINT_RELATIVE_TOLERANCE;
 }
 
+function geometricCentripetalAt(
+  samples: readonly TrajectorySample[],
+  index: number,
+  span: number,
+): number | null {
+  const center = samples[index];
+  const before = samples[Math.max(0, index - span)];
+  const after = samples[Math.min(samples.length - 1, index + span)];
+  const beforeDt = center.t - before.t;
+  const afterDt = after.t - center.t;
+  const beforeVelocity = {
+    x: (center.x - before.x) / beforeDt,
+    y: (center.y - before.y) / beforeDt,
+  };
+  const afterVelocity = {
+    x: (after.x - center.x) / afterDt,
+    y: (after.y - center.y) / afterDt,
+  };
+  const beforeSpeed = Math.hypot(beforeVelocity.x, beforeVelocity.y);
+  const afterSpeed = Math.hypot(afterVelocity.x, afterVelocity.y);
+  if (beforeSpeed <= 1e-8 || afterSpeed <= 1e-8) return null;
+  const directionChange = Math.abs(wrappedAngle(
+    Math.atan2(afterVelocity.y, afterVelocity.x) - Math.atan2(beforeVelocity.y, beforeVelocity.x),
+  ));
+  const speed = (beforeSpeed + afterSpeed) / 2;
+  const midpointDt = (beforeDt + afterDt) / 2;
+  return directionChange / Math.max(1e-9, speed * midpointDt) * speed * speed;
+}
+
 function limitsAt(path: PathDoc, project: BordeauxProject, ranges: ReturnType<typeof effectiveRanges>, fraction: number) {
   const active = activeRanges(ranges, fraction);
   return {
@@ -345,22 +376,24 @@ function validateGeometry(
   validateSemantics(path, trajectory, issues);
 }
 
-function validateConstraints(
-  fixture: FixedGeometryFixture,
+export function validateNormalizedTrajectoryConstraints(
+  project: BordeauxProject,
   path: PathDoc,
   dense: NormalizedTrajectory,
   source: NormalizedTrajectory,
   issues: FixedGeometryIssue[],
+  curvatureSource: "authored" | "candidate" = "authored",
 ): void {
   const ranges = effectiveRanges(path, dense.samples, dense.totalDistanceM);
-  const reference = referenceGeometry(path, fixture.project);
+  const reference = curvatureSource === "authored" ? referenceGeometry(path, project) : null;
+  let worstCentripetal: { value: number; limit: number; tolerance: number; sampleIndex: number } | null = null;
   for (let index = 1; index < dense.samples.length; index += 1) {
     const first = dense.samples[index - 1];
     const second = dense.samples[index];
     const dt = second.t - first.t;
     const ds = Math.hypot(second.x - first.x, second.y - first.y);
     const fraction = (first.f + second.f) / 2;
-    const limits = limitsAt(path, fixture.project, ranges, fraction);
+    const limits = limitsAt(path, project, ranges, fraction);
     const speed = ds / dt;
     const angularVelocity = wrappedAngle(second.headingRad - first.headingRad) / dt;
     if (speed > limits.velocity + tolerance(limits.velocity)) {
@@ -374,22 +407,33 @@ function validateConstraints(
     if (Math.abs(angularVelocity) > limits.angularVelocity + tolerance(limits.angularVelocity)) {
       addIssue(issues, { code: "constraint:angular-velocity", message: "Candidate exceeds the frozen angular velocity limit.", sampleIndex: index });
     }
-    const expected = referenceAt(reference, fraction);
-    const centripetal = expected.curvatureInvM * speed * speed;
-    if (centripetal > limits.centripetal + CONSTRAINT_ABSOLUTE_TOLERANCE + limits.centripetal * CENTRIPETAL_RELATIVE_TOLERANCE) {
-      addIssue(issues, { code: "constraint:centripetal-acceleration", message: `Candidate centripetal acceleration ${centripetal.toFixed(4)} m/s² exceeds the frozen ${limits.centripetal.toFixed(4)} m/s² limit.`, sampleIndex: index });
+    if (reference) {
+      const centripetal = referenceAt(reference, fraction).curvatureInvM * speed * speed;
+      const centripetalTolerance = CONSTRAINT_ABSOLUTE_TOLERANCE + limits.centripetal * CENTRIPETAL_RELATIVE_TOLERANCE;
+      if (!worstCentripetal || centripetal - limits.centripetal - centripetalTolerance > worstCentripetal.value - worstCentripetal.limit - worstCentripetal.tolerance) {
+        worstCentripetal = { value: centripetal, limit: limits.centripetal, tolerance: centripetalTolerance, sampleIndex: index };
+      }
     }
+  }
+  if (worstCentripetal && worstCentripetal.value > worstCentripetal.limit + worstCentripetal.tolerance) {
+    addIssue(issues, {
+      code: "constraint:centripetal-acceleration",
+      message: `Candidate centripetal acceleration ${worstCentripetal.value.toFixed(4)} m/s² exceeds the frozen ${worstCentripetal.limit.toFixed(4)} m/s² limit.`,
+      sampleIndex: worstCentripetal.sampleIndex,
+    });
   }
   const actualAngularVelocities: number[] = [];
   for (let index = 1; index < source.samples.length; index += 1) {
     const first = source.samples[index - 1];
     const second = source.samples[index];
     const dt = second.t - first.t;
-    const speed = Math.hypot(second.x - first.x, second.y - first.y) / dt;
+    const velocityX = (second.x - first.x) / dt;
+    const velocityY = (second.y - first.y) / dt;
+    const speed = Math.hypot(velocityX, velocityY);
     const actualAngularVelocity = wrappedAngle(second.headingRad - first.headingRad) / dt;
     actualAngularVelocities.push(actualAngularVelocity);
     const declaredAverageSpeed = (Math.abs(first.velocityMps) + Math.abs(second.velocityMps)) / 2;
-    const limits = limitsAt(path, fixture.project, ranges, (first.f + second.f) / 2);
+    const limits = limitsAt(path, project, ranges, (first.f + second.f) / 2);
     if (Math.abs(speed - declaredAverageSpeed) > Math.max(0.08, limits.velocity * 0.03)) {
       addIssue(issues, { code: "constraint:velocity-consistency", message: "Candidate velocity does not match its timestamped position change.", sampleIndex: index });
     }
@@ -398,10 +442,40 @@ function validateConstraints(
       addIssue(issues, { code: "constraint:angular-velocity-consistency", message: "Candidate angular velocity does not match its timestamped heading change.", sampleIndex: index });
     }
   }
+  if (curvatureSource === "candidate") {
+    for (let index = 1; index < source.samples.length - 1; index += 1) {
+      const limits = limitsAt(path, project, ranges, source.samples[index].f);
+      const checks = [
+        {
+          value: geometricCentripetalAt(source.samples, index, 4),
+          relativeTolerance: CANDIDATE_CENTRIPETAL_RELATIVE_TOLERANCE,
+        },
+        {
+          value: geometricCentripetalAt(source.samples, index, 1),
+          relativeTolerance: CANDIDATE_ADJACENT_CENTRIPETAL_RELATIVE_TOLERANCE,
+        },
+      ];
+      for (const check of checks) {
+        if (check.value === null) continue;
+        const centripetalTolerance = CONSTRAINT_ABSOLUTE_TOLERANCE
+          + limits.centripetal * check.relativeTolerance;
+        if (!worstCentripetal || check.value - limits.centripetal - centripetalTolerance > worstCentripetal.value - worstCentripetal.limit - worstCentripetal.tolerance) {
+          worstCentripetal = { value: check.value, limit: limits.centripetal, tolerance: centripetalTolerance, sampleIndex: index };
+        }
+      }
+    }
+    if (worstCentripetal && worstCentripetal.value > worstCentripetal.limit + worstCentripetal.tolerance) {
+      addIssue(issues, {
+        code: "constraint:centripetal-acceleration",
+        message: `Candidate centripetal acceleration ${worstCentripetal.value.toFixed(4)} m/s² exceeds the frozen ${worstCentripetal.limit.toFixed(4)} m/s² limit.`,
+        sampleIndex: worstCentripetal.sampleIndex,
+      });
+    }
+  }
   for (let index = 1; index < actualAngularVelocities.length; index += 1) {
     const midpointDt = Math.max(1e-9, (source.samples[index + 1].t - source.samples[index - 1].t) / 2);
     const angularAcceleration = (actualAngularVelocities[index] - actualAngularVelocities[index - 1]) / midpointDt;
-    const limits = limitsAt(path, fixture.project, ranges, source.samples[index].f);
+    const limits = limitsAt(path, project, ranges, source.samples[index].f);
     if (Math.abs(angularAcceleration) > limits.angularAcceleration + tolerance(limits.angularAcceleration)) {
       addIssue(issues, { code: "constraint:angular-acceleration", message: "Candidate exceeds the frozen angular acceleration limit derived from timestamped headings.", sampleIndex: index });
     }
@@ -416,11 +490,11 @@ function validateCandidate(fixture: FixedGeometryFixture, candidate: unknown): F
   let trajectory: NormalizedTrajectory | undefined;
   if (path && normalized.ok) {
     trajectory = normalized.trajectory;
-    const dense = denseTrajectory(trajectory);
+    const dense = densifyNormalizedTrajectory(trajectory);
     if (!dense) addIssue(issues, { code: "candidate:dense-sample-count", message: `Dense validation would exceed ${MAX_TRAJECTORY_SAMPLES} samples.` });
     else {
       validateGeometry(fixture, path, trajectory, dense, issues);
-      validateConstraints(fixture, path, dense, trajectory, issues);
+      validateNormalizedTrajectoryConstraints(fixture.project, path, dense, trajectory, issues);
     }
   }
   const valid = issues.length === 0;
