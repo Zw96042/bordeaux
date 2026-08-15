@@ -24,7 +24,7 @@ export interface CorridorFinalOptions {
   corridorM?: number;
   minimumClearanceM?: number;
   gates?: readonly CorridorGateBounds[];
-  budgetTier?: "common" | "stress";
+  budgetTier?: "common" | "stress" | "hard";
   budgetMs?: number;
   maximumEvaluations?: number;
   now?: () => number;
@@ -209,7 +209,8 @@ function fallback(
 export function optimizeCorridorFinal(input: PlannerInput, requested: CorridorFinalOptions = {}): PlannerResult {
   const now = requested.now ?? (() => performance.now());
   const budgetTier = requested.budgetTier ?? "common";
-  const budgetMs = Math.max(1, Math.min(30_000, requested.budgetMs ?? (budgetTier === "stress" ? 15_000 : 5_000)));
+  const budgetMs = Math.max(1, Math.min(30_000, requested.budgetMs
+    ?? (budgetTier === "hard" ? 30_000 : budgetTier === "stress" ? 15_000 : 5_000)));
   const diagnosticsOptions = { budgetTier, budgetMs };
   const corridorM = Math.max(MIN_CORRIDOR_M, Math.min(MAX_CORRIDOR_M, requested.corridorM ?? DEFAULT_CORRIDOR_M));
   const minimumClearanceM = Math.max(0, Math.min(0.5, requested.minimumClearanceM ?? 0));

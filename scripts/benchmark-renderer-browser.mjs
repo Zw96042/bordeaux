@@ -174,7 +174,7 @@ function runVariant(label, variant, checkCorrectness, runCorrectnessOnly = false
 
 const percentile = (values, fraction) => {
   const sorted = values.toSorted((a, b) => a - b);
-  return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * fraction))];
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * fraction) - 1))];
 };
 const deviation = (values) => {
   const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -182,6 +182,7 @@ const deviation = (values) => {
 };
 
 function aggregate(runs, workerBundle, correctness = null) {
+  const commonLatency = runs.flatMap((run) => run.commonLatency.samples);
   const latency = runs.flatMap((run) => run.latency.samples);
   const frames = runs.flatMap((run) => run.stress.frameDeltas);
   const dropped = runs.reduce((sum, run) => sum + run.stress.droppedFrames, 0);
@@ -191,6 +192,18 @@ function aggregate(runs, workerBundle, correctness = null) {
   return {
     workerBundle,
     correctness,
+    interactivePlanning: {
+      common: {
+        fixture: "3-waypoint profiled spline",
+        correctPaintMs: { p50: percentile(commonLatency, 0.5), p95: percentile(commonLatency, 0.95) },
+        rawSamples: commonLatency,
+      },
+      stress: {
+        fixture: "100-waypoint profiled spline",
+        correctPaintMs: { p50: percentile(latency, 0.5), p95: percentile(latency, 0.95) },
+        rawSamples: latency,
+      },
+    },
     correctPaintMs: { p50: percentile(latency, 0.5), p95: percentile(latency, 0.95), trialP95Deviation: deviation(runs.map((run) => run.latency.correctPaintMs.p95)) },
     frameTimeMs: { p95: percentile(frames, 0.95), trialP95Deviation: deviation(runs.map((run) => run.stress.frameTimeMs.p95)) },
     droppedFramePercent: expected ? dropped / expected * 100 : 0,
@@ -228,6 +241,7 @@ function correctnessFailures(checks, workerBundle) {
 
 function measuredTransportFailures(runs) {
   return runs.flatMap((run, index) => [
+    ...(!run.commonLatency.applicationWorkerTransport ? [`candidate-${index + 1}:commonLatencyApplicationWorkerTransport`] : []),
     ...(!run.latency.applicationWorkerTransport ? [`candidate-${index + 1}:latencyApplicationWorkerTransport`] : []),
     ...(!run.stress.applicationWorkerTransport ? [`candidate-${index + 1}:stressApplicationWorkerTransport`] : []),
   ]);
@@ -289,10 +303,11 @@ try {
   const report = {
     generatedAt: new Date().toISOString(),
     revisions: { upstream: revision(baselineRef), candidate: revision(candidateRef) },
+    runtime: runs.candidate[0]?.runtime ?? null,
     protocol: {
-      fixture: "100-waypoint profiled spline plus a 3-waypoint path-switch fixture",
+      fixture: "Bordeaux-authored synthetic 3-waypoint common and 100-waypoint stress profiled splines",
       viewport: "1440x900 offscreen Electron compositor at 60 Hz",
-      input: `mouse input at 120 Hz; ${latencySamples} isolated latency samples; ${stressMs} ms stress; ${trials} measured trials per variant`,
+      input: `mouse input at 120 Hz; ${latencySamples} isolated latency samples per fixture; ${stressMs} ms stress; ${trials} measured trials per variant`,
       execution: {
         correctness: comparisonOnly
           ? "skipped by --comparison-only; measured candidate worker transport remains required"
@@ -302,6 +317,7 @@ try {
       },
       correctPaint: "input dispatch to the first compositor bitmap containing per-input colors on the exact waypoint and centerline nodes after their screen/SVG geometry matches",
       droppedFrames: "missed 16.67 ms requestAnimationFrame slots between the bounded start and end of continuous input",
+      percentile: "nearest-rank p50 and p95 over all raw measured samples",
       worker: "the candidate's query-gated application scheduler instrumentation proves a discarded preflight, then silently counts measured interactive worker round trips and direct fallbacks before emitting one summary; upstream performs the same discarded movement without requiring candidate-only instrumentation",
       paintProof: "the offscreen NativeImage must contain the sample's unique waypoint color at the target and its unique centerline color immediately outside the waypoint",
     },

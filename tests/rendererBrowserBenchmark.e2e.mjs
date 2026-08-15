@@ -44,8 +44,12 @@ test("browser benchmark compares a pre-instrumentation baseline without requirin
     assert.ok(report.variants.upstream.rawTrials.length > 0);
     assert.ok(report.variants.candidate.rawTrials.length > 0);
     assert.equal(report.variants.candidate.correctness, null);
+    assert.equal(report.variants.candidate.interactivePlanning.common.rawSamples.length, 2);
+    assert.equal(report.variants.candidate.interactivePlanning.stress.rawSamples.length, 2);
 
     for (const trial of report.variants.upstream.rawTrials) {
+      assert.equal(trial.commonLatency.transport.preflightWorkerTransport, null);
+      assert.equal(trial.commonLatency.applicationWorkerTransport, null);
       assert.equal(trial.latency.transport.preflightWorkerTransport, null);
       assert.equal(trial.latency.applicationWorkerTransport, null);
       assert.equal(trial.stress.transport.preflightWorkerTransport, null);
@@ -53,6 +57,8 @@ test("browser benchmark compares a pre-instrumentation baseline without requirin
     }
 
     for (const trial of report.variants.candidate.rawTrials) {
+      assert.equal(trial.commonLatency.transport.preflightWorkerTransport, true);
+      assert.equal(trial.commonLatency.applicationWorkerTransport, true);
       assert.equal(trial.latency.transport.preflightWorkerTransport, true);
       assert.equal(trial.latency.applicationWorkerTransport, true);
       assert.equal(trial.stress.transport.preflightWorkerTransport, true);

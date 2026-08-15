@@ -81,7 +81,7 @@ export function processPathPreviewJob(job, derive = PM.derivePath, optimize = op
     if (job.quality === 'final' && job.plannerId === 'optimizedTrajectory') {
       const finalTrajectory = optimize(
         { path: job.path, robot: job.robot, samplesPerSegment: job.perSegment },
-        { budgetTier: job.deadline === 'stress' ? 'stress' : 'common', budgetMs: job.deadlineMs },
+        { budgetTier: job.deadline, budgetMs: job.deadlineMs },
       );
       if (finalTrajectory.optimization?.fallback) {
         return {

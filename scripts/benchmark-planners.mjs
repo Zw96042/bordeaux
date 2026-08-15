@@ -199,6 +199,45 @@ async function bordeauxRun(fixture, iteration) {
   }
 }
 
+function hardDeadlineRun() {
+  const fixture = fixtures.find((candidate) => candidate.benchmarkClass === "corridor" && candidate.id === "corridor-neutral-slalom");
+  const pathDocument = fixture && project.paths.find((candidate) => candidate.id === fixture.pathId);
+  const started = performance.now();
+  if (!fixture || !pathDocument) throw new Error("The frozen hard-deadline fixture is unavailable.");
+  try {
+    const candidate = optimizeCorridorFinal(
+      { path: pathDocument, robot: project.robot },
+      {
+        corridorM: fixture.centerlineToFootprintBoundaryM - robotFootprintRadius(project.robot),
+        gates: fixture.gates,
+        budgetTier: "hard",
+        budgetMs: 30_000,
+      },
+    );
+    const latencyMs = performance.now() - started;
+    const submitted = { ...candidate, events: eventsFor(fixture, candidate.totalTimeS) };
+    const validation = corridorCorpus.validate(fixture.id, submitted);
+    return {
+      deadlineTier: "hard", budgetMs: 30_000, fixtureId: fixture.id,
+      deterministicSeed: fixture.deterministicSeed, outcome: "generated", latencyMs,
+      validation: { valid: validation.valid, issues: validation.issues },
+      optimization: candidate.optimization ?? null,
+      raw: {
+        input: null,
+        output: `${JSON.stringify(submitted)}\n`,
+        invocation: { executable: "in-process", arguments: ["corridorFinal", "--deadline", "hard", fixture.pathId], workingDirectory: repositoryRoot },
+      },
+    };
+  } catch (error) {
+    return {
+      deadlineTier: "hard", budgetMs: 30_000, fixtureId: fixture.id,
+      deterministicSeed: fixture.deterministicSeed, outcome: "failed",
+      latencyMs: performance.now() - started, validation: null, optimization: null, raw: null,
+      failure: error instanceof Error ? error.message : "Bordeaux hard-deadline planning failed.",
+    };
+  }
+}
+
 async function pathPlannerRun(fixture, iteration, runDirectory) {
   const prepared = preparePathPlannerFixture(corpusDirectory, fixture.benchmarkClass, fixture.id);
   if (!prepared.supported) return {
@@ -299,6 +338,10 @@ try {
     }
   }
 
+  const finalPlanningEvidence = {
+    protocol: "one explicit frozen stress fixture executed with the 30-second hard tier; raw latency encloses the complete in-process final planner invocation",
+    rawRuns: [hardDeadlineRun()],
+  };
   const cpu = os.cpus()[0];
   const manifest = {
     generatedAt: new Date().toISOString(),
@@ -321,13 +364,16 @@ try {
     },
     executedArtifacts,
     tools: {
-      Bordeaux: { version: packageDocument.version, planner: "profiledSpline" },
+      Bordeaux: {
+        version: packageDocument.version,
+        finalPlanning: { fixedGeometry: "fixedGeometryFinal", corridor: "corridorFinal" },
+      },
       PathPlanner: { version: PATHPLANNER_VERSION, wpilibVersion: PATHPLANNER_WPILIB_VERSION, java: "17" },
       Choreo: { version: CHOREO_VERSION, sleipnirVersion: CHOREO_SLEIPNIR_VERSION, binarySha256: CHOREO_BINARY_SHA256,
         runtime: "ELF x86-64, GNU/Linux 3.2+ standalone" },
     },
   };
-  const report = buildPlannerBenchmarkReport(manifest, runs);
+  const report = { ...buildPlannerBenchmarkReport(manifest, runs), finalPlanningEvidence };
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
   const temporaryOutput = `${outputPath}.tmp-${process.pid}`;
   await fs.writeFile(temporaryOutput, `${JSON.stringify(report, null, 2)}\n`);

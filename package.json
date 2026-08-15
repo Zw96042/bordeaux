@@ -15,6 +15,7 @@
     "build:electron": "tsc -p tsconfig.electron.build.json",
     "benchmark:renderer:browser": "node scripts/benchmark-renderer-browser.mjs",
     "benchmark:planners": "npm run build:electron && node scripts/benchmark-planners.mjs",
+    "benchmark:planner-beta": "npm run build:electron && node scripts/evaluate-planner-beta.mjs",
     "certify:field": "npm run build:electron && node scripts/certify-field.mjs",
     "test": "npm run verify:license && vitest run",
     "test:benchmark:e2e": "node --test tests/rendererBrowserBenchmark.e2e.mjs",

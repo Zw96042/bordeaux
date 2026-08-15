@@ -612,7 +612,7 @@ export interface PlannerOptimizationDiagnostics {
   fallback: boolean;
   fallbackReason?: string;
   optimizationClass?: "fixed-geometry" | "corridor";
-  budgetTier?: "common" | "stress";
+  budgetTier?: "common" | "stress" | "hard";
   budgetMs?: number;
   evaluations?: number;
   maxDeviationM?: number;

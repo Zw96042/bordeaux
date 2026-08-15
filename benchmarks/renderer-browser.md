@@ -7,8 +7,9 @@ one identical run per variant is discarded as warmup before four measured runs
 per variant use an even AB/BA schedule. Raw JSON is written to the ignored
 `.benchmark-results/renderer-browser.json` file.
 
-The fixture is a 100-waypoint profiled spline in a 1440×900 offscreen Electron
-window. Each variant uses its production Vite bundle. Before timing the candidate,
+The fixtures are Bordeaux-authored synthetic three-waypoint common and 100-waypoint
+stress profiled splines in a 1440×900 offscreen Electron window. Each variant uses
+its production Vite bundle. Before timing each candidate fixture,
 the harness verifies that matching application geometry traversed the production
 preview scheduler's worker request/result transport, then checks terminal pointer
 coordinates, save/dirty behavior, undo, path-switch cancellation, and matching

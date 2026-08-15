@@ -30,7 +30,7 @@ const stressMainNow = () => epochNow() + mainClockOffsetMs;
 
 function percentile(values, fraction) {
   const sorted = values.toSorted((a, b) => a - b);
-  return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * fraction))];
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * fraction) - 1))];
 }
 
 function statistics(values) {
@@ -332,9 +332,9 @@ app.whenReady().then(async () => {
     },
   });
   window.webContents.setFrameRate(60);
-  const loadRenderer = () => window.loadFile(rendererHtml, { query: {
+  const loadRenderer = (waypointIndex = 50) => window.loadFile(rendererHtml, { query: {
     bordeauxBenchmarkTransport: forceDirectPreview ? "force-direct" : "observe",
-    bordeauxBenchmarkWaypoint: "50",
+    bordeauxBenchmarkWaypoint: String(waypointIndex),
   } });
 
   const paintTimestamps = [];
@@ -400,10 +400,10 @@ app.whenReady().then(async () => {
     await waitFor(() => epochNow() - lastPaintAt >= quietMs, timeoutMs, "a quiet paint interval");
   }
 
-  async function loadFixture() {
+  async function loadFixture({ pathName = primaryPath.name, waypointCount = 100, waypointIndex = 50 } = {}) {
     const load = () => new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error(`Timed out loading ${rendererHtml}`)), 10000);
-      loadRenderer().then(
+      loadRenderer(waypointIndex).then(
         (value) => { clearTimeout(timeout); resolve(value); },
         (error) => { clearTimeout(timeout); reject(error); },
       );
@@ -424,7 +424,23 @@ app.whenReady().then(async () => {
       10000,
       "the 100-waypoint fixture",
     );
-    await window.webContents.executeJavaScript(`(${installProbe.toString()})(50)`);
+    if (pathName !== primaryPath.name) {
+      await window.webContents.executeJavaScript("document.querySelector('button.pathsw-btn')?.click()");
+      const selected = await waitFor(async () => window.webContents.executeJavaScript(`(() => {
+        const button = [...document.querySelectorAll('button.pathlib-pick')]
+          .find((candidate) => candidate.textContent.includes(${JSON.stringify(pathName)}));
+        if (!button) return false;
+        button.click();
+        return true;
+      })()`), 2000, `the ${pathName} picker`);
+      if (!selected) throw new Error(`Could not select ${pathName}`);
+      await waitFor(
+        () => window.webContents.executeJavaScript(`document.querySelectorAll('[data-role="wp"]').length === ${waypointCount}`),
+        3000,
+        `the ${waypointCount}-waypoint fixture`,
+      );
+    }
+    await window.webContents.executeJavaScript(`(${installProbe.toString()})(${waypointIndex})`);
     await waitForPaintQuiet(100);
   }
 
@@ -877,13 +893,13 @@ app.whenReady().then(async () => {
     return { applicationWorkerTransport, nativeImagePaintProof, restoreConflictStaysDirty, staleProposalBlockedDuringDrag, proposalUsableAfterCancel, releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag, openDuringDragKeepsFile, saveOpenKeepsFile, renameSurvivesDrag, moveSurvivesDrag, linkSurvivesDrag };
   }
 
-  async function measureLatency() {
-    await loadFixture();
+  async function measureLatency(fixture, windowId) {
+    await loadFixture(fixture);
     const origin = await center();
     await pressMouse(origin);
     const preflightWorkerTransport = await proveApplicationWorkerTransport(origin);
     await waitForPaintQuiet(80);
-    await window.webContents.executeJavaScript("window.__rendererBenchmark.startTimedTransport('latency')");
+    await window.webContents.executeJavaScript(`window.__rendererBenchmark.startTimedTransport(${JSON.stringify(windowId)})`);
     const correctPaintSamples = [];
     const anyPaintSamples = [];
     let target = origin;
@@ -909,7 +925,7 @@ app.whenReady().then(async () => {
       anyPaintSamples.push(anyPaint - sentAt);
       correctPaintSamples.push(correctPaint - sentAt);
     }
-    const timedTransport = await window.webContents.executeJavaScript("window.__rendererBenchmark.finishTimedTransport('latency')");
+    const timedTransport = await window.webContents.executeJavaScript(`window.__rendererBenchmark.finishTimedTransport(${JSON.stringify(windowId)})`);
     const applicationWorkerTransport = requireWorkerTransport
       ? preflightWorkerTransport
         && timedTransport.matchingWorkerResults >= latencySamples
@@ -1014,13 +1030,15 @@ app.whenReady().then(async () => {
       })}\n`);
       return;
     }
-    const latency = await measureLatency();
+    const commonLatency = await measureLatency({ pathName: alternatePath.name, waypointCount: 3, waypointIndex: 1 }, "common-latency");
+    const latency = await measureLatency(undefined, "stress-latency");
     const stress = await measureStress();
     const result = {
       label,
       runtime: { chrome: process.versions.chrome, electron: process.versions.electron, node: process.versions.node },
-      fixture: { waypoints: 100, viewport: "1440x900", inputHz, compositorFrameRateHz: 60 },
+      fixture: { commonWaypoints: 3, stressWaypoints: 100, viewport: "1440x900", inputHz, compositorFrameRateHz: 60 },
       correctness,
+      commonLatency,
       latency,
       stress,
     };
