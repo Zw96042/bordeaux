@@ -120,7 +120,14 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run package:mac:ci -- --config.mac.notarize=true --config.forceCodeSigning=true --config.publish.channel=beta --config.publish.releaseType=prerelease
-      - name: Build Windows packages
+      - name: Require Windows signing credentials and approved signer
+        if: matrix.platform == 'windows'
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          WIN_SIGNER_SHA1: ${{ secrets.WIN_SIGNER_SHA1 }}
+        run: node scripts/verify-signing-env.mjs windows
+      - name: Build signed Windows packages
         if: matrix.platform == 'windows'
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
@@ -133,6 +140,16 @@ jobs:
       - name: Verify public beta update manifest
         if: matrix.platform != 'linux'
         run: node scripts/verify-update-manifest.mjs ${{ matrix.platform }} release beta
+      - name: Verify macOS signatures and notarization
+        if: matrix.platform == 'mac'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: node scripts/verify-release-signatures.mjs mac release beta release/signature-evidence-mac.json
+      - name: Verify Windows Authenticode signatures
+        if: matrix.platform == 'windows'
+        env:
+          WIN_SIGNER_SHA1: ${{ secrets.WIN_SIGNER_SHA1 }}
+        run: node scripts/verify-release-signatures.mjs windows release beta release/signature-evidence-windows.json
       - name: Verify public beta Linux update manifests
         if: matrix.platform == 'linux'
         run: |
@@ -150,6 +167,7 @@ jobs:
             release/*.AppImage
             release/*.blockmap
             release/beta*.yml
+            release/signature-evidence-*.json
 
   publish:
     needs: build

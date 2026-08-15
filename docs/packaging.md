@@ -75,9 +75,9 @@ The `Publish production release` workflow tests and packages every platform, emi
 Configure these GitHub Actions repository secrets before the first run:
 
 - macOS: `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID`
-- Windows (optional): `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD`
+- Windows: `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD`, and `WIN_SIGNER_SHA1` (the approved certificate's 40-digit SHA-1 thumbprint)
 
-Both GitHub release workflows deliberately fail before macOS packaging when credentials are absent because macOS automatic updates require a signed app; they also notarize it. Windows packages may be published unsigned while their secrets are absent and are signed automatically when both secrets are configured. Unsigned Windows installers display an unknown-publisher warning. Never publish replacement artifacts under an existing release version.
+Both GitHub release workflows fail before packaging when either platform's signing configuration is absent. After packaging, macOS jobs verify the Developer ID team, Gatekeeper assessment, and stapled notarization ticket on every DMG and the app inside every ZIP. Windows jobs verify that every setup and portable executable has a valid, timestamped Authenticode signature from `WIN_SIGNER_SHA1`. The workflows publish those checks, artifact SHA-256 hashes, and the verified updater manifest in `signature-evidence-*.json`; a promoted beta or production release cannot contain unsigned Windows artifacts. Never publish replacement artifacts under an existing release version.
 
 ## Microsoft Store Windows builds
 
