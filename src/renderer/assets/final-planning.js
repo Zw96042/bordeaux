@@ -1,5 +1,5 @@
   const FINAL_SAMPLES_PER_SEGMENT = 56;
-  const DEFAULT_DEADLINES_MS = Object.freeze({ common: 10000, stress: 30000, hard: 60000 });
+  const DEFAULT_DEADLINES_MS = Object.freeze({ common: 5000, stress: 15000, hard: 30000 });
 
   /** Runs deliberate final-planning work independently from interactive preview. */
   function create(options) {
@@ -49,6 +49,10 @@
             }
             if (result.error) {
               fail(result.error.message || 'The final-planning worker failed');
+              return;
+            }
+            if (result.finalFallbackReason) {
+              fail(result.finalFallbackReason);
               return;
             }
             if (!Object.prototype.hasOwnProperty.call(result, 'value')) {

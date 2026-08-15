@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const JAVASCRIPT_BUDGET_BYTES = 500 * 1024;
+const APPLICATION_JAVASCRIPT_BUDGET_BYTES = 500 * 1024;
+const WORKER_JAVASCRIPT_BUDGET_BYTES = 128 * 1024;
 const CSS_BUDGET_BYTES = 140 * 1024;
 const rendererDirectory = path.resolve("dist-renderer");
 const renderer = path.join(rendererDirectory, "index.html");
@@ -90,9 +91,16 @@ if (forbidden) throw new Error(`Renderer output contains development-only conten
 const javascript = files.filter((file) => file.endsWith(".js"));
 const css = files.filter((file) => file.endsWith(".css"));
 const javascriptBytes = javascript.reduce((total, file) => total + fs.statSync(file).size, 0);
+const workerJavascript = javascript.filter((file) => /^path-preview-worker-[^.]+\.js$/.test(path.basename(file)));
+const applicationJavascript = javascript.filter((file) => !workerJavascript.includes(file));
+const applicationJavascriptBytes = applicationJavascript.reduce((total, file) => total + fs.statSync(file).size, 0);
+const workerJavascriptBytes = workerJavascript.reduce((total, file) => total + fs.statSync(file).size, 0);
 const cssBytes = css.reduce((total, file) => total + fs.statSync(file).size, 0);
-if (javascriptBytes > JAVASCRIPT_BUDGET_BYTES) {
-  throw new Error(`Renderer JavaScript is ${javascriptBytes.toLocaleString()} bytes; budget is ${JAVASCRIPT_BUDGET_BYTES.toLocaleString()} bytes`);
+if (applicationJavascriptBytes > APPLICATION_JAVASCRIPT_BUDGET_BYTES) {
+  throw new Error(`Renderer application JavaScript is ${applicationJavascriptBytes.toLocaleString()} bytes; budget is ${APPLICATION_JAVASCRIPT_BUDGET_BYTES.toLocaleString()} bytes`);
+}
+if (workerJavascriptBytes > WORKER_JAVASCRIPT_BUDGET_BYTES) {
+  throw new Error(`Renderer worker JavaScript is ${workerJavascriptBytes.toLocaleString()} bytes; budget is ${WORKER_JAVASCRIPT_BUDGET_BYTES.toLocaleString()} bytes`);
 }
 if (cssBytes > CSS_BUDGET_BYTES) {
   throw new Error(`Renderer CSS is ${cssBytes.toLocaleString()} bytes; budget is ${CSS_BUDGET_BYTES.toLocaleString()} bytes`);
@@ -103,4 +111,4 @@ if (/react(?:-dom)?\.development(?:\.min)?\.js/i.test(builtJavaScript)) {
   throw new Error("Development React must not ship in the renderer bundle");
 }
 
-console.log(`Verified built renderer (${javascript.length} JavaScript file, ${javascriptBytes.toLocaleString()} JS bytes; ${css.length} stylesheet, ${cssBytes.toLocaleString()} CSS bytes)`);
+console.log(`Verified built renderer (${applicationJavascript.length} application JavaScript file, ${applicationJavascriptBytes.toLocaleString()} bytes; ${workerJavascript.length} worker JavaScript file, ${workerJavascriptBytes.toLocaleString()} bytes; ${javascriptBytes.toLocaleString()} total JS bytes; ${css.length} stylesheet, ${cssBytes.toLocaleString()} CSS bytes)`);

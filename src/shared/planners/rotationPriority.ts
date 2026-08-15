@@ -79,6 +79,27 @@ function translationHasPriorityForInterval(
     && activeTransitions.every((transition) => transition.rotationPriority === "translation");
 }
 
+export function translationPriorityStartIndex(
+  path: PathDoc,
+  samples: readonly TrajectorySample[],
+  totalDistanceM: number,
+): number | null {
+  const ranges = effectiveRanges(path, samples, totalDistanceM);
+  const waypointF = waypointFractions(path, samples);
+  const laws = segmentHeadingLaws(path, false);
+  const breaks = path.waypoints.slice(0, -1).map((waypoint) => Boolean(waypoint.turnInPlace));
+  const transitions = headingTransitionWindows(path.waypoints, laws, breaks, waypointF, totalDistanceM);
+  for (let index = 1; index < samples.length; index += 1) {
+    if (translationHasPriorityForInterval(
+      ranges,
+      transitions,
+      samples[index - 1].f,
+      samples[index].f,
+    )) return index;
+  }
+  return null;
+}
+
 function angularLimits(path: PathDoc, ranges: readonly EffectiveRange[], fraction: number) {
   let velocity = path.constraints.maxAngVel * DEG;
   let acceleration = path.constraints.maxAngAccel * DEG;

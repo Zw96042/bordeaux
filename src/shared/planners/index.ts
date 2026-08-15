@@ -1,9 +1,22 @@
-import type { TrajectoryPlanner, TrajectoryPlannerId } from "../types";
+import type { PlannerResult, TrajectoryPlanner, TrajectoryPlannerId } from "../types";
 import { optimizedTrajectoryPlanner } from "./optimizedTrajectory";
 import { profiledSplinePlanner } from "./profiledSpline";
 import { applyStationaryActions } from "./stationaryActions";
 import { applyRotationPriority } from "./rotationPriority";
 import { effectivePathConstraints, robotHardLimits } from "../robotLimits";
+import { validateOptimizedTrajectory } from "./trajectoryValidation";
+
+const EPSILON = 1e-9;
+
+export function fixedPathSamples(result: PlannerResult) {
+  let end = result.samples.length;
+  while (end > 1
+    && result.samples[end - 1].s - result.samples[end - 2].s <= EPSILON
+    && result.samples[end - 1].t - result.samples[end - 2].t > EPSILON) {
+    end -= 1;
+  }
+  return result.samples.slice(0, end);
+}
 
 export const planners: Record<TrajectoryPlannerId, TrajectoryPlanner> = {
   profiledSpline: profiledSplinePlanner,
@@ -31,7 +44,52 @@ export function getPlanner(id: TrajectoryPlannerId): TrajectoryPlanner {
           }
         : physicalInput;
       const generated = planner.generate(planningInput);
-      return applyStationaryActions(path, applyRotationPriority(path, generated, robot), robot);
+      let rotated = applyRotationPriority(path, generated, robot);
+      if (planner.id === "optimizedTrajectory"
+        && rotated !== generated
+        && (rotated.optimization?.status === "optimal" || rotated.optimization?.status === "feasible")) {
+        const validation = validateOptimizedTrajectory(planningInput, fixedPathSamples(rotated), {
+          angularKinematics: "sample",
+        });
+        if (validation.violations.length > 0) {
+          const reason = `Post-rotation validation found ${validation.violations.length} constraint violation${validation.violations.length === 1 ? "" : "s"}: ${validation.violations[0].message}`;
+          const fallback = applyRotationPriority(path, profiledSplinePlanner.generate(planningInput), robot);
+          rotated = {
+            ...fallback,
+            diagnostics: [...fallback.diagnostics, {
+              severity: "warning",
+              path: `paths.${path.name}.planner`,
+              message: `Optimized trajectory fell back to profiled spline: ${reason}`,
+            }],
+            optimization: {
+              ...rotated.optimization,
+              plannerUsed: "profiledSpline",
+              status: "internal-error",
+              totalTimeS: fallback.totalTimeS,
+              constraintViolations: validation.violations.length,
+              fallback: true,
+              fallbackReason: reason,
+              validatedPoints: Math.max(rotated.optimization.validatedPoints ?? 0, validation.checkedPoints),
+              activeConstraints: validation.activeConstraints,
+            },
+          };
+        } else {
+          rotated = {
+            ...rotated,
+            optimization: {
+              ...rotated.optimization,
+              status: "optimal",
+              constraintViolations: 0,
+              validatedPoints: Math.max(rotated.optimization.validatedPoints ?? 0, validation.checkedPoints),
+              activeConstraints: [...new Set([
+                ...(rotated.optimization.activeConstraints ?? []),
+                ...validation.activeConstraints,
+              ])].sort(),
+            },
+          };
+        }
+      }
+      return applyStationaryActions(path, rotated, robot);
     },
   };
 }

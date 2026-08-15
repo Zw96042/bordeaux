@@ -19,6 +19,7 @@ const {
   capturePathPlannerRun, PATHPLANNER_VERSION, PATHPLANNER_WPILIB_VERSION, pathPlannerInvocation, preparePathPlannerFixture,
 } = require("../dist-electron/electron/benchmark/pathPlannerAdapter.js");
 const { getPlanner } = require("../dist-electron/shared/planners/index.js");
+const { optimizeFixedGeometryFinal } = require("../dist-electron/shared/planners/fixedGeometryFinal.js");
 const { decodeProjectFile } = require("../dist-electron/shared/project/fileFormat.js");
 const execFileAsync = promisify(execFile);
 
@@ -158,7 +159,10 @@ async function bordeauxRun(fixture, iteration) {
   const pathDocument = project.paths.find((candidate) => candidate.id === fixture.pathId);
   const started = performance.now();
   try {
-    const candidate = getPlanner("profiledSpline").generate({ path: pathDocument, robot: project.robot });
+    const input = { path: pathDocument, robot: project.robot };
+    const candidate = fixture.benchmarkClass === "fixed-geometry"
+      ? optimizeFixedGeometryFinal(input)
+      : getPlanner("profiledSpline").generate(input);
     const latencyMs = performance.now() - started;
     const submitted = fixture.benchmarkClass === "corridor"
       ? { ...candidate, events: eventsFor(fixture, candidate.totalTimeS) }

@@ -18,18 +18,17 @@ function timeAtFraction(fraction: number, pts: Array<{ s: number }>, times: numb
   if (target <= 0) return times[0] ?? 0;
   if (target >= total) return times[times.length - 1] ?? 0;
 
-  let low = 1;
-  let high = pts.length - 1;
-  while (low < high) {
-    const middle = Math.floor((low + high) / 2);
-    if (pts[middle].s >= target) high = middle;
-    else low = middle + 1;
+  for (let i = 1; i < pts.length; i += 1) {
+    if (pts[i].s >= target) {
+      const prev = pts[i - 1];
+      const curr = pts[i];
+      const span = Math.max(1e-9, curr.s - prev.s);
+      const u = (target - prev.s) / span;
+      return (times[i - 1] ?? 0) + ((times[i] ?? 0) - (times[i - 1] ?? 0)) * u;
+    }
   }
-  const previous = pts[low - 1];
-  const current = pts[low];
-  const span = Math.max(1e-9, current.s - previous.s);
-  const progress = (target - previous.s) / span;
-  return (times[low - 1] ?? 0) + ((times[low] ?? 0) - (times[low - 1] ?? 0)) * progress;
+
+  return times[times.length - 1] ?? 0;
 }
 
 function diagnosticsFor(pathName: string, derived: any): ValidationIssue[] {
@@ -40,7 +39,12 @@ function diagnosticsFor(pathName: string, derived: any): ValidationIssue[] {
   }));
 }
 
-function markersFor(input: PlannerInput, pts: Array<{ s: number }>, times: number[]): BdxMarker[] {
+function markersFor(
+  input: PlannerInput,
+  pts: Array<{ s: number }>,
+  times: number[],
+  fullPrecision: boolean,
+): BdxMarker[] {
   const length = pts[pts.length - 1]?.s ?? 0;
   return (input.path.markers || []).map((marker, index) => {
     const fraction = marker.anchor === "dist" && length > 1e-9
@@ -52,52 +56,60 @@ function markersFor(input: PlannerInput, pts: Array<{ s: number }>, times: numbe
       command: marker.cmd ?? null,
       ...(marker.invocation ? { invocation: marker.invocation } : {}),
       group: marker.group ?? null,
-      timeS: R(timeAtFraction(fraction, pts, times), 4),
-      fraction: R(fraction, 5),
+      timeS: fullPrecision ? timeAtFraction(fraction, pts, times) : R(timeAtFraction(fraction, pts, times), 4),
+      fraction: fullPrecision ? fraction : R(fraction, 5),
     };
   });
+}
+
+function generateProfiledSpline(input: PlannerInput, fullPrecision: boolean): PlannerResult {
+  const samplesPerSegment = input.samplesPerSegment ?? DEFAULT_SAMPLES_PER_SEGMENT;
+  if (!Number.isInteger(samplesPerSegment) || samplesPerSegment < 1) {
+    throw new Error("Planner samples per segment must be a positive integer");
+  }
+  const segmentCount = Math.max(0, input.path.waypoints.length - 1);
+  if (segmentCount > Math.floor((MAX_TRAJECTORY_SAMPLES - 1) / samplesPerSegment)) {
+    throw new Error(`Path requires more than ${MAX_TRAJECTORY_SAMPLES} trajectory samples`);
+  }
+  // Stationary rotations are sampled by the shared post-processor. Keep the
+  // authored turn visible to heading continuity, but do not time it here.
+  const derived = PM.derivePath(input.path, input.robot, samplesPerSegment, { skipStationaryActions: true });
+  const pts = derived.sample.pts || [];
+  const metrics = derived.metrics || {};
+  const times = derived.prof.t || [];
+  const totalDistanceM = derived.sample.length || 0;
+  const value = (number: number, places: number) => fullPrecision ? number : R(number, places);
+  const samples: TrajectorySample[] = pts.map((point: any, i: number) => ({
+    i,
+    t: value(times[i] ?? 0, 4),
+    s: value(point.s ?? 0, 4),
+    f: value(totalDistanceM > 1e-9 ? (point.s ?? 0) / totalDistanceM : 0, 5),
+    x: value(point.x ?? 0, 4),
+    y: value(point.y ?? 0, 4),
+    headingRad: value((metrics.head?.[i] ?? point.heading ?? 0) + (derived.rev ? Math.PI : 0), 5),
+    velocityMps: value(metrics.v?.[i] ?? 0, 4),
+    accelerationMps2: value(metrics.accel?.[i] ?? 0, 4),
+    angularVelocityRadps: value(metrics.omega?.[i] ?? 0, 5),
+    curvatureInvM: value(metrics.curv?.[i] ?? point.curv ?? 0, 5),
+  }));
+
+  return {
+    planner: "profiledSpline",
+    totalTimeS: value(derived.prof.totalTime || 0, 4),
+    totalDistanceM: value(totalDistanceM, 4),
+    samples,
+    markers: markersFor(input, pts, times, fullPrecision),
+    diagnostics: diagnosticsFor(input.path.name, derived),
+  };
+}
+
+export function profiledSplineOptimizationSeed(input: PlannerInput): PlannerResult {
+  return generateProfiledSpline(input, true);
 }
 
 export const profiledSplinePlanner: TrajectoryPlanner = {
   id: "profiledSpline",
   generate(input: PlannerInput): PlannerResult {
-    const samplesPerSegment = input.samplesPerSegment ?? DEFAULT_SAMPLES_PER_SEGMENT;
-    if (!Number.isInteger(samplesPerSegment) || samplesPerSegment < 1) {
-      throw new Error("Planner samples per segment must be a positive integer");
-    }
-    const segmentCount = Math.max(0, input.path.waypoints.length - 1);
-    if (segmentCount > Math.floor((MAX_TRAJECTORY_SAMPLES - 1) / samplesPerSegment)) {
-      throw new Error(`Path requires more than ${MAX_TRAJECTORY_SAMPLES} trajectory samples`);
-    }
-    // Stationary rotations are sampled by the shared post-processor. Keep the
-    // authored turn visible to heading continuity, but do not time it here.
-    const derived = PM.derivePath(input.path, input.robot, samplesPerSegment, { skipStationaryActions: true });
-    const pts = derived.sample.pts || [];
-    const metrics = derived.metrics || {};
-    const times = derived.prof.t || [];
-    const totalDistanceM = derived.sample.length || 0;
-
-    const samples: TrajectorySample[] = pts.map((point: any, i: number) => ({
-      i,
-      t: R(times[i] ?? 0, 4),
-      s: R(point.s ?? 0, 4),
-      f: R(totalDistanceM > 1e-9 ? (point.s ?? 0) / totalDistanceM : 0, 5),
-      x: R(point.x ?? 0, 4),
-      y: R(point.y ?? 0, 4),
-      headingRad: R((metrics.head?.[i] ?? point.heading ?? 0) + (derived.rev ? Math.PI : 0), 5),
-      velocityMps: R(metrics.v?.[i] ?? 0, 4),
-      accelerationMps2: R(metrics.accel?.[i] ?? 0, 4),
-      angularVelocityRadps: R(metrics.omega?.[i] ?? 0, 5),
-      curvatureInvM: R(metrics.curv?.[i] ?? point.curv ?? 0, 5),
-    }));
-
-    return {
-      planner: "profiledSpline",
-      totalTimeS: R(derived.prof.totalTime || 0, 4),
-      totalDistanceM: R(totalDistanceM, 4),
-      samples,
-      markers: markersFor(input, pts, times),
-      diagnostics: diagnosticsFor(input.path.name, derived),
-    };
+    return generateProfiledSpline(input, false);
   },
 };

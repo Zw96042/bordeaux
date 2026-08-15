@@ -1,5 +1,5 @@
 import { PM } from "../math/pm";
-import type { ConstraintRange, PathDoc, PlannerResult, RobotConfig, TrajectorySample } from "../types";
+import type { ConstraintRange, PathDoc, PlannerResult, PlannerStationaryAction, RobotConfig, TrajectorySample } from "../types";
 import { MAX_TRAJECTORY_SAMPLES } from "./limits";
 
 const EPSILON = 1e-9;
@@ -228,6 +228,7 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
   let samples = result.samples.map((sample) => ({ ...sample }));
   const markers = result.markers.map((marker) => ({ ...marker }));
   const diagnostics = [...result.diagnostics];
+  const stationaryActions: PlannerStationaryAction[] = [];
   let inserted = 0;
   let addedDistance = 0;
 
@@ -268,6 +269,28 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     const duration = turnDuration + jiggleDuration + waitDuration;
     if (duration <= EPSILON) return;
     const arrivalTime = arrival.t;
+    if (turnDuration > EPSILON) stationaryActions.push({
+      kind: "turn",
+      waypointIndex,
+      fraction: arrival.f,
+      startTimeS: arrivalTime,
+      endTimeS: arrivalTime + turnDuration,
+    });
+    if (jiggleDuration > EPSILON) stationaryActions.push({
+      kind: "jiggle",
+      waypointIndex,
+      fraction: arrival.f,
+      startTimeS: arrivalTime + turnDuration,
+      endTimeS: arrivalTime + turnDuration + jiggleDuration,
+      strokeDurationS: jiggleStrokeDuration,
+    });
+    if (waitDuration > EPSILON) stationaryActions.push({
+      kind: "wait",
+      waypointIndex,
+      fraction: arrival.f,
+      startTimeS: arrivalTime + turnDuration + jiggleDuration,
+      endTimeS: arrivalTime + duration,
+    });
 
     if (turn) arrival.headingRad = startHeading;
     arrival.velocityMps = 0;
@@ -369,6 +392,7 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     samples,
     markers,
     diagnostics,
+    stationaryActions,
     optimization: result.optimization ? { ...result.optimization, totalTimeS } : result.optimization,
   };
 }

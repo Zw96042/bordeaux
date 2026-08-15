@@ -569,6 +569,15 @@ export interface BdxPath {
   optimization?: PlannerOptimizationDiagnostics;
 }
 
+export interface PlannerStationaryAction {
+  kind: "turn" | "jiggle" | "wait";
+  waypointIndex: number;
+  fraction: number;
+  startTimeS: number;
+  endTimeS: number;
+  strokeDurationS?: number;
+}
+
 export interface PlannerResult {
   planner: TrajectoryPlannerId;
   totalTimeS: number;
@@ -577,6 +586,8 @@ export interface PlannerResult {
   markers: BdxMarker[];
   diagnostics: ValidationIssue[];
   optimization?: PlannerOptimizationDiagnostics;
+  /** Internal timing metadata used to keep renderer playback identical to exported samples. */
+  stationaryActions?: PlannerStationaryAction[];
 }
 
 export interface TrajectoryPlanner {
@@ -586,6 +597,11 @@ export interface TrajectoryPlanner {
 
 export interface PlannerOptimizationDiagnostics {
   plannerUsed: TrajectoryPlannerId;
+  status?: "optimal" | "feasible" | "equivalent" | "invalid-input" | "infeasible" | "cancelled" | "internal-error";
+  iterations?: number;
+  refinementPasses?: number;
+  validatedPoints?: number;
+  activeConstraints?: string[];
   solveTimeMs: number;
   totalTimeS: number;
   maxVelocityMps: number;

@@ -1,6 +1,7 @@
 import { REBUILT_2026_FIELD, REBUILT_2026_FIELD_WIDTH_M, officialToAppPoint } from "../field/rebuilt2026";
 import { FIELD_H, FIELD_W } from "../math/fieldBounds";
 import { getPlanner } from "../planners";
+import { optimizeFixedGeometryFinal } from "../planners/fixedGeometryFinal";
 import { clone } from "../project/defaults";
 import type { BordeauxProject, PathDoc, TrajectorySample, ValidationIssue } from "../types";
 import { validateProject } from "../validation";
@@ -522,7 +523,9 @@ export function analyzePath(project: BordeauxProject, pathId: string, options: A
   const structural = validateProject(project).issues.filter((item) => item.path.startsWith(`$.paths[${pathIndex}]`));
   let generated;
   try {
-    generated = getPlanner(plannerId).generate({ path, robot: project.robot });
+    generated = plannerId === "optimizedTrajectory"
+      ? optimizeFixedGeometryFinal({ path, robot: project.robot })
+      : getPlanner("profiledSpline").generate({ path, robot: project.robot });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const structureFindings: PathAnalysisFinding[] = structural.map((item, index) => ({

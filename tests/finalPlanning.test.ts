@@ -95,16 +95,13 @@ describe("final planning execution", () => {
   });
 
   it.each([
-    ["common", 20],
-    ["stress", 40],
-    ["hard", 60],
+    ["common", 5_000],
+    ["stress", 15_000],
+    ["hard", 30_000],
   ] as const)("times out at the configured %s deadline", async (deadline, deadlineMs) => {
     vi.useFakeTimers();
     const worker = new FakeWorker();
-    const finalPlanning = finalPlanningModule().create({
-      workerFactory: () => worker,
-      deadlines: { common: 20, stress: 40, hard: 60 },
-    });
+    const finalPlanning = finalPlanningModule().create({ workerFactory: () => worker });
     const interactiveResult = { source: "interactive", revision: 5 };
 
     const request = finalPlanning.request(
@@ -141,6 +138,25 @@ describe("final planning execution", () => {
       fallbackReason: "Final planning failed: optimizer unavailable. Continuing with the last interactive result.",
     });
     expect(worker.terminated).toBe(true);
+  });
+
+  it("keeps the interactive result when the optimizer rejects its final candidate", async () => {
+    const worker = new FakeWorker();
+    const finalPlanning = finalPlanningModule().create({ workerFactory: () => worker });
+    const interactiveResult = { source: "interactive", revision: 8 };
+    const request = finalPlanning.request(
+      { path: { id: "path" }, robot: {}, plannerId: "optimizedTrajectory" },
+      { interactiveResult },
+    );
+
+    worker.resolve({ id: worker.jobs[0].id, finalFallbackReason: "candidate failed dense validation" });
+
+    await expect(request.promise).resolves.toEqual({
+      status: "failure",
+      error: { message: "candidate failed dense validation" },
+      fallback: interactiveResult,
+      fallbackReason: "Final planning failed: candidate failed dense validation. Continuing with the last interactive result.",
+    });
   });
 
   it("returns a failure result when final-planning execution cannot start", async () => {

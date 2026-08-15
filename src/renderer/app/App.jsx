@@ -277,6 +277,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       error: snapshot.errorPath === doc ? snapshot.error : null,
       pending: interactive.status === 'pending' || snapshot.status === 'pending',
       durationMs: snapshot.durationMs || 0,
+      optimization: snapshot.value?.finalOptimization || null,
     };
   }
 
@@ -1663,6 +1664,11 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
               exportError && h('div', { className: 'insert-preview export-error-banner', role: 'alert' },
                 h('div', { className: 'insert-preview-copy' }, h('b', null, 'Export failed'), h('span', null, exportError)),
                 h('button', { type: 'button', 'aria-label': 'Dismiss export error', onClick: () => setExportError('') }, '\u00d7')),
+              plannerId === 'optimizedTrajectory' && derivation.pending && h('div', { className: 'stage-hint', role: 'status' }, 'Optimizing the final trajectory…'),
+              plannerId === 'optimizedTrajectory' && !derivation.pending && derivation.optimization && h('div', { className: 'stage-hint', role: 'status' },
+                derivation.optimization.status === 'equivalent'
+                  ? 'Final optimizer kept the interactive trajectory; no valid time improvement was found.'
+                  : `Final trajectory ${derivation.optimization.totalTimeS.toFixed(2)} s · solved in ${derivation.optimization.solveTimeMs.toFixed(1)} ms`),
               derivation.error && h('div', { className: 'insert-preview derivation-error', role: 'alert' },
                 h('div', { className: 'insert-preview-copy' }, h('b', null, 'Path preview unavailable'), h('span', null, derivation.error.message || String(derivation.error))),
                 h('span', null, 'Showing the last valid preview. Undo or edit the selected geometry.')),

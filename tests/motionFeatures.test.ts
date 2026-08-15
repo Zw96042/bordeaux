@@ -786,6 +786,12 @@ describe("motion features", () => {
     const angularAcceleration = terminal.slice(1).map((sample, index) => (sample.angularVelocityRadps - terminal[index].angularVelocityRadps) / (sample.t - terminal[index].t));
     expect(Math.max(...angularAcceleration.map(Math.abs))).toBeLessThanOrEqual(path.constraints.maxAngAccel * Math.PI / 180 * 1.03);
     expect(result.markers[0].timeS).toBeCloseTo(result.totalTimeS, 6);
+    expect(result.stationaryActions).toEqual([
+      expect.objectContaining({ kind: "turn", waypointIndex: path.waypoints.length - 1, fraction: 1 }),
+      expect.objectContaining({ kind: "wait", waypointIndex: path.waypoints.length - 1, fraction: 1 }),
+    ]);
+    expect(result.stationaryActions![0].startTimeS).toBeCloseTo(terminal[0].t, 8);
+    expect(result.stationaryActions![1].endTimeS).toBeCloseTo(result.totalTimeS, 8);
   });
 
   it.each(PLANNERS)("keeps an interior %s turn continuous with its outgoing segment", (plannerId) => {
