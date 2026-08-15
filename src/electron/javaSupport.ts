@@ -5,7 +5,7 @@ import path from "node:path";
 import type { JavaCommandCatalog, JavaIntegrationStatus } from "../shared/types";
 import { writeBufferAtomically, writeJsonAtomically } from "./projectFiles";
 
-export const JAVA_SUPPORT_VERSION = "0.3.0";
+export const JAVA_SUPPORT_VERSION = "0.4.0";
 const MAX_BUILD_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
 const MAX_BUILD_OUTPUT_BYTES = 1024 * 1024;

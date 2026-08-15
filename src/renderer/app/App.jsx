@@ -1420,10 +1420,10 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     const lastRun = useRef({ steps: [], total: 0 });
     const run = useMemo(() => {
       if (page !== 'auto') return lastRun.current;
-      const nextRun = AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId);
+      const nextRun = AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId, javaProjectState.catalog);
       lastRun.current = nextRun;
       return nextRun;
-    }, [page, routine, project.paths, robot, routineOutcomes, plannerId]);
+    }, [page, routine, project.paths, robot, routineOutcomes, plannerId, javaProjectState.catalog]);
     useEffect(() => routinePlaybackStore.setTotal(run.total), [routinePlaybackStore, run.total]);
     useEffect(() => { if (page !== 'plan') playbackStore.pause(); if (page !== 'auto') routinePlaybackStore.pause(); }, [page, playbackStore, routinePlaybackStore]);
 
@@ -1432,7 +1432,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       set: (id, patch) => setRoutine((r) => AUTO.update(r, id, patch)),
       del: (id) => {
         const node = AUTO.findNode(routine, id);
-        const label = node ? AUTO.nodeTitle(node, project.paths) : 'this routine step';
+        const label = node ? AUTO.nodeTitle(node, project.paths, javaProjectState.catalog) : 'this routine step';
         if (!confirm('Delete “' + label + '” from the routine? Decision branches beneath it will also be removed.')) return;
         setRoutine((r) => AUTO.remove(r, id)); setRoutineSel(null);
       },
@@ -1445,7 +1445,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       prepend: (type, cat) => setRoutine((r) => { const nn = AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return AUTO.prepend(r, nn); }),
       setOutcome: (id, br) => setRoutineOutcomes((o) => ({ ...o, [id]: br })),
       openInEditor: (id) => { const idx = project.paths.findIndex((path) => path.id === id); if (idx >= 0) { setActive(idx); setPage('plan'); } },
-    }), [routineOutcomes, routine, project.paths]);
+    }), [routineOutcomes, routine, project.paths, javaProjectState.catalog]);
     const autoFieldActions = useMemo(() => ({ selectNode: (id) => setRoutineSel((s) => s === id ? null : id), select: () => setRoutineSel(null) }), []);
 
     // ---- view ----

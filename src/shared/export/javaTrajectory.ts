@@ -47,7 +47,7 @@ export interface JavaTrajectoryDocument {
   schemaVersion: "bordeaux-trajectory/1.0";
   generator: "bordeaux";
   catalog: {
-    schemaVersion: "1.0" | "1.1" | "1.2";
+    schemaVersion: "1.0" | "1.1" | "1.2" | "1.3";
     catalogId: string;
     supportVersion: string;
     catalogHash: string;
@@ -188,6 +188,17 @@ function deployableRoutine(project: BordeauxProject, pathIds: Set<string>): Java
       }
       return { id: node.id, type: "builtin", builtinId: "bordeaux.wait", arguments: { durationS: node.arguments.durationS } };
     }
+    if (node.type === "generatedTrajectory") {
+      return {
+        id: node.id,
+        type: "generatedTrajectory",
+        generatorId: node.generatorId,
+        arguments: node.arguments,
+        fallback: node.fallback.type === "safeStop"
+          ? { type: "safeStop" }
+          : { type: "branch", nodes: nodes(node.fallback.nodes) },
+      };
+    }
     if (node.cat !== "command" || !node.invocation) {
       throw new Error(`Routine function ${node.id} is simulation-only; use a bound Command step for Java export`);
     }
@@ -207,11 +218,21 @@ function assertRoutineNodeCount(routine: JavaTrajectoryRoutine | null): void {
       throw new Error(`Java trajectory export exceeds ${MAX_ROUTINE_NODE_COUNT} routine nodes`);
     }
     if (node.type === "decision") pending.push(...node.then, ...node.else);
+    if (node.type === "generatedTrajectory" && node.fallback.type === "branch") pending.push(...node.fallback.nodes);
   }
 }
 
+function projectForStaticPlanning(project: BordeauxProject): BordeauxProject {
+  const staticNodes = (nodes: RoutineNode[]): RoutineNode[] => nodes.flatMap((node) => {
+    if (node.type === "generatedTrajectory") return node.fallback.type === "branch" ? staticNodes(node.fallback.nodes) : [];
+    if (node.type === "decision") return [{ ...node, then: staticNodes(node.then), else: staticNodes(node.else) }];
+    return [node];
+  });
+  return { ...project, routines: project.routines.map((routine) => ({ ...routine, nodes: staticNodes(routine.nodes) })) };
+}
+
 export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaCommandCatalog): BuiltJavaTrajectory {
-  if (!catalog.authoritative || (catalog.generatedSchemaVersion !== "1.0" && catalog.generatedSchemaVersion !== "1.1" && catalog.generatedSchemaVersion !== "1.2") || !catalog.catalogId || !catalog.supportVersion || !catalog.catalogHash) {
+  if (!catalog.authoritative || (catalog.generatedSchemaVersion !== "1.0" && catalog.generatedSchemaVersion !== "1.1" && catalog.generatedSchemaVersion !== "1.2" && catalog.generatedSchemaVersion !== "1.3") || !catalog.catalogId || !catalog.supportVersion || !catalog.catalogHash) {
     throw new Error("Build the annotated Java command catalog before exporting robot JSON");
   }
   const invocationIssues = validateProjectJavaInvocations(project, catalog);
@@ -231,8 +252,8 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
   const routine = deployableRoutine(project, new Set(sourcePaths.map((path) => path.id)));
   if (routine && routine.nodes.some(function containsBuiltIn(node): boolean {
     return node.type === "builtin" || (node.type === "decision" && [...node.then, ...node.else].some(containsBuiltIn));
-  }) && catalog.generatedSchemaVersion !== "1.2") {
-    throw new Error("Routine built-ins require generated catalog schema 1.2 before export");
+  }) && catalog.generatedSchemaVersion !== "1.2" && catalog.generatedSchemaVersion !== "1.3") {
+    throw new Error("Routine built-ins require generated catalog schema 1.2 or newer before export");
   }
   assertRoutineNodeCount(routine);
   assertExportSize({
@@ -256,7 +277,10 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
     })),
   });
 
-  const native = buildBdxExport(project);
+  // Static planning has no geometry for runtime-dynamic nodes. Their separately
+  // validated fallback is sufficient for the generic project validator here;
+  // the exported routine below retains the generated node itself.
+  const native = buildBdxExport(projectForStaticPlanning(project));
   let sampleCount = 0;
   const paths: JavaTrajectoryPath[] = [];
   native.paths.forEach((path, pathIndex) => {

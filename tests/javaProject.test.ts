@@ -189,6 +189,31 @@ describe("Java command project discovery", () => {
     expect(catalog).toMatchObject({ generatedSchemaVersion: "1.1", conditions: [{ id: "auto.conditions#ready" }] });
   });
 
+  it("retains schema 1.3 trajectory generators from the authoritative catalog", async () => {
+    const project = await temporaryProject();
+    await fs.mkdir(path.join(project, "build/bordeaux"), { recursive: true });
+    const builtIns = [{
+      id: "bordeaux.wait", kind: "wait", label: "Wait", description: "Pause the routine before its next step.",
+      parameters: [{ name: "durationS", label: "Duration", description: "Time to wait before continuing the routine.", unit: "s", defaultValue: 1, min: 0.02, max: 15, role: "argument", javaType: "double", schema: { kind: "number", javaType: "double" } }],
+    }];
+    const trajectoryGenerators = [{
+      id: "frc.robot.DynamicPaths#route", label: "Dynamic route", ownerType: "frc.robot.DynamicPaths", member: "route",
+      inputs: [{ name: "avoid", javaType: "boolean", role: "argument", schema: { kind: "boolean", javaType: "boolean" } }],
+      preview: { kind: "runtimeDynamic" }, fallbackPolicy: "safeStopOnly",
+      limits: { timeoutMs: 50, maxSamples: 1024, maxDurationS: 8, maxDistanceM: 20, maxVelocityMps: 5, maxAccelerationMps2: 10, maxCentripetalAccelerationMps2: 8, maxAngularVelocityRadps: 12, maxAngularAccelerationRadps2: 40, minClearanceM: 0.2 },
+      source: { file: "frc/robot/DynamicPaths.java", line: 0 },
+    }];
+    await fs.writeFile(path.join(project, "build/bordeaux/catalog-v1.json"), JSON.stringify({
+      schemaVersion: "1.3", catalogId: "robot-test", supportVersion: "0.4.0",
+      catalogHash: generatedCatalogHash([], [], builtIns, trajectoryGenerators),
+      commands: [], conditions: [], builtIns, trajectoryGenerators,
+    }));
+
+    const catalog = await discoverJavaProject(project);
+
+    expect(catalog).toMatchObject({ generatedSchemaVersion: "1.3", supportVersion: "0.4.0", trajectoryGenerators: [{ id: "frc.robot.DynamicPaths#route", source: { line: 1 } }] });
+  });
+
   it("previews the annotated command factories in the bundled template before a catalog build", async () => {
     const project = await temporaryProject();
     const sourceRoot = path.join(project, "src/main/java");

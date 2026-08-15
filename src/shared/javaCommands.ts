@@ -216,6 +216,7 @@ export function validateProjectJavaInvocations(project: BordeauxProject, catalog
   const issues: ValidationIssue[] = [];
   const commands = new Map((catalog?.commands ?? []).map((command) => [command.id, command]));
   const conditions = new Map((catalog?.conditions ?? []).map((condition) => [condition.id, condition]));
+  const trajectoryGenerators = new Map((catalog?.trajectoryGenerators ?? []).map((generator) => [generator.id, generator]));
   const validateCondition = (conditionId: unknown, path: string, usage: string) => {
     if (typeof conditionId !== "string" || !conditionId.trim()) {
       issues.push({ path, message: `${usage} needs a registered condition ID`, severity: "error" });
@@ -225,8 +226,8 @@ export function validateProjectJavaInvocations(project: BordeauxProject, catalog
       issues.push({ path, message: `${usage} condition ID is invalid`, severity: "error" });
       return;
     }
-    if (catalog?.generatedSchemaVersion !== "1.1" && catalog?.generatedSchemaVersion !== "1.2") {
-      issues.push({ path, message: `${usage} condition catalog is stale; build generated catalog schema 1.1 or 1.2 before export`, severity: "error" });
+    if (catalog?.generatedSchemaVersion !== "1.1" && catalog?.generatedSchemaVersion !== "1.2" && catalog?.generatedSchemaVersion !== "1.3") {
+      issues.push({ path, message: `${usage} condition catalog is stale; build generated catalog schema 1.1 or newer before export`, severity: "error" });
       return;
     }
     if (!conditions.has(conditionId)) {
@@ -268,7 +269,37 @@ export function validateProjectJavaInvocations(project: BordeauxProject, catalog
   // older and future node shapes intact, while exporting the active routine reports
   // every incompatible branch in one pass instead of failing at the first serializer error.
   const exportablePathIds = new Set(project.paths.filter((path) => path.exportable !== false).map((path) => path.id));
-  const validateRoutineNodes = (nodes: unknown, path: string): void => {
+  const routineNodeIds = new Set<string>();
+  const registerNodeId = (node: Record<string, unknown>, base: string): void => {
+    if (typeof node.id !== "string" || !node.id.trim()) {
+      issues.push({ path: `${base}.id`, message: "Routine step needs a stable ID", severity: "error" });
+    } else if (routineNodeIds.has(node.id)) {
+      issues.push({ path: `${base}.id`, message: `Routine step ID ${node.id} must be globally unique, including fallback branches`, severity: "error" });
+    } else {
+      routineNodeIds.add(node.id);
+    }
+  };
+  const terminalPathStates = (nodes: unknown[], startsWithPath: boolean): Set<boolean> => {
+    let states = new Set([startsWithPath]);
+    for (const rawNode of nodes) {
+      if (!rawNode || typeof rawNode !== "object" || Array.isArray(rawNode)) continue;
+      const node = rawNode as Record<string, unknown>;
+      if (node.type === "path") {
+        states = new Set([true]);
+      } else if (node.type === "decision") {
+        const thenNodes = Array.isArray(node.then) ? node.then : [];
+        const elseNodes = Array.isArray(node.else) ? node.else : [];
+        const outcomes = new Set<boolean>();
+        states.forEach((state) => {
+          terminalPathStates(thenNodes, state).forEach((outcome) => outcomes.add(outcome));
+          terminalPathStates(elseNodes, state).forEach((outcome) => outcomes.add(outcome));
+        });
+        states = outcomes;
+      }
+    }
+    return states;
+  };
+  const validateRoutineNodes = (nodes: unknown, path: string, fallback?: { count: { value: number; overflow?: boolean }; depth: number }): void => {
     if (!Array.isArray(nodes)) {
       issues.push({ path, message: "Routine branch must be an array of deployable steps", severity: "error" });
       return;
@@ -280,6 +311,16 @@ export function validateProjectJavaInvocations(project: BordeauxProject, catalog
         return;
       }
       const node = value as Record<string, unknown>;
+      if (fallback && fallback.count.value >= 128) {
+        if (!fallback.count.overflow) issues.push({ path: base, message: "Generated trajectory fallback cannot exceed 128 nodes", severity: "error" });
+        fallback.count.overflow = true;
+        return;
+      }
+      registerNodeId(node, base);
+      if (fallback) {
+        fallback.count.value += 1;
+        if (fallback.depth > 8) issues.push({ path: base, message: "Generated trajectory fallback cannot exceed 8 decision levels", severity: "error" });
+      }
       const nodeId = typeof node.id === "string" && node.id ? node.id : "unknown";
       if (node.type === "path") {
         if (typeof node.ref !== "string" || !exportablePathIds.has(node.ref)) {
@@ -288,22 +329,74 @@ export function validateProjectJavaInvocations(project: BordeauxProject, catalog
         return;
       }
       if (node.type === "decision") {
+        if (fallback && fallback.depth + 1 > 8) issues.push({ path: base, message: "Generated trajectory fallback cannot exceed 8 decision levels", severity: "error" });
         validateCondition(node.cond, `${base}.cond`, `Routine decision ${nodeId}`);
-        validateRoutineNodes(node.then, `${base}.then`);
-        validateRoutineNodes(node.else, `${base}.else`);
+        const childFallback = fallback ? { count: fallback.count, depth: fallback.depth + 1 } : undefined;
+        validateRoutineNodes(node.then, `${base}.then`, childFallback);
+        validateRoutineNodes(node.else, `${base}.else`, childFallback);
         return;
       }
       if (node.type === "builtin") {
         const argumentsValue = node.arguments;
         const durationS = argumentsValue && typeof argumentsValue === "object" && !Array.isArray(argumentsValue)
           ? (argumentsValue as Record<string, unknown>).durationS : undefined;
-        if (catalog?.generatedSchemaVersion !== "1.2"
+        if ((catalog?.generatedSchemaVersion !== "1.2" && catalog?.generatedSchemaVersion !== "1.3")
           || !catalog.builtIns?.some((builtIn) => builtIn.id === "bordeaux.wait" && builtIn.kind === "wait")) {
           issues.push({ path: `${base}.builtinId`, message: "Routine built-ins require generated catalog schema 1.2 with bordeaux.wait before export", severity: "error" });
         }
         if (node.builtinId !== "bordeaux.wait" || !Number.isFinite(durationS) || (durationS as number) < 0.02 || (durationS as number) > 15
           || !argumentsValue || typeof argumentsValue !== "object" || Array.isArray(argumentsValue) || Object.keys(argumentsValue).length !== 1) {
           issues.push({ path: `${base}.arguments`, message: "Wait must declare only a finite durationS from 0.02 to 15 seconds", severity: "error" });
+        }
+        return;
+      }
+      if (node.type === "generatedTrajectory") {
+        if (fallback) {
+          issues.push({ path: base, message: "Generated trajectory fallback cannot contain a nested generated trajectory", severity: "error" });
+          return;
+        }
+        const unexpected = Object.keys(node).find((key) => !["id", "type", "generatorId", "arguments", "fallback"].includes(key));
+        if (unexpected) issues.push({ path: `${base}.${unexpected}`, message: `Generated trajectory step has unsupported free-form field ${unexpected}`, severity: "error" });
+        if (catalog?.generatedSchemaVersion !== "1.3" || catalog.supportVersion !== "0.4.0") {
+          issues.push({ path: `${base}.generatorId`, message: "Generated trajectories require catalog schema 1.3 with support 0.4.0", severity: "error" });
+        }
+        const generator = typeof node.generatorId === "string" ? trajectoryGenerators.get(node.generatorId) : undefined;
+        if (!generator) {
+          issues.push({ path: `${base}.generatorId`, message: `Trajectory generator ${String(node.generatorId)} is not in the linked generated catalog`, severity: "error" });
+        }
+        const argumentsValue = node.arguments;
+        if (!argumentsValue || typeof argumentsValue !== "object" || Array.isArray(argumentsValue)) {
+          issues.push({ path: `${base}.arguments`, message: "Generated trajectory arguments must be an object", severity: "error" });
+        } else if (generator) {
+          const argumentRecord = argumentsValue as Record<string, unknown>;
+          const names = new Set(generator.inputs.map((input) => input.name));
+          Object.keys(argumentRecord).filter((name) => !names.has(name)).forEach((name) =>
+            issues.push({ path: `${base}.arguments.${name}`, message: `${name} is not an input of ${generator.label}`, severity: "error" }));
+          generator.inputs.forEach((input) => {
+            const message = javaParameterValueError(argumentRecord[input.name], input);
+            if (message) issues.push({ path: `${base}.arguments.${input.name}`, message, severity: "error" });
+          });
+        }
+        const fallbackValue = node.fallback;
+        if (!fallbackValue || typeof fallbackValue !== "object" || Array.isArray(fallbackValue)) {
+          issues.push({ path: `${base}.fallback`, message: "Generated trajectory fallback must be safeStop or a validated branch", severity: "error" });
+          return;
+        }
+        const fallbackRecord = fallbackValue as Record<string, unknown>;
+        if (fallbackRecord.type === "safeStop") {
+          if (Object.keys(fallbackRecord).length !== 1) issues.push({ path: `${base}.fallback`, message: "Safe-stop fallback cannot contain extra fields", severity: "error" });
+          if (generator?.fallbackPolicy === "validatedBranch") issues.push({ path: `${base}.fallback`, message: "Generator policy validatedBranch requires an embedded fallback branch", severity: "error" });
+        } else if (fallbackRecord.type === "branch") {
+          if (Object.keys(fallbackRecord).some((key) => key !== "type" && key !== "nodes")) issues.push({ path: `${base}.fallback`, message: "Fallback branch cannot contain free-form references", severity: "error" });
+          if (generator?.fallbackPolicy === "safeStopOnly") issues.push({ path: `${base}.fallback`, message: "Generator policy safeStopOnly does not permit a fallback branch", severity: "error" });
+          const branchNodes = fallbackRecord.nodes;
+          const count: { value: number; overflow?: boolean } = { value: 0 };
+          validateRoutineNodes(branchNodes, `${base}.fallback.nodes`, { count, depth: 0 });
+          if (!count.overflow && Array.isArray(branchNodes) && terminalPathStates(branchNodes, false).has(false)) {
+            issues.push({ path: `${base}.fallback.nodes`, message: "Every generated trajectory fallback route must reach an exported static path", severity: "error" });
+          }
+        } else {
+          issues.push({ path: `${base}.fallback.type`, message: "Generated trajectory fallback must be safeStop or a validated branch", severity: "error" });
         }
         return;
       }

@@ -42,6 +42,13 @@ function expectExactKeys(value: unknown, expected: Record<string, string[] | nul
 }
 
 describe("beta diagnostic bundle", () => {
+  it("records schema 1.3 catalog identity without copying generator details", () => {
+    const bundle = JSON.parse(buildDiagnosticBundle(input({ catalog: { schemaVersion: "1.3", catalogId: "competition-robot", catalogHash: hash, supportVersion: "0.4.0" } })));
+
+    expect(bundle.catalog).toEqual({ schemaVersion: "1.3", catalogId: "competition-robot", catalogHash: hash, supportVersion: "0.4.0" });
+    expect(bundle.catalog).not.toHaveProperty("trajectoryGenerators");
+  });
+
   it("emits the stable v1 allowlist and excludes hostile project and transport values", () => {
     const contents = buildDiagnosticBundle(input({
       // These hostile values intentionally live outside the typed allowlist. A future

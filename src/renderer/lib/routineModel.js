@@ -45,7 +45,7 @@ import { PM } from "./pathMath";
   }
 
   function authoritativeConditions(catalog) {
-    if (!catalog || catalog.authoritative !== true || (catalog.generatedSchemaVersion !== '1.1' && catalog.generatedSchemaVersion !== '1.2')) return [];
+    if (!catalog || catalog.authoritative !== true || !['1.1', '1.2', '1.3'].includes(catalog.generatedSchemaVersion)) return [];
     return (catalog.conditions || []).map((condition) => ({
       value: condition.id,
       label: condition.label,
@@ -63,7 +63,7 @@ import { PM } from "./pathMath";
   }
 
   function hasWaitBuiltIn(catalog) {
-    return Boolean(catalog && catalog.authoritative === true && catalog.generatedSchemaVersion === '1.2'
+    return Boolean(catalog && catalog.authoritative === true && (catalog.generatedSchemaVersion === '1.2' || catalog.generatedSchemaVersion === '1.3')
       && Array.isArray(catalog.builtIns)
       && catalog.builtIns.some((builtIn) => builtIn && builtIn.id === 'bordeaux.wait' && builtIn.kind === 'wait'));
   }
@@ -72,10 +72,21 @@ import { PM } from "./pathMath";
     return AUTHORABLE_STEPS.filter((step) => step.id !== 'wait' || hasWaitBuiltIn(catalog));
   }
 
-  function nodeDeploymentState(node) {
+  function trajectoryGenerator(catalog, generatorId) {
+    return catalog && catalog.authoritative === true && catalog.generatedSchemaVersion === '1.3'
+      && Array.isArray(catalog.trajectoryGenerators)
+      ? catalog.trajectoryGenerators.find((generator) => generator && generator.id === generatorId)
+      : null;
+  }
+
+  function nodeDeploymentState(node, catalog) {
     if (!node || typeof node !== 'object') return { deployable: false, legacy: false, label: 'Unknown step' };
     if (node.type === 'path' || node.type === 'decision') return { deployable: true, legacy: false };
     if (node.type === 'builtin' && node.builtinId === 'bordeaux.wait') return { deployable: true, legacy: false };
+    if (node.type === 'generatedTrajectory') {
+      const generator = trajectoryGenerator(catalog, node.generatorId);
+      return { deployable: Boolean(generator), legacy: false, dynamic: true, label: generator ? generator.label : 'Runtime dynamic trajectory' };
+    }
     if (node.type === 'function' && node.cat === 'command') return { deployable: true, legacy: false };
     if (node.type === 'function' && CATS[node.cat]) return { deployable: false, legacy: true, label: CATS[node.cat].label };
     return { deployable: false, legacy: false, label: 'Unknown step' };
@@ -93,11 +104,15 @@ import { PM } from "./pathMath";
   const seqOp = (id) => SEQ_OPS.find((o) => o.id === id) || SEQ_OPS[0];
 
   // ---- display title for any node ----
-  function nodeTitle(node, paths) {
+  function nodeTitle(node, paths, catalog) {
     if (!node || typeof node !== 'object') return 'Unknown step';
     if (node.type === 'path') { const p = paths && paths.find((path) => path.id === node.ref); return p ? p.name : '(unbound path)'; }
     if (node.type === 'decision') return node.cond || 'Choose condition';
     if (node.type === 'builtin') return node.builtinId === 'bordeaux.wait' ? 'Wait' : 'Unsupported built-in';
+    if (node.type === 'generatedTrajectory') {
+      const generator = trajectoryGenerator(catalog, node.generatorId);
+      return `${generator ? generator.label : (node.generatorId || 'Generated trajectory')} · Runtime dynamic`;
+    }
     if (node.cat === 'command') return node.title || (node.invocation && node.invocation.commandId) || 'Choose command';
     if (node.cat === 'generate') return node.funcRef || 'GeneratePath';
     if (node.cat === 'sequence') { const o = seqOp(node.op); return o.verb + (node.target ? ' · ' + node.target : ''); }
@@ -140,7 +155,7 @@ import { PM } from "./pathMath";
   const EVENT_DWELL = 0.45; // seconds a non-driving function holds for, in the run
 
   // ---- flatten a routine into an executed step list given decision outcomes ----
-  function buildRun(routine, paths, robot, outcomes, plannerId) {
+  function buildRun(routine, paths, robot, outcomes, plannerId, catalog) {
     outcomes = outcomes || {};
     const flat = [];
     const collect = (nodes) => {
@@ -153,6 +168,8 @@ import { PM } from "./pathMath";
           flat.push({ node: n, kind: 'path' });
         } else if (n.type === 'builtin') {
           flat.push({ node: n, kind: 'wait' });
+        } else if (n.type === 'generatedTrajectory') {
+          flat.push({ node: n, kind: 'dynamic', label: nodeTitle(n, paths, catalog) });
         } else if (n.cat === 'generate' && n.preview) {
           flat.push({ node: n, kind: 'gen' });
         } else {
@@ -175,6 +192,8 @@ import { PM } from "./pathMath";
         steps.push({ ...it, t0, t1, dur, segIdx: segs.length - 1, idxLabel, label, dist: dp.deriv.sample.length });
         lastPose = dp.pts[dp.pts.length - 1];
         t = t1;
+      } else if (it.kind === 'dynamic') {
+        steps.push({ ...it, t0: t, t1: t, dur: 0, dynamic: true, pose: lastPose });
       } else if (it.kind === 'wait') {
         const dur = Math.max(0, Number.isFinite(it.node.arguments && it.node.arguments.durationS) ? it.node.arguments.durationS : 0);
         steps.push({ ...it, t0: t, t1: t + dur, dur, pose: lastPose });

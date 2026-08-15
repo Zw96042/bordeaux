@@ -12,7 +12,7 @@ export interface DiagnosticBundleInput {
   app: { version: string; build: BuildKind; channel: Channel };
   os: { platform: string; release: string; arch: string };
   fieldPin: { id: string; revision: string; coordinateSchemaId: string } | null;
-  catalog: { schemaVersion: "1.0" | "1.1" | "1.2"; catalogId: string; catalogHash: string; supportVersion: string } | null;
+  catalog: { schemaVersion: "1.0" | "1.1" | "1.2" | "1.3"; catalogId: string; catalogHash: string; supportVersion: string } | null;
   export: { state: "generated"; sha256: string; pathCount: number; eventCount: number; sampleCount: number } | { state: "unavailable" | "invalid" };
   routinePreflight: { state: PreflightState; issueCount: number };
   robotAcknowledgement: DiagnosticRobotAcknowledgement;

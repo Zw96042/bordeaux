@@ -398,7 +398,7 @@ function handle(channel: string, listener: (event: Electron.IpcMainInvokeEvent, 
 
 function diagnosticCatalog(catalog: JavaCommandCatalog | null): DiagnosticBundleInput["catalog"] {
   if (!catalog?.authoritative || !catalog.catalogId || !catalog.catalogHash || !catalog.supportVersion
-    || (catalog.generatedSchemaVersion !== "1.0" && catalog.generatedSchemaVersion !== "1.1" && catalog.generatedSchemaVersion !== "1.2")) {
+    || (catalog.generatedSchemaVersion !== "1.0" && catalog.generatedSchemaVersion !== "1.1" && catalog.generatedSchemaVersion !== "1.2" && catalog.generatedSchemaVersion !== "1.3")) {
     return null;
   }
   return {

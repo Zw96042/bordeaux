@@ -67,7 +67,7 @@ describe("Java support installation and trusted catalog builds", () => {
     expect(await fs.readFile(path.join(project, ".bordeaux/INTEGRATION.md"), "utf8")).toContain("BordeauxBindings.generatedCapabilities(actions)");
     expect(await fs.readFile(path.join(project, ".bordeaux/bordeaux.gradle"), "utf8")).toContain("-Abordeaux.catalogId=");
     expect(await fs.readFile(path.join(project, `.bordeaux/${buildName}.before-bordeaux`), "utf8")).toContain("GradleRIO");
-    await expect(inspectJavaSupport(project, sourceCatalog(), artifacts)).resolves.toMatchObject({ installed: true, supportVersion: "0.3.0", wrapperAvailable: true });
+    await expect(inspectJavaSupport(project, sourceCatalog(), artifacts)).resolves.toMatchObject({ installed: true, supportVersion: "0.4.0", wrapperAvailable: true });
     const applyLine = dialect === "groovy" ? "apply from: file('.bordeaux/bordeaux.gradle')" : "apply(from = file(\".bordeaux/bordeaux.gradle\"))";
     await fs.writeFile(path.join(project, buildName), contents.replace(applyLine, ""));
     await expect(inspectJavaSupport(project, sourceCatalog(), artifacts)).resolves.toMatchObject({ installed: false });

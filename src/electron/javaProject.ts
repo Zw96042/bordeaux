@@ -687,6 +687,7 @@ export async function discoverJavaProject(inputPath: string): Promise<JavaComman
       authoritative: true,
       conditions: generatedCatalog.conditions,
       builtIns: generatedCatalog.builtIns,
+      trajectoryGenerators: generatedCatalog.trajectoryGenerators,
     } : { authoritative: false }),
     commands,
     warnings: [...new Set(warnings)].slice(0, 100),

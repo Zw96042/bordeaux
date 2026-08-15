@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { compareExactDecimals, javaParameterValueError } from "../shared/javaCommands";
-import type { JavaBuiltInDescriptor, JavaCommandDescriptor, JavaCommandParameter, JavaConditionDescriptor, JavaValueSchema } from "../shared/types";
+import type { JavaBuiltInDescriptor, JavaCommandDescriptor, JavaCommandParameter, JavaConditionDescriptor, JavaTrajectoryGeneratorDescriptor, JavaTrajectoryGeneratorLimits, JavaValueSchema } from "../shared/types";
 
 const MAX_CATALOG_BYTES = 2 * 1024 * 1024;
 const MAX_COMMANDS = 5_000;
@@ -11,15 +11,18 @@ const MAX_PARAMETERS = 256;
 const MAX_SCHEMA_DEPTH = 24;
 const MAX_OBJECT_FIELDS = 256;
 const MAX_ENUM_VALUES = 1_024;
+const MAX_TRAJECTORY_GENERATORS = 1_024;
+const MAX_GENERATOR_INPUTS = 16;
 
 interface GeneratedJavaCatalog {
-  schemaVersion: "1.0" | "1.1" | "1.2";
+  schemaVersion: "1.0" | "1.1" | "1.2" | "1.3";
   catalogId: string;
   supportVersion: string;
   catalogHash: string;
   commands: JavaCommandDescriptor[];
   conditions: JavaConditionDescriptor[];
   builtIns: JavaBuiltInDescriptor[];
+  trajectoryGenerators: JavaTrajectoryGeneratorDescriptor[];
 }
 
 const BORDEAUX_WAIT: JavaBuiltInDescriptor = {
@@ -43,6 +46,12 @@ const BORDEAUX_WAIT: JavaBuiltInDescriptor = {
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function assertExactKeys(value: Record<string, unknown>, keys: readonly string[], label: string): void {
+  const allowed = new Set(keys);
+  const unexpected = Object.keys(value).find((key) => !allowed.has(key));
+  if (unexpected) throw new Error(`Generated Java catalog ${label} has unexpected field ${unexpected}`);
 }
 
 function text(value: unknown, label: string, maxLength: number): string {
@@ -150,41 +159,138 @@ function canonicalJson(value: unknown): string {
   return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(",")}}`;
 }
 
-export function generatedCatalogHash(commands: unknown, conditions?: unknown, builtIns?: unknown): string {
-  const input = builtIns === undefined
+export function generatedCatalogHash(commands: unknown, conditions?: unknown, builtIns?: unknown, trajectoryGenerators?: unknown): string {
+  const input = trajectoryGenerators !== undefined
+    ? { builtIns, commands, conditions, trajectoryGenerators }
+    : builtIns === undefined
     ? conditions === undefined ? commands : { commands, conditions }
     : { builtIns, commands, conditions };
   return `sha256:${createHash("sha256").update(canonicalJson(input), "utf8").digest("hex")}`;
 }
 
+const GENERATOR_LIMITS: ReadonlyArray<readonly [keyof JavaTrajectoryGeneratorLimits, number, number, boolean]> = [
+  ["timeoutMs", 1, 100, true],
+  ["maxSamples", 2, 4_096, true],
+  ["maxDurationS", 0.02, 15, false],
+  ["maxDistanceM", 0, 54, false],
+  ["maxVelocityMps", 0, 10, false],
+  ["maxAccelerationMps2", 0, 30, false],
+  ["maxCentripetalAccelerationMps2", 0, 30, false],
+  ["maxAngularVelocityRadps", 0, 25, false],
+  ["maxAngularAccelerationRadps2", 0, 100, false],
+  ["minClearanceM", 0, 2, false],
+];
+
+function parseTrajectoryGenerator(raw: unknown): JavaTrajectoryGeneratorDescriptor {
+  const value = record(raw);
+  if (!value) throw new Error("Generated Java catalog trajectory generator must be an object");
+  assertExactKeys(value, ["id", "label", "description", "aliases", "semanticTags", "ownerType", "member", "inputs", "preview", "fallbackPolicy", "limits", "source"], "trajectory generator");
+  const id = text(value.id, "trajectory generator ID", 256);
+  if (!/^[A-Za-z0-9_.:#()$,-]+$/.test(id)) throw new Error(`Generated Java catalog trajectory generator ID ${id} contains unsupported characters`);
+  const aliases = optionalTerms(value.aliases, "trajectory generator aliases");
+  const semanticTags = optionalTerms(value.semanticTags, "trajectory generator semantic tags", true);
+  for (const [label, terms] of [["aliases", aliases], ["semantic tags", semanticTags]] as const) {
+    if (terms && terms.some((term, index) => index > 0 && term <= terms[index - 1])) {
+      throw new Error(`Generated Java catalog trajectory generator ${label} must be sorted and unique`);
+    }
+  }
+  if (!Array.isArray(value.inputs) || value.inputs.length > MAX_GENERATOR_INPUTS) {
+    throw new Error(`Generated Java catalog trajectory generator ${id} cannot declare more than ${MAX_GENERATOR_INPUTS} inputs`);
+  }
+  let previousInput: string | null = null;
+  const inputs = value.inputs.map((rawInput) => {
+    const input = record(rawInput);
+    if (!input) throw new Error(`Generated Java catalog trajectory generator ${id} input must be an object`);
+    assertExactKeys(input, ["name", "label", "description", "unit", "min", "max", "javaType", "role", "schema"], `trajectory generator ${id} input`);
+    const parameter = parseParameter(input);
+    if (parameter.role !== "argument" || !["boolean", "enum", "integer", "integerString", "decimalString", "number"].includes(parameter.schema.kind)) {
+      throw new Error(`Generated Java catalog trajectory generator ${id} input ${parameter.name} must be a boolean, enum, or numeric scalar argument`);
+    }
+    const schema = record(input.schema)!;
+    const schemaKeys = parameter.schema.kind === "enum" ? ["kind", "javaType", "enumValues"] : ["kind", "javaType"];
+    assertExactKeys(schema, schemaKeys, `trajectory generator ${id} input ${parameter.name} schema`);
+    if (parameter.schema.kind === "enum" && parameter.schema.enumValues!.some((enumValue, index, values) => index > 0 && enumValue <= values[index - 1])) {
+      throw new Error(`Generated Java catalog trajectory generator ${id} input ${parameter.name} enum values must be sorted and unique`);
+    }
+    if (["integer", "integerString", "decimalString", "number"].includes(parameter.schema.kind) && (parameter.min === undefined || parameter.max === undefined)) {
+      throw new Error(`Generated Java catalog trajectory generator ${id} numeric input ${parameter.name} requires a minimum and maximum`);
+    }
+    if (Object.hasOwn(input, "defaultValue")) throw new Error(`Generated Java catalog trajectory generator ${id} inputs cannot declare defaults`);
+    if (previousInput !== null && parameter.name <= previousInput) throw new Error(`Generated Java catalog trajectory generator ${id} inputs must be sorted by unique name`);
+    previousInput = parameter.name;
+    return parameter;
+  });
+  const preview = record(value.preview);
+  if (!preview || preview.kind !== "runtimeDynamic") throw new Error(`Generated Java catalog trajectory generator ${id} preview must be runtimeDynamic`);
+  assertExactKeys(preview, ["kind"], `trajectory generator ${id} preview`);
+  const fallbackPolicy = text(value.fallbackPolicy, "trajectory generator fallback policy", 32);
+  if (fallbackPolicy !== "safeStopOnly" && fallbackPolicy !== "validatedBranch") throw new Error(`Generated Java catalog trajectory generator ${id} fallback policy is invalid`);
+  const rawLimits = record(value.limits);
+  if (!rawLimits) throw new Error(`Generated Java catalog trajectory generator ${id} limits are required`);
+  assertExactKeys(rawLimits, GENERATOR_LIMITS.map(([name]) => name), `trajectory generator ${id} limits`);
+  const limits = {} as JavaTrajectoryGeneratorLimits;
+  for (const [name, minimum, maximum, integer] of GENERATOR_LIMITS) {
+    const limit = rawLimits[name];
+    if (typeof limit !== "number" || !Number.isFinite(limit) || (integer && !Number.isInteger(limit)) || limit < minimum || limit > maximum) {
+      throw new Error(`Generated Java catalog trajectory generator ${id} ${name} must be ${integer ? "an integer " : ""}from ${minimum} to ${maximum}`);
+    }
+    limits[name] = limit;
+  }
+  const source = record(value.source);
+  if (!source) throw new Error(`Generated Java catalog trajectory generator ${id} source is invalid`);
+  assertExactKeys(source, ["file", "line"], `trajectory generator ${id} source`);
+  const sourceFile = text(source.file, "trajectory generator source path", 1_024);
+  if (path.isAbsolute(sourceFile) || sourceFile.split(/[\\/]/).includes("..")) throw new Error(`Generated Java catalog trajectory generator source path ${sourceFile} must be relative`);
+  if (!Number.isInteger(source.line) || (source.line as number) < 0) throw new Error(`Generated Java catalog trajectory generator ${id} source line is invalid`);
+  return {
+    id,
+    label: text(value.label, "trajectory generator label", 256),
+    description: optionalText(value.description, "trajectory generator description", 2_048),
+    aliases,
+    semanticTags,
+    ownerType: text(value.ownerType, "trajectory generator owner", 512),
+    member: text(value.member, "trajectory generator member", 256),
+    inputs,
+    preview: { kind: "runtimeDynamic" },
+    fallbackPolicy,
+    limits,
+    source: { file: sourceFile, line: (source.line as number) > 0 ? source.line as number : 1 },
+  };
+}
+
 export function parseGeneratedJavaCatalog(raw: unknown): GeneratedJavaCatalog {
   const value = record(raw);
   const schemaVersion = value?.schemaVersion;
-  if (!value || (schemaVersion !== "1.0" && schemaVersion !== "1.1" && schemaVersion !== "1.2") || !Array.isArray(value.commands) || value.commands.length > MAX_COMMANDS) {
-    throw new Error("Generated Java catalog must use schema version 1.0, 1.1, or 1.2 and contain a bounded commands array");
+  if (!value || (schemaVersion !== "1.0" && schemaVersion !== "1.1" && schemaVersion !== "1.2" && schemaVersion !== "1.3") || !Array.isArray(value.commands) || value.commands.length > MAX_COMMANDS) {
+    throw new Error("Generated Java catalog must use schema version 1.0, 1.1, 1.2, or 1.3 and contain a bounded commands array");
   }
   const supportVersion = text(value.supportVersion, "support version", 64);
-  if (!((schemaVersion === "1.0" && supportVersion === "0.1.0") || (schemaVersion === "1.1" && supportVersion === "0.2.0") || (schemaVersion === "1.2" && supportVersion === "0.3.0"))) {
+  if (!((schemaVersion === "1.0" && supportVersion === "0.1.0") || (schemaVersion === "1.1" && supportVersion === "0.2.0") || (schemaVersion === "1.2" && supportVersion === "0.3.0") || (schemaVersion === "1.3" && supportVersion === "0.4.0"))) {
     throw new Error(`Generated Java catalog schema ${schemaVersion} requires its matching supported runtime version`);
   }
   const catalogId = text(value.catalogId, "catalog ID", 256);
   const catalogHash = text(value.catalogHash, "catalog hash", 96);
   if (!/^sha256:[0-9a-f]{64}$/.test(catalogHash)) throw new Error("Generated Java catalog hash is invalid");
   if (schemaVersion === "1.0" && value.conditions !== undefined) throw new Error("Legacy generated Java catalog 1.0 cannot declare conditions");
-  if ((schemaVersion === "1.1" || schemaVersion === "1.2") && (!Array.isArray(value.conditions) || value.conditions.length > MAX_CONDITIONS)) {
+  if (schemaVersion !== "1.0" && (!Array.isArray(value.conditions) || value.conditions.length > MAX_CONDITIONS)) {
     throw new Error(`Generated Java catalog ${schemaVersion} must contain a bounded conditions array`);
   }
-  if (schemaVersion !== "1.2" && value.builtIns !== undefined) throw new Error("Generated Java catalog built-ins require schema 1.2");
-  if (schemaVersion === "1.2" && (!Array.isArray(value.builtIns) || canonicalJson(value.builtIns) !== canonicalJson([BORDEAUX_WAIT]))) {
-    throw new Error("Generated Java catalog 1.2 must declare the exact Bordeaux-owned built-in capabilities");
+  if (schemaVersion !== "1.2" && schemaVersion !== "1.3" && value.builtIns !== undefined) throw new Error("Generated Java catalog built-ins require schema 1.2 or newer");
+  if ((schemaVersion === "1.2" || schemaVersion === "1.3") && (!Array.isArray(value.builtIns) || canonicalJson(value.builtIns) !== canonicalJson([BORDEAUX_WAIT]))) {
+    throw new Error(`Generated Java catalog ${schemaVersion} must declare the exact Bordeaux-owned built-in capabilities`);
   }
+  if (schemaVersion !== "1.3" && value.trajectoryGenerators !== undefined) throw new Error("Generated Java catalog trajectory generators require schema 1.3");
+  if (schemaVersion === "1.3" && (!Array.isArray(value.trajectoryGenerators) || value.trajectoryGenerators.length > MAX_TRAJECTORY_GENERATORS)) throw new Error("Generated Java catalog 1.3 must contain a bounded trajectoryGenerators array");
   const rawConditions = schemaVersion === "1.0" ? [] : value.conditions as unknown[];
-  const rawBuiltIns = schemaVersion === "1.2" ? value.builtIns as unknown[] : [];
+  const rawBuiltIns = schemaVersion === "1.2" || schemaVersion === "1.3" ? value.builtIns as unknown[] : [];
+  const rawTrajectoryGenerators = schemaVersion === "1.3" ? value.trajectoryGenerators as unknown[] : [];
   const expectedHash = schemaVersion === "1.0"
     ? generatedCatalogHash(value.commands)
     : schemaVersion === "1.1"
       ? generatedCatalogHash(value.commands, rawConditions)
-      : generatedCatalogHash(value.commands, rawConditions, rawBuiltIns);
+      : schemaVersion === "1.2"
+        ? generatedCatalogHash(value.commands, rawConditions, rawBuiltIns)
+        : generatedCatalogHash(value.commands, rawConditions, rawBuiltIns, rawTrajectoryGenerators);
   if (catalogHash !== expectedHash) throw new Error("Generated Java catalog hash does not match its declared capabilities");
   const ids = new Set<string>();
   const commands = value.commands.map((rawCommand) => {
@@ -257,6 +363,14 @@ export function parseGeneratedJavaCatalog(raw: unknown): GeneratedJavaCatalog {
       };
     })
     : [];
+  let previousGeneratorId: string | null = null;
+  const trajectoryGenerators = rawTrajectoryGenerators.map((rawGenerator) => {
+    const generator = parseTrajectoryGenerator(rawGenerator);
+    if (ids.has(generator.id) || conditionIds.has(generator.id)) throw new Error(`Generated Java catalog capability ID ${generator.id} collides across commands, conditions, and trajectory generators`);
+    if (previousGeneratorId !== null && generator.id <= previousGeneratorId) throw new Error("Generated Java catalog trajectory generators must be sorted by unique ID");
+    previousGeneratorId = generator.id;
+    return generator;
+  });
   return {
     schemaVersion,
     catalogId,
@@ -264,9 +378,10 @@ export function parseGeneratedJavaCatalog(raw: unknown): GeneratedJavaCatalog {
     catalogHash,
     commands,
     conditions,
-    builtIns: schemaVersion === "1.2"
+    builtIns: schemaVersion === "1.2" || schemaVersion === "1.3"
       ? [{ ...BORDEAUX_WAIT, parameters: [{ ...BORDEAUX_WAIT.parameters[0], schema: { ...BORDEAUX_WAIT.parameters[0].schema } }] }]
       : [],
+    trajectoryGenerators,
   };
 }
 

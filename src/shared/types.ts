@@ -263,13 +263,42 @@ export interface JavaBuiltInDescriptor {
   parameters: [JavaCommandParameter];
 }
 
+export interface JavaTrajectoryGeneratorLimits {
+  timeoutMs: number;
+  maxSamples: number;
+  maxDurationS: number;
+  maxDistanceM: number;
+  maxVelocityMps: number;
+  maxAccelerationMps2: number;
+  maxCentripetalAccelerationMps2: number;
+  maxAngularVelocityRadps: number;
+  maxAngularAccelerationRadps2: number;
+  minClearanceM: number;
+}
+
+/** A team-owned runtime trajectory generator with a fully bounded output contract. */
+export interface JavaTrajectoryGeneratorDescriptor {
+  id: string;
+  label: string;
+  description?: string;
+  aliases?: string[];
+  semanticTags?: string[];
+  ownerType: string;
+  member: string;
+  inputs: JavaCommandParameter[];
+  preview: { kind: "runtimeDynamic" };
+  fallbackPolicy: "safeStopOnly" | "validatedBranch";
+  limits: JavaTrajectoryGeneratorLimits;
+  source: { file: string; line: number };
+}
+
 export interface JavaCommandCatalog {
   projectName: string;
   sourceFileCount: number;
   scannedAt: string;
   source?: "source" | "generated" | "mixed";
   runtimeCommandCount?: number;
-  generatedSchemaVersion?: "1.0" | "1.1" | "1.2";
+  generatedSchemaVersion?: "1.0" | "1.1" | "1.2" | "1.3";
   catalogId?: string;
   supportVersion?: string;
   catalogHash?: string;
@@ -281,6 +310,8 @@ export interface JavaCommandCatalog {
   conditions?: JavaConditionDescriptor[];
   /** Bordeaux-owned built-ins from the generated catalog's semantic identity. */
   builtIns?: JavaBuiltInDescriptor[];
+  /** Team-owned runtime trajectory generators. Present only in generated schema 1.3. */
+  trajectoryGenerators?: JavaTrajectoryGeneratorDescriptor[];
   warnings: string[];
 }
 
@@ -395,7 +426,17 @@ export interface RoutineBuiltInNode {
   arguments: { durationS: number };
 }
 
-export type RoutineNode = RoutineFunctionNode | RoutinePathNode | RoutineDecisionNode | RoutineBuiltInNode;
+export interface RoutineGeneratedTrajectoryNode {
+  id: string;
+  type: "generatedTrajectory";
+  generatorId: string;
+  arguments: Record<string, CommandArgumentValue>;
+  fallback:
+    | { type: "safeStop" }
+    | { type: "branch"; nodes: RoutineNode[] };
+}
+
+export type RoutineNode = RoutineFunctionNode | RoutinePathNode | RoutineDecisionNode | RoutineBuiltInNode | RoutineGeneratedTrajectoryNode;
 
 export interface AutonomousRoutine {
   /** Stable project-local identity. */

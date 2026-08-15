@@ -31,7 +31,7 @@ import { UI } from "./ui";
   function StepInspector(props) {
     const { node, paths, acq, run, javaProject, conditionOptions = [] } = props;
     if (!node) return null;
-    const deployment = A.nodeDeploymentState(node);
+    const deployment = A.nodeDeploymentState(node, javaProject && javaProject.catalog);
     if (!deployment.deployable) {
       const title = deployment.legacy ? (deployment.label || 'Legacy step') : 'Unsupported step';
       return h('div', { className: 'ctxinsp' },
@@ -70,6 +70,13 @@ import { UI } from "./ui";
           onChange: (event) => set({ arguments: { durationS: Number(event.target.value) } }) }),
         h('div', { className: 'seg-hint' }, 'Pause the routine for 0.02 to 15 seconds before the next step.'),
         h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete wait'));
+
+    } else if (node.type === 'generatedTrajectory') {
+      icon = 'route'; title = deployment.label || 'Generated trajectory'; tag = 'runtime dynamic'; accent = '#cf962f';
+      body = h(React.Fragment, null,
+        h('div', { className: 'rt-callout' }, h(Icon, { name: 'info', size: 14 }), 'This segment is generated and validated on the robot at runtime. Bordeaux does not fabricate desktop geometry, duration, distance, or clearance for it.'),
+        h('div', { className: 'seg-hint' }, 'Fallback: ' + (node.fallback && node.fallback.type === 'branch' ? 'validated static branch' : 'safe stop')),
+        h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Remove generated trajectory'));
 
     } else if (node.type === 'decision') {
       icon = 'branch'; title = 'Decision'; tag = 'branch'; accent = '#9aa3b0';
@@ -219,12 +226,12 @@ import { UI } from "./ui";
       left: run.total ? step.t0 / run.total * 100 : 0,
       width: run.total ? (step.t1 - step.t0) / run.total * 100 : 0,
       color: step.kind === 'path' ? 'var(--accent)' : step.kind === 'gen' ? A.CATS.generate.color : (step.node.cat && A.CATS[step.node.cat] ? A.CATS[step.node.cat].color : 'var(--txt-3)'),
-      label: A.nodeTitle(step.node),
+      label: step.label || A.nodeTitle(step.node),
     }));
     const instants = run.steps.filter((step) => step.t1 <= step.t0).map((step) => ({
       key: step.node.id,
       left: run.total ? step.t0 / run.total * 100 : 0,
-      label: A.nodeTitle(step.node),
+      label: step.label || A.nodeTitle(step.node),
     }));
 
     return h('div', { className: 'rt-transport timeline' + (running ? ' running' : '') },

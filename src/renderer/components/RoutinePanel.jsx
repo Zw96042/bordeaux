@@ -71,7 +71,7 @@ import { UI } from "./ui";
 
   // ---- one step card ----
   function StepCard(props) {
-    const { node, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction, nested, waitAvailable } = props;
+    const { node, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction, nested, waitAvailable, catalog } = props;
     const sel = selId === node.id;
     const active = activeId === node.id;
     const fired = firedIds.has(node.id) && !active;
@@ -81,7 +81,7 @@ import { UI } from "./ui";
 
     const seg = run.segs.find((s) => s.nodeId === node.id);
     let icon, color, meta, tag, kindCls;
-    const deployment = A.nodeDeploymentState(node);
+    const deployment = A.nodeDeploymentState(node, catalog);
     if (!deployment.deployable) {
       icon = 'info'; color = '#d2655f'; kindCls = 'fn'; tag = 'Legacy — cannot deploy'; meta = deployment.legacy ? 'Replace or remove this legacy step before export' : 'This unsupported step can be removed but cannot deploy';
     } else if (node.type === 'path') {
@@ -91,6 +91,8 @@ import { UI } from "./ui";
       icon = 'branch'; color = '#9aa3b0'; kindCls = 'decision'; meta = 'routes the run';
     } else if (node.type === 'builtin') {
       icon = 'pause'; color = '#cf962f'; kindCls = 'fn'; tag = 'Wait'; meta = fmt(node.arguments && node.arguments.durationS) + ' pause';
+    } else if (node.type === 'generatedTrajectory') {
+      icon = 'route'; color = '#cf962f'; kindCls = 'fn'; tag = 'Runtime dynamic'; meta = 'Generated and validated on the robot · no desktop preview';
     } else {
       const C = A.CATS[node.cat] || { icon: 'info', color: '#d2655f', label: 'Unknown step' }; icon = C.icon; color = C.color; kindCls = 'fn';
       tag = C.label;
@@ -110,7 +112,7 @@ import { UI } from "./ui";
         : seg ? h('span', { className: 'rt-step-idx' }, seg.idxLabel) : null,
       h('span', { className: 'rt-step-ic', style: { color } }, h(Icon, { name: icon, size: 15 })),
       h('button', { className: 'rt-step-body', type: 'button', 'aria-pressed': sel, onClick: () => onSelect(sel ? null : node.id) },
-        h('div', { className: 'rt-step-title' }, A.nodeTitle(node, paths)),
+        h('div', { className: 'rt-step-title' }, A.nodeTitle(node, paths, catalog)),
         h('div', { className: 'rt-step-meta' }, isCollapsed ? (A.branchCount(node.then) + A.branchCount(node.else)) + ' steps in 2 branches' : meta)),
       tag && h('span', { className: 'rt-step-tag', style: { color, borderColor: color } }, tag),
       active && h('span', { className: 'rt-step-live' }, node.type === 'path' || node.type === 'builtin' || node.cat === 'generate' ? 'running' : 'firing'),
@@ -137,7 +139,7 @@ import { UI } from "./ui";
               h('span', { className: 'rt-brcount' }, cnt),
               out === br && h('span', { className: 'rt-brlive' }, 'sim')),
             h('div', { className: 'rt-brbody' },
-              (Array.isArray(node[br]) ? node[br] : []).map((cn, index) => h(StepCard, { key: cn.id || index, node: cn, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction: cn.type === 'function', nested: true, waitAvailable })),
+              (Array.isArray(node[br]) ? node[br] : []).map((cn, index) => h(StepCard, { key: cn.id || index, node: cn, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction: cn.type === 'function', nested: true, waitAvailable, catalog })),
               h(AddStep, { variant: 'end', label: 'Add to branch', waitAvailable, onPick: (t, c) => acq.addBranch(node.id, br, t, c) })));
         })));
   }
@@ -166,7 +168,7 @@ import { UI } from "./ui";
           : h('div', { className: 'rt-list' },
               h(AddStep, { variant: 'gap', waitAvailable, onPick: (t, c) => acq.prepend(t, c) }),
               routine.nodes.map((n, index) => h(React.Fragment, { key: n.id || index },
-                h(StepCard, { node: n, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction: n.type === 'function', waitAvailable }),
+                h(StepCard, { node: n, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction: n.type === 'function', waitAvailable, catalog }),
                 index < routine.nodes.length - 1 && h(AddStep, { variant: 'gap', waitAvailable, onPick: (t, c) => acq.addAfter(n.id, t, c) }))),
               h(AddStep, { variant: 'end', waitAvailable, onPick: (t, c) => acq.addEnd(t, c) }))));
   }
