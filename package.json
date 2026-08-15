@@ -17,6 +17,7 @@
     "certify:field": "npm run build:electron && node scripts/certify-field.mjs",
     "test": "npm run verify:license && vitest run",
     "test:benchmark:e2e": "node --test tests/rendererBrowserBenchmark.e2e.mjs",
+    "test:benchmark:pathplanner": "npm run build:electron && node scripts/pathplanner-adapter-integration.mjs",
     "test:java": "node scripts/build-java.mjs test",
     "test:java-integration": "npm run build && npm run test:java-integration:built",
     "test:java-integration:built": "node scripts/java-project-integration.mjs",
