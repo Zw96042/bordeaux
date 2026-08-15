@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { minimumPathClearance } from "../../shared/agent/pathAnalysis";
+import { minimumRobotFieldClearance } from "../../shared/agent/fieldClearance";
 import { PM } from "../../shared/math/pm";
 import { activeRanges, effectiveRanges } from "../../shared/planners/rotationPriority";
 import { MAX_TRAJECTORY_SAMPLES } from "../../shared/planners/limits";
@@ -370,7 +370,7 @@ function validateGeometry(
       addIssue(issues, { code: "geometry:fixed-heading", message: "Candidate changes the frozen heading law.", sampleIndex });
     }
   });
-  if (minimumPathClearance(fixture.project, dense.samples) < -1e-4) {
+  if (minimumRobotFieldClearance(fixture.project.robot, dense.samples) < -1e-4) {
     addIssue(issues, { code: "geometry:field-collision", message: "Candidate swept footprint intersects the field boundary or a solid obstacle." });
   }
   validateSemantics(path, trajectory, issues);

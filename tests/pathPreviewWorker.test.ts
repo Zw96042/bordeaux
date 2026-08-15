@@ -28,7 +28,7 @@ function finalTrajectory(status = "optimal"): any {
 }
 
 describe("path preview worker final optimization", () => {
-  it("runs the fixed final optimizer only for an optimized final request", () => {
+  it("runs the corridor final optimizer only for an optimized final request", () => {
     const optimize = () => finalTrajectory();
 
     const result = processPathPreviewJob({
@@ -45,6 +45,28 @@ describe("path preview worker final optimization", () => {
         metrics: { v: [0, 1.2, 0] },
       },
     });
+  });
+
+  it("renders accepted corridor geometry without mutating the authored path", () => {
+    const authored = { id: "authored", x: 1 };
+    const optimizedPath = { id: "candidate", x: 1.2 };
+    const derive = (path: any) => {
+      const value = derived();
+      if (path.id === "candidate") value.sample.pts[1].x = 1.2;
+      return value;
+    };
+    const accepted = finalTrajectory();
+    accepted.optimizedPath = optimizedPath;
+    accepted.samples[1].x = 1.2;
+
+    const result = processPathPreviewJob({
+      id: 3, quality: "final", plannerId: "optimizedTrajectory", path: authored, robot: {}, perSegment: 56,
+      deadline: "common", deadlineMs: 5_000,
+    }, derive, () => accepted);
+
+    expect(authored).toEqual({ id: "authored", x: 1 });
+    expect(result.value.sample.pts[1].x).toBe(1.2);
+    expect(result.value.finalTrajectory.optimizedPath).toEqual(optimizedPath);
   });
 
   it("projects an equivalent result through the same renderer-facing trajectory", () => {

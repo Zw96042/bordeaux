@@ -5,6 +5,8 @@ interface WorkerJob {
   id: number;
   quality: "interactive" | "final";
   perSegment: number;
+  deadline: "common" | "stress" | "hard";
+  deadlineMs: number;
 }
 
 class FakeWorker {
@@ -71,7 +73,7 @@ describe("final planning execution", () => {
       value: { source: "final" },
       durationMs: 12,
     });
-    expect(job).toMatchObject({ quality: "final", perSegment: 56 });
+    expect(job).toMatchObject({ quality: "final", perSegment: 56, deadline: "common", deadlineMs: 5_000 });
     expect(worker.terminated).toBe(true);
   });
 
@@ -108,6 +110,7 @@ describe("final planning execution", () => {
       { path: { id: "path" }, robot: {}, plannerId: "profiledSpline" },
       { interactiveResult, deadline },
     );
+    expect(worker.jobs[0]).toMatchObject({ deadline, deadlineMs });
     await vi.advanceTimersByTimeAsync(deadlineMs);
 
     await expect(request.promise).resolves.toEqual({

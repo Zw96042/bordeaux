@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const APPLICATION_JAVASCRIPT_BUDGET_BYTES = 500 * 1024;
-const WORKER_JAVASCRIPT_BUDGET_BYTES = 128 * 1024;
+const WORKER_JAVASCRIPT_BUDGET_BYTES = 136 * 1024;
 const CSS_BUDGET_BYTES = 140 * 1024;
 const rendererDirectory = path.resolve("dist-renderer");
 const renderer = path.join(rendererDirectory, "index.html");

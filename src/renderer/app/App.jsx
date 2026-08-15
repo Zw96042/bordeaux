@@ -1668,7 +1668,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
               plannerId === 'optimizedTrajectory' && !derivation.pending && derivation.optimization && h('div', { className: 'stage-hint', role: 'status' },
                 derivation.optimization.status === 'equivalent'
                   ? 'Final optimizer kept the interactive trajectory; no valid time improvement was found.'
-                  : `Final trajectory ${derivation.optimization.totalTimeS.toFixed(2)} s · solved in ${derivation.optimization.solveTimeMs.toFixed(1)} ms`),
+                  : `Final trajectory ${derivation.optimization.totalTimeS.toFixed(2)} s · solved in ${derivation.optimization.solveTimeMs.toFixed(1)} ms${derivation.optimization.optimizationClass === 'corridor' ? ` · ${derivation.optimization.budgetTier} budget ${(derivation.optimization.budgetMs / 1000).toFixed(0)} s · max shift ${(derivation.optimization.maxDeviationM || 0).toFixed(2)} m` : ''}`),
               derivation.error && h('div', { className: 'insert-preview derivation-error', role: 'alert' },
                 h('div', { className: 'insert-preview-copy' }, h('b', null, 'Path preview unavailable'), h('span', null, derivation.error.message || String(derivation.error))),
                 h('span', null, 'Showing the last valid preview. Undo or edit the selected geometry.')),

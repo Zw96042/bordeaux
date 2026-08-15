@@ -1,5 +1,5 @@
 import { getPlanner } from "../planners";
-import { optimizeFixedGeometryFinal } from "../planners/fixedGeometryFinal";
+import { optimizeCorridorFinal } from "../planners/corridorFinal";
 import { clone } from "../project/defaults";
 import { activeRoutine } from "../project/routines";
 import type {
@@ -23,7 +23,7 @@ export function buildBdxExport(project: BordeauxProject): BdxExport {
   const paths: BdxPath[] = exportablePaths(project).map((path) => {
     const input = { path, robot: project.robot };
     const result = project.plannerId === "optimizedTrajectory"
-      ? optimizeFixedGeometryFinal(input)
+      ? optimizeCorridorFinal(input)
       : getPlanner("profiledSpline").generate(input);
     if (result.samples.length < 2) {
       throw new Error(`Path "${path.name}" generated fewer than two samples`);

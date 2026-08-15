@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { minimumPathClearance } from "../../shared/agent/pathAnalysis";
+import { minimumRobotFieldClearance } from "../../shared/agent/fieldClearance";
 import { robotFootprintAt, robotFootprintRadius } from "../../shared/agent/robotFootprint";
 import { FIELD_H, FIELD_W } from "../../shared/math/fieldBounds";
 import { PM } from "../../shared/math/pm";
@@ -209,7 +209,7 @@ function validateSweptFootprint(fixture: CorridorFixture, dense: NormalizedTraje
       break;
     }
   }
-  if (minimumPathClearance(fixture.project, dense.samples) < -1e-4) {
+  if (minimumRobotFieldClearance(fixture.project.robot, dense.samples) < -1e-4) {
     addIssue(issues, { code: "corridor:field-collision", message: "Candidate swept footprint intersects a field boundary or solid obstacle." });
   }
 }

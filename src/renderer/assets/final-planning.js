@@ -75,6 +75,8 @@
             ...input,
             quality: 'final',
             perSegment: FINAL_SAMPLES_PER_SEGMENT,
+            deadline,
+            deadlineMs,
           });
         } catch (error) {
           fail(error && typeof error.message === 'string' ? error.message : String(error));

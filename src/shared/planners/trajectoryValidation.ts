@@ -247,19 +247,19 @@ export function validateOptimizedTrajectory(
       activeConstraints.add("centripetal-acceleration");
     }
     const midpointProjection = projectDrivetrainAtPoint(midpoint, input.robot, lateralLimit);
+    const sampleAngularAcceleration = usesSampleAngularKinematics && index > 0
+      ? (after.angularVelocityRadps - before.angularVelocityRadps)
+        / Math.max(EPSILON, (after.t - samples[index - 1].t) / 2)
+      : 0;
     if (usesSampleAngularKinematics) {
-      const dt = after.t - before.t;
       const angularVelocity = (before.angularVelocityRadps + after.angularVelocityRadps) * 0.5;
-      const angularAcceleration = dt > EPSILON
-        ? (after.angularVelocityRadps - before.angularVelocityRadps) / dt
-        : 0;
       for (const module of evaluateDrivetrainKinematics(
         midpoint,
         input.robot,
         speed,
         acceleration,
         angularVelocity,
-        angularAcceleration,
+        sampleAngularAcceleration,
       )) {
         const moduleAccelerationLimit = lateralLimit;
         if (module.speedMps > input.robot.maxSpeed + tolerance(input.robot.maxSpeed)) {
@@ -332,9 +332,8 @@ export function validateOptimizedTrajectory(
       if (omega > angular.velocity + tolerance(angular.velocity, 2e-3, 0.02)) {
         pushViolation(violations, "angular-velocity", index + 1, omega, angular.velocity, false, "Angular velocity");
       }
-      const dt = after.t - before.t;
       const signedAngularAcceleration = usesSampleAngularKinematics
-        ? (dt > EPSILON ? (after.angularVelocityRadps - before.angularVelocityRadps) / dt : 0)
+        ? sampleAngularAcceleration
         : midpoint.headingDerivativeRadPerM * acceleration
           + midpoint.headingSecondDerivativeRadPerM2 * speedSquared;
       const headingDirection = Math.sign(midpoint.headingDerivativeRadPerM);

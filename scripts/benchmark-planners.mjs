@@ -18,8 +18,9 @@ const { FixedGeometryCorpus } = require("../dist-electron/electron/benchmark/fix
 const {
   capturePathPlannerRun, PATHPLANNER_VERSION, PATHPLANNER_WPILIB_VERSION, pathPlannerInvocation, preparePathPlannerFixture,
 } = require("../dist-electron/electron/benchmark/pathPlannerAdapter.js");
-const { getPlanner } = require("../dist-electron/shared/planners/index.js");
+const { optimizeCorridorFinal } = require("../dist-electron/shared/planners/corridorFinal.js");
 const { optimizeFixedGeometryFinal } = require("../dist-electron/shared/planners/fixedGeometryFinal.js");
+const { robotFootprintRadius } = require("../dist-electron/shared/agent/robotFootprint.js");
 const { decodeProjectFile } = require("../dist-electron/shared/project/fileFormat.js");
 const execFileAsync = promisify(execFile);
 
@@ -162,7 +163,12 @@ async function bordeauxRun(fixture, iteration) {
     const input = { path: pathDocument, robot: project.robot };
     const candidate = fixture.benchmarkClass === "fixed-geometry"
       ? optimizeFixedGeometryFinal(input)
-      : getPlanner("profiledSpline").generate(input);
+      : optimizeCorridorFinal(input, {
+          corridorM: fixture.centerlineToFootprintBoundaryM - robotFootprintRadius(project.robot),
+          gates: fixture.gates,
+          budgetTier: "stress",
+          budgetMs: 15_000,
+        });
     const latencyMs = performance.now() - started;
     const submitted = fixture.benchmarkClass === "corridor"
       ? { ...candidate, events: eventsFor(fixture, candidate.totalTimeS) }
@@ -179,7 +185,7 @@ async function bordeauxRun(fixture, iteration) {
       raw: {
         input: null,
         output: `${JSON.stringify(submitted)}\n`, stdout: "", stderr: "",
-        invocation: { executable: "in-process", arguments: ["profiledSpline", fixture.pathId], workingDirectory: repositoryRoot },
+        invocation: { executable: "in-process", arguments: [fixture.benchmarkClass === "fixed-geometry" ? "fixedGeometryFinal" : "corridorFinal", fixture.pathId], workingDirectory: repositoryRoot },
       },
     };
   } catch (error) {

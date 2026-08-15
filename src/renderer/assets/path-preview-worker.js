@@ -1,5 +1,5 @@
 import { PM } from "../lib/pathMath";
-import { optimizeFixedGeometryFinal } from "../../shared/planners/fixedGeometryFinal";
+import { optimizeCorridorFinal } from "../../shared/planners/corridorFinal";
 
 function trajectoryAtGeometryPoint(samples, point, fraction) {
   let match = null;
@@ -74,12 +74,15 @@ export function applyFinalTrajectoryToPreview(derived, finalTrajectory) {
   };
 }
 
-export function processPathPreviewJob(job, derive = PM.derivePath, optimize = optimizeFixedGeometryFinal) {
+export function processPathPreviewJob(job, derive = PM.derivePath, optimize = optimizeCorridorFinal) {
   const startedAt = performance.now();
   try {
     const value = derive(job.path, job.robot, job.perSegment, job.plannerId);
     if (job.quality === 'final' && job.plannerId === 'optimizedTrajectory') {
-      const finalTrajectory = optimize({ path: job.path, robot: job.robot, samplesPerSegment: job.perSegment });
+      const finalTrajectory = optimize(
+        { path: job.path, robot: job.robot, samplesPerSegment: job.perSegment },
+        { budgetTier: job.deadline === 'stress' ? 'stress' : 'common', budgetMs: job.deadlineMs },
+      );
       if (finalTrajectory.optimization?.fallback) {
         return {
           id: job.id,
@@ -91,7 +94,12 @@ export function processPathPreviewJob(job, derive = PM.derivePath, optimize = op
       return {
         id: job.id,
         quality: job.quality,
-        value: applyFinalTrajectoryToPreview(value, finalTrajectory),
+        value: applyFinalTrajectoryToPreview(
+          finalTrajectory.optimizedPath
+            ? derive(finalTrajectory.optimizedPath, job.robot, job.perSegment, job.plannerId)
+            : value,
+          finalTrajectory,
+        ),
         durationMs: performance.now() - startedAt,
       };
     }

@@ -1,21 +1,16 @@
 import { REBUILT_2026_FIELD, REBUILT_2026_FIELD_WIDTH_M, officialToAppPoint } from "../field/rebuilt2026";
-import { FIELD_H, FIELD_W } from "../math/fieldBounds";
+import { FIELD_H } from "../math/fieldBounds";
 import { getPlanner } from "../planners";
-import { optimizeFixedGeometryFinal } from "../planners/fixedGeometryFinal";
+import { optimizeCorridorFinal } from "../planners/corridorFinal";
 import { clone } from "../project/defaults";
 import type { BordeauxProject, PathDoc, TrajectorySample, ValidationIssue } from "../types";
 import { validateProject } from "../validation";
 import {
-  boundsPolygon,
-  convexPolygonClearance,
-  footprintBoundsClearance,
   interpolateHeading,
-  polygonBounds,
   robotFootprintAt,
-  robotFootprintVertices,
-  transformFootprint,
   verticalLineSection,
 } from "./robotFootprint";
+import { measureRobotFieldClearance, minimumRobotFieldClearance, observeRobotFieldPortalSequence } from "./fieldClearance";
 import type {
   PathAnalysis,
   PathAnalysisExtremum,
@@ -27,16 +22,6 @@ import type {
 const EPSILON = 1e-6;
 const BARRIER_EPSILON = 1e-4;
 const DEFAULT_SAMPLE_LIMIT = 500;
-
-const APP_OBSTACLE_POLYGONS = REBUILT_2026_FIELD.solidObstacles.flatMap((item) => {
-  if (!item.bounds) return [];
-  const first = officialToAppPoint({ x: item.bounds.xMin, y: item.bounds.yMin });
-  const second = officialToAppPoint({ x: item.bounds.xMax, y: item.bounds.yMax });
-  return [boundsPolygon({
-    min: { x: Math.min(first.x, second.x), y: Math.min(first.y, second.y) },
-    max: { x: Math.max(first.x, second.x), y: Math.max(first.y, second.y) },
-  })];
-});
 
 const APP_BARRIER_X = new Map(REBUILT_2026_FIELD.crossingBarriers.map((barrier) => (
   [barrier, officialToAppPoint({ x: barrier.x, y: 0 }).x] as const
@@ -288,48 +273,6 @@ function barrierCrossingFindings(
   return findings;
 }
 
-function observedPortalIds(project: BordeauxProject, samples: readonly TrajectorySample[]): Array<{ id: string; sampleIndex: number }> {
-  if (samples.length === 0) return [];
-  const observed: Array<{ id: string; sampleIndex: number }> = [];
-  const portalAt = (barrier: typeof REBUILT_2026_FIELD.crossingBarriers[number], pose: { x: number; y: number; headingRad: number }, barrierX: number) => {
-    const section = footprintSectionAt(project, pose, barrierX);
-    if (!section) return undefined;
-    const portals = portalsForSection(barrier, section);
-    return portals.length === 1 ? portals[0] : undefined;
-  };
-  const add = (id: string | undefined, sampleIndex: number) => {
-    const previous = observed.at(-1);
-    if (!id || (previous?.id === id && sampleIndex - previous.sampleIndex <= 1)) return;
-    observed.push({ id, sampleIndex });
-  };
-
-  for (const barrier of REBUILT_2026_FIELD.crossingBarriers) {
-    const barrierX = appBarrierX(barrier);
-    if (footprintSectionAt(project, samples[0], barrierX)) add(portalAt(barrier, samples[0], barrierX)?.id, 0);
-  }
-  for (let index = 1; index < samples.length; index += 1) {
-    const previous = samples[index - 1];
-    const sample = samples[index];
-    const visits: Array<{ id: string; ratio: number }> = [];
-    for (const barrier of REBUILT_2026_FIELD.crossingBarriers) {
-      const barrierX = appBarrierX(barrier);
-      const left = previous.x - barrierX;
-      const right = sample.x - barrierX;
-      if (left * right >= 0 || Math.abs(sample.x - previous.x) <= EPSILON) continue;
-      const pose = crossingPose(previous, sample, barrierX);
-      const portal = portalAt(barrier, pose, barrierX);
-      if (portal) visits.push({ id: portal.id, ratio: pose.ratio });
-    }
-    visits.sort((left, right) => left.ratio - right.ratio).forEach((visit) => add(visit.id, index));
-  }
-  for (const barrier of REBUILT_2026_FIELD.crossingBarriers) {
-    const barrierX = appBarrierX(barrier);
-    const lastIndex = samples.length - 1;
-    if (footprintSectionAt(project, samples[lastIndex], barrierX)) add(portalAt(barrier, samples[lastIndex], barrierX)?.id, lastIndex);
-  }
-  return observed;
-}
-
 function requiredPortalSequenceFindings(
   project: BordeauxProject,
   samples: readonly TrajectorySample[],
@@ -337,7 +280,7 @@ function requiredPortalSequenceFindings(
   sampleReferenceAt: (index: number) => PathSampleReference,
 ): PathAnalysisFinding[] {
   if (requiredPortalIds.length === 0 || samples.length === 0) return [];
-  const observed = observedPortalIds(project, samples);
+  const observed = observeRobotFieldPortalSequence(project.robot, samples).visits;
   if (observed.length === requiredPortalIds.length && observed.every((visit, index) => visit.id === requiredPortalIds[index])) return [];
   const mismatchIndex = requiredPortalIds.findIndex((id, index) => observed[index]?.id !== id);
   const sampleIndex = mismatchIndex >= 0 ? (observed[mismatchIndex]?.sampleIndex ?? 0) : (observed.at(-1)?.sampleIndex ?? 0);
@@ -351,79 +294,8 @@ function requiredPortalSequenceFindings(
   }];
 }
 
-interface PathClearanceMeasurement {
-  minimum: number;
-  closestSampleIndex: number;
-}
-
-function measurePathClearance(project: BordeauxProject, samples: readonly TrajectorySample[]): PathClearanceMeasurement {
-  const localFootprint = robotFootprintVertices(project.robot);
-  let minimum = Number.POSITIVE_INFINITY;
-  let closestSampleClearance = Number.POSITIVE_INFINITY;
-  let closestSampleIndex = 0;
-
-  samples.forEach((sample, sampleIndex) => {
-    const footprint = transformFootprint(localFootprint, sample);
-    const footprintBounds = polygonBounds(footprint);
-    let sampleMinimum = footprintBoundsClearance(footprint, FIELD_W, FIELD_H);
-    for (const obstacle of APP_OBSTACLE_POLYGONS) {
-      sampleMinimum = Math.min(sampleMinimum, convexPolygonClearance(footprint, obstacle));
-    }
-    REBUILT_2026_FIELD.crossingBarriers.forEach((barrier) => {
-      const barrierX = appBarrierX(barrier);
-      const section = verticalLineSection(footprint, barrierX);
-      const occupied = section ?? { minY: footprintBounds.min.y, maxY: footprintBounds.max.y };
-      const lateral = barrier.portals.reduce((best, portal) => {
-        const bounds = portalBounds(portal);
-        return Math.max(best, Math.min(occupied.minY - bounds.minY, bounds.maxY - occupied.maxY));
-      }, Number.NEGATIVE_INFINITY);
-      if (section) sampleMinimum = Math.min(sampleMinimum, lateral);
-      else if (lateral < 0) {
-        const longitudinal = barrierX < footprintBounds.min.x
-          ? footprintBounds.min.x - barrierX
-          : barrierX > footprintBounds.max.x ? barrierX - footprintBounds.max.x : 0;
-        sampleMinimum = Math.min(sampleMinimum, longitudinal);
-      }
-    });
-    minimum = Math.min(minimum, sampleMinimum);
-    const normalizedSampleMinimum = Number.isFinite(sampleMinimum) ? sampleMinimum : 0;
-    if (normalizedSampleMinimum < closestSampleClearance) {
-      closestSampleClearance = normalizedSampleMinimum;
-      closestSampleIndex = sampleIndex;
-    }
-  });
-
-  REBUILT_2026_FIELD.crossingBarriers.forEach((barrier) => {
-    const barrierX = appBarrierX(barrier);
-    let previousIndex = -1;
-    let previousSide = 0;
-    samples.forEach((sample, index) => {
-      const delta = sample.x - barrierX;
-      const side = Math.abs(delta) <= EPSILON ? 0 : Math.sign(delta);
-      if (side === 0) return;
-      if (previousIndex >= 0 && previousSide !== side) {
-        const previous = samples[previousIndex];
-        const pose = crossingPose(previous, sample, barrierX);
-        const section = verticalLineSection(transformFootprint(localFootprint, pose), barrierX);
-        const portalClearance = barrier.portals.reduce((best, portal) => {
-          if (!section) return best;
-          const bounds = portalBounds(portal);
-          return Math.max(best, Math.min(section.minY - bounds.minY, bounds.maxY - section.maxY));
-        }, Number.NEGATIVE_INFINITY);
-        minimum = Math.min(minimum, portalClearance);
-      }
-      previousIndex = index;
-      previousSide = side;
-    });
-  });
-  return {
-    minimum: Number.isFinite(minimum) ? minimum : 0,
-    closestSampleIndex,
-  };
-}
-
 export function minimumPathClearance(project: BordeauxProject, samples: readonly TrajectorySample[]): number {
-  return measurePathClearance(project, samples).minimum;
+  return minimumRobotFieldClearance(project.robot, samples);
 }
 
 function analyzeGeneratedPath(
@@ -479,7 +351,7 @@ function analyzeGeneratedPath(
     });
   });
 
-  const clearanceMeasurement = measurePathClearance(project, samples);
+  const clearanceMeasurement = measureRobotFieldClearance(project.robot, samples);
   const clearance = clearanceMeasurement.minimum;
   if (clearance < minimumClearanceM) {
     const closestIndex = clearanceMeasurement.closestSampleIndex;
@@ -524,7 +396,7 @@ export function analyzePath(project: BordeauxProject, pathId: string, options: A
   let generated;
   try {
     generated = plannerId === "optimizedTrajectory"
-      ? optimizeFixedGeometryFinal({ path, robot: project.robot })
+      ? optimizeCorridorFinal({ path, robot: project.robot })
       : getPlanner("profiledSpline").generate({ path, robot: project.robot });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -588,6 +588,8 @@ export interface PlannerResult {
   optimization?: PlannerOptimizationDiagnostics;
   /** Internal timing metadata used to keep renderer playback identical to exported samples. */
   stationaryActions?: PlannerStationaryAction[];
+  /** Internal final-preview geometry; export schemas select trajectory fields explicitly. */
+  optimizedPath?: PathDoc;
 }
 
 export interface TrajectoryPlanner {
@@ -609,6 +611,12 @@ export interface PlannerOptimizationDiagnostics {
   constraintViolations: number;
   fallback: boolean;
   fallbackReason?: string;
+  optimizationClass?: "fixed-geometry" | "corridor";
+  budgetTier?: "common" | "stress";
+  budgetMs?: number;
+  evaluations?: number;
+  maxDeviationM?: number;
+  minimumClearanceM?: number;
 }
 
 export interface BdxExport {
