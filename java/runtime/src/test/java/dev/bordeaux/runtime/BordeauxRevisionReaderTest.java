@@ -70,6 +70,24 @@ class BordeauxRevisionReaderTest {
     }
 
     @Test
+    void validatesGeneratedTrajectoryNodesAgainstTheExactCurrentCatalogPair() {
+        BordeauxRuntimeCompatibility current = new BordeauxRuntimeCompatibility(
+                CATALOG_ID, HASH, "0.4.0", "2026-rebuilt", "2026-manual-tu19-welded-4", "bordeaux-field/1.0");
+        String currentDocument = trajectory("""
+                ,"routine":{"name":"Dynamic","nodes":[
+                  {"id":"dynamic","type":"generatedTrajectory","generatorId":"detour","arguments":{},
+                   "fallback":{"type":"safeStop"}}]}
+                ,"paths":[{"id":"auto","name":"Auto","totalTimeS":1,"samples":[],"events":[]}]
+                """)
+                .replace("\"schemaVersion\":\"1.0\"", "\"schemaVersion\":\"1.3\"")
+                .replace("\"supportVersion\":\"0.1.0\"", "\"supportVersion\":\"0.4.0\"");
+
+        BordeauxTrajectoryReader.validateDocument(bytes(currentDocument), current);
+        assertThrows(BordeauxRuntimeException.class, () -> BordeauxTrajectoryReader.validateDocument(
+                bytes(currentDocument.replace("\"schemaVersion\":\"1.3\"", "\"schemaVersion\":\"1.2\"")), current));
+    }
+
+    @Test
     void rejectsInvalidRoutineBranchesEvenWhenEveryPathIsOtherwiseValid() {
         String document = trajectory("""
                 ,"routine":{"name":"Auto","nodes":[{"id":"decision","type":"decision","cond":"ready",

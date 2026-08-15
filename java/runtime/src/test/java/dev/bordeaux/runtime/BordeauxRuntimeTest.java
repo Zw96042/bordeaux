@@ -49,6 +49,49 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void retainsGeneratorDescriptorsBehindTheRuntimeOnlyInvocationSeam() throws Exception {
+        BordeauxTrajectoryGeneratorLimits limits = new BordeauxTrajectoryGeneratorLimits(
+                50, 512, 5, 12, 4, 8, 6, 10, 20, 0.2);
+        double[] receivedOffset = {Double.NaN};
+        BordeauxTrajectoryGeneratorRegistry generators = BordeauxTrajectoryGeneratorRegistry.builder()
+                .catalogId(CATALOG_ID).catalogHash(HASH)
+                .register("detour", Set.of("offset"), limits,
+                        BordeauxTrajectoryGeneratorRegistry.FallbackPolicy.SAFE_STOP_ONLY,
+                        (context, arguments) -> {
+                            receivedOffset[0] = arguments.requireDouble("offset", "0", "2");
+                            return new BordeauxGeneratedTrajectory(List.of());
+                        })
+                .build();
+        BordeauxCommandRegistry commands = BordeauxCommandRegistry.builder().catalogId(CATALOG_ID).catalogHash(HASH).build();
+        BordeauxConditionRegistry conditions = BordeauxConditionRegistry.builder()
+                .catalogId(CATALOG_ID).catalogHash(HASH).build();
+
+        BordeauxCapabilities explicit = new BordeauxCapabilities(commands, conditions, generators);
+        assertEquals(limits, explicit.trajectoryGenerators().resolve("detour").limits());
+        ObjectNode values = (ObjectNode) MAPPER.readTree("{\"offset\":1.25}");
+        BordeauxGenerationContext context = new BordeauxGenerationContext(1, 2, 0.5,
+                "2026-rebuilt", "rev", "bordeaux-field/1.0", limits);
+        assertTrue(generators.invokeRaw("detour", context, values).samples().isEmpty());
+        assertEquals(1.25, receivedOffset[0]);
+        BordeauxCapabilities legacy = new BordeauxCapabilities(commands, conditions);
+        assertThrows(BordeauxRuntimeException.class, () -> legacy.trajectoryGenerators().resolve("detour"));
+    }
+
+    @Test
+    void doesNotSilentlySkipGeneratedTrajectoriesBeforeRuntimeContainmentRunsThem() throws Exception {
+        BordeauxCapabilities capabilities = BordeauxBindings.generatedCapabilities(new FirstProvider(), new SecondProvider());
+        BordeauxRoutine routine = new BordeauxRoutine("Dynamic", List.of(new BordeauxRoutineNode.GeneratedTrajectory(
+                "dynamic", "detour", (ObjectNode) MAPPER.readTree("{}"),
+                new BordeauxRoutineNode.GeneratedFallback.SafeStop())));
+        BordeauxPathEvents document = new BordeauxPathEvents("auto", "Auto", 1,
+                capabilities.catalogId(), capabilities.catalogHash(), List.of(), List.of(), List.of(), routine);
+        BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, capabilities, new RecordingScheduler());
+
+        BordeauxRuntimeException failure = assertThrows(BordeauxRuntimeException.class, runner::startProgress);
+        assertTrue(failure.getMessage().contains("runtime containment"), failure::getMessage);
+    }
+
+    @Test
     void generatedCapabilitiesTakeAConditionBranchAndScheduleItsCommand() throws Exception {
         BordeauxCapabilities capabilities = BordeauxBindings.generatedCapabilities(new FirstProvider(), new SecondProvider());
         ObjectNode arguments = (ObjectNode) MAPPER.readTree("{}");
@@ -155,6 +198,62 @@ class BordeauxRuntimeTest {
                    {"id":"wait","type":"builtin","builtinId":"bordeaux.wait","arguments":{"durationS":0.01,"extra":1}}]},
                  "paths":[{"id":"auto","name":"Auto","totalTimeS":1,"samples":[],"events":[]}]}
                 """));
+    }
+
+    @Test
+    void readsGeneratedTrajectoryFallbacksOnlyWhenEveryBranchReachesAStaticPath() {
+        String valid = """
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
+                 "catalog":{"schemaVersion":"1.3","catalogId":"test-robot","supportVersion":"0.4.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "routine":{"name":"Dynamic","nodes":[
+                   {"id":"dynamic","type":"generatedTrajectory","generatorId":"detour","arguments":{"offset":1},
+                    "fallback":{"type":"branch","nodes":[
+                      {"id":"choose","type":"decision","cond":"ready","thenLabel":"Ready","elseLabel":"Not ready",
+                       "then":[{"id":"left","type":"path","ref":"auto"}],
+                       "else":[{"id":"stop","type":"builtin","builtinId":"bordeaux.wait","arguments":{"durationS":0.1}},
+                               {"id":"right","type":"path","ref":"right"}]}]}}]},
+                 "paths":[
+                   {"id":"auto","name":"Left","totalTimeS":1,"samples":[],"events":[]},
+                   {"id":"right","name":"Right","totalTimeS":1,"samples":[],"events":[]}]}
+                """;
+
+        BordeauxRoutineNode.GeneratedTrajectory generated = (BordeauxRoutineNode.GeneratedTrajectory)
+                readWithRoutine(valid).routine().nodes().get(0);
+        assertEquals("detour", generated.generatorId());
+        assertTrue(generated.fallback() instanceof BordeauxRoutineNode.GeneratedFallback.Branch);
+
+        assertThrows(BordeauxRuntimeException.class, () -> readWithRoutine(valid.replace(
+                "{\"id\":\"right\",\"type\":\"path\",\"ref\":\"right\"}",
+                "{\"id\":\"done\",\"type\":\"function\",\"cat\":\"command\",\"title\":\"Stop\",\"invocation\":{\"commandId\":\"stop\",\"arguments\":{}}}")));
+        assertThrows(BordeauxRuntimeException.class, () -> readWithRoutine(valid.replace(
+                "{\"type\":\"branch\",\"nodes\":[", "{\"type\":\"branch\",\"ref\":\"left\",\"nodes\":[")));
+        assertThrows(BordeauxRuntimeException.class, () -> readWithRoutine(valid.replace(
+                "{\"id\":\"left\",\"type\":\"path\",\"ref\":\"auto\"}",
+                "{\"id\":\"nested\",\"type\":\"generatedTrajectory\",\"generatorId\":\"other\",\"arguments\":{},\"fallback\":{\"type\":\"safeStop\"}}")));
+    }
+
+    @Test
+    void boundsGeneratedTrajectoryFallbackGraphsAndSharesRoutineNodeIdentity() {
+        StringBuilder oversized = new StringBuilder();
+        for (int index = 0; index < BordeauxTrajectoryReader.MAX_GENERATED_FALLBACK_NODES; index++) {
+            if (index > 0) oversized.append(',');
+            oversized.append("{\"id\":\"command-").append(index)
+                    .append("\",\"type\":\"function\",\"cat\":\"command\",\"invocation\":{\"commandId\":\"noop\",\"arguments\":{}}}");
+        }
+        oversized.append(",{\"id\":\"path\",\"type\":\"path\",\"ref\":\"auto\"}");
+        assertThrows(BordeauxRuntimeException.class,
+                () -> readWithRoutine(generatedFallbackDocument(oversized.toString())));
+
+        String nested = "{\"id\":\"deep-path\",\"type\":\"path\",\"ref\":\"auto\"}";
+        for (int depth = 8; depth >= 0; depth--) {
+            nested = "{\"id\":\"decision-" + depth + "\",\"type\":\"decision\",\"cond\":\"ready\",\"then\":["
+                    + nested + "],\"else\":[{\"id\":\"else-path-" + depth + "\",\"type\":\"path\",\"ref\":\"auto\"}]}";
+        }
+        String tooDeep = nested;
+        assertThrows(BordeauxRuntimeException.class,
+                () -> readWithRoutine(generatedFallbackDocument(tooDeep)));
+        assertThrows(BordeauxRuntimeException.class, () -> readWithRoutine(generatedFallbackDocument(
+                "{\"id\":\"dynamic\",\"type\":\"path\",\"ref\":\"auto\"}")));
     }
 
     record Target(String level, List<Integer> slots) {}
@@ -621,6 +720,17 @@ class BordeauxRuntimeTest {
     private static BordeauxPathEvents readWithRoutine(String json) {
         return BordeauxTrajectoryReader.readWithRoutine(
                 new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), "auto");
+    }
+
+    private static String generatedFallbackDocument(String fallbackNodes) {
+        return """
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
+                 "catalog":{"schemaVersion":"1.3","catalogId":"test-robot","supportVersion":"0.4.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "routine":{"name":"Dynamic","nodes":[
+                   {"id":"dynamic","type":"generatedTrajectory","generatorId":"detour","arguments":{},
+                    "fallback":{"type":"branch","nodes":[%s]}}]},
+                 "paths":[{"id":"auto","name":"Auto","totalTimeS":1,"samples":[],"events":[]}]}
+                """.formatted(fallbackNodes);
     }
 
     private static BordeauxSample sample(int index, double timeS, double xM) {

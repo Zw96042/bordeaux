@@ -24,6 +24,8 @@ public final class BordeauxTrajectoryReader {
     static final int MAX_EVENTS = 2_000;
     static final int MAX_SAMPLES = 100_000;
     static final int MAX_ROUTINE_NODES = 2_000;
+    static final int MAX_GENERATED_FALLBACK_NODES = 128;
+    static final int MAX_GENERATED_FALLBACK_DEPTH = 8;
 
     private static final ObjectMapper MAPPER = new ObjectMapper(JsonFactory.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
@@ -206,8 +208,9 @@ public final class BordeauxTrajectoryReader {
         String supportVersion = text(catalog, "supportVersion", "$.catalog");
         if (!(catalogSchema.equals("1.0") && supportVersion.equals("0.1.0"))
                 && !(catalogSchema.equals("1.1") && supportVersion.equals("0.2.0"))
-                && !(catalogSchema.equals("1.2") && supportVersion.equals("0.3.0"))) {
-            throw new BordeauxRuntimeException("$.catalog must use supported schema/support pair 1.0/0.1.0, 1.1/0.2.0, or 1.2/0.3.0");
+                && !(catalogSchema.equals("1.2") && supportVersion.equals("0.3.0"))
+                && !(catalogSchema.equals("1.3") && supportVersion.equals("0.4.0"))) {
+            throw new BordeauxRuntimeException("$.catalog must use a supported schema/support pair from 1.0/0.1.0 through 1.3/0.4.0");
         }
         String catalogId = text(catalog, "catalogId", "$.catalog");
         if (catalogId.length() > 256) {
@@ -365,8 +368,8 @@ public final class BordeauxTrajectoryReader {
                 ObjectNode arguments = requireObject(invocation.get("arguments"), base + ".invocation.arguments must be an object");
                 parsed.add(new BordeauxRoutineNode.Command(id, text(invocation, "commandId", base + ".invocation"), arguments));
             } else if ("builtin".equals(type)) {
-                if (!"1.2".equals(catalogSchema)) {
-                    throw new BordeauxRuntimeException(base + " built-ins require catalog schema 1.2");
+                if (!("1.2".equals(catalogSchema) || "1.3".equals(catalogSchema))) {
+                    throw new BordeauxRuntimeException(base + " built-ins require catalog schema 1.2 or later");
                 }
                 String builtInId = text(node, "builtinId", base);
                 if (!"bordeaux.wait".equals(builtInId)) {
@@ -381,11 +384,155 @@ public final class BordeauxTrajectoryReader {
                     throw new BordeauxRuntimeException(base + ".arguments.durationS must be between 0.02 and 15 seconds");
                 }
                 parsed.add(new BordeauxRoutineNode.Wait(id, durationS));
+            } else if ("generatedTrajectory".equals(type)) {
+                if (!"1.3".equals(catalogSchema)) {
+                    throw new BordeauxRuntimeException(base + " generated trajectories require catalog schema 1.3");
+                }
+                requireExactFields(node, Set.of("id", "type", "generatorId", "arguments", "fallback"), base);
+                String generatorId = text(node, "generatorId", base);
+                if (!generatorId.matches("[A-Za-z0-9_.:#()$,-]{1,256}")) {
+                    throw new BordeauxRuntimeException(base + ".generatorId must be a stable generator ID");
+                }
+                ObjectNode arguments = requireObject(node.get("arguments"), base + ".arguments must be an object");
+                parsed.add(new BordeauxRoutineNode.GeneratedTrajectory(id, generatorId, arguments,
+                        parseGeneratedFallback(node.get("fallback"), base + ".fallback", pathIds, nodeIds)));
             } else {
-                throw new BordeauxRuntimeException(base + " must be a path, decision, bound command, or supported built-in");
+                throw new BordeauxRuntimeException(base + " must be a path, decision, bound command, supported built-in, or generated trajectory");
             }
         }
         return parsed;
+    }
+
+    private static BordeauxRoutineNode.GeneratedFallback parseGeneratedFallback(
+            JsonNode value, String path, Set<String> pathIds, Set<String> nodeIds) {
+        ObjectNode fallback = requireObject(value, path + " must be an object");
+        String type = text(fallback, "type", path);
+        if ("safeStop".equals(type)) {
+            requireExactFields(fallback, Set.of("type"), path);
+            return new BordeauxRoutineNode.GeneratedFallback.SafeStop();
+        }
+        if (!"branch".equals(type)) {
+            throw new BordeauxRuntimeException(path + ".type must be safeStop or branch");
+        }
+        requireExactFields(fallback, Set.of("type", "nodes"), path);
+        JsonNode nodes = fallback.get("nodes");
+        if (nodes == null || !nodes.isArray()) throw new BordeauxRuntimeException(path + ".nodes must be an array");
+        List<BordeauxRoutineNode> parsed = parseFallbackNodes(nodes, path + ".nodes", pathIds, nodeIds, new int[] {0}, 0);
+        if (!reachesStaticPath(parsed)) {
+            throw new BordeauxRuntimeException(path + " every root-to-leaf branch must reach a static path");
+        }
+        return new BordeauxRoutineNode.GeneratedFallback.Branch(parsed);
+    }
+
+    private static List<BordeauxRoutineNode> parseFallbackNodes(JsonNode nodes, String path,
+            Set<String> pathIds, Set<String> nodeIds, int[] count, int depth) {
+        List<BordeauxRoutineNode> parsed = new ArrayList<>();
+        for (int index = 0; index < nodes.size(); index++) {
+            if (++count[0] > MAX_GENERATED_FALLBACK_NODES) {
+                throw new BordeauxRuntimeException(path + " exceeds the fallback node limit of " + MAX_GENERATED_FALLBACK_NODES);
+            }
+            String base = path + "[" + index + "]";
+            ObjectNode node = requireObject(nodes.get(index), base + " must be an object");
+            String id = text(node, "id", base);
+            if (!nodeIds.add(id)) throw new BordeauxRuntimeException("Routine contains duplicate node ID '" + id + "'");
+            String type = text(node, "type", base);
+            switch (type) {
+                case "path" -> {
+                    requireExactFields(node, Set.of("id", "type", "ref"), base);
+                    String ref = text(node, "ref", base);
+                    if (!pathIds.contains(ref)) throw new BordeauxRuntimeException(base + ".ref does not match an exported path ID");
+                    parsed.add(new BordeauxRoutineNode.Path(id, ref));
+                }
+                case "decision" -> {
+                    if (depth >= MAX_GENERATED_FALLBACK_DEPTH) {
+                        throw new BordeauxRuntimeException(base + " exceeds the fallback decision depth of " + MAX_GENERATED_FALLBACK_DEPTH);
+                    }
+                    requireAllowedFields(node, Set.of("id", "type", "cond", "thenLabel", "elseLabel", "then", "else"), base);
+                    optionalBoundedText(node, "thenLabel", base, 256);
+                    optionalBoundedText(node, "elseLabel", base, 256);
+                    String condition = text(node, "cond", base);
+                    if (!condition.matches("[A-Za-z0-9_.:#()$,-]{1,256}")) {
+                        throw new BordeauxRuntimeException(base + ".cond must be a stable condition ID");
+                    }
+                    JsonNode whenTrue = node.get("then");
+                    JsonNode whenFalse = node.get("else");
+                    if (whenTrue == null || !whenTrue.isArray() || whenFalse == null || !whenFalse.isArray()) {
+                        throw new BordeauxRuntimeException(base + " decision branches must be arrays");
+                    }
+                    parsed.add(new BordeauxRoutineNode.Decision(id, condition,
+                            parseFallbackNodes(whenTrue, base + ".then", pathIds, nodeIds, count, depth + 1),
+                            parseFallbackNodes(whenFalse, base + ".else", pathIds, nodeIds, count, depth + 1)));
+                }
+                case "function" -> {
+                    requireAllowedFields(node, Set.of("id", "type", "cat", "title", "invocation"), base);
+                    optionalBoundedText(node, "title", base, 256);
+                    if (!"command".equals(text(node, "cat", base))) {
+                        throw new BordeauxRuntimeException(base + ".cat must be command");
+                    }
+                    ObjectNode invocation = requireObject(node.get("invocation"), base + ".invocation must be an object");
+                    requireExactFields(invocation, Set.of("commandId", "arguments"), base + ".invocation");
+                    ObjectNode arguments = requireObject(invocation.get("arguments"), base + ".invocation.arguments must be an object");
+                    parsed.add(new BordeauxRoutineNode.Command(id, text(invocation, "commandId", base + ".invocation"), arguments));
+                }
+                case "builtin" -> {
+                    requireExactFields(node, Set.of("id", "type", "builtinId", "arguments"), base);
+                    if (!"bordeaux.wait".equals(text(node, "builtinId", base))) {
+                        throw new BordeauxRuntimeException(base + ".builtinId must be bordeaux.wait");
+                    }
+                    ObjectNode arguments = requireObject(node.get("arguments"), base + ".arguments must be an object");
+                    requireExactFields(arguments, Set.of("durationS"), base + ".arguments");
+                    double durationS = finite(arguments.get("durationS"), base + ".arguments.durationS");
+                    if (durationS < 0.02 || durationS > 15) {
+                        throw new BordeauxRuntimeException(base + ".arguments.durationS must be between 0.02 and 15 seconds");
+                    }
+                    parsed.add(new BordeauxRoutineNode.Wait(id, durationS));
+                }
+                case "generatedTrajectory" -> throw new BordeauxRuntimeException(base + " must not contain a nested generated trajectory");
+                default -> throw new BordeauxRuntimeException(base + " must contain only deployable fallback nodes");
+            }
+        }
+        return parsed;
+    }
+
+    private static boolean reachesStaticPath(List<BordeauxRoutineNode> nodes) {
+        for (int index = 0; index < nodes.size(); index++) {
+            BordeauxRoutineNode node = nodes.get(index);
+            if (node instanceof BordeauxRoutineNode.Path) return true;
+            if (node instanceof BordeauxRoutineNode.Decision decision) {
+                List<BordeauxRoutineNode> suffix = nodes.subList(index + 1, nodes.size());
+                if (!reachesStaticPath(withSuffix(decision.whenTrue(), suffix))
+                        || !reachesStaticPath(withSuffix(decision.whenFalse(), suffix))) return false;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<BordeauxRoutineNode> withSuffix(
+            List<BordeauxRoutineNode> branch, List<BordeauxRoutineNode> suffix) {
+        List<BordeauxRoutineNode> combined = new ArrayList<>(branch.size() + suffix.size());
+        combined.addAll(branch);
+        combined.addAll(suffix);
+        return combined;
+    }
+
+    private static void requireExactFields(ObjectNode node, Set<String> fields, String path) {
+        Set<String> actual = new HashSet<>();
+        node.fieldNames().forEachRemaining(actual::add);
+        if (!actual.equals(fields)) throw new BordeauxRuntimeException(path + " must contain exactly " + fields);
+    }
+
+    private static void requireAllowedFields(ObjectNode node, Set<String> fields, String path) {
+        node.fieldNames().forEachRemaining(field -> {
+            if (!fields.contains(field)) throw new BordeauxRuntimeException(path + " contains unsupported field '" + field + "'");
+        });
+    }
+
+    private static void optionalBoundedText(ObjectNode node, String field, String path, int maximumLength) {
+        JsonNode value = node.get(field);
+        if (value != null && (!value.isTextual() || value.textValue().length() > maximumLength)) {
+            throw new BordeauxRuntimeException(path + "." + field + " must be a string of at most " + maximumLength + " characters");
+        }
     }
 
     private static ObjectNode readDocument(byte[] contents) {
@@ -411,6 +558,7 @@ public final class BordeauxTrajectoryReader {
             case "0.1.0" -> "1.0";
             case "0.2.0" -> "1.1";
             case "0.3.0" -> "1.2";
+            case "0.4.0" -> "1.3";
             default -> throw new BordeauxRuntimeException("Compiled Bordeaux support version is not supported: " + compatibility.supportVersion());
         };
         if (!expectedSchema.equals(schemaVersion) || !compatibility.supportVersion().equals(supportVersion)) {

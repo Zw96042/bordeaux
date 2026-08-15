@@ -145,6 +145,9 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
                 }
                 waitDeadlineS = deadlineS;
                 return new BordeauxRoutineProgress.Waiting(wait.durationS());
+            } else if (node instanceof BordeauxRoutineNode.GeneratedTrajectory generated) {
+                throw new BordeauxRuntimeException("Generated trajectory '" + generated.generatorId()
+                        + "' requires runtime containment before it can run");
             }
         }
         active = false;

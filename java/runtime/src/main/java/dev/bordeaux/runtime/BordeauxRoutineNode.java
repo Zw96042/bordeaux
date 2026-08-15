@@ -34,4 +34,24 @@ public sealed interface BordeauxRoutineNode {
             }
         }
     }
+
+    /** A post-beta runtime-dynamic segment; execution and validation are owned by runtime containment. */
+    record GeneratedTrajectory(
+            String id, String generatorId, ObjectNode arguments, GeneratedFallback fallback)
+            implements BordeauxRoutineNode {
+        public GeneratedTrajectory {
+            arguments = arguments.deepCopy();
+            fallback = java.util.Objects.requireNonNull(fallback, "fallback");
+        }
+    }
+
+    sealed interface GeneratedFallback {
+        record SafeStop() implements GeneratedFallback {}
+
+        record Branch(List<BordeauxRoutineNode> nodes) implements GeneratedFallback {
+            public Branch {
+                nodes = List.copyOf(nodes);
+            }
+        }
+    }
 }

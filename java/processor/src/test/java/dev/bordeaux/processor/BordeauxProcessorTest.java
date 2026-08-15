@@ -48,8 +48,8 @@ class BordeauxProcessorTest {
 
         JsonNode catalog = MAPPER.readTree(Files.readString(
                 result.classes().resolve("META-INF/bordeaux/commands.json")));
-        assertEquals("1.2", catalog.path("schemaVersion").textValue());
-        assertEquals("0.3.0", catalog.path("supportVersion").textValue());
+        assertEquals("1.3", catalog.path("schemaVersion").textValue());
+        assertEquals("0.4.0", catalog.path("supportVersion").textValue());
         assertEquals("test-robot", catalog.path("catalogId").textValue());
         assertEquals(0, catalog.path("commands").size());
         assertEquals(0, catalog.path("conditions").size());
@@ -59,6 +59,101 @@ class BordeauxProcessorTest {
                 "dev/bordeaux/generated/BordeauxGeneratedBindings.java"));
         assertTrue(bindings.contains("BordeauxGeneratedBindings()"));
         assertTrue(bindings.contains("BordeauxCapabilities capabilities()"));
+    }
+
+    @Test
+    void generatesBoundedRuntimeDynamicTrajectoryGeneratorsAndHashesTheirMetadata() throws Exception {
+        Compilation result = compile("frc/robot/Generators.java", """
+                package frc.robot;
+                import dev.bordeaux.annotations.*;
+                import dev.bordeaux.runtime.*;
+                public final class Generators {
+                  public enum Side { RIGHT, LEFT }
+                  @BordeauxTrajectoryGenerator(id="detour", label="Detour", aliases={"zeta", "avoid"},
+                    semanticTags={"z-tag", "avoid-obstacle"}, preview=BordeauxTrajectoryPreview.RUNTIME_DYNAMIC,
+                    fallbackPolicy=BordeauxTrajectoryFallbackPolicy.SAFE_STOP_ONLY,
+                    timeoutMs=50, maxSamples=512, maxDurationS=5, maxDistanceM=12,
+                    maxVelocityMps=4, maxAccelerationMps2=8, maxCentripetalAccelerationMps2=6,
+                    maxAngularVelocityRadps=10, maxAngularAccelerationRadps2=20, minClearanceM=0.2)
+                  public static BordeauxGeneratedTrajectory detour(BordeauxGenerationContext context,
+                    @BordeauxParam(min="0", max="4") double offset, Side side, boolean reverse) { return null; }
+                }
+                """);
+        assertTrue(result.success(), result.messages());
+
+        JsonNode catalog = MAPPER.readTree(Files.readString(
+                result.classes().resolve("META-INF/bordeaux/commands.json")));
+        assertEquals("1.3", catalog.path("schemaVersion").textValue());
+        assertEquals("0.4.0", catalog.path("supportVersion").textValue());
+        JsonNode generator = catalog.path("trajectoryGenerators").get(0);
+        assertEquals("detour", generator.path("id").textValue());
+        assertEquals("runtimeDynamic", generator.path("preview").path("kind").textValue());
+        assertEquals("safeStopOnly", generator.path("fallbackPolicy").textValue());
+        assertEquals(50, generator.path("limits").path("timeoutMs").intValue());
+        assertEquals(List.of("avoid", "zeta"), StreamSupport.stream(generator.path("aliases").spliterator(), false)
+                .map(JsonNode::textValue).toList());
+        assertEquals(List.of("avoid-obstacle", "z-tag"), StreamSupport.stream(
+                generator.path("semanticTags").spliterator(), false).map(JsonNode::textValue).toList());
+        assertEquals(List.of("offset", "reverse", "side"), StreamSupport.stream(
+                generator.path("inputs").spliterator(), false).map(value -> value.path("name").textValue()).toList());
+        JsonNode side = StreamSupport.stream(generator.path("inputs").spliterator(), false)
+                .filter(value -> value.path("name").textValue().equals("side")).findFirst().orElseThrow();
+        assertEquals(List.of("LEFT", "RIGHT"), StreamSupport.stream(
+                side.path("schema").path("enumValues").spliterator(), false).map(JsonNode::textValue).toList());
+        assertEquals(canonicalHash(catalog.path("builtIns"), catalog.path("commands"),
+                catalog.path("conditions"), catalog.path("trajectoryGenerators")), catalog.path("catalogHash").textValue());
+
+        String bindings = Files.readString(result.generated().resolve(
+                "dev/bordeaux/generated/BordeauxGeneratedBindings.java"));
+        assertTrue(bindings.contains("BordeauxTrajectoryGeneratorRegistry trajectoryGenerators()"));
+        assertTrue(bindings.contains("frc.robot.Generators.detour(context,"));
+    }
+
+    @Test
+    void rejectsIncompleteOrUnsafeTrajectoryGeneratorContracts() throws Exception {
+        Compilation missing = compile("frc/robot/Missing.java", generatorSource("""
+                preview=BordeauxTrajectoryPreview.RUNTIME_DYNAMIC,
+                fallbackPolicy=BordeauxTrajectoryFallbackPolicy.SAFE_STOP_ONLY
+                """, "BordeauxGenerationContext context, double offset", "BordeauxGeneratedTrajectory"));
+        assertFalse(missing.success());
+        assertTrue(missing.messages().contains("timeoutMs"), missing.messages());
+        assertTrue(missing.messages().contains("require both @BordeauxParam min and max"), missing.messages());
+
+        Compilation excessive = compile("frc/robot/Missing.java", generatorSource(generatorLimits()
+                .replace("timeoutMs=50", "timeoutMs=101"),
+                "BordeauxGenerationContext context, @BordeauxParam(min=\"0\", max=\"2\") double offset",
+                "BordeauxGeneratedTrajectory"));
+        assertFalse(excessive.success());
+        assertTrue(excessive.messages().contains("timeoutMs must be between 1 and 100"), excessive.messages());
+
+        Compilation wrongSignature = compile("frc/robot/Missing.java", generatorSource(generatorLimits(),
+                "String context, String freeForm", "String"));
+        assertFalse(wrongSignature.success());
+        assertTrue(wrongSignature.messages().contains("must return dev.bordeaux.runtime.BordeauxGeneratedTrajectory"), wrongSignature.messages());
+        assertTrue(wrongSignature.messages().contains("first parameter"), wrongSignature.messages());
+        assertTrue(wrongSignature.messages().contains("boolean, enum, or numeric scalar"), wrongSignature.messages());
+
+        Compilation defaulted = compile("frc/robot/Missing.java", generatorSource(generatorLimits(),
+                "BordeauxGenerationContext context, @BordeauxParam(defaultValue=\"1\", min=\"0\", max=\"2\") double offset",
+                "BordeauxGeneratedTrajectory"));
+        assertFalse(defaulted.success());
+        assertTrue(defaulted.messages().contains("must not declare default values"), defaulted.messages());
+    }
+
+    @Test
+    void trajectoryGeneratorLimitChangesChangeTheSemanticHash() throws Exception {
+        Compilation first = compile("frc/robot/Missing.java", generatorSource(generatorLimits(),
+                "BordeauxGenerationContext context", "BordeauxGeneratedTrajectory"));
+        Compilation changed = compile("frc/robot/Missing.java", generatorSource(
+                generatorLimits().replace("maxDistanceM=12", "maxDistanceM=13"),
+                "BordeauxGenerationContext context", "BordeauxGeneratedTrajectory"));
+        assertTrue(first.success(), first.messages());
+        assertTrue(changed.success(), changed.messages());
+        String firstHash = MAPPER.readTree(Files.readString(first.classes().resolve("META-INF/bordeaux/commands.json")))
+                .path("catalogHash").textValue();
+        String changedHash = MAPPER.readTree(Files.readString(changed.classes().resolve("META-INF/bordeaux/commands.json")))
+                .path("catalogHash").textValue();
+        assertNotEquals(firstHash, changedHash);
     }
 
     @Test
@@ -84,9 +179,9 @@ class BordeauxProcessorTest {
 
         JsonNode catalog = MAPPER.readTree(Files.readString(
                 result.classes().resolve("META-INF/bordeaux/commands.json")));
-        assertEquals("1.2", catalog.path("schemaVersion").textValue());
+        assertEquals("1.3", catalog.path("schemaVersion").textValue());
         assertEquals("test-robot", catalog.path("catalogId").textValue());
-        assertEquals("0.3.0", catalog.path("supportVersion").textValue());
+        assertEquals("0.4.0", catalog.path("supportVersion").textValue());
         assertEquals("bordeaux.wait", catalog.path("builtIns").get(0).path("id").textValue());
         assertEquals(0.02, catalog.path("builtIns").get(0).path("parameters").get(0).path("min").doubleValue());
         assertEquals("super.score", catalog.path("commands").get(0).path("id").textValue());
@@ -320,11 +415,35 @@ class BordeauxProcessorTest {
                 """.formatted(label);
     }
 
-    private static String canonicalHash(JsonNode builtIns, JsonNode commands, JsonNode conditions) throws Exception {
+    private static String generatorLimits() {
+        return """
+                preview=BordeauxTrajectoryPreview.RUNTIME_DYNAMIC,
+                fallbackPolicy=BordeauxTrajectoryFallbackPolicy.SAFE_STOP_ONLY,
+                timeoutMs=50, maxSamples=512, maxDurationS=5, maxDistanceM=12,
+                maxVelocityMps=4, maxAccelerationMps2=8, maxCentripetalAccelerationMps2=6,
+                maxAngularVelocityRadps=10, maxAngularAccelerationRadps2=20, minClearanceM=0.2
+                """;
+    }
+
+    private static String generatorSource(String annotationMembers, String parameters, String returnType) {
+        return """
+                package frc.robot;
+                import dev.bordeaux.annotations.*;
+                import dev.bordeaux.runtime.*;
+                public final class Missing {
+                  @BordeauxTrajectoryGenerator(%s)
+                  public static %s generate(%s) { return null; }
+                }
+                """.formatted(annotationMembers, returnType, parameters);
+    }
+
+    private static String canonicalHash(JsonNode builtIns, JsonNode commands, JsonNode conditions, JsonNode... trajectoryGenerators) throws Exception {
         var catalog = MAPPER.createObjectNode();
         catalog.set("builtIns", builtIns);
         catalog.set("commands", commands);
         catalog.set("conditions", conditions);
+        catalog.set("trajectoryGenerators", trajectoryGenerators.length == 0
+                ? MAPPER.createArrayNode() : trajectoryGenerators[0]);
         String canonical = canonical(catalog);
         byte[] digest = MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(StandardCharsets.UTF_8));
         StringBuilder result = new StringBuilder("sha256:");

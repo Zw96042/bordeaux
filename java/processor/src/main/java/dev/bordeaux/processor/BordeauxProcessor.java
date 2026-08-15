@@ -3,6 +3,9 @@ package dev.bordeaux.processor;
 import dev.bordeaux.annotations.BordeauxCommand;
 import dev.bordeaux.annotations.BordeauxCondition;
 import dev.bordeaux.annotations.BordeauxParam;
+import dev.bordeaux.annotations.BordeauxTrajectoryFallbackPolicy;
+import dev.bordeaux.annotations.BordeauxTrajectoryGenerator;
+import dev.bordeaux.annotations.BordeauxTrajectoryPreview;
 import java.io.IOException;
 import java.io.Writer;
 import java.math.BigDecimal;
@@ -43,6 +46,8 @@ import javax.tools.StandardLocation;
 @SupportedOptions("bordeaux.catalogId")
 public final class BordeauxProcessor extends AbstractProcessor {
     private static final String COMMAND_TYPE = "edu.wpi.first.wpilibj2.command.Command";
+    private static final String GENERATION_CONTEXT_TYPE = "dev.bordeaux.runtime.BordeauxGenerationContext";
+    private static final String GENERATED_TRAJECTORY_TYPE = "dev.bordeaux.runtime.BordeauxGeneratedTrajectory";
     private static final String GENERATED_PACKAGE = "dev.bordeaux.generated";
     private static final String GENERATED_CLASS = "BordeauxGeneratedBindings";
     private static final int MAX_SCHEMA_DEPTH = 24;
@@ -56,6 +61,8 @@ public final class BordeauxProcessor extends AbstractProcessor {
     private final Map<String, ExecutableElement> collectedIds = new HashMap<>();
     private final List<ConditionMethod> collectedConditions = new ArrayList<>();
     private final Map<String, ExecutableElement> collectedConditionIds = new HashMap<>();
+    private final List<GeneratorMethod> collectedGenerators = new ArrayList<>();
+    private final Map<String, ExecutableElement> collectedGeneratorIds = new HashMap<>();
     private boolean generated;
     private boolean invalid;
 
@@ -81,20 +88,24 @@ public final class BordeauxProcessor extends AbstractProcessor {
                     .sorted(Comparator.comparing(CommandMethod::id)).toList();
             List<ConditionMethod> conditions = collectedConditions.stream()
                     .sorted(Comparator.comparing(ConditionMethod::id)).toList();
+            List<GeneratorMethod> generators = collectedGenerators.stream()
+                    .sorted(Comparator.comparing(GeneratorMethod::id)).toList();
             try {
                 String commandsJson = commandsJson(methods);
                 String conditionsJson = conditionsJson(conditions);
-                String semanticCatalog = "{\"builtIns\":" + BUILT_INS_JSON + ",\"commands\":" + commandsJson + ",\"conditions\":" + conditionsJson + "}";
+                String generatorsJson = generatorsJson(generators);
+                String semanticCatalog = "{\"builtIns\":" + BUILT_INS_JSON + ",\"commands\":" + commandsJson
+                        + ",\"conditions\":" + conditionsJson + ",\"trajectoryGenerators\":" + generatorsJson + "}";
                 if (semanticCatalog.getBytes(StandardCharsets.UTF_8).length > MAX_CATALOG_BYTES - 1_024) {
                     processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
                             "Generated Bordeaux capability catalog exceeds " + MAX_CATALOG_BYTES + " bytes");
                     return false;
                 }
                 String catalogHash = semanticHash(semanticCatalog);
-                String catalogId = catalogId(methods, conditions);
+                String catalogId = catalogId(methods, conditions, generators);
                 if (catalogId == null) return false;
-                writeCatalog(commandsJson, conditionsJson, catalogId, catalogHash);
-                writeBindings(methods, conditions, catalogId, catalogHash);
+                writeCatalog(commandsJson, conditionsJson, generatorsJson, catalogId, catalogHash);
+                writeBindings(methods, conditions, generators, catalogId, catalogHash);
             } catch (IOException exception) {
                 processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
                         "Could not generate Bordeaux command metadata: " + exception.getMessage());
@@ -103,8 +114,10 @@ public final class BordeauxProcessor extends AbstractProcessor {
         }
         Set<? extends Element> annotated = roundEnvironment.getElementsAnnotatedWith(BordeauxCommand.class);
         Set<? extends Element> annotatedConditions = roundEnvironment.getElementsAnnotatedWith(BordeauxCondition.class);
-        if (annotated.isEmpty() && annotatedConditions.isEmpty()) return false;
-        if (collectedMethods.size() + collectedConditions.size() + annotated.size() + annotatedConditions.size() > MAX_COMMANDS) {
+        Set<? extends Element> annotatedGenerators = roundEnvironment.getElementsAnnotatedWith(BordeauxTrajectoryGenerator.class);
+        if (annotated.isEmpty() && annotatedConditions.isEmpty() && annotatedGenerators.isEmpty()) return false;
+        if (collectedMethods.size() + collectedConditions.size() + collectedGenerators.size()
+                + annotated.size() + annotatedConditions.size() + annotatedGenerators.size() > MAX_COMMANDS) {
             processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
                     "Bordeaux command count exceeds " + MAX_COMMANDS);
             invalid = true;
@@ -124,7 +137,7 @@ public final class BordeauxProcessor extends AbstractProcessor {
                 continue;
             }
             ExecutableElement previous = collectedIds.putIfAbsent(command.id(), method);
-            if (previous != null || collectedConditionIds.containsKey(command.id())) {
+            if (previous != null || collectedConditionIds.containsKey(command.id()) || collectedGeneratorIds.containsKey(command.id())) {
                 error(method, previous == null ? "Duplicate Bordeaux capability ID '" + command.id() + "'"
                         : "Duplicate Bordeaux command ID '" + command.id() + "'");
                 if (previous != null) error(previous, "Duplicate Bordeaux command ID '" + command.id() + "'");
@@ -146,7 +159,7 @@ public final class BordeauxProcessor extends AbstractProcessor {
                 continue;
             }
             ExecutableElement previous = collectedConditionIds.putIfAbsent(condition.id(), method);
-            if (previous != null || collectedIds.containsKey(condition.id())) {
+            if (previous != null || collectedIds.containsKey(condition.id()) || collectedGeneratorIds.containsKey(condition.id())) {
                 error(method, "Duplicate Bordeaux capability ID '" + condition.id() + "'");
                 if (previous != null) error(previous, "Duplicate Bordeaux capability ID '" + condition.id() + "'");
                 invalid = true;
@@ -154,7 +167,150 @@ public final class BordeauxProcessor extends AbstractProcessor {
             }
             collectedConditions.add(condition);
         }
+        for (Element element : annotatedGenerators) {
+            if (element.getKind() != ElementKind.METHOD) {
+                error(element, "@BordeauxTrajectoryGenerator may only annotate methods");
+                invalid = true;
+                continue;
+            }
+            ExecutableElement method = (ExecutableElement) element;
+            GeneratorMethod generator = inspectGenerator(method);
+            if (generator == null) {
+                invalid = true;
+                continue;
+            }
+            ExecutableElement previous = collectedGeneratorIds.putIfAbsent(generator.id(), method);
+            if (previous != null || collectedIds.containsKey(generator.id()) || collectedConditionIds.containsKey(generator.id())) {
+                error(method, "Duplicate Bordeaux capability ID '" + generator.id() + "'");
+                if (previous != null) error(previous, "Duplicate Bordeaux capability ID '" + generator.id() + "'");
+                invalid = true;
+                continue;
+            }
+            collectedGenerators.add(generator);
+        }
         return false;
+    }
+
+    private GeneratorMethod inspectGenerator(ExecutableElement method) {
+        TypeElement owner = (TypeElement) method.getEnclosingElement();
+        BordeauxTrajectoryGenerator annotation = method.getAnnotation(BordeauxTrajectoryGenerator.class);
+        boolean valid = true;
+        if (!method.getModifiers().contains(Modifier.PUBLIC)) {
+            error(method, "Bordeaux trajectory generator methods must be public"); valid = false;
+        }
+        if (!owner.getModifiers().contains(Modifier.PUBLIC)) {
+            error(owner, "Bordeaux trajectory generator provider types must be public"); valid = false;
+        }
+        if (!owner.getTypeParameters().isEmpty() || !method.getTypeParameters().isEmpty()) {
+            error(method, "Generic Bordeaux trajectory generator providers and methods are not supported"); valid = false;
+        }
+        if (!method.getThrownTypes().isEmpty()) {
+            error(method, "Bordeaux trajectory generator methods must not declare checked exceptions"); valid = false;
+        }
+        if (!method.getReturnType().toString().equals(GENERATED_TRAJECTORY_TYPE)) {
+            error(method, "@BordeauxTrajectoryGenerator method must return " + GENERATED_TRAJECTORY_TYPE); valid = false;
+        }
+        if (!method.getModifiers().contains(Modifier.STATIC)
+                && owner.getNestingKind().isNested() && !owner.getModifiers().contains(Modifier.STATIC)) {
+            error(owner, "Nested Bordeaux trajectory generator providers must be static"); valid = false;
+        }
+        if (method.getParameters().isEmpty()
+                || !method.getParameters().get(0).asType().toString().equals(GENERATION_CONTEXT_TYPE)) {
+            error(method, "Bordeaux trajectory generator methods must declare BordeauxGenerationContext as their first parameter");
+            valid = false;
+        }
+        if (method.getParameters().size() > 17) {
+            error(method, "Bordeaux trajectory generators cannot exceed 16 authored inputs"); valid = false;
+        }
+        List<Parameter> inputs = new ArrayList<>();
+        for (int index = 1; index < method.getParameters().size(); index++) {
+            VariableElement parameter = method.getParameters().get(index);
+            if (!isGeneratorInputType(parameter.asType())) {
+                error(parameter, "Trajectory generator inputs must be boolean, enum, or numeric scalar values");
+                valid = false;
+                continue;
+            }
+            BordeauxParam metadata = parameter.getAnnotation(BordeauxParam.class);
+            if (parameter.getSimpleName().length() > 256 || parameter.asType().toString().length() > 512) {
+                error(parameter, "Trajectory generator input names and Java types exceed catalog limits");
+                valid = false;
+                continue;
+            }
+            if (metadata != null && !metadata.defaultValue().isBlank()) {
+                error(parameter, "Trajectory generator inputs must not declare default values");
+                valid = false;
+                continue;
+            }
+            if (isNumericType(parameter.asType().toString())
+                    && (metadata == null || metadata.min().isBlank() || metadata.max().isBlank())) {
+                error(parameter, "Numeric trajectory generator inputs require both @BordeauxParam min and max");
+                valid = false;
+                continue;
+            }
+            Parameter inspected = inspectParameter(parameter);
+            if (inspected == null) valid = false;
+            else inputs.add(inspected);
+        }
+        String ownerName = owner.getQualifiedName().toString();
+        String id = annotation.id().isBlank() ? ownerName + "#" + method.getSimpleName() : annotation.id().trim();
+        if (id.length() > 256 || !id.matches("[A-Za-z0-9_.:#()$,-]+")) {
+            error(method, "Bordeaux trajectory generator ID must be 1-256 stable identifier characters"); valid = false;
+        }
+        if (annotation.preview() != BordeauxTrajectoryPreview.RUNTIME_DYNAMIC) {
+            error(method, "Trajectory generator preview must be explicitly RUNTIME_DYNAMIC"); valid = false;
+        }
+        if (annotation.fallbackPolicy() == BordeauxTrajectoryFallbackPolicy.UNSPECIFIED) {
+            error(method, "Trajectory generator fallbackPolicy must be explicitly declared"); valid = false;
+        }
+        valid &= generatorLimit(method, annotation.timeoutMs(), 1, 100, "timeoutMs");
+        valid &= generatorLimit(method, annotation.maxSamples(), 2, 4096, "maxSamples");
+        valid &= generatorLimit(method, annotation.maxDurationS(), 0.02, 15, "maxDurationS");
+        valid &= generatorLimit(method, annotation.maxDistanceM(), 0, 54, "maxDistanceM");
+        valid &= generatorLimit(method, annotation.maxVelocityMps(), 0, 10, "maxVelocityMps");
+        valid &= generatorLimit(method, annotation.maxAccelerationMps2(), 0, 30, "maxAccelerationMps2");
+        valid &= generatorLimit(method, annotation.maxCentripetalAccelerationMps2(), 0, 30, "maxCentripetalAccelerationMps2");
+        valid &= generatorLimit(method, annotation.maxAngularVelocityRadps(), 0, 25, "maxAngularVelocityRadps");
+        valid &= generatorLimit(method, annotation.maxAngularAccelerationRadps2(), 0, 100, "maxAngularAccelerationRadps2");
+        valid &= generatorLimit(method, annotation.minClearanceM(), 0, 2, "minClearanceM");
+        if (annotation.label().length() > 256 || annotation.description().length() > 2_048) {
+            error(method, "Bordeaux trajectory generator labels and descriptions exceed catalog limits"); valid = false;
+        }
+        List<String> aliases = boundedTerms(method, annotation.aliases(), "trajectory generator aliases", false);
+        List<String> tags = boundedTerms(method, annotation.semanticTags(), "trajectory generator semantic tags", true);
+        if (aliases == null || tags == null) valid = false;
+        if (!valid) return null;
+        String label = annotation.label().isBlank() ? humanize(method.getSimpleName().toString()) : annotation.label();
+        return new GeneratorMethod(id, label, annotation.description(), aliases.stream().sorted().toList(),
+                tags.stream().sorted().toList(), ownerName,
+                method.getSimpleName().toString(), method.getModifiers().contains(Modifier.STATIC), inputs,
+                annotation.preview(), annotation.fallbackPolicy(), annotation.timeoutMs(), annotation.maxSamples(),
+                annotation.maxDurationS(), annotation.maxDistanceM(), annotation.maxVelocityMps(),
+                annotation.maxAccelerationMps2(), annotation.maxCentripetalAccelerationMps2(),
+                annotation.maxAngularVelocityRadps(), annotation.maxAngularAccelerationRadps2(), annotation.minClearanceM());
+    }
+
+    private static boolean isGeneratorInputType(TypeMirror type) {
+        if (type.getKind() == TypeKind.BOOLEAN || type.getKind().isPrimitive() && type.getKind() != TypeKind.CHAR) return true;
+        if (type.getKind() != TypeKind.DECLARED) return false;
+        TypeElement element = (TypeElement) ((DeclaredType) type).asElement();
+        return element.getKind() == ElementKind.ENUM || type.toString().equals("java.lang.Boolean")
+                || isNumericType(type.toString());
+    }
+
+    private boolean generatorLimit(Element method, int value, int minimum, int maximum, String name) {
+        if (value < minimum || value > maximum) {
+            error(method, "Trajectory generator " + name + " must be between " + minimum + " and " + maximum);
+            return false;
+        }
+        return true;
+    }
+
+    private boolean generatorLimit(Element method, double value, double minimum, double maximum, String name) {
+        if (!Double.isFinite(value) || value < minimum || value > maximum) {
+            error(method, "Trajectory generator " + name + " must be finite and between " + minimum + " and " + maximum);
+            return false;
+        }
+        return true;
     }
 
     private ConditionMethod inspectCondition(ExecutableElement method) {
@@ -596,7 +752,7 @@ public final class BordeauxProcessor extends AbstractProcessor {
         if (element.getKind() == ElementKind.ENUM) {
             List<String> constants = element.getEnclosedElements().stream()
                     .filter(value -> value.getKind() == ElementKind.ENUM_CONSTANT)
-                    .map(value -> quote(value.getSimpleName().toString())).toList();
+                    .map(value -> value.getSimpleName().toString()).sorted().map(BordeauxProcessor::quote).toList();
             if (constants.size() > MAX_ENUM_VALUES) return schemaLeaf("opaque", javaType);
             return "{\"enumValues\":[" + String.join(",", constants) + "],\"javaType\":" + quote(javaType)
                     + ",\"kind\":\"enum\"}";
@@ -652,11 +808,12 @@ public final class BordeauxProcessor extends AbstractProcessor {
                 value.getModifiers().contains(Modifier.PUBLIC) && value.getParameters().isEmpty());
     }
 
-    private String catalogId(List<CommandMethod> methods, List<ConditionMethod> conditions) {
+    private String catalogId(List<CommandMethod> methods, List<ConditionMethod> conditions, List<GeneratorMethod> generators) {
         String value = processingEnv.getOptions().get("bordeaux.catalogId");
         if (value == null || value.isBlank()) {
             if (!methods.isEmpty()) value = methods.get(0).owner();
             else if (!conditions.isEmpty()) value = conditions.get(0).owner();
+            else if (!generators.isEmpty()) value = generators.get(0).owner();
             else {
                 processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR,
                         "A Wait-only Bordeaux catalog requires -Abordeaux.catalogId=<stable-id>");
@@ -672,22 +829,28 @@ public final class BordeauxProcessor extends AbstractProcessor {
         return value;
     }
 
-    private void writeCatalog(String commandsJson, String conditionsJson, String catalogId, String catalogHash) throws IOException {
+    private void writeCatalog(String commandsJson, String conditionsJson, String generatorsJson,
+            String catalogId, String catalogHash) throws IOException {
         Filer filer = processingEnv.getFiler();
         try (Writer writer = filer.createResource(StandardLocation.CLASS_OUTPUT, "", "META-INF/bordeaux/commands.json").openWriter()) {
-            writer.write("{\n  \"schemaVersion\": \"1.2\",\n  \"catalogId\": " + quote(catalogId)
-                    + ",\n  \"supportVersion\": \"0.3.0\",\n  \"catalogHash\": " + quote(catalogHash)
-                    + ",\n  \"builtIns\": " + BUILT_INS_JSON + ",\n  \"commands\": " + commandsJson + ",\n  \"conditions\": " + conditionsJson + "\n}\n");
+            writer.write("{\n  \"schemaVersion\": \"1.3\",\n  \"catalogId\": " + quote(catalogId)
+                    + ",\n  \"supportVersion\": \"0.4.0\",\n  \"catalogHash\": " + quote(catalogHash)
+                    + ",\n  \"builtIns\": " + BUILT_INS_JSON + ",\n  \"commands\": " + commandsJson
+                    + ",\n  \"conditions\": " + conditionsJson + ",\n  \"trajectoryGenerators\": " + generatorsJson + "\n}\n");
         }
     }
 
-    private void writeBindings(List<CommandMethod> methods, List<ConditionMethod> conditions, String catalogId, String catalogHash) throws IOException {
+    private void writeBindings(List<CommandMethod> methods, List<ConditionMethod> conditions,
+            List<GeneratorMethod> generators, String catalogId, String catalogHash) throws IOException {
         Map<String, String> providers = new LinkedHashMap<>();
         for (CommandMethod method : methods) {
             if (!method.isStatic()) providers.computeIfAbsent(method.owner(), ignored -> "provider" + providers.size());
         }
         for (ConditionMethod condition : conditions) {
             if (!condition.isStatic()) providers.computeIfAbsent(condition.owner(), ignored -> "provider" + providers.size());
+        }
+        for (GeneratorMethod generator : generators) {
+            if (!generator.isStatic()) providers.computeIfAbsent(generator.owner(), ignored -> "provider" + providers.size());
         }
         JavaFileObject source = processingEnv.getFiler().createSourceFile(GENERATED_PACKAGE + "." + GENERATED_CLASS);
         try (Writer writer = source.openWriter()) {
@@ -724,9 +887,31 @@ public final class BordeauxProcessor extends AbstractProcessor {
                 writer.write(condition.isStatic() ? condition.owner() : providers.get(condition.owner()));
                 writer.write("." + condition.member() + "());\n");
             }
+            writer.write("    return builder.build();\n  }\n\n  public dev.bordeaux.runtime.BordeauxTrajectoryGeneratorRegistry trajectoryGenerators() {\n");
+            writer.write("    var builder = dev.bordeaux.runtime.BordeauxTrajectoryGeneratorRegistry.builder()"
+                    + ".catalogId(CATALOG_ID).catalogHash(CATALOG_HASH);\n");
+            for (GeneratorMethod generator : generators) {
+                String names = generator.inputs().stream().map(parameter -> quoteJava(parameter.name()))
+                        .reduce((a, b) -> a + ", " + b).orElse("");
+                writer.write("    builder.register(" + quoteJava(generator.id()) + ", java.util.Set.of(" + names + "), ");
+                writer.write(generatorLimitsExpression(generator) + ", dev.bordeaux.runtime.BordeauxTrajectoryGeneratorRegistry.FallbackPolicy."
+                        + generator.fallbackPolicy().name() + ", (context, args) -> ");
+                writer.write(generator.isStatic() ? generator.owner() : providers.get(generator.owner()));
+                writer.write("." + generator.member() + "(context");
+                for (Parameter input : generator.inputs()) writer.write(", " + argumentExpression(input));
+                writer.write("));\n");
+            }
             writer.write("    return builder.build();\n  }\n\n  public dev.bordeaux.runtime.BordeauxCapabilities capabilities() {\n"
-                    + "    return new dev.bordeaux.runtime.BordeauxCapabilities(registry(), conditions());\n  }\n}\n");
+                    + "    return new dev.bordeaux.runtime.BordeauxCapabilities(registry(), conditions(), trajectoryGenerators());\n  }\n}\n");
         }
+    }
+
+    private static String generatorLimitsExpression(GeneratorMethod value) {
+        return "new dev.bordeaux.runtime.BordeauxTrajectoryGeneratorLimits(" + value.timeoutMs() + ", "
+                + value.maxSamples() + ", " + value.maxDurationS() + ", " + value.maxDistanceM() + ", "
+                + value.maxVelocityMps() + ", " + value.maxAccelerationMps2() + ", "
+                + value.maxCentripetalAccelerationMps2() + ", " + value.maxAngularVelocityRadps() + ", "
+                + value.maxAngularAccelerationRadps2() + ", " + value.minClearanceM() + ")";
     }
 
     private String commandsJson(List<CommandMethod> methods) {
@@ -784,6 +969,56 @@ public final class BordeauxProcessor extends AbstractProcessor {
             values.add("{" + String.join(",", fields) + "}");
         }
         return "[" + String.join(",", values) + "]";
+    }
+
+    private String generatorsJson(List<GeneratorMethod> generators) {
+        List<String> values = new ArrayList<>();
+        for (GeneratorMethod generator : generators) {
+            List<String> inputs = new ArrayList<>();
+            for (Parameter input : generator.inputs().stream().sorted(Comparator.comparing(Parameter::name)).toList()) {
+                BordeauxParam metadata = input.metadata();
+                List<String> fields = new ArrayList<>();
+                if (!input.defaultValue().isEmpty()) fields.add("\"defaultValue\":" + input.defaultValue());
+                if (metadata != null && !metadata.description().isBlank()) fields.add("\"description\":" + quote(metadata.description()));
+                fields.add("\"javaType\":" + quote(input.type().toString()));
+                if (metadata != null && !metadata.label().isBlank()) fields.add("\"label\":" + quote(metadata.label()));
+                if (metadata != null && !metadata.max().isBlank()) fields.add("\"max\":" + boundJson(input, metadata.max()));
+                if (metadata != null && !metadata.min().isBlank()) fields.add("\"min\":" + boundJson(input, metadata.min()));
+                fields.add("\"name\":" + quote(input.name()));
+                fields.add("\"role\":\"argument\"");
+                fields.add("\"schema\":" + input.schema());
+                if (metadata != null && !metadata.unit().isBlank()) fields.add("\"unit\":" + quote(metadata.unit()));
+                inputs.add("{" + String.join(",", fields) + "}");
+            }
+            List<String> fields = new ArrayList<>();
+            if (!generator.aliases().isEmpty()) fields.add("\"aliases\":[" + generator.aliases().stream().map(BordeauxProcessor::quote).reduce((a, b) -> a + "," + b).orElse("") + "]");
+            if (!generator.description().isBlank()) fields.add("\"description\":" + quote(generator.description()));
+            fields.add("\"fallbackPolicy\":" + quote(generator.fallbackPolicy() == BordeauxTrajectoryFallbackPolicy.SAFE_STOP_ONLY ? "safeStopOnly" : "validatedBranch"));
+            fields.add("\"id\":" + quote(generator.id()));
+            fields.add("\"inputs\":[" + String.join(",", inputs) + "]");
+            fields.add("\"label\":" + quote(generator.label()));
+            fields.add("\"limits\":{" + generatorLimitsJson(generator) + "}");
+            fields.add("\"member\":" + quote(generator.member()));
+            fields.add("\"ownerType\":" + quote(generator.owner()));
+            fields.add("\"preview\":{\"kind\":\"runtimeDynamic\"}");
+            if (!generator.semanticTags().isEmpty()) fields.add("\"semanticTags\":[" + generator.semanticTags().stream().map(BordeauxProcessor::quote).reduce((a, b) -> a + "," + b).orElse("") + "]");
+            fields.add("\"source\":{\"file\":" + quote(generator.owner().replace('.', '/') + ".java") + ",\"line\":0}");
+            values.add("{" + String.join(",", fields) + "}");
+        }
+        return "[" + String.join(",", values) + "]";
+    }
+
+    private static String generatorLimitsJson(GeneratorMethod value) {
+        return "\"maxAccelerationMps2\":" + value.maxAccelerationMps2()
+                + ",\"maxAngularAccelerationRadps2\":" + value.maxAngularAccelerationRadps2()
+                + ",\"maxAngularVelocityRadps\":" + value.maxAngularVelocityRadps()
+                + ",\"maxCentripetalAccelerationMps2\":" + value.maxCentripetalAccelerationMps2()
+                + ",\"maxDistanceM\":" + value.maxDistanceM()
+                + ",\"maxDurationS\":" + value.maxDurationS()
+                + ",\"maxSamples\":" + value.maxSamples()
+                + ",\"maxVelocityMps\":" + value.maxVelocityMps()
+                + ",\"minClearanceM\":" + value.minClearanceM()
+                + ",\"timeoutMs\":" + value.timeoutMs();
     }
 
     private static String boundJson(Parameter parameter, String value) {
@@ -913,6 +1148,14 @@ public final class BordeauxProcessor extends AbstractProcessor {
     private record ConditionMethod(
             String id, String label, String description, List<String> aliases, List<String> semanticTags, String owner,
             String member, boolean isStatic) {}
+
+    private record GeneratorMethod(
+            String id, String label, String description, List<String> aliases, List<String> semanticTags,
+            String owner, String member, boolean isStatic, List<Parameter> inputs,
+            BordeauxTrajectoryPreview preview, BordeauxTrajectoryFallbackPolicy fallbackPolicy,
+            int timeoutMs, int maxSamples, double maxDurationS, double maxDistanceM,
+            double maxVelocityMps, double maxAccelerationMps2, double maxCentripetalAccelerationMps2,
+            double maxAngularVelocityRadps, double maxAngularAccelerationRadps2, double minClearanceM) {}
 
     private record Parameter(
             String name, TypeMirror type, BordeauxParam metadata, String defaultValue, String schema) {}

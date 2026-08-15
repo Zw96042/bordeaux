@@ -4,7 +4,7 @@ This Java 17 bundle provides the robot-side half of Bordeaux commands for WPILib
 
 ## Modules
 
-- `annotations`: source-retained `@BordeauxCommand`, `@BordeauxCondition`, and `@BordeauxParam` annotations.
+- `annotations`: source-retained command, condition, parameter, and bounded trajectory-generator annotations.
 - `processor`: an aggregating annotation processor that validates authored factories and predicates, then generates both `META-INF/bordeaux/commands.json` and direct-call `dev.bordeaux.generated.BordeauxGeneratedBindings`.
 - `runtime`: a bounded `bordeaux-trajectory/1.0` reader, generated capabilities API, exact argument conversion, and a jitter-safe WPILib command event runner.
 
@@ -12,15 +12,15 @@ The desktop app's **Install Java Support** action is the one supported integrati
 
 Factories must be public methods on public provider types and return `edu.wpi.first.wpilibj2.command.Command`. Non-static providers are explicit constructor dependencies of the generated bindings, keeping subsystem ownership in `RobotContainer`. Supported authored values are numeric/boolean primitives and wrappers, strings, enums, exact `long`/`BigInteger`/`BigDecimal`, arrays, collections, string-key maps, optionals, records, and public Jackson-deserializable objects with mutable public data fields plus a public no-argument constructor. `char`/`Character`, unsupported, recursive, or opaque shapes fail compilation.
 
-Call `BordeauxBindings.generatedCapabilities(provider1, provider2, ...)` to construct the generated command and condition capabilities. Provider order does not matter. This fixed bootstrap avoids importing a class emitted during the processor's final aggregation round, while the generated class still owns direct typed calls and compiled catalog identity. `generated(...)` remains available for command-only integrations.
+Call `BordeauxBindings.generatedCapabilities(provider1, provider2, ...)` to construct the generated command, condition, and trajectory-generator capabilities. Provider order does not matter. This fixed bootstrap avoids importing a class emitted during the processor's final aggregation round, while the generated class still owns direct typed calls and compiled catalog identity. `generated(...)` remains available for command-only integrations.
 
 See [`../examples/bordeaux-template-robot`](../examples/bordeaux-template-robot) for a complete GradleRIO project and [`examples`](examples) for integration snippets. The fixed `bordeauxCatalog` task copies the processor resource to `build/bordeaux/catalog-v1.json`, which is the only generated project file the app reads.
 
 ## Catalog identity
 
-Set `-Abordeaux.catalogId=<team-stable-id>` on `JavaCompile`; otherwise the first provider type is the fallback ID. The generated catalog uses `schemaVersion: "1.2"`, `supportVersion: "0.3.0"`, and a deterministic `catalogHash`. It includes the one closed Bordeaux-owned built-in, `bordeaux.wait`, with its bounded `durationS` argument. Both the ID and hash are compiled into `BordeauxGeneratedBindings` and its capabilities.
+Set `-Abordeaux.catalogId=<team-stable-id>` on `JavaCompile`; otherwise the first provider type is the fallback ID. The generated catalog uses `schemaVersion: "1.3"`, `supportVersion: "0.4.0"`, and a deterministic `catalogHash`. It includes the closed `bordeaux.wait` built-in and any strictly bounded `@BordeauxTrajectoryGenerator` descriptors. Both the ID and hash are compiled into `BordeauxGeneratedBindings` and its capabilities.
 
-The hash is `sha256:` plus lowercase SHA-256 of UTF-8 canonical JSON for `{builtIns,commands,conditions}`. Command and condition arrays are sorted by ID, command parameters by name, and canonical JSON recursively sorts every object key lexicographically. A `bordeaux-trajectory/1.0` document carries the same ID and hash in `catalog`; capability runners reject either mismatch and any unknown condition before scheduling anything.
+The hash is `sha256:` plus lowercase SHA-256 of UTF-8 canonical JSON for `{builtIns,commands,conditions,trajectoryGenerators}`. Capability arrays are sorted by ID, authored inputs by name, and canonical JSON recursively sorts every object key lexicographically. A `bordeaux-trajectory/1.0` document carries the same ID and hash in `catalog`; capability runners reject either mismatch and any unknown condition before scheduling anything.
 
 ## Runtime lifecycle
 
@@ -43,7 +43,7 @@ var namespace = Path.of(BordeauxRobotStatusPublisher.PRODUCTION_DEPLOYMENT_NAMES
 Files.createDirectories(namespace.resolve("inbox"));
 Files.createDirectories(namespace.resolve("acks"));
 var compatibility = new BordeauxRuntimeCompatibility(
-    capabilities.catalogId(), capabilities.catalogHash(), "0.3.0",
+    capabilities.catalogId(), capabilities.catalogHash(), "0.4.0",
     "2026-rebuilt", "2026-manual-tu19-welded-4", "bordeaux-field/1.0");
 var revisions = new BordeauxRevisionService(
     namespace.resolve("state"), 2468, DriverStation::isDisabled, compatibility);
