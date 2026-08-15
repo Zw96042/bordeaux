@@ -3,7 +3,7 @@ import { buildBdxExport } from "./bdx";
 import { DEFAULT_SAMPLES_PER_SEGMENT } from "../planners/limits";
 import { validateProjectJavaInvocations } from "../javaCommands";
 import { activeRoutine } from "../project/routines";
-import type { BordeauxProject, CommandInvocation, FollowMode, JavaCommandCatalog, PathDoc, RoutineNode, TrajectorySample } from "../types";
+import type { BordeauxProject, CommandInvocation, FollowMode, JavaCommandCatalog, PathDoc, RoutineFallbackNode, RoutineNode, TrajectorySample } from "../types";
 
 const MAX_SAMPLE_COUNT = 100_000;
 const MAX_EVENT_COUNT = 2_000;
@@ -172,38 +172,42 @@ function assertExportSize(value: unknown): void {
 function deployableRoutine(project: BordeauxProject, pathIds: Set<string>): JavaTrajectoryRoutine | null {
   const routine = activeRoutine(project);
   if (!routine) return null;
-  const nodes = (source: RoutineNode[]): RoutineNode[] => source.map((node) => {
-    if (node.type === "path") {
-      if (!pathIds.has(node.ref)) throw new Error(`Routine path ${node.ref} is not Java-exportable`);
-      return { id: node.id, type: "path", ref: node.ref };
-    }
-    if (node.type === "decision") {
-      if (!/^[A-Za-z0-9_.:#()$,-]{1,256}$/.test(node.cond)) throw new Error(`Routine decision ${node.id} needs a stable condition ID`);
-      return { id: node.id, type: "decision", cond: node.cond, thenLabel: node.thenLabel, elseLabel: node.elseLabel, then: nodes(node.then), else: nodes(node.else) };
-    }
-    if (node.type === "builtin") {
-      if (node.builtinId !== "bordeaux.wait" || !Number.isFinite(node.arguments.durationS) || node.arguments.durationS < 0.02 || node.arguments.durationS > 15
-        || Object.keys(node.arguments).length !== 1) {
-        throw new Error(`Routine built-in ${node.id} is invalid for Java export`);
+  function nodes(source: RoutineFallbackNode[]): RoutineFallbackNode[];
+  function nodes(source: RoutineNode[]): RoutineNode[];
+  function nodes(source: RoutineNode[]): RoutineNode[] {
+    return source.map((node) => {
+      if (node.type === "path") {
+        if (!pathIds.has(node.ref)) throw new Error(`Routine path ${node.ref} is not Java-exportable`);
+        return { id: node.id, type: "path", ref: node.ref };
       }
-      return { id: node.id, type: "builtin", builtinId: "bordeaux.wait", arguments: { durationS: node.arguments.durationS } };
-    }
-    if (node.type === "generatedTrajectory") {
-      return {
-        id: node.id,
-        type: "generatedTrajectory",
-        generatorId: node.generatorId,
-        arguments: node.arguments,
-        fallback: node.fallback.type === "safeStop"
-          ? { type: "safeStop" }
-          : { type: "branch", nodes: nodes(node.fallback.nodes) },
-      };
-    }
-    if (node.cat !== "command" || !node.invocation) {
-      throw new Error(`Routine function ${node.id} is simulation-only; use a bound Command step for Java export`);
-    }
-    return { id: node.id, type: "function", cat: "command", title: node.title, invocation: node.invocation };
-  });
+      if (node.type === "decision") {
+        if (!/^[A-Za-z0-9_.:#()$,-]{1,256}$/.test(node.cond)) throw new Error(`Routine decision ${node.id} needs a stable condition ID`);
+        return { id: node.id, type: "decision", cond: node.cond, thenLabel: node.thenLabel, elseLabel: node.elseLabel, then: nodes(node.then), else: nodes(node.else) };
+      }
+      if (node.type === "builtin") {
+        if (node.builtinId !== "bordeaux.wait" || !Number.isFinite(node.arguments.durationS) || node.arguments.durationS < 0.02 || node.arguments.durationS > 15
+          || Object.keys(node.arguments).length !== 1) {
+          throw new Error(`Routine built-in ${node.id} is invalid for Java export`);
+        }
+        return { id: node.id, type: "builtin", builtinId: "bordeaux.wait", arguments: { durationS: node.arguments.durationS } };
+      }
+      if (node.type === "generatedTrajectory") {
+        return {
+          id: node.id,
+          type: "generatedTrajectory",
+          generatorId: node.generatorId,
+          arguments: node.arguments,
+          fallback: node.fallback.type === "safeStop"
+            ? { type: "safeStop" }
+            : { type: "branch", nodes: nodes(node.fallback.nodes) },
+        };
+      }
+      if (node.cat !== "command" || !node.invocation) {
+        throw new Error(`Routine function ${node.id} is simulation-only; use a bound Command step for Java export`);
+      }
+      return { id: node.id, type: "function", cat: "command", title: node.title, invocation: node.invocation };
+    });
+  }
   return { name: routine.name, nodes: nodes(routine.nodes) };
 }
 

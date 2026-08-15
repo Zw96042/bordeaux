@@ -101,7 +101,7 @@ public final class BordeauxProcessor extends AbstractProcessor {
                             "Generated Bordeaux capability catalog exceeds " + MAX_CATALOG_BYTES + " bytes");
                     return false;
                 }
-                String catalogHash = semanticHash(semanticCatalog);
+                String catalogHash = semanticHash(CanonicalJson.canonicalize(semanticCatalog));
                 String catalogId = catalogId(methods, conditions, generators);
                 if (catalogId == null) return false;
                 writeCatalog(commandsJson, conditionsJson, generatorsJson, catalogId, catalogHash);

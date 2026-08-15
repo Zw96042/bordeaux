@@ -426,6 +426,13 @@ export interface RoutineBuiltInNode {
   arguments: { durationS: number };
 }
 
+export interface RoutineFallbackDecisionNode extends Omit<RoutineDecisionNode, "then" | "else"> {
+  then: RoutineFallbackNode[];
+  else: RoutineFallbackNode[];
+}
+
+export type RoutineFallbackNode = RoutineFunctionNode | RoutinePathNode | RoutineFallbackDecisionNode | RoutineBuiltInNode;
+
 export interface RoutineGeneratedTrajectoryNode {
   id: string;
   type: "generatedTrajectory";
@@ -433,7 +440,7 @@ export interface RoutineGeneratedTrajectoryNode {
   arguments: Record<string, CommandArgumentValue>;
   fallback:
     | { type: "safeStop" }
-    | { type: "branch"; nodes: RoutineNode[] };
+    | { type: "branch"; nodes: RoutineFallbackNode[] };
 }
 
 export type RoutineNode = RoutineFunctionNode | RoutinePathNode | RoutineDecisionNode | RoutineBuiltInNode | RoutineGeneratedTrajectoryNode;

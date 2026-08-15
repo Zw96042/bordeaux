@@ -8,6 +8,10 @@ import type { JavaBuiltInDescriptor, JavaCommandCatalog, JavaTrajectoryGenerator
 // @ts-expect-error Routine authoring remains a legacy JavaScript module.
 import { AUTO } from "../src/renderer/lib/routineModel";
 
+type GeneratedFallbackNode = Extract<RoutineGeneratedTrajectoryNode["fallback"], { type: "branch" }>["nodes"][number];
+const generatedFallbackIsNonRecursive: RoutineGeneratedTrajectoryNode extends GeneratedFallbackNode ? never : true = true;
+void generatedFallbackIsNonRecursive;
+
 const wait: JavaBuiltInDescriptor = {
   id: "bordeaux.wait", kind: "wait", label: "Wait", description: "Pause the routine before its next step.",
   parameters: [{ name: "durationS", label: "Duration", description: "Time to wait before continuing the routine.", unit: "s", defaultValue: 1, min: 0.02, max: 15, role: "argument", javaType: "double", schema: { kind: "number", javaType: "double" } }],

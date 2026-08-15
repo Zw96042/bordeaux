@@ -30,6 +30,42 @@ try {
   });
   if (process.platform !== "win32") await fs.chmod(path.join(fixtureRoot, "gradlew"), 0o755);
 
+  const generatorSource = path.join(fixtureRoot, "src", "main", "java", "frc", "robot", "GeneratedPathIntegration.java");
+  await fs.writeFile(generatorSource, `package frc.robot;
+
+import dev.bordeaux.annotations.BordeauxParam;
+import dev.bordeaux.annotations.BordeauxTrajectoryFallbackPolicy;
+import dev.bordeaux.annotations.BordeauxTrajectoryGenerator;
+import dev.bordeaux.annotations.BordeauxTrajectoryPreview;
+import dev.bordeaux.runtime.BordeauxGeneratedTrajectory;
+import dev.bordeaux.runtime.BordeauxGenerationContext;
+
+public final class GeneratedPathIntegration {
+  private GeneratedPathIntegration() {}
+
+  @BordeauxTrajectoryGenerator(
+      id = "integration.dynamic-path",
+      label = "Dynamic path",
+      preview = BordeauxTrajectoryPreview.RUNTIME_DYNAMIC,
+      fallbackPolicy = BordeauxTrajectoryFallbackPolicy.SAFE_STOP_ONLY,
+      timeoutMs = 50,
+      maxSamples = 512,
+      maxDurationS = 5,
+      maxDistanceM = 12,
+      maxVelocityMps = 4,
+      maxAccelerationMps2 = 8,
+      maxCentripetalAccelerationMps2 = 6,
+      maxAngularVelocityRadps = 10,
+      maxAngularAccelerationRadps2 = 20,
+      minClearanceM = 0.2)
+  public static BordeauxGeneratedTrajectory generate(
+      BordeauxGenerationContext context,
+      @BordeauxParam(min = "0", max = "4") double offset) {
+    return null;
+  }
+}
+`);
+
   const preview = await prepareJavaSupportInstall(fixtureRoot, path.join(repositoryRoot, "java", "dist"));
   await applyJavaSupportInstall(preview);
   await runJavaCatalogBuild(fixtureRoot);
@@ -37,10 +73,12 @@ try {
   const expectedIds = ["example.hold-output", "example.print-message", "example.set-output", "example.set-status"];
   const generatedIds = catalog.commands.filter((command) => command.runtimeReady).map((command) => command.id).sort();
   const generatedConditionIds = (catalog.conditions ?? []).map((condition) => condition.id).sort();
+  const generatedTrajectoryIds = (catalog.trajectoryGenerators ?? []).map((generator) => generator.id).sort();
   if (!catalog.authoritative || catalog.catalogId !== "BordeauxTemplateRobot" || !catalog.catalogHash
       || JSON.stringify(generatedIds) !== JSON.stringify(expectedIds)
-      || JSON.stringify(generatedConditionIds) !== JSON.stringify(["vision.targetVisible"])) {
-    throw new Error(`Template catalog did not contain the expected generated capabilities (commands: ${generatedIds.join(", ")}; conditions: ${generatedConditionIds.join(", ")})`);
+      || JSON.stringify(generatedConditionIds) !== JSON.stringify(["vision.targetVisible"])
+      || JSON.stringify(generatedTrajectoryIds) !== JSON.stringify(["integration.dynamic-path"])) {
+    throw new Error(`Template catalog did not contain the expected generated capabilities (commands: ${generatedIds.join(", ")}; conditions: ${generatedConditionIds.join(", ")}; trajectories: ${generatedTrajectoryIds.join(", ")})`);
   }
   const structured = catalog.commands.find((command) => command.id === "example.set-output")?.parameters[0]?.schema;
   if (structured?.kind !== "object" || structured.fields?.length !== 2) {
@@ -145,7 +183,7 @@ try {
     maxBuffer: 2 * 1024 * 1024,
     timeout: 180_000,
   });
-  console.log(`Verified Bordeaux template robot (${catalog.catalogHash.slice(0, 19)}…, ${generatedIds.length} commands, ${generatedConditionIds.length} condition).`);
+  console.log(`Verified Bordeaux template robot (${catalog.catalogHash.slice(0, 19)}…, ${generatedIds.length} commands, ${generatedConditionIds.length} condition, ${generatedTrajectoryIds.length} trajectory generator).`);
   console.log("Verified desktop-exported path → generated condition → Wait → generated command runtime flow.");
 } finally {
   await fs.rm(fixtureRoot, { recursive: true, force: true });

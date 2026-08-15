@@ -444,28 +444,11 @@ class BordeauxProcessorTest {
         catalog.set("conditions", conditions);
         catalog.set("trajectoryGenerators", trajectoryGenerators.length == 0
                 ? MAPPER.createArrayNode() : trajectoryGenerators[0]);
-        String canonical = canonical(catalog);
+        String canonical = CanonicalJson.canonicalize(MAPPER.writeValueAsString(catalog));
         byte[] digest = MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(StandardCharsets.UTF_8));
         StringBuilder result = new StringBuilder("sha256:");
         for (byte value : digest) result.append(String.format("%02x", value & 0xff));
         return result.toString();
-    }
-
-    private static String canonical(JsonNode node) throws Exception {
-        if (node.isObject()) {
-            List<String> names = new ArrayList<>();
-            node.fieldNames().forEachRemaining(names::add);
-            names.sort(Comparator.naturalOrder());
-            List<String> fields = new ArrayList<>();
-            for (String name : names) fields.add(MAPPER.writeValueAsString(name) + ":" + canonical(node.get(name)));
-            return "{" + String.join(",", fields) + "}";
-        }
-        if (node.isArray()) {
-            List<String> values = new ArrayList<>();
-            for (JsonNode value : node) values.add(canonical(value));
-            return "[" + String.join(",", values) + "]";
-        }
-        return MAPPER.writeValueAsString(node);
     }
 
     private record Compilation(boolean success, String messages, Path classes, Path generated) {}
