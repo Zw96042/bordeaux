@@ -1,0 +1,82 @@
+  <section class="plan-links">
+    <div class="tbl-scroll"><table class="data">
+      <tr><td>Project</td><td>bordeaux</td></tr>
+      <tr><td>Version</td><td id="thelab-version">v6</td></tr>
+      <tr><td>Status</td><td><span class="status st-done">done</span> · 2026-08-12</td></tr>
+    </table></div>
+  </section>
+
+  <p class="lede">Resolve all twenty-nine confirmed risks from the repository audit and independent integration review as small, evidence-backed changes that can be reviewed and merged independently.</p>
+
+  <h2>Context</h2>
+  <p>The upstream audit at <code>0d9530e</code> found motion-safety violations, preview/export drift, renderer stalls, Java runtime contract failures, data-loss risks, and Electron/MCP lifecycle defects. Independent review of the integrated repairs exposed additional boundary and scaling defects, now tracked through #113. The fixes span unrelated ownership boundaries, so one large pull request would make review and rollback unnecessarily risky.</p>
+  <div class="callout"><strong>Publication outcome:</strong> all branches and PRs were published only to <code>Zw96042/bordeaux</code>. <code>Zw96042/turnal</code> remains untouched.</div>
+
+  <h2>Recommendation</h2>
+  <p>Use one branch per independent behavioral contract and short stacks only where one change genuinely depends on another. Every performance pull request carries a reproducible benchmark fixture with baseline, fixed result, hardware/runtime context, and percentage improvement. Every correctness pull request adds a failing regression before changing production code.</p>
+
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Review unit</th><th>Issues</th><th>Relationship</th></tr></thead>
+    <tbody>
+      <tr><td>Angular limits</td><td>#88 → #107 → #108</td><td>Planner safety stack: signed enforcement, valid deceleration boundary, then indexed turn boundaries</td></tr>
+      <tr><td>Stationary waits</td><td>#89</td><td>Independent planner contract PR</td></tr>
+      <tr><td>Preview parity</td><td>#90, #111</td><td>One authoritative shared-planner PR covering both maintained planners</td></tr>
+      <tr><td>Reverse semantics</td><td>#91</td><td>Independent editor semantics PR</td></tr>
+      <tr><td>Java timing</td><td>#92</td><td>Independent runtime PR</td></tr>
+      <tr><td>Java invocations</td><td>#94 → #93</td><td>Two-layer stack: preflight foundation, then chronological bounded catch-up</td></tr>
+      <tr><td>Routine command sequencing</td><td>#103</td><td>Independent runtime state-machine PR</td></tr>
+      <tr><td>Single-instance ownership</td><td>#95</td><td>Independent Electron data-safety PR</td></tr>
+      <tr><td>MCP lifecycle</td><td>#96, #101</td><td>One coherent service-ownership PR</td></tr>
+      <tr><td>MCP frame capacity</td><td>#97</td><td>Independent protocol-capacity PR</td></tr>
+      <tr><td>Java support boundaries</td><td>#98, #102</td><td>One coherent I/O and build-admission PR</td></tr>
+      <tr><td>Brush semantics</td><td>#99 → #100</td><td>Two-layer stack: correct range math, then indexed remapping benchmark</td></tr>
+      <tr><td>Dense preview work</td><td>#79</td><td>Independent renderer performance PR</td></tr>
+      <tr><td>Routine path identity</td><td>#105</td><td>Independent authored/generated lookup correctness PR</td></tr>
+      <tr><td>Render-time derivation</td><td>#106, #109, #110</td><td>Worker-preview stack: routine recovery, selected agent proposal, then insertion review</td></tr>
+      <tr><td>Routine transfer bounds</td><td>#104</td><td>Independent schema and compact-result capacity PR</td></tr>
+      <tr><td>Focused draft persistence</td><td>#82</td><td>Independent persistence PR</td></tr>
+      <tr><td>Empty Java export</td><td>#86</td><td>Independent export-validation PR</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Implementation steps</h2>
+  <ol>
+    <li>Capture each deterministic reproducer as a regression test or benchmark before modifying its implementation.</li>
+    <li>Implement the smallest contract-preserving fix on a descriptive <code>fix/…</code> or <code>perf/…</code> branch based on current Bordeaux main.</li>
+    <li>Keep commits cohesive and normally near 100 changed lines; use lowercase Conventional Commit descriptions such as <code>fix(planner): enforce signed angular acceleration</code>.</li>
+    <li>Run focused tests and before/after measurements on each branch, then run the complete release matrix on a temporary integration branch containing every fix.</li>
+    <li>Perform an independent read-only review of the integrated diff, repair blocking findings on the owning branch, and re-run affected checks.</li>
+    <li>Push only to a confirmed Bordeaux-compatible repository, create independently mergeable PRs/stacks, link every Lab card to its exact PR, and close cards only after merge.</li>
+  </ol>
+
+  <h2>Risks &amp; mitigations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>Fixes interact across preview, export, and runtime</td><td>medium</td><td>Shared fixtures must assert semantic parity at every boundary; verify all branches together before publication.</td></tr>
+      <tr><td>Microbenchmarks overstate gains</td><td>medium</td><td>Use valid maximum-scale documents, warmups, repeated samples, median/p95, and identical runtime settings before and after.</td></tr>
+      <tr><td>Small PRs become artificially dependent</td><td>medium</td><td>Default every branch to main; stack only same-file or API-dependent changes and document the dependency.</td></tr>
+      <tr><td>Concurrent work overwrites owner edits</td><td>low</td><td>Use dedicated clean worktrees; never edit the owner’s dirty main worktree.</td></tr>
+      <tr><td>Wrong publication repository</td><td>high until resolved</td><td>Do not push to Turnal; retain local branches and commits until a Bordeaux-compatible remote is confirmed.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li>Focused regression tests prove every original reproducer fails before and passes after.</li>
+    <li><code>npm test</code>, typecheck, production build, Java unit/integration tests, browser correctness, Electron smoke, and dependency audits all pass on the integrated tree.</li>
+    <li>Planner exports are checked numerically for signed angular acceleration, wait continuity, monotonic progress, and preview/export duration parity.</li>
+    <li>Performance cards report raw before/after sample sets and computed percentage improvements, not unsupported headline claims.</li>
+    <li>Every PR diff contains only its issue’s production code, tests, and measurement artifact.</li>
+  </ul>
+
+  <h2>Publication result</h2>
+  <ul>
+    <li>PRs #48–#75 are merged into <code>Zw96042/bordeaux</code>; smoke-harness follow-up #82 is also merged.</li>
+    <li>Every affected Lab card links to its owning PR and was closed only after merge.</li>
+    <li>Merged main <code>afdd9728</code> passes 421 tests with six intentional skips, typecheck, Java tests and template integration, production build, and five consecutive packaged Electron smokes.</li>
+  </ul>
+</article>
+</main>
+</body>
+</html>
