@@ -1,0 +1,100 @@
+    <thead><tr><th>#</th><th>Finding</th><th>Observed impact</th><th>Merge unit</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Angular acceleration contract is bypassed</td><td>Both planners exported about 322°/s² under a 30°/s² limit without a blocking diagnostic.</td><td>Planner safety</td></tr>
+      <tr><td>2</td><td>Wait is accepted without Stop</td><td>Postprocessing creates an approximately 247 m/s² stop/restart and non-monotonic interior progress.</td><td>Stationary actions</td></tr>
+      <tr><td>3</td><td>Optimized preview uses Profiled timing</td><td>Editor playback and routine timing differ materially from the selected exported planner.</td><td>Shared planner parity</td></tr>
+      <tr><td>4</td><td>Reverse Path leaves feature anchors forward</td><td>Markers, targets, and non-waypoint constraints relocate to the wrong field positions.</td><td>Renderer semantics</td></tr>
+      <tr><td>5</td><td>Time follower drops section overflow</td><td>Short or dense segments make the robot reference lag far behind elapsed autonomous time.</td><td>Java follower</td></tr>
+      <tr><td>6</td><td>Repeated event catch-up is unbounded and misordered</td><td>One valid update can schedule 10,001 commands before throwing, in the wrong global order.</td><td>Java events</td></tr>
+      <tr><td>7</td><td>Runtime invocation validation is late</td><td>An unknown or malformed command can fail only after the robot has begun moving.</td><td>Java preflight</td></tr>
+      <tr><td>8</td><td>Multiple GUI instances share one mutable project</td><td>Stale whole-project autosaves can silently erase newer edits.</td><td>Electron lifecycle</td></tr>
+      <tr><td>9</td><td>MCP helpers ignore stdin EOF</td><td>Disconnected sessions leave full Electron processes alive.</td><td>MCP lifecycle</td></tr>
+      <tr><td>10</td><td>Valid MCP detail exceeds 1 MiB framing</td><td>Successful proposals can expose resource links that cannot be read.</td><td>MCP transport</td></tr>
+      <tr><td>11</td><td>Java inspection reads files without bounds</td><td>Link/reopen can stall or exhaust the main process before user trust or build execution.</td><td>Electron Java boundary</td></tr>
+      <tr><td>12</td><td>Brush remapping confuses parameter with arc length</td><td>A 2.1 mm edit moved an effective constraint more than five meters.</td><td>Brush semantics</td></tr>
+      <tr><td>13</td><td>Smooth brush rescans all ranges per removal</td><td>One maximum-valid pointer sample blocked the renderer for approximately 235 ms.</td><td>Brush performance</td></tr>
+      <tr><td>14</td><td>Canceling Quit disables MCP</td><td>The app remains open with Agents unavailable until restart.</td><td>Electron lifecycle</td></tr>
+      <tr><td>15</td><td>Java build admission races</td><td>Two simultaneous calls both launch Gradle despite the advertised single-build guard.</td><td>Java build lifecycle</td></tr>
+      <tr><td>16</td><td>#79: Auto and shared scans remain synchronous</td><td>One legal repeated-path routine blocks Auto for about 6.99 s; large shared scans still reach seconds and hundreds of MB.</td><td>Extend existing #79</td></tr>
+      <tr><td>17</td><td>#82: focused command draft persistence is flaky</td><td>The built smoke lost the visible command argument in 3 of 5 sequential runs.</td><td>Keep existing #82 open</td></tr>
+      <tr><td>18</td><td>#86: zero-path Java export remains possible</td><td>Desktop can emit a document the Java reader rejects because no path is exportable.</td><td>Extend existing #86</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Measured evidence</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Probe</th><th>Baseline</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Signed angular reversal</td><td>30°/s² acceleration/deceleration</td><td>Approximately 322°/s² in both planners; no block</td></tr>
+      <tr><td>Interior wait without Stop</td><td>6.5 m/s² linear limit</td><td>0→4.2 m/s in ~17 ms, approximately 247 m/s²</td></tr>
+      <tr><td>Optimized preview parity</td><td>Editor 10.417 s</td><td>Export 13.023 s for the same selected planner/path</td></tr>
+      <tr><td>Auto repeated path</td><td>Official 100-waypoint benchmark path</td><td>100 references synchronously blocked the renderer for 6.99 s</td></tr>
+      <tr><td>Focused command save</td><td>Five sequential built Electron smokes</td><td>Three failed with <code>draftCommandSaved=false</code></td></tr>
+      <tr><td>Time-section overflow</td><td>100 × 1 ms sections, five 20 ms ticks</td><td>Advanced only to section 5 instead of section 100</td></tr>
+      <tr><td>Repeated event catch-up</td><td>One valid 1 ms repeat through 10 s</td><td>10,001 commands scheduled before the guard threw</td></tr>
+      <tr><td>MCP candidate frame</td><td>1 MiB transport ceiling</td><td>Minimal valid-size repair result measured 1,396,945 bytes</td></tr>
+      <tr><td>Brush anchor semantics</td><td>15.5 m curve, 2.1 mm edit</td><td>Constraint moved from 6.2–9.3 m to 11.790–13.464 m</td></tr>
+      <tr><td>Smooth-brush pointer sample</td><td>4096 waypoints / 4096 ranges</td><td>Approximately 235 ms on the renderer thread</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Remediation and PR topology</h2>
+  <ol>
+    <li><strong>Planner stack:</strong> angular safety and wait validation first, then authoritative previews, waypoint indexing/provenance, and finally the single-pass stationary-action optimization. Each behavior change has its own commit boundary.</li>
+    <li><strong>Renderer siblings:</strong> Reverse anchors, brush correctness/frame work, routine caching/workers, exact async path previews, aggregate admission, and Reverse gating remain distinct merge units.</li>
+    <li><strong>Java stack:</strong> follower overflow is independent; autonomous preflight is the foundation for bounded event catch-up and later-path preflight; between-path command waiting has an explicit transition API and legacy migration guard.</li>
+    <li><strong>Electron/MCP siblings:</strong> focused-draft persistence, desktop ownership, stdio EOF, streamed bridge resources, bounded Java reads/build admission, and canceled-quit lifecycle are separate branches with only their real file-level dependencies stacked.</li>
+    <li>The integrated branch exists only as a release oracle. Maintainers can merge or decline the smaller branches and restack descendants without accepting an all-or-nothing mega-PR.</li>
+  </ol>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Stack</th><th>Prepared local branches</th><th>Dependency rule</th></tr></thead>
+    <tbody>
+      <tr><td>Planner</td><td><a href="https://github.com/Zw96042/bordeaux/pull/48">PRs #48–#54</a> · GitHub stack #76</td><td>Validation → migration → indexing → boundaries → authoritative previews → provenance → stationary assembly.</td></tr>
+      <tr><td>Renderer</td><td><a href="https://github.com/Zw96042/bordeaux/pull/55">PRs #55–#60</a> · GitHub stack #77; <a href="https://github.com/Zw96042/bordeaux/pull/61">brush PRs #61–#62</a> · stack #78</td><td>Routine cache → worker → exact previews → aggregate admission → Reverse semantics/gate. Brush correctness/performance is independent.</td></tr>
+      <tr><td>Java</td><td><a href="https://github.com/Zw96042/bordeaux/pull/63">PRs #63–#68</a>; preflight stack #79</td><td>Follower and zero-path export are siblings. Preflight → command waiting → later-path preflight is stacked; event catch-up is a sibling child of preflight.</td></tr>
+      <tr><td>Electron/MCP</td><td><a href="https://github.com/Zw96042/bordeaux/pull/69">PRs #69–#75</a>; stacks #80–#81</td><td>Drafts, EOF, and canceled quit are siblings; bridge streaming follows desktop ownership, and build serialization follows bounded inspection reads.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Board sync</h2>
+  <p>The Lab tracks the complete repair program: #79, #82, #86, and #88–#113. Every card has measured resolution evidence, links to its exact GitHub PR, and is closed against the shipped commit after merge.</p>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Board action</th><th>Scope</th><th>Reason</th></tr></thead>
+    <tbody>
+      <tr><td>Shipped</td><td>29 cards / 28 repair PRs</td><td>Focused fixes, regression coverage, measured evidence, and final merged-main verification are linked from each card.</td></tr>
+      <tr><td>Closed</td><td>#79, #82, #86, #88–#113</td><td>Each card was closed only after its corresponding PR merged.</td></tr>
+      <tr><td>Previously closed</td><td>#68–#71, #75–#78, #80–#81, #83–#85, #87</td><td>Current upstream already contains and verifies the behavior those cards requested.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><strong>Review method:</strong> independent subsystem passes covered shared planning/export, Java runtime, Electron/persistence/MCP, and renderer editing/preview behavior. Every blocker was reproduced against current upstream, repaired with a focused regression, and re-reviewed after integration.</div>
+
+  <h2>Final verification</h2>
+  <ul>
+    <li><code>npm test</code>: 40 files passed, four skipped; 421 tests passed, six skipped.</li>
+    <li><code>npm run typecheck</code>, <code>npm run build</code>, and <code>git diff --check</code>: passed.</li>
+    <li><code>npm run test:java</code> and <code>npm run test:java-integration:built</code>: passed; the built template verified four commands.</li>
+    <li><code>ELECTRON_RUN_AS_NODE=1 npm run test:smoke:built</code>: five consecutive post-merge runs passed; the harness removes the hostile inherited variable and reports focused numeric/command drafts, dirty-close handling, and MCP-after-canceled-quit all true.</li>
+    <li><code>npm run benchmark:renderer:browser</code>: correctness passed, zero dropped frames in baseline and candidate, and paint/frame distributions remained within noise.</li>
+    <li><code>npm audit</code> and <code>npm audit --omit=dev</code>: zero vulnerabilities.</li>
+    <li><code>npm run package:mac</code> and <code>npm run verify:package -- release</code>: arm64 and x64 archives built, signed, and verified (notarization was unavailable in local configuration).</li>
+    <li>Final renderer JavaScript is 506,316 / 512,000 bytes.</li>
+  </ul>
+  <div class="callout"><strong>Scope:</strong> the final verified target is merged <code>origin/main</code> commit <code>afdd9728</code>. The user's local <code>main</code> contains unrelated in-progress edits; those files were preserved and never used as the verification target.</div>
+
+  <h2>Risk controls</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Control</th></tr></thead>
+    <tbody>
+      <tr><td>Performance work changes trajectory semantics</td><td>Lock shared planner/export parity and signed-limit oracle tests before caching, indexing, or worker changes.</td></tr>
+      <tr><td>Robot-loop fixes trade one overload for another</td><td>Set explicit per-update budgets, preserve global ordering, and avoid partial side effects on rejection.</td></tr>
+      <tr><td>Process fixes break MCP helpers</td><td>Apply the single-instance lock only to GUI mode and test GUI plus <code>--mcp-stdio</code> lifecycles separately.</td></tr>
+      <tr><td>Green unit tests hide integration races</td><td>Keep repeated built smokes and spawned-process tests; a single retry is not acceptance.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Decision</h2>
+  <p>The repaired tree is merged as small sibling and stacked PRs on <code>Zw96042/bordeaux</code>. Turnal was never modified. Merged main is fully verified, every addressed Lab card is closed, and no audit PR remains open.</p>
+</article>
+</main>
+</body>
+</html>
