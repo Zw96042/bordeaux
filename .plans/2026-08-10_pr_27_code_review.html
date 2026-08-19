@@ -1,3 +1,106 @@
+  <p><a href="https://github.com/Zw96042/bordeaux/blob/c92530e36711a44077ba13cc38122607c3575643/scripts/renderer-browser-benchmark-electron.cjs#L333-L342">renderer-browser-benchmark-electron.cjs:333–342</a> validates geometry in renderer <code>requestAnimationFrame</code>, then subtracts two frame budgets and asks <code>paintAfter()</code> for the first historical paint after that earlier threshold. A waypoint-only or stale-curve paint can be labeled “correct paint,” materially understating latency.</p>
+  <p><strong>Required:</strong> associate the validated frame with presentation directly, or report renderer correct-frame latency honestly without searching backward. Re-run the headline measurements afterward.</p>
+
+  <h2>Should fix</h2>
+  <ul>
+    <li><strong>StrictMode still leaks a worker:</strong> <a href="https://github.com/Zw96042/bordeaux/blob/c92530e36711a44077ba13cc38122607c3575643/src/renderer/app/App.jsx#L147-L150">App.jsx:147–150</a> creates the worker during <code>useMemo</code>; render replay discards one created instance before an effect can retain or release it.</li>
+    <li><strong>A second worker failure stalls:</strong> <a href="https://github.com/Zw96042/bordeaux/blob/c92530e36711a44077ba13cc38122607c3575643/src/renderer/assets/path-preview.js#L120-L140">path-preview.js:120–140</a> attaches a third worker after the retried job fails but neither resends nor publishes an error. <code>messageerror</code> and synchronous <code>postMessage</code> failures remain unhandled.</li>
+    <li><strong>Short live ranges still disappear:</strong> <a href="https://github.com/Zw96042/bordeaux/blob/c92530e36711a44077ba13cc38122607c3575643/src/renderer/components/FieldView.jsx#L959-L965">FieldView.jsx:959–965</a> still selects only interior samples instead of reusing the exact-boundary helper.</li>
+    <li><strong>The benchmark does not prove path-switch cancellation or worker use:</strong> its check only confirms that the alternate three-waypoint path remains visible, and an emitted worker bundle does not prove jobs ran off-thread. Its release-stability radius also permits a full snap back to the last move.</li>
+    <li><strong>The default run is order-imbalanced:</strong> three trials run upstream/candidate, candidate/upstream, upstream/candidate with no warmup. The reported 2.8% p50 improvement is smaller than a credible environmental effect and is presented without the recorded variance.</li>
+    <li><strong>Harness portability:</strong> the command inherits <code>ELECTRON_RUN_AS_NODE</code>; in this workspace it fails before launching Electron unless that variable is removed.</li>
+  </ul>
+
+  <h2>Resolved since v1</h2>
+  <ul>
+    <li>Completed previews publish monotonically during continuous input instead of starving.</li>
+    <li>The unused selected-position pipeline no longer rerenders the App root at pointer cadence.</li>
+    <li>Pointer-up applies its own terminal coordinates.</li>
+    <li>Path switching cancels the native pointer session without flushing an old-path move.</li>
+    <li>StrictMode effect cleanup/remount no longer destroys the retained scheduler.</li>
+    <li>Committed constraint bands and hit paths interpolate their authored boundaries.</li>
+    <li>Save, export, agent snapshots, and autosave materialize the active draft; undo and redo cancel it.</li>
+  </ul>
+
+  <h2>Follow-up verification</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Check</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td><code>npm test</code></td><td>Passed: 23 files, 210 tests</td></tr>
+      <tr><td><code>npm run typecheck</code></td><td>Passed</td></tr>
+      <tr><td><code>npm run build:renderer</code></td><td>Passed; worker bundle emitted</td></tr>
+      <tr><td>Browser benchmark smoke</td><td>Passed with 1 trial / 4 latency samples / 500 ms stress after unsetting <code>ELECTRON_RUN_AS_NODE</code>; default inherited environment failed</td></tr>
+      <tr><td><code>git diff --check</code></td><td>Passed for the full PR diff</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Prior review (v1)</h2>
+
+  <p class="lede">Request changes: the off-thread preview is promising, but active edits can bypass persistence, corrupt history, or combine current documents with stale geometry.</p>
+
+  <div class="callout danger">
+    <strong>Verdict — not ready to merge.</strong> Five findings directly undermine correctness or the performance claim. The full test suite passes, but it does not exercise React StrictMode, the real worker module, transaction overlap, or exact preview provenance.
+  </div>
+
+  <h2>Review scope</h2>
+  <div class="tbl-scroll"><table class="data">
+    <tbody>
+      <tr><td>Pull request</td><td><a href="https://github.com/Zw96042/bordeaux/pull/27">#27 · perf: Cut path-drag latency by 65% and eliminate frame drops</a></td></tr>
+      <tr><td>Base</td><td><code>ca50a4586210c423b13aaa979344a8231569c02b</code></td></tr>
+      <tr><td>Head</td><td><code>6c2ec2dca8a790712c26ce32f8a9955dd0509406</code></td></tr>
+      <tr><td>Method</td><td>Diff inspection, targeted browser reproduction, worker failure simulation, randomized geometry comparisons, production build, tests, typecheck, renderer verification, and Electron smoke.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Blocking findings</h2>
+
+  <h3><span class="priority">P1</span> Active drafts are outside dirty state, save/export, autosave, and close protection</h3>
+  <p><a href="https://github.com/Zw96042/bordeaux/blob/6c2ec2dca8a790712c26ce32f8a9955dd0509406/src/renderer/app/App.jsx#L551-L560">App.jsx:551–560</a> updates only <code>editStore</code> during a drag. Dirty state changes only when <code>project</code> changes, and save/export serialize that committed project. From a clean document, starting a drag and invoking save or close before a terminal pointer event can save the old path or let Electron close without a warning.</p>
+  <p><strong>Required:</strong> include the active draft in persistence snapshots and mark the transaction dirty on its first mutation. Cover save, export, autosave, new/open, and close.</p>
+
+  <h3><span class="priority">P1</span> Undo during a drag corrupts history</h3>
+  <p><a href="https://github.com/Zw96042/bordeaux/blob/6c2ec2dca8a790712c26ce32f8a9955dd0509406/src/renderer/app/App.jsx#L549-L603">App.jsx:549–603</a> pushes the pre-drag document immediately, but undo/redo still operate on committed state while the draft remains live. Reproduced sequence: hold a waypoint drag, press Cmd+Z, then release. The moved point returns on release, a second undo does nothing, and redo restores the old position.</p>
+  <p><strong>Required:</strong> serialize all commands with the active transaction. Undo should cancel the draft; nudge, delete, save, open, and path switches must explicitly finish or cancel it.</p>
+
+  <h3><span class="priority">P1</span> Preview provenance uses a path ID as if it were a revision</h3>
+  <p><a href="https://github.com/Zw96042/bordeaux/blob/6c2ec2dca8a790712c26ce32f8a9955dd0509406/src/renderer/app/App.jsx#L170-L182">App.jsx:170–182</a> accepts a cached preview when <code>preview.key === doc.id</code>, although every edit of that path has the same ID and the scheduler already exposes <code>preview.path</code>. An old interactive curve can be paired with a newer waypoint list; <a href="https://github.com/Zw96042/bordeaux/blob/6c2ec2dca8a790712c26ce32f8a9955dd0509406/src/renderer/components/FieldView.jsx#L551-L556">FieldView.jsx:551–556</a> then builds editable segment hit paths from mismatched geometry and topology, so a fast follow-up insertion can target the wrong segment.</p>
+  <p><strong>Required:</strong> require exact revision provenance and disable geometry hit actions whenever displayed geometry does not correspond to the editable document.</p>
+
+  <h3><span class="priority">P1</span> The supposedly scoped update still escapes to the App root</h3>
+  <p><a href="https://github.com/Zw96042/bordeaux/blob/6c2ec2dca8a790712c26ce32f8a9955dd0509406/src/renderer/components/FieldView.jsx#L68-L83">FieldView.jsx:68–83</a> reports a fresh selected-position object on every draft revision. <a href="https://github.com/Zw96042/bordeaux/blob/6c2ec2dca8a790712c26ce32f8a9955dd0509406/src/renderer/app/App.jsx#L265">App.jsx:265</a> stores it in <code>selPos</code>, but that state is never read. This forces an App-root rerender at pointer cadence and undermines the central performance claim.</p>
+  <p><strong>Required:</strong> remove the dead position pipeline or keep it in a ref/external store consumed only by the overlay that needs it.</p>
+
+  <h3><span class="priority">P1</span> Continuous input can starve all curve updates until the pointer stops</h3>
+  <p><a href="https://github.com/Zw96042/bordeaux/blob/6c2ec2dca8a790712c26ce32f8a9955dd0509406/src/renderer/assets/path-preview.js#L47-L48">path-preview.js:47–48</a> discards a completed result whenever any newer revision has been requested, while <a href="https://github.com/Zw96042/bordeaux/blob/6c2ec2dca8a790712c26ce32f8a9955dd0509406/src/renderer/assets/path-preview.js#L131-L137">lines 131–137</a> continuously replace the queued job. If derive plus structured-clone time exceeds the input interval, every completion is stale by definition: waypoint nodes move but the curve freezes until motion pauses. A 100-waypoint interactive derivation measured 9.1 ms before copying an approximately 477 KB result, already longer than an 119 Hz input interval.</p>
+  <p><strong>Required:</strong> allow monotonically newer completed previews to publish even when a replacement is queued, and benchmark the curve revision corresponding to the input rather than the next paint of any node.</p>
+
+  <h2>Correctness issues to fix</h2>
+
+  <h3>StrictMode destroys the retained schedulers</h3>
+  <p>The app is wrapped in <a href="https://github.com/Zw96042/bordeaux/blob/6c2ec2dca8a790712c26ce32f8a9955dd0509406/src/renderer/main.tsx#L14-L19">StrictMode</a>, but both schedulers are created in render with <code>useMemo</code> and permanently destroyed by effect cleanup at <a href="https://github.com/Zw96042/bordeaux/blob/6c2ec2dca8a790712c26ce32f8a9955dd0509406/src/renderer/app/App.jsx#L173-L179">App.jsx:173–179</a> and <a href="https://github.com/Zw96042/bordeaux/blob/6c2ec2dca8a790712c26ce32f8a9955dd0509406/src/renderer/app/App.jsx#L213-L234">213–234</a>. Development effect replay destroys the retained instance; subsequent requests no-op. Reproduced in Vite development: the waypoint moved but the centerline never updated. The production build updated correctly.</p>
+
+  <h3>A runtime worker failure permanently stalls later previews</h3>
+  <p><a href="https://github.com/Zw96042/bordeaux/blob/6c2ec2dca8a790712c26ce32f8a9955dd0509406/src/renderer/assets/path-preview.js#L84-L116">path-preview.js:84–116</a> keeps the failed worker after <code>onerror</code> and posts queued/future jobs back to it. <code>postMessage</code> errors and <code>messageerror</code> are unhandled. In a direct scheduler reproduction, the first failure produced <code>error</code>; retry changed the snapshot to <code>pending</code> with no path to completion.</p>
+
+  <h3>Pointer release can commit a stale coordinate</h3>
+  <p><a href="https://github.com/Zw96042/bordeaux/blob/6c2ec2dca8a790712c26ce32f8a9955dd0509406/src/renderer/hooks/usePointerDrag.js#L40-L44">usePointerDrag.js:40–44</a> flushes the last queued <code>pointermove</code>, then calls the end handler without applying the <code>pointerup</code> coordinates. The existing test uses the same coordinate for the final move and release, so it cannot detect this.</p>
+
+  <h3>Switching paths cancels the draft but not the pointer session</h3>
+  <p><a href="https://github.com/Zw96042/bordeaux/blob/6c2ec2dca8a790712c26ce32f8a9955dd0509406/src/renderer/app/App.jsx#L566-L569">App.jsx:566–569</a> cancels <code>editStore</code> when the path ID changes, but the global pointer controller is cleaned up only when <code>FieldView</code> unmounts. Switching paths preserves that component. A later pointer event can combine the new <code>docRef</code> with callbacks closed over the old active index and write the wrong path.</p>
+
+  <h2>Geometry and interaction nits</h2>
+
+  <h3>Constraint ranges overdraw and over-hit their authored interval</h3>
+  <p><a href="https://github.com/Zw96042/bordeaux/blob/6c2ec2dca8a790712c26ce32f8a9955dd0509406/src/renderer/assets/field-scene.js#L11-L20">field-scene.js:11–20</a> includes the sample before <code>f0</code> and the sample at/after <code>f1</code>. That expanded span drives both the visible band and transparent click target. On a one-segment, 56-sample path, range <code>[0.50, 0.51]</code> renders and intercepts clicks across approximately <code>[0.4821, 0.5179]</code>, while its handles remain at the exact bounds.</p>
+
+  <h3>Short live ranges can disappear and then pop in larger on commit</h3>
+  <p><a href="https://github.com/Zw96042/bordeaux/blob/6c2ec2dca8a790712c26ce32f8a9955dd0509406/src/renderer/components/FieldView.jsx#L974-L980">FieldView.jsx:974–980</a> keeps only samples strictly inside the live interval. With 14 interactive samples, a valid <code>[0.51, 0.53]</code> drag contains no sample and draws nothing; on release the committed helper displays roughly <code>[0.50, 0.5714]</code>. Live and committed rendering should share an exact-boundary interpolating helper.</p>
+
+  <h2>Performance and test nits</h2>
+  <ul>
+    <li><code>staticLayers</code> still depends on the entire draft <code>doc</code>, so every pointer update rebuilds the complete SVG scene, labels, ranges, markers, and path strings. A lightweight moving overlay would better match the PR's architecture claim.</li>
+    <li>Two workers are eagerly created before editing. The exact production bundles grew by 36,585 raw bytes, and dense final results can approach 1.9 MB of structured-cloned object arrays. One lazy/shared scheduler and transferable typed arrays would reduce startup and copy cost.</li>
+    <li>The initial 14-sample fallback is exposed to time, graph, outline, inspector, and field consumers as if it were final while <code>pending</code> is returned but unused. Keep approximate geometry field-only or show metrics as pending.</li>
     <li>The headline benchmark is not reproducible from the repository: there is no runner, fixture, trace, hardware/refresh-rate description, warmup policy, or run count. The tests replace the real Worker and strip module imports, so they cannot catch lifecycle, module-loading, structured-clone, or React provenance failures.</li>
   </ul>
 
