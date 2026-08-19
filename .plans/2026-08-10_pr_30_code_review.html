@@ -1,0 +1,32 @@
+
+  <p class="lede">Latest review: the updated preview-ownership, receipt, rollback, and bridge-cancellation changes address every previously reported issue.</p>
+
+  <h2>Verdict</h2>
+  <div class="callout"><strong>Approve.</strong> No blocking or actionable correctness findings remain at <code>bb6cc76</code>.</div>
+
+  <h2>Resolved since v2</h2>
+  <ul>
+    <li>A monotonic preview generation now spans planning, staging, renderer acknowledgment, and rollback, so an older transaction cannot overwrite or revive state after a newer request wins.</li>
+    <li>Robot-profile, route, and repair proposals now share the same newest-wins ownership mechanism while independent read-only analyses remain concurrent.</li>
+    <li>Renderer receipts carry the live session and revision; mismatched proposals become stale before staging can commit them.</li>
+    <li>The last renderer-acknowledged preview is the only rollback target and is preserved when proposal history reaches capacity.</li>
+    <li>The bridge client rechecks cancellation after descriptor I/O, closing the remaining pre-connection race.</li>
+  </ul>
+
+  <h2>Verification</h2>
+  <ul>
+    <li><code>npm run typecheck</code> — passed locally on the PR head.</li>
+    <li><code>npm test</code> — passed locally: 21 files, 221 tests.</li>
+    <li><code>npm run build</code> — passed, including renderer verification, Java distribution build, and Electron compilation.</li>
+    <li><code>git diff --check origin/main...origin/pr-30</code> — clean.</li>
+    <li>Regression coverage now exercises nested staging orderings, revision changes, profile/path races, renderer receipt cancellation, history capacity, and descriptor-I/O cancellation.</li>
+    <li>Independent Codex review found no blocking or actionable correctness issues.</li>
+    <li>GitHub currently reports the PR mergeable; CodeRabbit is still pending and no project verify check is listed.</li>
+  </ul>
+
+  <h2>Scope notes</h2>
+  <p>The review covered the full <code>origin/main...origin/pr-30</code> diff and the unchanged renderer/main call sites that consume proposals. Existing unrelated working-tree changes were preserved, and no PR files were modified.</p>
+</article>
+</main>
+</body>
+</html>
