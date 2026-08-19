@@ -1,3 +1,106 @@
+    <div class="tbl-scroll"><table class="data">
+      <tr><td>Project</td><td>bordeaux</td></tr>
+      <tr><td>Implementation</td><td><a href="https://thelab.wilsonzach.com/project/bordeaux/issue/154">Commands v3 #154</a> · <a href="https://thelab.wilsonzach.com/project/bordeaux/issue/155">version compatibility #155</a></td></tr>
+      <tr><td>Version</td><td id="thelab-version">v1</td></tr>
+      <tr><td>Status</td><td><span class="status">active</span> · 2026-08-20</td></tr>
+    </table></div>
+  </section>
+
+  <p class="lede">Prepare Bordeaux for WPILib Commands v3 without abandoning existing Commands v2 robots: one command-framework-neutral runtime, separate native backends, and a pinned 2027 preview track.</p>
+
+  <div class="callout"><strong>Verdict.</strong> Commands v3 is different enough that Bordeaux needs explicit compatibility. It is not a wrapper library and it cannot be bridged through Commands v2: WPILib's official vendordeps prohibit both frameworks in one robot project. Bordeaux should support either native framework, exactly one at a time, while keeping the normal <code>@BordeauxCommand</code> experience unchanged.</div>
+
+  <h2>What this actually is</h2>
+  <p>“Commands v3 from Systemcore” is the official Java-only <strong>WPILib Commands v3</strong> framework shipping in the 2027/Systemcore software line. The latest published build reviewed for this plan is <a href="https://github.com/wpilibsuite/allwpilib/releases/tag/v2027.0.0-alpha-6">WPILib 2027.0.0-alpha-6</a>. It is a prerelease API, and the official documentation still says the Commands v3 documentation is in progress.</p>
+  <p>This is also a broader platform boundary than a command import rename. WPILib 2027 moves Java packages from <code>edu.wpi.first</code> to <code>org.wpilib</code> and requires Java 25. Bordeaux 0.4 currently targets Java 17, WPILib 2026.2.2, and <code>edu.wpi.first.wpilibj2.command.Command</code>. A single binary cannot honestly cover both seasons.</p>
+
+  <h2>How v3 differs: alpha-6 baseline</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Boundary</th><th>Commands v2</th><th>Commands v3</th><th>Bordeaux implication</th></tr></thead>
+    <tbody>
+      <tr><td>Command type</td><td>2026: <code>edu.wpi.first.wpilibj2.command.Command</code><br>2027: <code>org.wpilib.command2.Command</code></td><td><code>org.wpilib.command3.Command</code></td><td>The types are unrelated; processor validation must select the available framework exactly.</td></tr>
+      <tr><td>Lifecycle</td><td><code>initialize</code>, <code>execute</code>, <code>end</code>, <code>isFinished</code></td><td>One <code>run(Coroutine)</code> body plus <code>onCancel</code>; loops must yield</td><td>Bordeaux must never invoke or emulate lifecycle methods.</td></tr>
+      <tr><td>Scheduler</td><td><code>CommandScheduler.getInstance()</code></td><td><code>Scheduler.getDefault()</code></td><td>Separate native adapters; scheduling and cancellation stay on the robot scheduler thread.</td></tr>
+      <tr><td>Scheduling result</td><td>No returned result</td><td><code>SUCCESS</code>, <code>ALREADY_RUNNING</code>, or lower-priority rejection</td><td>Normalize and expose an outcome instead of silently claiming every event started.</td></tr>
+      <tr><td>Requirements</td><td><code>Subsystem</code> plus interruption behavior</td><td><code>Mechanism</code> plus integer priority</td><td>No requirement translation in core. Each backend gives the native scheduler the original command unchanged.</td></tr>
+      <tr><td>Composition</td><td>Decorator/group ownership and composed-command restrictions</td><td>Staged builders, coroutine <code>fork</code>/<code>await</code>, scoped child cancellation</td><td>Bordeaux owns invocation timing only; WPILib owns groups, priorities, and child trees.</td></tr>
+      <tr><td>Scope</td><td>Primarily scheduler-global</td><td>Global, opmode, and parent-command scopes</td><td>Child scoping occurs only when scheduling inside an active v3 command/coroutine scope. A low-level runner called from <code>robotPeriodic()</code> inherits the active global/opmode call-site scope.</td></tr>
+      <tr><td>Runtime</td><td>Java 17 in the current Bordeaux line</td><td>Java 25 and JDK-internal continuations configured by GradleRIO</td><td>Use a dedicated 2027 build and never schedule/cancel from a worker thread.</td></tr>
+      <tr><td>Coexistence</td><td colspan="2">The official <code>CommandsV2.json</code> and <code>CommandsV3.json</code> conflict.</td><td>No v2↔v3 wrapper, mixed fixture, or robot project.</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>Upstream is still moving after alpha-6. On WPILib <code>main</code>, <code>Mechanism</code> has already changed from a class to an interface, scheduling results changed from the released enum to a sealed hierarchy, and the Maven artifact was renamed from <code>commands3-java</code> to <code>commandsv3-java</code>. That is enough evidence to ship only pinned preview support until a 2027 beta or stable contract exists.</p>
+
+  <h2>Current Bordeaux boundary</h2>
+  <p>The command coupling is concentrated, which is good: the annotation processor hardcodes the 2026 v2 command FQN; <code>BordeauxCommandRegistry</code> returns v2 commands; and the event/routine runners schedule and cancel them through a v2-typed scheduler interface. Bordeaux does not inspect requirements or execute command lifecycle methods itself.</p>
+  <p>One extra coupling should be removed before the path follower lands: <code>BordeauxDrive.requirement()</code> returns a v2 <code>Subsystem</code>, although no shipped production runtime consumes it. The future follower's v2 <code>Subsystem</code> or v3 <code>Mechanism</code> belongs in the framework-specific command shell, not the drive I/O contract.</p>
+
+  <h2>Recommended architecture</h2>
+  <p>Deepen the existing seam at the only operations Bordeaux actually owns: construct one invocation, ask the native scheduler to schedule it, and request cancellation only when the provider and lifecycle make ownership of that run provable.</p>
+
+  <pre class="code">public interface BordeauxCommandInvocation {
+    BordeauxScheduleOutcome schedule();
+    void cancel();
+}
+
+public enum BordeauxScheduleOutcome {
+    SCHEDULED,
+    ALREADY_RUNNING,
+    REJECTED
+}</pre>
+
+  <p>The exact names may change during implementation; the constraint should not. This interface must not grow fake cross-framework versions of requirements, priorities, command names, coroutine state, or group ownership. Backend-specific details can appear in diagnostics without moving their policy into core.</p>
+  <p>Each backend receives its native scheduler through construction; a production convenience may select the framework default. Generated bindings hold that backend adapter, while the neutral runtime never imports a WPILib scheduler type. An injected status sink records the event or routine-node ID, command ID, and normalized scheduling result so “rejected” is observable without GUI work.</p>
+
+  <figure>
+    <div class="fig-scroll"><svg viewBox="0 0 860 390" role="img" aria-labelledby="arch-title arch-desc">
+      <title id="arch-title">Bordeaux command compatibility architecture</title>
+      <desc id="arch-desc">Annotated team commands are validated by one processor, adapted by exactly one native backend, and exposed to one framework-neutral invocation registry used by events and routines.</desc>
+      <rect width="860" height="390" fill="#0d0d0d"/>
+      <g font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="13">
+        <g fill="#111" stroke="#333">
+          <rect x="28" y="38" width="190" height="68" rx="5"/>
+          <rect x="28" y="142" width="190" height="68" rx="5"/>
+          <rect x="292" y="82" width="246" height="184" rx="6" stroke="#4e9bfa"/>
+          <rect x="618" y="38" width="210" height="68" rx="5"/>
+          <rect x="618" y="142" width="210" height="68" rx="5"/>
+          <rect x="618" y="246" width="210" height="68" rx="5"/>
+        </g>
+        <g fill="#ededed">
+          <text x="48" y="66">Existing Commands v2</text><text x="48" y="86">method · field · supplier</text>
+          <text x="48" y="170">Existing Commands v3</text><text x="48" y="190">method · field · supplier</text>
+          <text x="316" y="116" font-size="15" font-weight="600">Generated Bordeaux bindings</text>
+          <text x="316" y="148">framework-neutral invocation</text>
+          <text x="316" y="171">schedule outcome · cancel</text>
+          <text x="316" y="214">stable IDs and arguments</text>
+          <text x="316" y="237">one runtime, no command types</text>
+          <text x="640" y="66">Commands v2 backend</text><text x="640" y="86">native CommandScheduler</text>
+          <text x="640" y="170">Commands v3 backend</text><text x="640" y="190">native Scheduler</text>
+          <text x="640" y="274">Events · Aquitaine</text><text x="640" y="294">runtime command shell</text>
+        </g>
+        <g stroke="#4e9bfa" stroke-width="1.5" fill="none">
+          <path d="M218 72H292"/><path d="M218 176H292"/><path d="M538 124H618"/><path d="M538 176H618"/><path d="M538 228H576V280H618"/>
+        </g>
+        <g fill="#6b6b6b"><text x="28" y="350">Build invariant: one robot selects v2 or v3; neither backend is present in neutral-core tests.</text></g>
+      </g>
+    </svg></div>
+    <figcaption>One source-level Bordeaux experience; one selected WPILib scheduler per robot.</figcaption>
+  </figure>
+
+  <h3>What teams should write</h3>
+  <p>The import changes with the chosen WPILib framework; the Bordeaux API does not.</p>
+  <pre class="code">@BordeauxCommand
+public Command score(ScoreLevel level) {
+    return superstructure.score(level);
+}
+
+@BordeauxCommand
+public final Supplier&lt;Command&gt; intake = intakeSubsystem::intakeCommand;</pre>
+  <p>A direct command field remains acceptable only for fire-and-continue use under a team-enforced mutually exclusive ownership rule. Use a supplier/factory that returns a genuinely fresh command whenever a fresh run or reliable <code>cancelOnPathEnd</code> ownership matters. Native schedulers cancel by command object, not by a Bordeaux run token, so successful scheduling alone cannot make a reusable field safe to cancel after another owner may have restarted it.</p>
+
+  <h2>Behavior contract</h2>
+  <ol>
     <li>An event makes one scheduling attempt. Bordeaux does not retry an already-running or lower-priority command behind the team's back.</li>
     <li>Every attempt writes a status record with source event/node ID, command ID, and normalized outcome. A rejection does not automatically fail the path in the compatibility release; this preserves today's fire-and-continue behavior.</li>
     <li><code>cancelOnPathEnd</code> requires a fresh supplier/factory command or a future proven run-token mechanism. Bordeaux must not retain cancellation ownership for an already-running or reusable shared command merely because one scheduling call succeeded.</li>
