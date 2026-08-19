@@ -1,0 +1,18 @@
+  </table></div>
+
+  <h2>Merge readiness</h2>
+  <p>GitHub reports <code>MERGEABLE</code> with a clean merge state. CI <code>verify</code> and Greptile Review both completed successfully on <code>134196d</code>; the only inline review thread is resolved. CodeRabbit's earlier skipped-review comment is obsolete process noise for this non-default target branch and is not an active check.</p>
+
+  <h2>Verification</h2>
+  <ul>
+    <li>Exact-head CI <code>npm test</code> — 23 test files and 238 tests passed.</li>
+    <li>Exact-head CI typecheck and full build — passed.</li>
+    <li>Shadow optimizer — passed with zero latency failures; common p95 was 59.604 ms against 75 ms, and stress p95 was 112.443 ms against 150 ms.</li>
+    <li>Java integration, dependency audit, and Electron smoke test — passed; the audit found zero vulnerabilities.</li>
+    <li>Greptile Review — passed with 5/5 confidence and no blocking failure; its P1 thread is resolved.</li>
+    <li><code>git diff --check 892ff1b..134196d</code> — passed for the post-review delta.</li>
+  </ul>
+</article>
+</main>
+</body>
+</html>
