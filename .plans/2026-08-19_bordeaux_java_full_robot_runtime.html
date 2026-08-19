@@ -1,0 +1,97 @@
+    <li>Stage tuning only while disabled by default. Snapshot gains at run start so an autonomous run cannot change beneath itself.</li>
+  </ol>
+
+  <h2>Delivery map</h2>
+  <ol>
+    <li><strong><a href="https://thelab.wilsonzach.com/project/bordeaux/issue/147">#147 Complete trajectory and adapter contracts.</a></strong> Preserve acceleration, angular velocity, curvature, and travel direction separately from robot heading; add normalized drive, localization, vision, result, limits, and fault types without breaking existing callers.</li>
+    <li><strong><a href="https://thelab.wilsonzach.com/project/bordeaux/issue/148">#148 Tunable holonomic follower.</a></strong> Convert full trajectory states plus current pose into bounded robot-relative <code>ChassisSpeeds</code>, with start-pose policies and an ordinary command lifecycle.</li>
+    <li><strong><a href="https://thelab.wilsonzach.com/project/bordeaux/issue/149">#149 Localization and vision.</a></strong> Support a team-owned estimator first, then a Bordeaux-owned <code>SwerveDrivePoseEstimator</code> path with delayed multi-camera corrections and diagnostics.</li>
+    <li><strong><a href="https://thelab.wilsonzach.com/project/bordeaux/issue/150">#150 One runtime facade.</a></strong> Compose the existing routine, event, generation, fallback, capability, and revision machinery behind <code>BordeauxRuntime</code>.</li>
+    <li><strong><a href="https://thelab.wilsonzach.com/project/bordeaux/issue/151">#151 Tuning and characterization.</a></strong> Add typed bounded parameters, atomic disabled-only NetworkTables transactions, telemetry, SysId command factories, and reproducible reports.</li>
+    <li><strong><a href="https://thelab.wilsonzach.com/project/bordeaux/issue/152">#152 Adapter packs and examples.</a></strong> Certify CTRE Phoenix 6, YAGSL, custom WPILib swerve, PhotonVision, Limelight, common IMUs, and import bridges through optional artifacts.</li>
+    <li><strong><a href="https://thelab.wilsonzach.com/project/bordeaux/issue/153">#153 Simulation and compatibility certification.</a></strong> Run deterministic fake-drive/fake-vision tests, WPILib simulation, vendor compile matrices, stale/fault tests, and full generated-path containment tests.</li>
+  </ol>
+
+  <h2>Priority model</h2>
+  <p>Adjust the weights to see which delivery phase should be pulled forward. This working model is available in the local plan; The Lab's hosted reader does not execute scripts.</p>
+  <div class="model" id="priority-model">
+    <div class="model-row"><label for="safety">Safety and correctness</label><input id="safety" type="range" min="0" max="10" value="10"><output for="safety">10</output></div>
+    <div class="model-row"><label for="compatibility">Hardware compatibility</label><input id="compatibility" type="range" min="0" max="10" value="9"><output for="compatibility">9</output></div>
+    <div class="model-row"><label for="ease">Ease of adoption</label><input id="ease" type="range" min="0" max="10" value="10"><output for="ease">10</output></div>
+    <div class="model-row"><label for="advanced">Advanced capability</label><input id="advanced" type="range" min="0" max="10" value="8"><output for="advanced">8</output></div>
+    <p class="model-result">Recommended emphasis: <strong id="recommendation">foundation and generic adapters</strong></p>
+    <button type="button" id="copy-priorities">Copy JSON</button> <span class="small" id="copy-state" aria-live="polite"></span>
+  </div>
+
+  <h2>Risks &amp; mitigations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>“All hardware” becomes an unmaintainable vendor matrix.</td><td>high</td><td>Keep core vendor-neutral, ship optional adapters, and always retain callback-based integration.</td></tr>
+      <tr><td>Double pose filtering makes localization worse.</td><td>medium</td><td>Make estimator ownership explicit: team-owned or Bordeaux-owned, never both.</td></tr>
+      <tr><td>Live tuning destabilizes a run.</td><td>medium</td><td>Disabled-only atomic commits by default; bounded and rate-limited live policy only when explicitly enabled.</td></tr>
+      <tr><td>Generated paths bypass authored-path safety.</td><td>medium</td><td>Both enter the same validation, following, event, fault, and stop pipeline.</td></tr>
+      <tr><td>A universal adapter silently drops advanced feedforward.</td><td>medium</td><td>Negotiate capabilities explicitly and fail preflight when a path requires unsupported features.</td></tr>
+      <tr><td>Runtime growth breaks today's low-level API.</td><td>low</td><td>Compose existing classes first; deprecate manual wiring only after facade parity tests pass.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification gates</h2>
+  <ul>
+    <li>API tests prove fresh commands, WPILib requirements, safe interruption, retained results, and reuse of existing command bindings.</li>
+    <li>Golden trajectory tests prove every exported motion field reaches the follower and legacy trajectory documents still load deterministically.</li>
+    <li>Controller tests cover straight, curved, rotating, reversed, stationary-action, start-pose mismatch, saturation, and stale-state cases.</li>
+    <li>Fusion tests use delayed, reordered, duplicate, future, high-innovation, and multi-camera measurements with deterministic timestamps.</li>
+    <li>Generation tests prove timeout, sample, dynamics, field, collision, fallback, cancellation, and result handoff through the same command.</li>
+    <li>Adapter compile/simulation matrices cover supported WPILib and vendor versions; hardware support is published only after a repeatable smoke test.</li>
+    <li>Repository gates remain focused on Java modules; GUI and website files are outside this implementation program.</li>
+  </ul>
+
+  <h2>Primary references</h2>
+  <ul>
+    <li><a href="https://docs.wpilib.org/en/stable/docs/software/advanced-controls/trajectories/holonomic.html">WPILib holonomic controller</a> — the standard pose/reference-to-chassis-speed control seam.</li>
+    <li><a href="https://docs.wpilib.org/en/2022/docs/software/advanced-controls/state-space/state-space-pose_state-estimators.html">WPILib pose estimators</a> — delayed vision correction over drivetrain odometry.</li>
+    <li><a href="https://docs.wpilib.org/en/stable/docs/software/advanced-controls/system-identification/creating-routine.html">WPILib SysId routine</a> — command-based characterization hooks.</li>
+    <li><a href="https://docs.wpilib.org/en/stable/docs/software/hardware-apis/sensors/gyros-software.html">WPILib gyro APIs</a> and <a href="https://docs.wpilib.org/en/stable/docs/software/basic-programming/coordinate-system.html">coordinate conventions</a> — normalization requirements for IMU adapters.</li>
+    <li><a href="https://docs.photonvision.org/en/v2025.3.2/docs/programming/photonlib/robot-pose-estimator.html">PhotonVision pose estimation</a> — capture timestamps and estimator measurement delivery.</li>
+    <li><a href="https://v6.docs.ctr-electronics.com/en/docs-2026-beta/docs/api-reference/mechanisms/swerve/swerve-builder-api.html">CTRE Phoenix 6 swerve</a> and <a href="https://docs.yagsl.com/overview/our-features/vision-odometry">YAGSL vision odometry</a> — examples of existing estimators that should sit behind the default adapter.</li>
+  </ul>
+
+  <h2>Non-goals</h2>
+  <ul>
+    <li>Automatically discover hardware, rewrite vendor configuration, or claim support without a versioned test matrix.</li>
+    <li>Replace WPILib's scheduler, geometry, kinematics, or standard robot lifecycle.</li>
+    <li>Move safety-critical vendor code into core or require direct module access from teams that already have a working drivetrain.</li>
+    <li>Modify the Bordeaux GUI or website as part of this Java runtime work.</li>
+  </ul>
+</article>
+</main>
+<script>
+  (() => {
+    const ids = ["safety", "compatibility", "ease", "advanced"];
+    const values = () => Object.fromEntries(ids.map((id) => [id, Number(document.getElementById(id).value)]));
+    const update = () => {
+      for (const id of ids) {
+        const input = document.getElementById(id);
+        input.nextElementSibling.value = input.value;
+      }
+      const v = values();
+      const scores = {
+        "foundation and generic adapters": v.safety * 3 + v.compatibility * 2 + v.ease * 3 + v.advanced,
+        "localization and vision": v.safety * 3 + v.compatibility * 2 + v.ease + v.advanced * 3,
+        "vendor adapter packs": v.safety + v.compatibility * 4 + v.ease * 2 + v.advanced * 2,
+        "tuning and characterization": v.safety * 2 + v.compatibility + v.ease * 2 + v.advanced * 4
+      };
+      document.getElementById("recommendation").textContent = Object.entries(scores).sort((a, b) => b[1] - a[1])[0][0];
+    };
+    for (const id of ids) document.getElementById(id).addEventListener("input", update);
+    document.getElementById("copy-priorities").addEventListener("click", async () => {
+      const payload = JSON.stringify({ priorities: values(), recommendation: document.getElementById("recommendation").textContent }, null, 2);
+      await navigator.clipboard.writeText(payload);
+      document.getElementById("copy-state").textContent = "Copied";
+    });
+    update();
+  })();
+</script>
+</body>
+</html>
