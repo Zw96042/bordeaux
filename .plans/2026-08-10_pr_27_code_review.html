@@ -1,0 +1,30 @@
+    <li>The headline benchmark is not reproducible from the repository: there is no runner, fixture, trace, hardware/refresh-rate description, warmup policy, or run count. The tests replace the real Worker and strip module imports, so they cannot catch lifecycle, module-loading, structured-clone, or React provenance failures.</li>
+  </ul>
+
+  <h2>Copy-paste overall PR review</h2>
+  <blockquote>
+    Requesting changes. The off-thread latest-job scheduler is a good direction and the existing checks pass, but the edit transaction and preview provenance are not safe yet. I can reproduce undo during a held drag being overwritten on release and corrupting redo history. Active drafts are also invisible to dirty/save/export/close state, so closing mid-drag can lose the visible edit without warning. Finally, cached previews are validated only by path ID, allowing old geometry to be paired with a newer waypoint topology and used for hit-testing. The performance path also still triggers an unused App-root state update on every drag revision, and under dense input the scheduler can discard every completed curve until the pointer stops. I would fix those five before merging, then add one StrictMode/real-worker integration test plus a reproducible benchmark tied to the rendered preview revision.
+  </blockquote>
+
+  <h2>Verification</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Check</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td><code>npm test</code></td><td>Passed: 23 files, 202 tests</td></tr>
+      <tr><td><code>npm run typecheck</code></td><td>Passed</td></tr>
+      <tr><td><code>npm run verify:renderer</code></td><td>Passed</td></tr>
+      <tr><td>Production build</td><td>Passed; main JavaScript 411.84 kB, worker 32.61 kB</td></tr>
+      <tr><td>Electron smoke</td><td>Passed after removing the harness-provided <code>ELECTRON_RUN_AS_NODE</code> variable</td></tr>
+      <tr><td><code>git diff --check</code></td><td>Passed</td></tr>
+      <tr><td>Randomized comparison</td><td><code>nearestVisits</code> matched base over 100,000 valid cases; derived waypoint indexes matched over 300 valid paths</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>What is solid</h2>
+  <p>The one-in-flight/one-replacement scheduler bounds queue growth, the extracted geometry helpers are easier to reason about, the current 202 tests all remain green, and randomized comparisons found no regression in <code>nearestVisits</code> or waypoint index derivation. The concerns above are lifecycle and integration defects around that core, not evidence that moving derivation off-thread is the wrong direction.</p>
+
+  <p><strong>Review boundary:</strong> read-only. No source files, GitHub comments, or PR review state were changed.</p>
+</article>
+</main>
+</body>
+</html>
