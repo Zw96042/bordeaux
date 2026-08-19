@@ -1,3 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- TheLab metadata (read by the `lab` CLI on publish; do not remove).
+     thelab:plan is the STABLE plan id — re-publishing this file updates the same
+     plan (bumping its version) even if the title changes. -->
+<meta name="thelab:project" content="bordeaux">
+<meta name="thelab:title" content="PR #27 Code Review">
+<meta name="thelab:plan" content="pr-27-code-review">
+<meta name="thelab:kind" content="review">
+<meta name="thelab:status" content="active">
+<meta name="thelab:tags" content="pr-review,renderer,performance">
+<!-- Optional: issue numbers this plan closes on ship, e.g. content="3,7". They
+     auto-close when the plan is marked done (`lab done … --commit`). -->
+<meta name="thelab:addresses" content="">
+<meta name="thelab:version" content="5">
+<meta name="thelab:hosted-url" content="https://thelab.wilsonzach.com/project/bordeaux/review/pr-27-code-review">
+<meta name="thelab:reviewof-commit" content="1262ab7661027e5446b0f9f1adc02f65486875cd">
+<meta name="thelab:reviewof-repo" content="https://github.com/Zw96042/bordeaux">
+<meta name="thelab:reviewof-branch" content="renderer-performance">
+<!-- Optional owner questions. Add 1–8 entries; each needs 2–8 options. -->
+<script type="application/json" id="thelab-questions">[]</script>
+<script type="application/json" id="thelab-findings">
+[
+  {
+    "key": "pr27-agent-cancel-republish",
+    "title": "Canceling an edit leaves the agent session permanently stale",
+    "type": "bug",
+    "severity": "medium",
+    "body": "PathEdit.cancel() increments the edit revision, while proposal receipt and Apply require that revision to equal the last published context. The session publication effect is keyed only by project/path state, and cancellation does not change the project, so no replacement snapshot is published. After Escape or another drag cancellation, every newly requested proposal is rejected until an unrelated project/path change occurs. Publish a new session revision after edit cancellation and add a cancel-then-request regression test."
+  },
+  {
+    "key": "pr27-benchmark-coverage",
+    "title": "Full benchmark cannot compare against the intended baseline",
+    "type": "bug",
+    "severity": "high",
+    "body": "Every timed child now unconditionally runs the new application worker-transport preflight, including upstream warmups and measured upstream trials. The intended pre-PR baseline does not contain the query-gated transport observer, so its probe can never produce the required event and the comparison times out before measurement. Keep equivalent discarded movement for both variants, but require transport instrumentation only from a capable/candidate bundle, or inject equivalent observation into both archives. Add an end-to-end comparison regression test using a pre-instrumentation baseline."
+  }
+]
+</script>
+<title>PR #27 Code Review</title>
+<style>
+  /* Self-contained. Mirrors The Lab reader so the local file looks like the hosted
+     one. This block is NOT published: the hosted view uses The Lab's own reader
+     stylesheet, and only the article content below is published. */
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    background: #0a0a0a; color: #a1a1a1;
+    font-size: 15px; line-height: 1.7; letter-spacing: -0.006em;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 40px 24px 96px; }
+  a { color: #4e9bfa; text-decoration: none; } a:hover { text-decoration: underline; }
+  img { max-width: 100%; height: auto; }
+  h1 { font-size: 30px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.2; color: #ededed; margin-bottom: 8px; }
+  h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.015em; color: #ededed; margin: 56px 0 16px; padding-top: 24px; border-top: 1px solid #222; }
+  h3 { font-size: 14px; font-weight: 600; color: #ededed; margin: 32px 0 12px; }
+  p { margin: 0 0 12px; } strong { color: #ededed; font-weight: 600; }
+  ul, ol { margin: 0 0 12px 22px; } li { margin: 4px 0; }
+  .lede { color: #ededed; font-size: 16px; margin: 4px 0 8px; }
   code { font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; }
   pre.code { background: #0d0d0d; border: 1px solid #222; border-radius: 6px; padding: 16px 20px; overflow-x: auto; font-size: 12.5px; line-height: 1.65; color: #a1a1a1; tab-size: 2; margin: 16px 0; }
   .callout { border: 1px solid #222; border-left: 2px solid #4e9bfa; border-radius: 0 6px 6px 0; padding: 14px 20px; margin: 20px 0; font-size: 13.5px; color: #a1a1a1; }

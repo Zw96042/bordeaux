@@ -1,0 +1,40 @@
+<article>
+  <h1>PR #29 Code Review</h1>
+
+  <!-- Plan meta: local-file chrome only — `lab publish` strips this whole section
+       from the published body (The Lab renders its own header + metadata rail). The
+       CLI fills the Version cell on publish (v1, v2, …). -->
+  <section class="plan-links">
+    <div class="tbl-scroll"><table class="data">
+      <tr><td>Project</td><td>bordeaux</td></tr>
+      <tr><td>Version</td><td id="thelab-version">v1</td></tr>
+      <tr><td>Status</td><td><span class="status st-done">done</span> · 2026-08-10</td></tr>
+    </table></div>
+  </section>
+
+  <p class="lede"><strong>Verdict: Ship it.</strong> No actionable regressions were found in PR #29 at <code>a7e22ba</code>.</p>
+
+  <h2>Scope</h2>
+  <p>Reviewed the complete diff from <code>6320714</code> to <code>a7e22ba</code>: 58 files, 748 additions, and 1,345 deletions. The review covered canonical project state and import compatibility, native and Java export, path-analysis performance changes, agent sessions and bridge framing, renderer behavior and CSS cleanup, Java catalog discovery and runtime changes, smoke-test cleanup, and release workflows.</p>
+
+  <h2>Findings</h2>
+  <div class="callout"><strong>None.</strong> The independent schema, renderer, platform, and integration passes did not identify a concrete correctness, compatibility, accessibility, or release blocker introduced by this PR.</div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li><code>npm test</code> — 21 files and 200 tests passed.</li>
+    <li><code>npm run typecheck</code> — all shared, renderer, and Electron TypeScript checks passed.</li>
+    <li><code>npm run build</code> — renderer verification, Java distribution, and Electron compilation passed.</li>
+    <li><code>npm run test:java</code> — Gradle runtime and processor tests passed.</li>
+    <li><code>npm run test:java-integration:built</code> — the template robot integration passed with four commands.</li>
+    <li><code>env -u ELECTRON_RUN_AS_NODE npm run test:smoke:built</code> — the Electron smoke test passed, including canonical project round-trip and temporary-directory cleanup. The variable removal is specific to the T3 harness.</li>
+    <li><code>git diff --check origin/main...refs/remotes/origin/pr/29</code> — no whitespace errors.</li>
+    <li>Both GitHub Actions verification jobs were green at review time.</li>
+  </ul>
+
+  <h2>Residual risk</h2>
+  <p>The largest remaining uncertainty is platform-specific packaging and signing, which was not reproduced locally. The PR does not materially change those platform commands, and its workflow changes are limited to removing unused matrix fields and adding Java tests.</p>
+</article>
+</main>
+</body>
+</html>
