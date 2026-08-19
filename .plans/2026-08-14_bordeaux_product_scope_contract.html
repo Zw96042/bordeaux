@@ -1,0 +1,29 @@
+    benchmarkWinsPercent: Number(wins.value),
+    invalidBenchmarkOutputs: Number(invalid.value),
+    ...Object.fromEntries(boxes.map((box) => [box.dataset.gate, box.checked]))
+  });
+  const evaluate = () => {
+    const value = state();
+    const blockers = [];
+    if (!(value.benchmarkWinsPercent > 50)) blockers.push('benchmark wins must exceed 50%');
+    if (value.invalidBenchmarkOutputs !== 0) blockers.push('invalid outputs must be zero');
+    for (const box of boxes) if (!box.checked) blockers.push(box.parentElement.textContent.trim());
+    result.textContent = blockers.length === 0
+      ? 'External beta entry gates pass. Attach evidence before recruiting teams.'
+      : `External beta blocked: ${blockers.length} gate${blockers.length === 1 ? '' : 's'} remain — ${blockers.join('; ')}.`;
+  };
+  model.addEventListener('input', evaluate);
+  document.getElementById('reset-gates').addEventListener('click', () => {
+    wins.value = 51; invalid.value = 0; boxes.forEach((box) => { box.checked = false; }); evaluate();
+  });
+  document.getElementById('copy-json').addEventListener('click', async (event) => {
+    const payload = JSON.stringify({ contract: 'bordeaux-product-scope/1.0', evaluatedAt: new Date().toISOString(), ...state() }, null, 2);
+    try { await navigator.clipboard.writeText(payload); event.currentTarget.textContent = 'Copied'; }
+    catch { event.currentTarget.textContent = 'Copy unavailable'; }
+    setTimeout(() => { event.currentTarget.textContent = 'Copy as JSON'; }, 1400);
+  });
+  evaluate();
+})();
+</script>
+</body>
+</html>
