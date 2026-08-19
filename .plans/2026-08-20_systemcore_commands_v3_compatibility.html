@@ -1,0 +1,35 @@
+    <li>Reimplement WPILib requirements, priority arbitration, coroutine execution, groups, triggers, or opmode scoping.</li>
+    <li>Declare stable Commands v3 support against an alpha API or claim vendor-command compatibility without a pinned compile/runtime fixture.</li>
+    <li>Modify the Bordeaux renderer, GUI, website, or path-authoring schemas during the initial Java compatibility work.</li>
+  </ul>
+</article>
+</main>
+<script>
+  (() => {
+    const ids = ["backcompat", "fidelity", "maintenance", "speed"];
+    const values = () => Object.fromEntries(ids.map((id) => [id, Number(document.getElementById(id).value)]));
+    const update = () => {
+      for (const id of ids) {
+        const input = document.getElementById(id);
+        input.nextElementSibling.value = input.value;
+      }
+      const v = values();
+      const scores = {
+        "neutral core + native backends": v.backcompat * 4 + v.fidelity * 4 + v.maintenance * 4 + v.speed * 2,
+        "v3-only rewrite": v.backcompat * -3 + v.fidelity * 4 + v.maintenance * 2 + v.speed * 4,
+        "duplicate the full runtime": v.backcompat * 3 + v.fidelity * 3 + v.maintenance * -4 + v.speed,
+        "remain v2-only": v.backcompat * 3 + v.fidelity * -4 + v.maintenance * 3 + v.speed * 2
+      };
+      document.getElementById("recommendation").textContent = Object.entries(scores).sort((a, b) => b[1] - a[1])[0][0];
+    };
+    for (const id of ids) document.getElementById(id).addEventListener("input", update);
+    document.getElementById("copy-strategy").addEventListener("click", async () => {
+      const payload = JSON.stringify({ priorities: values(), recommendation: document.getElementById("recommendation").textContent }, null, 2);
+      await navigator.clipboard.writeText(payload);
+      document.getElementById("copy-state").textContent = "Copied";
+    });
+    update();
+  })();
+</script>
+</body>
+</html>
