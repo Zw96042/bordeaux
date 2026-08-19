@@ -1,0 +1,75 @@
+       CLI fills the Version cell on publish (v1, v2, …). -->
+  <section class="plan-links">
+    <div class="tbl-scroll"><table class="data">
+      <tr><td>Project</td><td>bordeaux</td></tr>
+      <tr><td>Version</td><td id="thelab-version">v2</td></tr>
+      <tr><td>Status</td><td><span class="status st-done">done</span> · 2026-08-10</td></tr>
+    </table></div>
+  </section>
+
+  <p class="lede">Create a cohesive launch system around Bordeaux’s wine-glass mark: three startup-motion directions, a complete static marketing site, reusable campaign media, and an edit-ready demo-video package.</p>
+
+  <h2>Context</h2>
+  <p>Bordeaux is a desktop FRC path, autonomous-routine, and Java-integration tool. Its existing product language is precise graphite UI with a cool blue technical accent; the existing application icon is a red-wine glass. The marketing direction should follow the hierarchy and restraint of <code>learn.wilsonzach.com</code>: near-black canvas, oversized editorial serif headlines, small monospaced labels, crisp white actions, minimal borders, and one characterful visual counterpoint.</p>
+  <div class="callout"><strong>Scope boundary.</strong> Startup ideas remain in an isolated prototype harness until the owner chooses one. The current application shell and its tests explicitly keep the dormant Chap loader out of production, so this work does not silently promote exploratory motion.</div>
+
+  <h2>Recommendation</h2>
+  <p>Use the wine glass as the constant and robot-path geometry as the system. Burgundy communicates Bordeaux; cool blue and telemetry details keep the identity rooted in engineering. Build the public-facing work as dependency-free static HTML, CSS, SVG, and JavaScript in top-level isolated directories so it neither disturbs the Electron renderer nor conflicts with the renderer migration already present upstream.</p>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Startup direction</th><th>Named axis</th><th>Purpose</th><th>Cost</th></tr></thead>
+    <tbody>
+      <tr><td>Liquid Route</td><td>Cinematic / physical</td><td>The canonical glass anticipates, tips with a level liquid surface, drains into a fixed route, and resolves the wordmark.</td><td>3.20-second first-launch master; richest compositing and longest boot.</td></tr>
+      <tr><td>Impact Cut</td><td>Character-led / kinetic</td><td>An articulated Chap sprint makes real beak-to-rim contact; compression, follow-through, recoil, droplets, and a wine wipe reveal Bordeaux.</td><td>3.00-second internal master; public use blocked until mascot rights are documented.</td></tr>
+      <tr><td>Waypoint Mark</td><td>Precise / repeatable</td><td>A measured route trace reaches a waypoint that sequentially constructs, fills, and resolves the canonical glass.</td><td>1.65-second daily master; intentionally quieter and fastest to replay.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Implementation steps</h2>
+  <ol>
+    <li>Build <code>prototypes/startup-animations/</code> as a real frame-rendering pipeline and full-size review player: 1440×900 at 60 fps, MP4/WebM masters, exact-frame scrubbing, contact sheets, replay/rate controls, keyboard access, and reduced-motion behavior.</li>
+    <li>Build <code>marketing/</code> as a standalone static site with truthful product copy, responsive sections, download/source CTAs, feature explanations, FAQ, launch announcement, privacy note, sitemap, robots, manifest, structured data, and social metadata.</li>
+    <li>Build <code>launch/assets/</code> with source SVGs plus exported PNG variants for wordmarks, social cards, wallpapers, launch key art, product feature cards, press-kit inventory, and reusable video title cards.</li>
+    <li>Create <code>launch/video/</code> with a timed script, storyboard, voiceover, captions, shot list, recording checklist, edit notes, and a silent motion draft assembled from code-built product visuals and branded title cards. Keep real packaged-app capture as an explicit final-production replacement.</li>
+    <li>Verify desktop and mobile rendering, keyboard and reduced-motion paths, static asset integrity, media dimensions, video playback, and the existing repository checks. Run an independent Codex review before handoff.</li>
+  </ol>
+
+  <h2>Risks &amp; mitigations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>Chap ships without documented rights</td><td>medium</td><td>Mark Impact Cut non-public in its manifest and provenance record; block release until mascot ownership is cleared. Official font URLs, hashes, copyright notices, and OFL text are bundled.</td></tr>
+      <tr><td>Prototype motion leaks into production</td><td>low</td><td>Keep the harness isolated and imported by nothing; do not alter the Electron shell.</td></tr>
+      <tr><td>Marketing claims exceed the current product</td><td>medium</td><td>Base copy on inspected UI, repository docs, and existing Java/update flows; avoid invented collaboration or cloud claims.</td></tr>
+      <tr><td>Media makes Bordeaux feel like a wine product</td><td>medium</td><td>Pair the glass with field geometry, path traces, constraint data, and product screenshots in every major composition.</td></tr>
+      <tr><td>Heavy media harms page load</td><td>medium</td><td>Prefer SVG and CSS art, preload only the hero, lazy-load below-fold raster assets, and declare intrinsic dimensions.</td></tr>
+      <tr><td>Upstream renderer migration creates conflicts</td><td>medium</td><td>Use top-level isolated directories and avoid <code>public/renderer</code>, <code>src/renderer</code>, and generated <code>dist-renderer</code>.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li>Serve the prototype and marketing directories locally; inspect at desktop and phone widths with the collaborative browser.</li>
+    <li>Exercise the picker mount/fallback path, replay and tuning source, CTA/menu behavior, video controls, keyboard focus, mobile inert navigation, and reduced-motion fallbacks.</li>
+    <li>Validate required SEO files and metadata, image dimensions, SVG parseability, video streams, and link targets with focused scripts.</li>
+    <li>Run <code>npm run verify:renderer</code>, <code>npm run typecheck</code>, and <code>npm test</code> to ensure isolated additions do not disturb the application.</li>
+  </ul>
+
+  <h2>Result</h2>
+  <ul>
+    <li>Replaced CSS choreography with three true frame-rendered startup films: <strong>Liquid Route</strong>, <strong>Impact Cut</strong>, and <strong>Waypoint Mark</strong>. Each ships as a 1440×900/60 fps MP4 and WebM plus poster, eight-frame contact sheet, manifest metadata, and reproducible source renderer.</li>
+    <li>Delivered a responsive dependency-free marketing site with complete launch copy, product visuals, an 18-second walkthrough, SEO/social metadata, structured data, captions, privacy, 404, robots, sitemap, manifest, and reduced-motion behavior.</li>
+    <li>Generated 42 deterministic SVG/PNG exports across logo, social, product, video, and wallpaper families, plus two clearly labeled ImageGen campaign assets.</li>
+    <li>Rendered a 37.5-second 1080p launch draft and supplied the voiceover, captions, storyboard, shot list, edit/audio brief, platform copy, press boilerplate, rights notes, and public-launch checklist.</li>
+    <li>Validation passed: 114 focused motion checks, 128 launch checks, renderer verification, TypeScript checks, and 197 existing tests. Desktop/mobile browser layouts, exact-frame scrubbing, video streams, representative frames, and collision mechanics were inspected; an independent motion review approved all three directions.</li>
+  </ul>
+
+  <h2>Open questions</h2>
+  <ul>
+    <li>Which startup direction should be promoted into the desktop app? The current recommendation is <strong>Liquid Route</strong> for first launch and <strong>Waypoint Mark</strong> for daily boot; no production renderer code was changed.</li>
+    <li>Confirm the assumed canonical domain, final release artifacts, signing/notarization status, repository license, and public contact before deployment.</li>
+    <li>Clear Chap rights, then record real packaged-app footage, final voiceover, and licensed music/sound design for the public master. Font provenance and OFL notices are complete.</li>
+  </ul>
+</article>
+</main>
+</body>
+</html>
