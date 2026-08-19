@@ -1,3 +1,106 @@
+
+  <h2>Routine and extension contract</h2>
+  <p>The external beta ships an export-safe routine surface: typed commands, sequences, decisions, and simple built-ins. Team capabilities are registered in compiled Java, discovered through an authoritative catalog, and referenced from project data by stable ID and typed arguments.</p>
+  <p>Custom runtime trajectory generation is a post-beta goal. A generator must declare typed inputs, output and kinematic bounds, spatial constraints, a timeout, and fallback behavior. The runtime validates every generated segment. If generation times out or returns an invalid segment, the routine branch aborts into a safe stop unless the author explicitly attached a validated fallback branch. When exact desktop preview is impossible, Bordeaux labels the segment dynamic instead of pretending to know its path.</p>
+
+  <h2>Seasonal contract</h2>
+  <ul>
+    <li>Ship the official field image and coordinate model within 48 hours of kickoff.</li>
+    <li>Ship fully verified obstacles, portals, vocabulary, clearances, and agent-planning behavior within seven days.</li>
+    <li>Deliver seasonal support through a normal signed GitHub application release using the existing updater; independent field-pack infrastructure is deferred.</li>
+    <li>Persist the field ID and schema version in each project. Opening an older project never silently reinterprets coordinates, geometry, or obstacles.</li>
+    <li>Before claiming full support, cross-check official drawings, CAD, and the game manual; run coordinate, symmetry, obstacle, portal, clearance, and representative-route simulation tests.</li>
+  </ul>
+
+  <h2>External beta gates</h2>
+  <p>The repository may continue to use prerelease versioning, but Bordeaux should not recruit or promote a deliberate external beta cohort until every entry gate passes.</p>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Gate</th><th>Required evidence</th></tr></thead>
+    <tbody>
+      <tr><td>Planner</td><td>The frozen public corpus passes all validity checks and Bordeaux wins more than half the cases.</td></tr>
+      <tr><td>Robot loop</td><td>Pairing, manual push, atomic staging, runtime hash acknowledgment, known-good pinning, and rollback work on a real robot.</td></tr>
+      <tr><td>Routine truth</td><td>Every visible routine node exports and runs; no simulation-only placeholder appears deployable.</td></tr>
+      <tr><td>Season</td><td>The current field implementation passes the seasonal certification contract.</td></tr>
+      <tr><td>Release</td><td>Windows and macOS packages are signed, update successfully, and present honest installation guidance.</td></tr>
+      <tr><td>Rights</td><td>Apache-2.0 is present for software; brand and media rights are documented separately.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Local readiness model</h3>
+  <p class="muted">This local-only control checks the agreed entry gates and exports their state. The hosted plan remains a static contract because The Lab disables arbitrary scripts.</p>
+  <div class="gate-model" id="gate-model">
+    <div class="gate-grid">
+      <label class="metric">Benchmark wins (%)<input id="wins" type="number" min="0" max="100" step="1" value="51"></label>
+      <label class="metric">Invalid benchmark outputs<input id="invalid" type="number" min="0" step="1" value="0"></label>
+      <label><input data-gate="robotLoop" type="checkbox"> Robot push, acknowledgment, and rollback proven</label>
+      <label><input data-gate="routineTruth" type="checkbox"> Every visible routine node deploys</label>
+      <label><input data-gate="season" type="checkbox"> Current season certification passes</label>
+      <label><input data-gate="signed" type="checkbox"> Windows and macOS packages signed</label>
+      <label><input data-gate="updates" type="checkbox"> Packaged update flow passes</label>
+      <label><input data-gate="license" type="checkbox"> Apache-2.0 and asset rights recorded</label>
+    </div>
+    <p class="gate-result" id="gate-result">External beta blocked: six non-benchmark gates remain.</p>
+    <div class="gate-actions"><button type="button" id="copy-json">Copy as JSON</button><button type="button" class="secondary" id="reset-gates">Reset</button></div>
+  </div>
+
+  <h3>Beta outcome</h3>
+  <p>After entry, success means at least five outside teams author, push, and run a real autonomous routine; at least three return for another use; and no critical incorrect-output incident occurs. Evidence comes from explicit diagnostic bundles and structured cohort check-ins, not passive telemetry.</p>
+
+  <h2>Explicit non-goals</h2>
+  <ul>
+    <li>PathPlanner or Choreo import, migration, export, or bidirectional compatibility. Full Bordeaux behavior requires a Bordeaux-native project.</li>
+    <li>Python, C++, or LabVIEW integration on the maintained application branch.</li>
+    <li>Cloud projects, accounts, synchronization, collaboration, or passive analytics.</li>
+    <li>Arbitrary desktop plugins, uploaded executable scripts, robot-code compilation, or GradleRIO deployment.</li>
+    <li>A second transfer service for FMS-field pushing.</li>
+    <li>FTC, general robotics, or non-FRC field support.</li>
+    <li>Field-agnostic pack infrastructure before annual app-release delivery proves insufficient.</li>
+  </ul>
+
+  <h2>Execution sequence</h2>
+  <ol>
+    <li><strong>Make product truth explicit.</strong> Hide simulation-only routine templates, add Apache-2.0, reconcile current scope records, and keep competitive claims out of product copy until evidence exists.</li>
+    <li><strong>Build the neutral benchmark.</strong> Freeze the two-class corpus, adapters, dense validator, raw result format, and reproducible runner before tuning a final solver.</li>
+    <li><strong>Build the final optimizer.</strong> Preserve interactive planning, introduce cancellable bounded final optimization, and earn the majority-win gate without invalid outputs.</li>
+    <li><strong>Close the robot loop.</strong> Add explicit pairing, push preview, atomic staging, disabled-only activation, runtime acknowledgment, revision history, and rollback.</li>
+    <li><strong>Polish the native workflow.</strong> Ensure commands, sequences, decisions, simple built-ins, Java discovery, export, and robot execution form one coherent path without migration features.</li>
+    <li><strong>Certify and recruit.</strong> Pass seasonal, signing, update, safety, and real-robot gates; then recruit the five-team cohort and evaluate the outcome contract.</li>
+  </ol>
+
+  <h2>Risks &amp; mitigations</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>Benchmark overfitting</td><td>high</td><td>Freeze fixtures first, include real team paths, publish raw results, and keep a neutral validator outside planner implementations.</td></tr>
+      <tr><td>Unsafe or ambiguous push state</td><td>high</td><td>Separate upload from activation, pair robot identity, require disabled/catalog/runtime checks, and acknowledge the active SHA-256.</td></tr>
+      <tr><td>Native solver packaging regressions</td><td>medium</td><td>Keep it behind a worker and final-optimizer boundary; preserve the deterministic interactive planner as fallback.</td></tr>
+      <tr><td>Season deadline misses</td><td>medium</td><td>Stage image/coordinates before semantics, automate certification, and ship corrections through the existing signed updater.</td></tr>
+      <tr><td>Dynamic function escapes validation</td><td>medium</td><td>Use compiled typed registries, bounded outputs, timeouts, runtime validation, safe-stop defaults, and explicit fallback branches.</td></tr>
+      <tr><td>Scope records contradict reality</td><td>high</td><td>Mark implemented plans done, archive superseded analyses, preserve work with unresolved issues, and use this plan as the current product contract.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li>Each implementation plan must trace its acceptance criteria to one contract section and identify any non-goal it could accidentally expand.</li>
+    <li>Planner claims require committed raw results from the frozen corpus; passing unit tests alone is insufficient.</li>
+    <li>Robot delivery requires a real-device test covering wrong identity, stale catalog, enabled robot, interrupted upload, invalid hash, successful activation, and rollback.</li>
+    <li>Release validation includes repository tests, type checks, builds, Electron smoke tests, signed-package verification, updater verification, and the applicable seasonal certification suite.</li>
+    <li>At beta entry, export the readiness model as JSON and attach concrete evidence for every true gate.</li>
+  </ul>
+
+  <h2>Open questions</h2>
+  <p>None. Changes to the product boundary, benchmark gates, robot activation contract, annual field promise, or explicit non-goals require an intentional revision of this plan.</p>
+</article>
+</main>
+<script>
+(() => {
+  const model = document.getElementById('gate-model');
+  const wins = document.getElementById('wins');
+  const invalid = document.getElementById('invalid');
+  const result = document.getElementById('gate-result');
+  const boxes = [...model.querySelectorAll('[data-gate]')];
+  const state = () => ({
     benchmarkWinsPercent: Number(wins.value),
     invalidBenchmarkOutputs: Number(invalid.value),
     ...Object.fromEntries(boxes.map((box) => [box.dataset.gate, box.checked]))
