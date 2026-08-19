@@ -1,3 +1,106 @@
+  code { font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; }
+  pre.code { background: #0d0d0d; border: 1px solid #222; border-radius: 6px; padding: 16px 20px; overflow-x: auto; font-size: 12.5px; line-height: 1.65; color: #a1a1a1; tab-size: 2; margin: 16px 0; }
+  .callout { border: 1px solid #222; border-left: 2px solid #4e9bfa; border-radius: 0 6px 6px 0; padding: 14px 20px; margin: 20px 0; font-size: 13.5px; color: #a1a1a1; }
+  .callout strong { color: #ededed; }
+  .danger { border-left-color: #e56a6a; }
+  blockquote { border-left: 2px solid #333; color: #c7c7c7; margin: 14px 0 22px; padding: 2px 0 2px 18px; }
+  .priority { color: #e56a6a; font-family: ui-monospace, Menlo, monospace; font-size: 12px; font-weight: 600; }
+  figure { margin: 16px 0; } figcaption { font-size: 12px; color: #6b6b6b; padding-top: 8px; font-family: ui-monospace, Menlo, monospace; }
+  .fig-scroll { overflow-x: auto; border: 1px solid #222; border-radius: 6px; }
+  .fig-scroll svg { display: block; width: 100%; height: auto; }
+  .tbl-scroll { overflow-x: auto; }
+  table.data { width: 100%; border-collapse: collapse; font-size: 13.5px; margin: 12px 0; }
+  table.data th { text-align: left; font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.07em; color: #6b6b6b; padding: 10px 14px; border-bottom: 1px solid #222; }
+  table.data td { padding: 10px 14px; border-bottom: 1px solid #222; color: #a1a1a1; vertical-align: top; }
+  table.data tr:last-child td { border-bottom: 0; }
+  table.data td:first-child { color: #ededed; white-space: nowrap; }
+  .plan-links { margin: 16px 0 8px; }
+  .plan-links table.data td:first-child { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: #6b6b6b; width: 90px; }
+  .plan-links table.data td:nth-child(2) { color: #ededed; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
+  .status { display: inline-flex; align-items: center; gap: 7px; }
+  .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; }
+  .st-draft::before { border: 1px solid #6b6b6b; }
+  .st-active::before { background: #4e9bfa; }
+  .st-done::before { background: #ededed; }
+  .st-archived::before { background: #333; }
+</style>
+</head>
+<body>
+<main class="wrap">
+<article>
+  <h1>PR #27 Code Review</h1>
+
+  <!-- Plan meta: local-file chrome only — `lab publish` strips this whole section
+       from the published body (The Lab renders its own header + metadata rail). The
+       CLI fills the Version cell on publish (v1, v2, …). -->
+  <section class="plan-links">
+    <div class="tbl-scroll"><table class="data">
+      <tr><td>Project</td><td>bordeaux</td></tr>
+      <tr><td>Version</td><td id="thelab-version">v5</td></tr>
+      <tr><td>Status</td><td><span class="status st-active">active</span> · 2026-08-10</td></tr>
+    </table></div>
+  </section>
+
+  <p class="lede">Recheck verdict: request changes. The prior proposal-context, catalog-invalidation, environment, timing-order, and worker-proof findings are addressed, but edit cancellation leaves agent proposals unusable and the full benchmark cannot run against its baseline.</p>
+
+  <div class="callout danger">
+    <strong>Not ready at <code>1262ab766102</code>.</strong> Candidate-only correctness is clean, but the comparison workflow fails before measurement and canceling a drag can strand the agent session on an obsolete edit revision.
+  </div>
+
+  <h2>Latest changes review (v5)</h2>
+  <div class="tbl-scroll"><table class="data">
+    <tbody>
+      <tr><td>Reviewed delta</td><td><code>c151283f73b7..1262ab766102</code> · four follow-up commits</td></tr>
+      <tr><td>Resolved</td><td>Project/active-path receipt validation, Java catalog semantic invalidation, Electron child environment sanitization, renderer-owned stress clocks, isolated correctness, balanced warmups/order, and application-level worker instrumentation.</td></tr>
+      <tr><td>Method</td><td>Full delta inspection, three independent read-only reviews, isolated project checks, candidate correctness, and an end-to-end balanced comparison attempt against the intended older baseline.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Canceling a drag leaves the agent session permanently stale</h3>
+  <p><a href="https://github.com/Zw96042/bordeaux/blob/1262ab7661027e5446b0f9f1adc02f65486875cd/src/renderer/assets/path-edit.js#L33-L39">PathEdit.cancel():33–39</a> advances the edit revision. Proposal receipt and Apply correctly require that revision to match the last published context at <a href="https://github.com/Zw96042/bordeaux/blob/1262ab7661027e5446b0f9f1adc02f65486875cd/src/renderer/app/App.jsx#L35-L44">App.jsx:35–44</a>, but <a href="https://github.com/Zw96042/bordeaux/blob/1262ab7661027e5446b0f9f1adc02f65486875cd/src/renderer/app/App.jsx#L516-L565">the cancel subscriber and publication effect</a> never publish a replacement snapshot because cancellation does not change <code>project</code> or <code>activeIdx</code>. After Escape or another cancel, all newly requested proposals still target the main process's old base revision and are rejected until an unrelated project/path mutation republishes the session.</p>
+  <p><strong>Fix:</strong> publish a new session revision after an edit cancellation (and any other resolution that changes the edit revision without changing project state), while continuing to reject in-flight pre-cancel results. Add a cancel-then-request regression test.</p>
+
+  <h3>Full browser comparisons cannot run against the intended baseline</h3>
+  <p><a href="https://github.com/Zw96042/bordeaux/blob/1262ab7661027e5446b0f9f1adc02f65486875cd/scripts/renderer-browser-benchmark-electron.cjs#L846-L851">measureLatency():846–851</a> unconditionally requires the new application worker-transport preflight in every timing child. That includes the upstream warmup launched at <a href="https://github.com/Zw96042/bordeaux/blob/1262ab7661027e5446b0f9f1adc02f65486875cd/scripts/benchmark-renderer-browser.mjs#L262-L275">benchmark-renderer-browser.mjs:262–275</a>. Older baselines do not contain the query-gated observer added to <code>path-preview.js</code>, so <a href="https://github.com/Zw96042/bordeaux/blob/1262ab7661027e5446b0f9f1adc02f65486875cd/scripts/renderer-browser-benchmark-electron.cjs#L455-L466">the preflight</a> can never receive its transport event and times out before any measured trial. I reproduced this with the intended pre-instrumentation baseline.</p>
+  <p><strong>Fix:</strong> keep equivalent discarded input movement for both variants, but enable and require transport proof only for the capable candidate bundle, or inject equivalent observation into both archives. Add a full-comparison regression test using a pre-instrumentation baseline.</p>
+
+  <h2>Latest verification</h2>
+  <div class="tbl-scroll"><table class="data">
+    <thead><tr><th>Check</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td><code>npm test</code></td><td>Passed: 25 files, 254 tests</td></tr>
+      <tr><td><code>npm run typecheck</code></td><td>Passed</td></tr>
+      <tr><td><code>npm run verify:renderer</code></td><td>Passed; production worker emitted and verified</td></tr>
+      <tr><td><code>npm run build:electron</code></td><td>Passed</td></tr>
+      <tr><td>Browser correctness-only</td><td>Passed: 19/19 with inherited <code>ELECTRON_RUN_AS_NODE</code> left set, confirming environment sanitization.</td></tr>
+      <tr><td>Balanced comparison smoke</td><td>Failed before measurement: <code>upstream-warmup</code> timed out waiting for the application worker preflight.</td></tr>
+      <tr><td><code>git diff --check</code></td><td>Passed for <code>c151283f73b7..1262ab766102</code></td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Prior latest changes review (v4)</h2>
+  <div class="tbl-scroll"><table class="data">
+    <tbody>
+      <tr><td>Reviewed delta</td><td><code>def4123ed998..c151283f73b7</code> · eleven follow-up commits after the rebased equivalent of v3</td></tr>
+      <tr><td>Resolved</td><td>Cross-project autosave/save targeting, path-library updates during drags, worker send/message/timeout recovery, direct-fallback isolation, release stability, path-switch proof, and correct-paint NativeImage provenance.</td></tr>
+      <tr><td>Method</td><td>Full delta inspection, three independent read-only reviews, isolated validation, correctness-only benchmark, and a minimal timed browser smoke.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Proposal receipts can cross the publication debounce</h3>
+  <p><a href="https://github.com/Zw96042/bordeaux/blob/c151283f73b7fd530623f852c4c102c0af1cca58/src/renderer/app/App.jsx#L511-L560">App.jsx:511–560</a> advances <code>agentRevision</code> only when the 150 ms publication timer fires. After a project mutation or path switch, the existing stale proposal is invalidated, but a revision-N result arriving before N+1 is published still matches the old counter. <code>receiveProposal()</code> accepts it and records the already-new <code>projectRef.current</code> as its context, so <a href="https://github.com/Zw96042/bordeaux/blob/c151283f73b7fd530623f852c4c102c0af1cca58/src/renderer/app/App.jsx#L1297-L1302">the Apply guard</a> also passes. The proposal type already carries <code>baseActivePathId</code>, but neither guard checks it.</p>
+  <p><strong>Fix:</strong> retain the exact project and active path associated with the last published revision, reject receipts whenever current editor state differs, and compare <code>baseActivePathId</code> during receipt and apply. Alternatively, invalidate the revision synchronously on every relevant mutation before the debounced snapshot send.</p>
+
+  <h3>Catalog-backed proposals outlive their validation context</h3>
+  <p><a href="https://github.com/Zw96042/bordeaux/blob/c151283f73b7fd530623f852c4c102c0af1cca58/src/electron/agentSession.ts#L628-L649">agentSession.ts:628–649</a> embeds an endpoint invocation after validating it against the authoritative Java catalog. Refreshing or relinking that catalog does not alter the project/session revision used by proposal staleness. A ready proposal can therefore survive a catalog change and insert an invocation for a command that was removed or whose arguments changed.</p>
+  <p><strong>Fix:</strong> include catalog ID/hash in the proposal context or explicitly stale ready proposals whenever catalog identity/readiness changes.</p>
+
+  <h3>Benchmark limitations</h3>
+  <ul>
+    <li><a href="https://github.com/Zw96042/bordeaux/blob/c151283f73b7fd530623f852c4c102c0af1cca58/scripts/renderer-browser-benchmark-electron.cjs#L794-L825">Stress accounting</a> filters renderer rAF/geometry epochs with main-process boundaries. Return start/end values from the renderer probe so all stress calculations use one clock domain.</li>
+    <li><a href="https://github.com/Zw96042/bordeaux/blob/c151283f73b7fd530623f852c4c102c0af1cca58/scripts/benchmark-renderer-browser.mjs#L243-L248">Candidate trial one</a> performs the 19-check correctness suite in the same process immediately before timing; upstream receives no equivalent warmup. Separate correctness and use identical discarded warmups plus an even counterbalanced trial count.</li>
+    <li><a href="https://github.com/Zw96042/bordeaux/blob/c151283f73b7fd530623f852c4c102c0af1cca58/scripts/benchmark-renderer-browser.mjs#L130-L147">The Electron child environment</a> still inherits <code>ELECTRON_RUN_AS_NODE</code>; the documented command fails in this workspace until that variable is removed.</li>
+    <li>The standalone worker round trip proves the asset executes, not that timed <code>PathPreview</code> requests avoided direct fallback. Instrument the application's worker transport if that proof is required.</li>
   </ul>
 
   <h2>Latest verification</h2>
