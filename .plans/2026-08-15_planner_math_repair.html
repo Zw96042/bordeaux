@@ -1,0 +1,23 @@
+      <tr><td>Sample-density-dependent decisions</td><td>high</td><td>Use continuous/one-sided boundary math and verify identical semantics across 56, 112, and 224 samples per segment.</td></tr>
+      <tr><td>Preview/export divergence</td><td>high</td><td>Make both consume authoritative accepted samples; test pose and marker equality.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Verification</h2>
+  <ul>
+    <li>A deterministic focused command reproduces the current saved-project failure before the repair and passes afterward.</li>
+    <li>Seeded property coverage reports zero constraint violations and no NaN/discontinuity across the supported heading and priority matrix.</li>
+    <li><code>npm test</code>, <code>npm run typecheck</code>, <code>npm run build</code>, and <code>git diff --check</code> pass.</li>
+    <li>The relaunched app plays the saved fixture without fallback, stale geometry, heading jumps, or renderer/export disagreement.</li>
+  </ul>
+
+  <h2>Non-goals</h2>
+  <ul>
+    <li>Changing authored field geometry or silently relaxing robot constraints.</li>
+    <li>Preserving invalid timing merely because an older preview displayed it.</li>
+    <li>Adding more user-facing planner modes before the existing contract is reliable.</li>
+  </ul>
+</article>
+</main>
+</body>
+</html>
