@@ -1,0 +1,13 @@
+<h2>Structural redesign after owner rejection</h2>
+<p>The earlier feedback pass passed functional checks but failed the owner's product expectations. The next pass replaces its cards, explicit Select mode and expanding action blocks, and implements the flow-first Aquitaine workspace instead of leaving the central-layout change as a proposal.</p>
+<ul>
+<li>Compact flat rows with direct click, modifier toggle, range and keyboard selection. Selection is tied to the active editing context, so opening a path from a routine or creating a path cannot restore an unrelated batch or range anchor.</li>
+<li>Direct New folder action and a native top-layer popup for each named path's actions. Append accepts the explicit source path ID. Folder/link properties live in a focused dialog. Menus dismiss with Escape or outside clicks and reopen reliably under React 18 using a native toggle listener.</li>
+<li>Full-height central routine flow with responsive branch lanes, a Flow/Field preview switch, existing playback, preserved node editing, and a dismissible inspector. The left library retains its width and the shared toolbar controls retain their positions across modes.</li>
+</ul>
+<p>Independent review identified popup dismissal state, a mismatch between the sole selected push target and its label, stale selection across routine-to-path navigation, and a stale range anchor after path creation. All were corrected and exercised in actual Electron interaction tests. Screenshots include plain paths, multi-selection, the open popup, populated branches, and the step inspector at 1440, 1280 and 1024 px.</p>
+<p>Verification results for this structural pass: 23 focused library/status/routine/retention tests passed; shared, renderer and Electron type checks passed; renderer build and asset budgets passed. <code>node scripts/verify-library-ui.mjs</code> passed all 22 actual Electron scenarios, including exact shared-toolbar x positions across modes at all three widths. <code>npm run test:smoke:built</code> passed. The final read-only review found no remaining blockers in the changed workflow. No physical robot was contacted.</p>
+</article>
+</main>
+</body>
+</html>
