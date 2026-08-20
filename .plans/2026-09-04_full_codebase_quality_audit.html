@@ -1,0 +1,31 @@
+    <li>Clear pending inspection state when replacing robot pairing so future refreshes remain usable. Use a native diagnostic dialog to contain keyboard focus, and clamp typed numeric edits while rejecting invalid or nonfinite input.</li>
+    <li>Reject initial generated motion exceeding its descriptor's limits; regression cases cover both linear and angular speed.</li>
+    <li>Correct agent repair scoring for upper-bound height constraints and zero measurements. Route Windows Java integration wrappers through the appropriate command interpreter.</li>
+    <li>Enable unused local/parameter diagnostics in TypeScript and remove the existing unused bindings and an unused test calculation.</li>
+  </ul>
+  <h2>Verification</h2>
+  <table class="data"><thead><tr><th>Check</th><th>Result</th></tr></thead><tbody>
+    <tr><td><code>npm test -- --maxWorkers=2</code></td><td>686 tests passed across 67 files, up from 658 tests across 64 files.</td></tr>
+    <tr><td><code>npm run typecheck</code></td><td>Passed with noUnusedLocals and noUnusedParameters enabled for checked TypeScript.</td></tr>
+    <tr><td><code>npm run build</code></td><td>Renderer verification, Java distribution and Electron compilation passed. Renderer and Electron rebuilt again after preserving exact floating-point evaluation order in the shared heading implementation.</td></tr>
+    <tr><td>Math parity</td><td>22 paths × 2 resolutions × 2 engines; 794,352 numeric values match the starting implementation exactly. Includes authored corpus paths and all combinations of Manual, Targets, Tangent and LookAt transitions.</td></tr>
+    <tr><td><code>node scripts/verify-library-ui.mjs</code></td><td>15 real Electron checks passed, including numeric bounds/cancellation, modal focus and shortcut isolation, brush shortcuts and superseded robot inspection. Diagnostic dialog screenshot visually checked.</td></tr>
+    <tr><td><code>node scripts/verify-optimizer-ui.mjs</code></td><td>22 real Electron checks passed. Two stale harness selectors were corrected to navigate from Robot using the current Editor button; product assertions were preserved.</td></tr>
+    <tr><td><code>npm run test:smoke:built</code></td><td>Passed: desktop startup, Java discovery/install/build/export, project persistence, routine/robot UI and renderer security boundaries. The expected rejection of exporting before linking a Java project is logged by the negative test.</td></tr>
+    <tr><td><code>JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/private/tmp npm run test:java</code></td><td>Final retained source: 124 tests passed, one existing fixture-dependent test skipped (runtime: 100 total including the skip; processor: 13; examples: 12).</td></tr><tr><td><code>npm run test:java-integration:built</code></td><td>Did not pass: catalog generation succeeded, then the temporary template robot's Gradle build exceeded its 180-second timeout and was terminated (exit 143). Output did not identify the underlying cause. Full template integration remains unverified; this is not attributed to the cleanup or dismissed as pre-existing without evidence.</td></tr>
+    <tr><td>Review and diff</td><td>Independent reviews found no blocking issues in retained changes. Review caught ignored preflight cancellation and the inadequate follower repair; cancellation was fixed and the follower change was removed. <code>git diff --check</code> passed.</td></tr>
+  </tbody></table>
+  <h2>Change size</h2>
+  <p>The two production math files are 340 lines shorter after removing their duplicate heading-transition helpers. The <code>src/</code> tree is 271 lines smaller. Added code is primarily focused regression coverage and existing UI harness extensions; no dependencies were added. Counts compare this run with the starting snapshot, not the extensive earlier changes relative to HEAD.</p>
+  <h2>Tracked follow-ups</h2>
+  <table class="data"><thead><tr><th>Issue</th><th>Remaining work</th></tr></thead><tbody>
+    <tr><td><a href="https://thelab.wilsonzach.com/project/bordeaux/issue/165">#165 · High</a></td><td>Position following cannot reliably distinguish early and final visits to a closed or overlapping path. Reproduced immediate completion at the start of a closed route and a nearest-sample jump near a nearly closed endpoint. A local completion gate failed independent review and was removed. Correct repair needs an explicit progress/relocalization contract that preserves sparse/dense sampling behavior and endpoint tolerance. Follower source and its existing tests remain identical to the starting snapshot.</td></tr>
+    <tr><td><a href="https://thelab.wilsonzach.com/project/bordeaux/issue/163">#163 · Policy</a></td><td>Define whether a repeating TIME event window missed entirely between periodic updates should be dropped or caught up. Current behavior is preserved because late robot actuation is a product/runtime decision.</td></tr>
+    <tr><td><a href="https://thelab.wilsonzach.com/project/bordeaux/issue/164">#164 · Typing</a></td><td>Extend static checking to JavaScript renderer modules and the remaining legacy math engine. Existing checkJs:false and @ts-nocheck gaps are explicitly retained for a bounded typed migration.</td></tr>
+  </tbody></table>
+  <h2>Scope limits</h2>
+  <p>No robot hardware, Windows host, signed installer or release validation was performed. Windows command construction is tested; executing it on Windows remains unverified. Changes are uncommitted and preserve the earlier working tree.</p>
+</article>
+</main>
+</body>
+</html>
