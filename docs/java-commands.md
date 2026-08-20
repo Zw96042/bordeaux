@@ -2,7 +2,15 @@
 
 Bordeaux uses a generated, versioned JSON contract between the desktop editor and robot code. The editor never loads robot classes. Source discovery is only a preview; only commands emitted by the annotation processor are exportable.
 
-For a project you can link immediately, start with [`../examples/bordeaux-template-robot`](../examples/bordeaux-template-robot). It includes a complete GradleRIO robot, four annotated commands, generated-binding wiring, a pre-authored Bordeaux project, trajectory loading, and simulation-safe lifecycle handling.
+For a guided setup and migration path, start at the [Java documentation home](java/index.md). This
+page records the desktop/robot contract and exact schema invariants.
+
+For a project you can link immediately, start with
+[`../examples/bordeaux-template-robot`](../examples/bordeaux-template-robot). It includes a complete
+GradleRIO robot, method/field/supplier commands, a processor-checked generated-path provider, generated-binding
+wiring, a pre-authored Bordeaux project, trajectory loading, and simulation-safe lifecycle handling.
+The [`../java/examples`](../java/examples/README.md) gallery adds hardware, estimator, vision,
+PathPlanner, Choreo, Aquitaine, tuning, and simulation recipes.
 
 ## Desktop workflow
 
@@ -19,7 +27,25 @@ The generated catalog is `build/bordeaux/catalog-v1.json`. Bordeaux rejects malf
 
 The installed `.bordeaux/INTEGRATION.md` contains the project-local handoff. Complete examples live in [`../java/examples`](../java/examples), and the Java API and lifecycle are documented in [`../java/README.md`](../java/README.md).
 
-In brief, call `BordeauxBindings.generatedCapabilities(...)` with the team-owned providers and load an exported path through `BordeauxTrajectoryReader`; use `readWithRoutine(...)` when running the exported Auto-tab routine. Pass those capabilities to `BordeauxEventRunner` and `BordeauxRoutineRunner`, so every command, condition, and generator ID is checked against the generated catalog before execution. Routines with Wait or runtime-generated trajectories use the caller-driven progress API; generated trajectories also require robot-owned limits, current pose, field/collision validators, and a safe-stop callback through `BordeauxGeneratedTrajectorySafety`. Call `endPath()` when a path ends; only event invocations authored with **Cancel at path end** are canceled.
+In brief, call `BordeauxBindings.generatedCapabilities(...)` with the team-owned providers, build
+`BordeauxRuntimeCompatibility` from that catalog identity and the robot's compiled field pack, and
+load the exported stream through the bounded, validated `BordeauxTrajectoryReader.read(...)`
+overload; use the
+validated `readWithRoutine(...)` overload for an exported Auto-tab routine. This preflights field and
+catalog identity plus every exported path/branch before selection. `BordeauxEventRunner` preflights
+event conditions and every typed command invocation before execution. `BordeauxRoutineRunner`
+preflights every reachable command and condition; its contained generated-trajectory constructor also
+preflights generator IDs, fallback policy, and fallback arguments. Routine commands run sequentially and report `CommandWaiting` until their scheduler reports
+completion. `reset()`, `stop()`, and `close()` cancel a waiting routine command.
+Transition API callers use `startTransition()`, `completePathTransition(...)`, and
+`periodicTransition()`; migrate their former `periodic()` call to `periodicTransition()`.
+Routines with Wait or
+runtime-generated trajectories use the caller-driven progress API; generated trajectories also
+require robot-owned limits, current pose, field/collision validators, and a safe-stop callback through
+`BordeauxGeneratedTrajectorySafety`. Call `endPath()` when a path ends; only event invocations
+authored with **Cancel at path end** are canceled.
+
+Generated bindings include side-effect-free argument validators automatically. Hand-built `BordeauxCommandRegistry` instances used with event or routine runners must use the four-argument `register(id, parameterNames, validator, factory)` overload; the validator should perform the same `BordeauxArguments` reads as the factory without creating commands or touching robot state. The legacy three-argument overload supports direct `registry.create(...)` calls only and is rejected during autonomous preflight.
 
 ## Contract invariants
 
@@ -27,5 +53,5 @@ In brief, call `BordeauxBindings.generatedCapabilities(...)` with the team-owned
 - The trajectory carries the stable catalog ID and semantic capability hash compiled into the robot capabilities; both must match before an event or routine can run.
 - `catalogHash` is SHA-256 of canonical JSON for `{builtIns,commands,conditions,trajectoryGenerators}`; the built-in list contains the bounded `bordeaux.wait` contract, and every capability array is sorted by stable ID.
 - Exact Java integers and decimals cross the JSON boundary as strings.
-- Event IDs are stable and unique within a path.
+- Event IDs are stable and unique across the complete export.
 - Bordeaux does not run Gradle until the user accepts the trust prompt, and it never performs robot deployment.
