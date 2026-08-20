@@ -1,3 +1,84 @@
+# Aquitaine and generated paths
+
+> **Current status:** Aquitaine routine graphs, typed commands and conditions, waits, generated-path
+> containment, explicit progress, validated fallback, and safe stop ship today. Execution is
+> caller-driven through `BordeauxRoutineRunner`; the single command-returning holonomic Aquitaine
+> runtime is staged.
+
+Aquitaine is Bordeaux's routine graph. It selects static paths, schedules cataloged WPILib commands,
+evaluates sensor conditions, waits from a monotonic clock, and can request a bounded robot-side path
+generator. It deliberately hands motion to a robot-owned follower rather than pretending that loading
+a routine also drives the robot.
+
+## Construct a contained routine
+
+Use the same generated capabilities for commands, conditions, and path generators:
+
+```java
+private BordeauxRoutineRunner loadRoutine(Path trajectoryFile, String pathSelector)
+        throws IOException {
+    BordeauxCapabilities capabilities = BordeauxBindings.generatedCapabilities(
+        commandProvider,
+        conditionProvider,
+        generatedPathProvider);
+    BordeauxRuntimeCompatibility compatibility = new BordeauxRuntimeCompatibility(
+        capabilities.catalogId(), capabilities.catalogHash(), "0.4.0",
+        FIELD_ID, FIELD_REVISION, FIELD_COORDINATE_SCHEMA_ID);
+    BordeauxPathEvents document;
+    try (InputStream input = Files.newInputStream(trajectoryFile)) {
+        document = BordeauxTrajectoryReader.readWithRoutine(
+            input, pathSelector, compatibility);
+    }
+    return ContainedGeneratedRoutine.create(
+        document,
+        capabilities,
+        FIELD_ID,
+        FIELD_REVISION,
+        FIELD_COORDINATE_SCHEMA_ID,
+        this::generationContext,
+        this::insideField,
+        this::segmentIsCollisionFree,
+        drivetrain::stop);
+}
+```
+
+[`ContainedGeneratedRoutine`](../../java/examples/src/main/java/dev/bordeaux/examples/generation/ContainedGeneratedRoutine.java)
+is the compile-checked construction helper. It builds
+[`BordeauxRuntimeCompatibility`](../../java/runtime/src/main/java/dev/bordeaux/runtime/BordeauxRuntimeCompatibility.java)
+from the generated catalog identity and the robot's field identity, then supplies
+[`BordeauxGeneratedTrajectorySafety`](../../java/runtime/src/main/java/dev/bordeaux/runtime/BordeauxGeneratedTrajectorySafety.java).
+The field and swept-segment validators run on the generator worker, so they must be thread-safe and
+side-effect free.
+
+`BordeauxRoutineRunner` preflights catalog identity, every reachable command and condition, generator
+IDs, fallback policy, and typed fallback arguments before motion begins. A generated fallback cannot
+contain another generator, and every validated fallback route must reach a static path.
+
+## Drive the explicit progress lifecycle
+
+[`BordeauxRoutineProgress`](../../java/runtime/src/main/java/dev/bordeaux/runtime/BordeauxRoutineProgress.java)
+has seven states:
+
+| Progress | Caller responsibility |
+| --- | --- |
+| `Path` | Load and start the named static path in the robot-owned follower. |
+| `CommandWaiting` | Call `periodic()` until the scheduled command finishes. |
+| `Waiting` | Call `periodic()` again from the normal robot loop. |
+| `Generating` | Keep calling `periodic()`; no partial generated samples are available. |
+| `GeneratedTrajectory` | Start the robot-owned follower with the immutable validated samples. |
+| `SafeStopped` | Treat as terminal; the safety callback has already run. |
+| `Complete` | Stop motion and close/reset the routine as appropriate. |
+
+The shipped
+[`AquitaineRoutineLoop`](../../java/examples/src/main/java/dev/bordeaux/examples/generation/AquitaineRoutineLoop.java)
+turns that state machine into a small caller-driven bridge:
+
+```java
+AquitaineRoutineLoop loop = new AquitaineRoutineLoop(runner, motionFollower);
+loop.start();
+
+// Once per normal robot loop:
+BordeauxRoutineProgress progress = loop.periodic();
 ```
 
 Its `MotionFollower` starts static path IDs or generated sample lists, advances motion once per loop,
