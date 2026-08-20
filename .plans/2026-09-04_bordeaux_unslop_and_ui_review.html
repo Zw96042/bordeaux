@@ -1,0 +1,41 @@
+       from the published body (The Lab renders its own header + metadata rail). The
+       CLI fills the Version cell on publish (v1, v2, …). -->
+  <section class="plan-links">
+    <div class="tbl-scroll"><table class="data">
+      <tr><td>Project</td><td>bordeaux</td></tr>
+      <tr><td>Version</td><td id="thelab-version">v1</td></tr>
+      <tr><td>Status</td><td><span class="status st-done">done</span> · 2026-09-04</td></tr>
+    </table></div>
+  </section>
+
+  <p class="lede">The editor controls are smaller and document units now survive reopening. The code cleanup removes redundant machinery while preserving planner and Java runtime behavior.</p>
+  <h2>Editor changes</h2>
+  <ul>
+    <li>Routine and path pickers share the same compact width and truncation rules.</li>
+    <li>Document settings replaces the toolbar unit toggle. It contains one Metric/Imperial choice, available from Plan, Aquitaine, and Robot.</li>
+    <li>Display units are saved in optional <code>editor.unitSystem</code> metadata. Old files remain valid; invalid values are rejected at the file boundary. Geometry and exported measurements remain SI.</li>
+    <li>Waypoint up/down buttons are removed. Pointer dragging remains, with arrow-key reordering on the drag grip.</li>
+  </ul>
+  <h2>Code cleanup</h2>
+  <table class="data"><thead><tr><th>Area</th><th>Change</th></tr></thead><tbody>
+    <tr><td>Renderer</td><td>Removed narrated and stale comments plus unused bindings. Deleted orphaned arrow and unit-toggle styling.</td></tr>
+    <tr><td>Shared code</td><td>Kept unvalidated project input typed as unknown; removed unnecessary assertions, a duplicate diagnostic lookup, and a single-use limits wrapper.</td></tr>
+    <tr><td>Java runtime</td><td>Removed fourteen unchanged rethrows from eight classes. Checked-exception handling, contextual errors, cleanup, and public interfaces remain intact.</td></tr>
+    <tr><td>Math and tests</td><td>Removed a stale generated-file warning and an unnecessary fixture cast. No assertions were weakened.</td></tr>
+  </tbody></table>
+  <h2>Verification</h2>
+  <ul>
+    <li><code>npm test -- --maxWorkers=2</code>: 612 tests passed across 60 files.</li>
+    <li><code>npm run typecheck</code>: passed for shared, renderer, and Electron code.</li>
+    <li><code>npm run verify:renderer</code>: production build and bundle verification passed.</li>
+    <li><code>JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/private/tmp npm run test:java</code>: passed. The default macOS temporary directory traverses a symlink rejected by existing namespace-safety tests; canonicalizing the test directory preserves those checks.</li>
+    <li><code>node scripts/verify-optimizer-ui.mjs</code>: all 22 real Electron checks passed, including keyboard reorder/focus, equal picker widths, document-unit persistence over a different machine preference, and optimizer compare/apply stability. Settings and toolbar screenshots were visually checked.</li>
+    <li>Independent read-only review found no blocking issues. The UI run caught focus loss during asynchronous waypoint recalculation; restoration now waits for the updated view, and the repeated real-app check passes. Visual inspection also caught a compressed Done button; its flex sizing was corrected and verified.</li>
+  </ul>
+  <h2>Scope and limits</h2>
+  <p>This pass was reviewed against a snapshot taken before cleanup, preserving the repository's earlier uncommitted work. Existing boundary validation, compatibility contracts, and the legacy math module's type-check suppression were retained. Removing that suppression requires a separate typed migration.</p>
+  <p>Changes remain uncommitted. <a href="https://thelab.wilsonzach.com/project/bordeaux/issue/162">Issue #162</a> stays open until a closing commit is recorded. No installer or release was published.</p>
+</article>
+</main>
+</body>
+</html>
