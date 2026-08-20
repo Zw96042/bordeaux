@@ -1,0 +1,40 @@
+  .plan-links { margin: 16px 0 8px; }
+  .plan-links table.data td:first-child { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: #6b6b6b; width: 90px; }
+  .plan-links table.data td:nth-child(2) { color: #ededed; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
+  .status { display: inline-flex; align-items: center; gap: 7px; }
+  .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; }
+  .st-draft::before { border: 1px solid #6b6b6b; }
+  .st-active::before { background: #4e9bfa; }
+  .st-done::before { background: #ededed; }
+  .st-archived::before { background: #333; }
+</style>
+</head>
+<body>
+<main class="wrap">
+<article>
+<h1>Shared waypoint positions and path boundary conditions</h1>
+<p class="lede">Implementation review for <a href="https://thelab.wilsonzach.com/project/bordeaux/issue/166">issue #166</a>. Implemented and verified locally; no remaining blocking review findings.</p>
+<h2>Requested behavior</h2>
+<p>Shared waypoints reuse position only, as explicitly selected by the owner. Each path retains its own robot heading, tangent, and stop settings. Any waypoint may be reused, including an interior point. Initial swerve facing is independent of travel tangent. Paths expose scalar entry and exit speeds, vi and vf. Adding or switching a routine path must not briefly label a pending preview as skipped.</p>
+<h2>Implementation</h2>
+<ul><li>Optional waypoint positionLink references preserve membership through file persistence and waypoint reordering. Connected legacy endpoint links also share position only.</li><li>A searchable Shared position control links the selected waypoint to another occurrence; Unlink makes it independent. Position moves translate local control handles without rotating them. Duplicating a path retains links; duplicating one offset waypoint detaches it.</li><li>Link undo restores waypoint/link state without restoring unrelated robot configuration or path settings. Typed coordinate edits use the same handle translation as dragging.</li><li>Existing planner support already honors feasible initial and final scalar speeds. The inspector makes those controls and endpoint stop overrides explicit; no planner algorithm rewrite was necessary.</li><li>Routine flow distinguishes preparing, unavailable, and genuinely unchosen branch previews.</li></ul>
+<h2>Validation</h2>
+<p>The full JavaScript/TypeScript suite passed: 729 tests across 73 files. Added shared-position regressions also passed in a subsequent focused run. Type checks, the renderer production build and asset verification passed. The actual Electron harness passed 26 checks, including shared-coordinate propagation, local heading/tangent preservation, link and coordinate undo/redo, unlink isolation, independent facing, vi/vf and stop overrides, and observing pending routine renders without false skipped labels.</p>
+<h2>Review</h2>
+<p>A separate read-only review identified two history hazards: finishing a draft before materializing the link input could lose the final edit, and whole-project undo snapshots could revert unrelated robot settings. Both were addressed before final verification. Review also caught legacy endpoint-link creation bypassing shared-position propagation and history ordering; it now uses the same waypoint history and propagates through the connected group. The final read-only review found no remaining blockers.</p>
+<h2>Editor refinement after owner feedback</h2>
+<p><a href="https://thelab.wilsonzach.com/project/bordeaux/issue/167">Issue #167</a> refines the initial implementation. Shared-position targets are now explicitly opted in using Linkable and a short Point name; unnamed waypoints are excluded and repeated members of one named group are deduplicated. Hiding a point from the picker preserves existing links.</p>
+<p>The start-facing arrow is now draggable even when tangent or look-at heading was active. Dragging or entering an initial angle changes only the first segment to manual facing and preserves the point and its tangent handles. Backward-facing offsets use the same convention across numeric, drag, and context actions.</p>
+<p>Passive field notices occupy one compact row with consistent typography, a direct Optimize action when needed, and bounded expandable details. Normal trajectory rebuilding remains automatic. Library names and durations share an exact baseline. Entry/exit controls stay within the inspector.</p>
+<p>The Robot workspace is now Settings, containing robot connection, units and existing configuration. Connection, units and JSON export no longer occupy the toolbar. Existing Save and underlying Java export workflows remain.</p>
+<p>Validation: 46 focused tests across status, names, shared propagation, headings, settings and editing passed. The wider suite passed759 tests and caught one obsolete inline-markup assertion; that assertion was updated for FieldStatus and the21-test compatibility/status run then passed. Type checks and renderer production verification passed. The actual Electron harness passed26 checks including opted-in target filtering, typing/saving a point name, linking/undo/unlink, direct start-arrow dragging, settings navigation/units/connection, and bounded status layout. An independent review found no remaining blockers.</p>
+<h2>Duration and routine follow-up</h2>
+<p><a href="https://thelab.wilsonzach.com/project/bordeaux/issue/168">Issue #168</a>: the initial simple restore check missed an outdated applied optimization in the actual saved project. Worker planning already generated a current normal trajectory, but library and routine consumers rejected that successful result solely because an old optimization artifact remained saved.</p>
+<p>Outdated optimization inputs now use fresh normal planning consistently for library duration, routine preview and export. Valid applied optimizations remain selected. Invalid artifacts with matching current inputs still fail validation. Saved artifacts are retained so undo can restore their applicability; no optimization candidate is applied automatically.</p>
+<p>A copy of the actual saved project now displays 4.16 s and 4.62 s in aligned rows, with an 8.78 s routine preview and no optimization error. The original project was not modified. Validation passed: 28 Electron checks, 33 focused renderer/shared tests, 78 shared/export tests, type checks, renderer production verification and diff whitespace checks. A separate read-only review found no blocking issues.</p>
+<h2>Scope and limits</h2>
+<p>vi and vf are speeds along the path, not arbitrary field velocity vectors. Tank facing follows travel tangent. Existing acceleration, robot and trajectory limits still apply. Shared landmarks do not force every dependent path into a selective push; each modified path’s deployment status is invalidated by its changed coordinates. This work does not establish physical-robot execution behavior.</p>
+</article>
+</main>
+</body>
+</html>

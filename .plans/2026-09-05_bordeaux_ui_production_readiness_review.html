@@ -1,3 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- TheLab metadata (read by the `lab` CLI on publish; do not remove).
+     thelab:plan is the STABLE plan id — re-publishing this file updates the same
+     plan (bumping its version) even if the title changes. -->
+<meta name="thelab:project" content="bordeaux">
+<meta name="thelab:title" content="Bordeaux UI production readiness review">
+<meta name="thelab:plan" content="bordeaux-ui-production-readiness-review">
+<meta name="thelab:kind" content="review">
+<meta name="thelab:status" content="active">
+<meta name="thelab:tags" content="">
+<!-- Optional: issue numbers this plan closes on ship, e.g. content="3,7". They
+     auto-close when the plan is marked done (`lab done … --commit`). -->
+<meta name="thelab:addresses" content="">
+<meta name="thelab:version" content="2">
+<meta name="thelab:hosted-url" content="https://thelab.wilsonzach.com/project/bordeaux/review/bordeaux-ui-production-readiness-review">
+<!-- Optional owner questions. Add 1–8 entries; each needs 2–8 options. -->
+<script type="application/json" id="thelab-questions">[]</script>
+<title>Bordeaux UI production readiness review</title>
+<style>
+  /* Self-contained. Mirrors The Lab reader so the local file looks like the hosted
+     one. This block is NOT published: the hosted view uses The Lab's own reader
+     stylesheet, and only the article content below is published. */
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    background: #0a0a0a; color: #a1a1a1;
+    font-size: 15px; line-height: 1.7; letter-spacing: -0.006em;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 40px 24px 96px; }
+  a { color: #4e9bfa; text-decoration: none; } a:hover { text-decoration: underline; }
+  img { max-width: 100%; height: auto; }
+  h1 { font-size: 30px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.2; color: #ededed; margin-bottom: 8px; }
+  h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.015em; color: #ededed; margin: 56px 0 16px; padding-top: 24px; border-top: 1px solid #222; }
+  h3 { font-size: 14px; font-weight: 600; color: #ededed; margin: 32px 0 12px; }
+  p { margin: 0 0 12px; } strong { color: #ededed; font-weight: 600; }
+  ul, ol { margin: 0 0 12px 22px; } li { margin: 4px 0; }
+  .lede { color: #ededed; font-size: 16px; margin: 4px 0 8px; }
+  code { font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; }
+  pre.code { background: #0d0d0d; border: 1px solid #222; border-radius: 6px; padding: 16px 20px; overflow-x: auto; font-size: 12.5px; line-height: 1.65; color: #a1a1a1; tab-size: 2; margin: 16px 0; }
+  .callout { border: 1px solid #222; border-left: 2px solid #4e9bfa; border-radius: 0 6px 6px 0; padding: 14px 20px; margin: 20px 0; font-size: 13.5px; color: #a1a1a1; }
+  .callout strong { color: #ededed; }
+  figure { margin: 16px 0; } figcaption { font-size: 12px; color: #6b6b6b; padding-top: 8px; font-family: ui-monospace, Menlo, monospace; }
+  .fig-scroll { overflow-x: auto; border: 1px solid #222; border-radius: 6px; }
+  .fig-scroll svg { display: block; width: 100%; height: auto; }
+  .tbl-scroll { overflow-x: auto; }
+  table.data { width: 100%; border-collapse: collapse; font-size: 13.5px; margin: 12px 0; }
+  table.data th { text-align: left; font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.07em; color: #6b6b6b; padding: 10px 14px; border-bottom: 1px solid #222; }
+  table.data td { padding: 10px 14px; border-bottom: 1px solid #222; color: #a1a1a1; vertical-align: top; }
+  table.data tr:last-child td { border-bottom: 0; }
+  table.data td:first-child { color: #ededed; white-space: nowrap; }
+  .plan-links { margin: 16px 0 8px; }
+  .plan-links table.data td:first-child { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: #6b6b6b; width: 90px; }
+  .plan-links table.data td:nth-child(2) { color: #ededed; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
+  .status { display: inline-flex; align-items: center; gap: 7px; }
+  .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; }
+  .st-draft::before { border: 1px solid #6b6b6b; }
+  .st-active::before { background: #4e9bfa; }
+  .st-done::before { background: #ededed; }
   .st-archived::before { background: #333; }
 </style>
 <script type="application/json" id="thelab-findings">[{"key": "selection-delete", "title": "Selection gesture deletes a waypoint", "type": "bug", "severity": "high", "body": "Evidence: Rendered reproduction + source. Location: src/renderer/components/Panels.jsx:146. Shift-clicking the first waypoint changed the count from 3 to 2. The same modifier means range selection in the library, whose on-screen hint is directly above the outline. Undo exists, but an ordinary selection gesture should not silently edit geometry.\n\nCorrection and acceptance: Remove Shift-click deletion. Keep deletion in explicit Delete controls and the documented keyboard action. Test modifier clicks without geometry mutation."}, {"key": "coordinate-units", "title": "Coordinate displays ignore Imperial units", "type": "bug", "severity": "high", "body": "Evidence: Rendered reproduction + source. Location: src/renderer/components/RobotPage.jsx:252; src/renderer/components/Panels.jsx:150. With Imperial selected, custom footprint inputs still display raw -0.42 coordinates with no unit, and the waypoint outline still displays 10.8, 5.9 meters while the inspector converts values. Custom vertex edits also commit the raw number as meters. This is a potentially consequential dimensional error, not just inconsistent copy.\n\nCorrection and acceptance: Use UnitPrefs consistently for display and entry, expose units, and verify round-trip editing does not change canonical coordinates."}, {"key": "optimizer-error", "title": "Optimizer turns planning failure into indefinite loading", "type": "bug", "severity": "medium", "body": "Evidence: Source state analysis. Location: src/renderer/app/App.jsx:702; src/renderer/app/App.jsx:1794; src/renderer/components/OptimizationPanel.jsx:37. normalReady is false for errors, but the panel receives pending: !normalReady. A failed baseline can therefore show Preparing path and disable the action without reaching a useful error state. The field may report the error separately, but the panel still misstates its state.\n\nCorrection and acceptance: Pass loading and error separately. Show one actionable failure, retain a way to edit or retry, and test a rejected baseline worker."}, {"key": "routine-drop", "title": "Routine drag feedback offers unsupported cross-branch moves", "type": "bug", "severity": "medium", "body": "Evidence: Source event/model analysis. Location: src/renderer/components/RoutinePanel.jsx:26; src/renderer/lib/routineModel.js:315. Drag hit testing accepts any routine step, while reorderRelative permits only the same sibling array and silently ignores other targets. The insertion feedback can promise a move that dropping never performs.\n\nCorrection and acceptance: Restrict valid targets to the model-supported siblings, or explicitly implement cross-branch moves. Test both valid and invalid targets using real pointer input."}, {"key": "menu-keyboard", "title": "Field context menu has no focus handoff", "type": "bug", "severity": "medium", "body": "Evidence: Source interaction analysis. Location: src/renderer/components/ui.jsx:336; src/renderer/components/EditorLibrary.jsx:70. The field context menu positions buttons and closes on Escape/outside click, but does not focus its first action, implement arrow navigation, or restore focus. The library menu already implements these behaviors. Opening the field menu does not establish a usable keyboard interaction context.\n\nCorrection and acceptance: Converge on one menu interaction contract, with focus entry, arrow navigation, Escape, and focus return. Verify Shift+F10/context-key access as well as pointer opening."}, {"key": "push-transitions", "title": "Pairing and failure screens need stable state presentation", "type": "bug", "severity": "medium", "body": "Evidence: Source state analysis. Location: src/renderer/components/RobotPushDialog.jsx:29; src/renderer/components/RobotPushDialog.jsx:36; src/renderer/components/RobotPushDialog.jsx:88; src/renderer/components/RobotPushDialog.jsx:96. During pairing the identity review disappears and the endpoint form returns with disabled Connect. On failure, the same c.error can appear in two alert regions. Delayed operations therefore change the screen unexpectedly, and failures can be announced twice.\n\nCorrection and acceptance: Retain identity information while pairing with a pending action. Render one authoritative error with recovery controls. Test a deferred pairing promise and a rejected push."}, {"key": "push-fonts", "title": "Push controls reference undefined font tokens", "type": "bug", "severity": "medium", "body": "Evidence: Source CSS analysis + rendered review. Location: src/renderer/styles/robot-push.css:139; src/renderer/styles/robot-push.css:173; src/renderer/styles/robot-push.css:195. The stylesheet uses --font-mono and --font-ui, but the app defines --mono and --ui. Invalid font shorthands lose their intended size, weight, and family. The push review also visibly retains a different typography treatment from the editor.\n\nCorrection and acceptance: Use defined shared tokens and verify computed fonts/sizes in endpoint, review, and outcome states."}, {"key": "ui-verification", "title": "UI verification is stale and is not a CI release gate", "type": "chore", "severity": "high", "body": "Evidence: Executed checks + CI source. Location: scripts/verify-optimizer-ui-electron.cjs:148; scripts/verify-optimizer-ui-electron.cjs:100; .github/workflows/ci.yml:35. The original optimizer harness fails waiting for keyboard reorder focus. Its later assertions also target the removed Display units control and export button, and contain outdated stale-trajectory expectations. The later remediation confirmed that opening the optimizer intentionally starts a quick search. At audit time, CI runs desktop smoke but not these full UI harnesses. A green build can miss the screens under discussion.\n\nCorrection and acceptance: Diagnose reorder focus separately from stale expectations, update the harness to the current product contract, then run maintained UI flows under CI with captured artifacts and a rendered review. Do not silence failing expectations indiscriminately."}]</script>
