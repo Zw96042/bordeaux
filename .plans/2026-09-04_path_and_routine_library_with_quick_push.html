@@ -1,0 +1,34 @@
+      <tr><td>Robot runtime</td><td><code>java/runtime/src/main/java/dev/bordeaux/runtime/</code>: BordeauxRevisionService, BordeauxRevisionReader, BordeauxTrajectoryReader, BordeauxRobotStatusPublisher, and FileBordeauxRevisionStorage. Verify preservation/read compatibility here; keep atomic whole-revision activation and retention behavior.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>Acceptance and verification</h2>
+  <ul>
+    <li><strong>Core scenario:</strong> robot contains paths A/B/C and routine R. Locally edit A and B, browse routine S, then push only A. Robot receives new A, retains old B/C and R, and the review names that scope. B stays Changed. Repeat with A+B selected and with an explicit routine push.</li>
+    <li><strong>Dependencies:</strong> cover paths referenced in both decision branches and generated fallback branches, linked endpoint changes, preserved routine impact, missing references, global-config mismatch, stale optimization, duplicate names, and an invalid unrelated local draft.</li>
+    <li><strong>Transactions:</strong> cover active revision changing before confirmation, corrupt/missing/oversized baselines, a nondefault runtime storage directory, unsupported baseline-read capability, runtime/catalog/pairing changes, project switching, cancellation before staging, acknowledgment loss after staging, rollback, and application restart. No failure may silently replace other paths or imply acceptance.</li>
+    <li><strong>Library:</strong> create, rename, duplicate, move, append/link, delete constraints, folder deletion, no matches, last-item restrictions, long names, hundreds of items, hidden batch selections, and switching during edits/planning/playback/upload. Confirm Save/Open are available in both modes.</li>
+    <li><strong>Layout/accessibility:</strong> exercise 1440×900, 1280×800, and a narrow 1024×768 window, plus increased text size. Field controls, routine branches, outline, and inspector remain usable. Complete a keyboard-only edit/switch/push review flow; check focus restoration and status announcements.</li>
+  </ul>
+  <p>Use the project’s actual commands, scaling checks to each phase:</p>
+  <pre class="code">npm run typecheck
+npm run verify:renderer
+npx vitest run tests/robotPush.test.ts tests/robotSftpTransport.test.ts tests/robotRetention.test.ts tests/javaTrajectory.test.ts tests/javaRevision.test.ts tests/trajectoryExport.test.ts tests/routineExportSafety.test.ts
+npm run test:java        # required when runtime/read contracts change
+npm run test:smoke      # complete integrated build + Electron smoke</pre>
+  <p>Add focused composition and library interaction tests rather than relying only on existing cases. Extend the existing Electron smoke/renderer verification patterns for the new UI and captured screenshots. Run the broader <code>npm test</code> before release for shared export changes. If any check is blocked by the changing working tree or environment, report its exact failure instead of treating it as passed. Hardware verification must exercise disabled activation and acknowledgment on the supported robot setup before claiming real-robot readiness.</p>
+
+  <h2>Implementation results</h2>
+  <p>The persistent library now owns Paths/Routines switching, search, folders, stable-ID batch selection, item actions, and a shared adjustable rail with the existing structure panels. A single application-owned controller handles scoped review, pairing, immutable confirmation, progress, history, pin, rollback, and diagnostics.</p>
+  <p>Selective pushes compose complete snapshots from a bounded, hash-verified active payload exposed by the runtime under <code>bordeaux-active-revision/1.0</code>. Full generation-context fingerprints prevent mixing old trajectories with changed robot settings. Local receipts bind comparisons to project and runtime identity; stale or unassociated content remains Unknown. Explicit routine pushes include the full linked-path dependency closure.</p>
+  <p>Older runtimes require updated Java support before selective baseline reads. Older snapshots without a generation-context fingerprint require one explicitly reviewed full-project replacement. The current runtime payload requires at least one static path, so a command-only routine cannot be the first push to an empty robot; the UI reports the prerequisite.</p>
+  <p>Verification and independent review results are recorded in the <a href="https://thelab.wilsonzach.com/project/bordeaux/review/path-library-and-scoped-push-implementation-review">companion implementation review</a>. All 658 unit tests, Java tests, type checks, renderer checks, 10 library UI scenarios, 21 controller checks, and integrated Electron smoke passed. No physical robot was contacted. Real-hardware disabled activation and acknowledgment remain deployment validation, not an outcome claimed by this task.</p>
+
+  <h2>Boundaries</h2>
+  <p>The implemented product direction is persistent library, fast local switching, scoped push, and preserved robot content. Baseline reads are a versioned runtime capability; the existing immutable write and activation protocol is retained.</p>
+  <p>This plan does not change planner algorithms, robot execution selection, drivetrain behavior, file export formats incidentally, or the single-routine runtime model. It preserves the explicit data-push and activation boundary in the existing Bordeaux product scope contract. The working tree contains extensive unrelated ongoing work; implementation must establish a fresh baseline and keep its changes focused.</p>
+  <p><strong>Planning verification:</strong> current UI, selection, export, revision, and transport code inspected. This paragraph records the original planning-only review; implementation verification is recorded above and in the companion review. A separate read-only Codex review found no blocking issues; its storage-location and routine-identity clarifications are incorporated. Document checks passed for balanced HTML/SVG, unique IDs, Lab metadata, absence of template placeholders/remote assets, and existence of code-map paths. Application tests were not run during the original planning turn; they have since been run during implementation.</p>
+</article>
+</main>
+</body>
+</html>
