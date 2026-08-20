@@ -1,0 +1,29 @@
+  .st-done::before { background: #ededed; }
+  .st-archived::before { background: #333; }
+</style>
+</head>
+<body>
+<main class="wrap">
+<article>
+  <h1>Bordeaux codebase cleanup</h1>
+
+  <!-- Plan meta: local-file chrome only — `lab publish` strips this whole section
+       from the published body (The Lab renders its own header + metadata rail). The
+       CLI fills the Version cell on publish (v1, v2, …). -->
+  <section class="plan-links">
+    <div class="tbl-scroll"><table class="data">
+      <tr><td>Project</td><td>bordeaux</td></tr>
+      <tr><td>Version</td><td id="thelab-version">v2</td></tr>
+      <tr><td>Status</td><td><span class="status st-done">done</span> · 2026-09-04</td></tr>
+    </table></div>
+  </section>
+
+  <p class="lede">Remove demonstrated dead code and simplify duplicated implementation while preserving current product behavior.</p>
+  <h2>Scope and constraints</h2><p>Requested by the owner on September 4, 2026. Survey renderer, Electron/MCP, shared models, Java, scripts, dependencies, tests, and assets. The concurrent optimizer task owns planner/editor/export changes. Preserve all earlier uncommitted work and public Java APIs; absence of an internal caller alone does not prove a public API is obsolete.</p>
+  <h2>Implementation</h2><ol><li>Capture the starting working tree and establish type-check results.</li><li>Check references and entry points before deleting code. Audit independent areas with bounded Codex agents.</li><li>Implement behavior-preserving simplifications and remove proven unused implementation. Keep findings requiring product decisions or optimizer overlap documented.</li><li>Inspect the task-specific diff, run focused and repository checks, and obtain an independent read-only review.</li></ol>
+  <h2>Verification</h2><p>Use package.json commands: npm run typecheck, npm test, npm run verify:renderer, and targeted tests where needed. Distinguish pre-existing or concurrent failures from cleanup regressions. Do not add dependencies or rewrite large modules just because they are large.</p>
+  <h2>Result</h2><p>Completed the safe cleanup identified by the repository-wide audit. Removed unreachable routine editors, orphan picker data and styling, seven disconnected fixture/screenshot files, and consolidated repeated paired robot identity validation. Preserved existing optimizer changes, public Java compatibility, active dependencies and release tooling.</p><p>Verification: all 605 tests in 60 files passed with two workers; typecheck and renderer verification passed. Independent read-only Codex review found no blocking issues. Changes remain uncommitted; issue #161 records implementation and is left open for commit attribution.</p><p>Detailed results: <a href="https://thelab.wilsonzach.com/project/bordeaux/review/bordeaux-cleanup-verification">cleanup verification review</a>.</p>
+</article>
+</main>
+</body>
+</html>
