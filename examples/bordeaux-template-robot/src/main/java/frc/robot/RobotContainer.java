@@ -34,8 +34,23 @@ public final class RobotContainer {
 
     /** Processes the final event tick before applying path-end cancellation. */
     public boolean pollBordeauxEvents(double elapsedS) {
+        return pollBordeauxEvents(elapsedS, plannedFraction);
+    }
+
+    /** Processes the final event tick using monotonic measured path progress from 0 to 1. */
+    public boolean pollBordeauxEvents(double elapsedS, double measuredFraction) {
         if (eventRunner == null) return false;
-        eventRunner.periodic(elapsedS);
+        eventRunner.periodic(elapsedS, measuredFraction);
+        return finishPathIfDue(elapsedS);
+    }
+
+    /** Processes events while a real follower remains the sole owner of path completion. */
+    public void updateBordeauxEvents(double elapsedS, double measuredFraction) {
+        if (eventRunner == null) return;
+        eventRunner.periodic(elapsedS, measuredFraction);
+    }
+
+    private boolean finishPathIfDue(double elapsedS) {
         if (elapsedS + 1e-9 >= pathDurationS) {
             endBordeauxPath();
             return false;

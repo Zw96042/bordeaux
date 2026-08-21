@@ -9,7 +9,7 @@ import java.io.IOException;
 
 public final class Robot extends TimedRobot {
     private static final String TRAJECTORY_FILE = "Untitled.bordeaux.json";
-    private static final String PATH_SELECTOR = "NewPath";
+    private static final String PATH_SELECTOR = "LeftAuto1";
 
     private final Timer autonomousTimer = new Timer();
     private RobotContainer container;
@@ -41,7 +41,8 @@ public final class Robot extends TimedRobot {
     public void autonomousPeriodic() {
         if (!bordeauxPathActive) return;
         try {
-            // A real robot passes the same elapsed time to its drivetrain path follower.
+            // This drivetrain-free template estimates progress from planned time.
+            // Real robots should pass monotonic follower/odometry progress to the two-argument overload.
             bordeauxPathActive = container.pollBordeauxEvents(autonomousTimer.get());
             if (!bordeauxPathActive) autonomousTimer.stop();
         } catch (BordeauxRuntimeException exception) {
