@@ -1,3 +1,10 @@
+package frc.robot.paths;
+
+import dev.bordeaux.annotations.BordeauxParam;
+import dev.bordeaux.annotations.BordeauxTrajectoryFallbackPolicy;
+import dev.bordeaux.annotations.BordeauxTrajectoryGenerator;
+import dev.bordeaux.annotations.BordeauxTrajectoryPreview;
+import dev.bordeaux.runtime.BordeauxGeneratedTrajectory;
 import dev.bordeaux.runtime.BordeauxGenerationContext;
 import dev.bordeaux.runtime.BordeauxSample;
 import java.util.List;
