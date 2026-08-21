@@ -1,3 +1,50 @@
+# Testing and tuning
+
+> **Current status:** Bordeaux ships deterministic adapter, reference-following, events, routines,
+> generated-path containment, and annotation-processor tests. It ships enforced output velocity
+> limits, explicit generator limits, and explicit vision uncertainty. Live atomic gain profiles and
+> the command-returning Bordeaux holonomic
+> controller are staged, not current runtime interfaces.
+
+Keep hardware control, localization, and path feedback separate while testing. A passing catalog
+build does not prove a drivetrain can follow a path, and a good path controller cannot compensate for
+wrong module offsets or a timestamp in the wrong epoch.
+
+## Test the vendor-neutral seam first
+
+Run controller and adapter tests without vendor JNI. The gallery's
+[`DeterministicSwervePlant`](../../java/examples/src/main/java/dev/bordeaux/examples/simulation/DeterministicSwervePlant.java)
+is a fixed-step first-order plant that integrates combined robot-relative X/Y/omega requests. It is
+deliberately a repeatable seam test, not a claim of robot physics.
+
+```java
+var plant = new DeterministicSwervePlant();
+var drive = plant.drive(new BordeauxDriveLimits(4, 6, 8, 12));
+
+drive.driveRobotRelative(new ChassisSpeeds(1, 0.3, 0.5));
+for (int step = 0; step < 200; step++) {
+    plant.step(0.02);
+}
+
+Pose2d result = drive.state().pose();
+drive.stop();
+```
+
+The corresponding
+[`DeterministicSwervePlantTest`](../../java/examples/src/test/java/dev/bordeaux/examples/simulation/DeterministicSwervePlantTest.java)
+runs the same trace twice and verifies stop. The gallery's
+[`DriveExamplesTest`](../../java/examples/src/test/java/dev/bordeaux/examples/drive/DriveExamplesTest.java)
+covers atomic state, output, reset, normalized vision delivery, limits, and stop. Runtime-level
+validation lives in
+[`BordeauxDriveAdapterTest`](../../java/runtime/src/test/java/dev/bordeaux/runtime/BordeauxDriveAdapterTest.java).
+
+At minimum, an adapter test should prove:
+
+- pose, measured speed, and timestamp are one coherent snapshot;
+- `robotRelativeSpeeds()` returns a defensive WPILib value;
+- combined X/Y/omega reaches the output callback unchanged when within limits;
+- NaN and over-limit requests are rejected before the callback;
+- reset reaches the estimator without zeroing physical sensor state;
 - optional vision support is reported honestly; and
 - stop produces the robot's real zero/idle behavior.
 
