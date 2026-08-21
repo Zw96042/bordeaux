@@ -5,6 +5,7 @@ import dev.bordeaux.annotations.BordeauxCondition;
 import dev.bordeaux.annotations.BordeauxParam;
 import edu.wpi.first.wpilibj2.command.Command;
 import java.util.List;
+import java.util.function.Supplier;
 
 public final class RobotCommands {
     public enum Level { L1, L2, L3, L4 }
@@ -13,8 +14,18 @@ public final class RobotCommands {
 
     private final Superstructure superstructure;
 
+    // Reuse one instance only when its trigger/chooser and Bordeaux ownership are mutually exclusive.
+    @BordeauxCommand(id = "superstructure.intake", label = "Run intake")
+    public final Command intakeCommand;
+
+    // Use a supplier when every invocation should construct a fresh command.
+    @BordeauxCommand(id = "superstructure.home", label = "Home superstructure")
+    public final Supplier<Command> homeCommand;
+
     public RobotCommands(Superstructure superstructure) {
         this.superstructure = superstructure;
+        intakeCommand = superstructure.intakeCommand();
+        homeCommand = superstructure::homeCommand;
     }
 
     @BordeauxCommand(
@@ -38,6 +49,10 @@ public final class RobotCommands {
     // This placeholder represents the team's existing subsystem/API.
     public interface Superstructure {
         Command score(Level level, List<Integer> branches, double releaseDelayS);
+
+        Command intakeCommand();
+
+        Command homeCommand();
 
         boolean readyToScore();
     }
