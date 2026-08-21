@@ -1,3 +1,23 @@
+# Get a robot project running with Bordeaux
+
+This guide adds Bordeaux to an existing command-based GradleRIO Java project. The current support
+bundle targets Java 17 and WPILib 2026.
+
+## 1. Link the GradleRIO project
+
+Open Bordeaux, then choose **Java → Link Robot Project…** and select the directory containing the
+robot project's Gradle wrapper and build file.
+
+Choose **Java → Install or Update Support…** and review the proposed files before approving them.
+The installer adds a managed `.bordeaux` directory and one managed apply block to `build.gradle` or
+`build.gradle.kts`. It supplies the runtime and annotation processor, writes a project-local
+`.bordeaux/INTEGRATION.md`, and creates the fixed `bordeauxCatalog` Gradle task. It does not edit
+`RobotContainer`, change subsystem ownership, or deploy to the robot.
+
+Re-run the same action to update support. Do not hand-edit `.bordeaux/bordeaux.gradle`; the next
+support update replaces that managed file.
+
+## 2. Expose one existing command
 
 Put `@BordeauxCommand` on an existing public command factory, or expose an existing command through
 a public final field. This is the smallest useful provider:
