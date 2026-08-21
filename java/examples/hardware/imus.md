@@ -1,3 +1,25 @@
+# IMUs
+
+An IMU normally feeds the estimator that produces `BordeauxDriveState`; Bordeaux should not run a
+second heading estimate beside CTRE, YAGSL, or the team's WPILib estimator. A `resetPose` callback
+changes the estimator's field pose. It must not silently zero physical IMU hardware.
+
+## Selection matrix
+
+| IMU | Current Java surface | Bordeaux integration status |
+| --- | --- | --- |
+| CTRE Pigeon 2 | `getRotation2d`, timestamped status signals | Phoenix 6 API verified |
+| WPILib ADIS16470 | `getAngle(axis)`, `getRate(axis)` | Compile-checked against WPILib 2026.2.2 |
+| WPILib ADXRS450 | `getRotation2d`, `getAngle`, `getRate` | Compile-checked against WPILib 2026.2.2 |
+| Redux Canandgyro | `getRotation2d`, timestamped frames | ReduxLib 2026.1.2 source verified |
+| Studica NavX3 | `Navx`, unit-safe yaw and angular velocity | StudicaLib 2026.0.2 source verified |
+| Legacy KauaiLabs navX/navX2 | `AHRS` | Legacy only; no maintained 2026 artifact verified |
+| Any other IMU | `Rotation2d` plus the estimator loop's FPGA time | Vendor-neutral pattern |
+
+## Pigeon 2
+
+When using CTRE's swerve drivetrain, take heading from the drivetrain's own atomic state; do not poll
+the Pigeon a second time for Bordeaux. A custom WPILib estimator can use:
 
 ```java
 Rotation2d heading = pigeon.getRotation2d();
