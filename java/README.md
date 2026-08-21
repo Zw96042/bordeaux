@@ -2,25 +2,118 @@
 
 This Java 17 bundle provides the robot-side half of Bordeaux commands for WPILib 2026.2.2. It uses stable IDs across the desktop/robot boundary; it never serializes Java objects, reflects over robot classes in the editor, or asks Bordeaux to instantiate subsystems.
 
+New integration? Start with the [task-oriented Java guide](../docs/java/index.md). This README is the
+compact reference for the complete shipped API and its invariants.
+
+## Connect an existing WPILib command
+
+The shortest integration is one annotation on the command a robot already uses:
+
+```java
+public final class RobotCommands {
+    @BordeauxCommand(id = "intake.run", label = "Run intake")
+    public final Command intakeCommand;
+
+    public RobotCommands(Intake intake) {
+        intakeCommand = intake.runCommand();
+    }
+}
+```
+
+The same instance can stay in existing teleop or autonomous wiring, such as
+`controller.rightTrigger().whileTrue(commands.intakeCommand)`, when those entry points are mutually
+exclusive. Pass the containing provider to `BordeauxBindings.generatedCapabilities(commands)`, and
+the generated Bordeaux catalog and runtime bindings use that exact command too. WPILib gives one
+command instance one shared lifecycle: scheduling it again while it is running is a no-op, and a
+cancellation from either caller ends that same run.
+
+Use a public final `Supplier<? extends Command>` field whenever teleop/auto and Bordeaux may overlap,
+restart independently, or need separate cancellation. Each Bordeaux invocation then creates a fresh
+command:
+
+```java
+@BordeauxCommand(id = "shooter.fire", label = "Fire")
+public final Supplier<Command> fireCommand = shooter::fireCommand;
+```
+
+Existing public command factory methods still need only `@BordeauxCommand`. If an existing command
+field should remain private, expose it through a small annotated public method instead. Command and
+supplier fields are required to be final so the generated binding cannot silently change after the
+catalog is compiled. As with ordinary WPILib scheduling, do not expose a command instance that has
+already been composed into a command group; expose its factory or a supplier instead.
+
 ## Modules
 
 - `annotations`: source-retained command, condition, parameter, and bounded trajectory-generator annotations.
 - `processor`: an aggregating annotation processor that validates authored factories and predicates, then generates both `META-INF/bordeaux/commands.json` and direct-call `dev.bordeaux.generated.BordeauxGeneratedBindings`.
-- `runtime`: a bounded `bordeaux-trajectory/1.0` reader, generated capabilities API, exact argument conversion, and a jitter-safe WPILib command event runner.
+- `runtime`: bounded trajectory and routine execution, generated capabilities, exact argument conversion, complete motion references, and vendor-neutral WPILib drivetrain and vision seams.
 
 The desktop app's **Install Java Support** action is the one supported integration path. It copies the runtime and processor jars into the linked robot project, adds one managed Gradle script, and creates the fixed `bordeauxCatalog` task. A separately published Gradle plugin is intentionally not maintained.
 
-Factories must be public methods on public provider types and return `edu.wpi.first.wpilibj2.command.Command`. Non-static providers are explicit constructor dependencies of the generated bindings, keeping subsystem ownership in `RobotContainer`. Supported authored values are numeric/boolean primitives and wrappers, strings, enums, exact `long`/`BigInteger`/`BigDecimal`, arrays, collections, string-key maps, optionals, records, and public Jackson-deserializable objects with mutable public data fields plus a public no-argument constructor. `char`/`Character`, unsupported, recursive, or opaque shapes fail compilation.
+Factories must be public methods on public provider types and return `edu.wpi.first.wpilibj2.command.Command`. Existing commands may instead be public final `Command` or `Supplier<? extends Command>` fields. Non-static providers are explicit constructor dependencies of the generated bindings, keeping subsystem ownership in `RobotContainer`. Supported authored values are numeric/boolean primitives and wrappers, strings, enums, exact `long`/`BigInteger`/`BigDecimal`, arrays, collections, string-key maps, optionals, records, and public Jackson-deserializable objects with mutable public data fields plus a public no-argument constructor. `char`/`Character`, unsupported, recursive, or opaque shapes fail compilation.
 
 Call `BordeauxBindings.generatedCapabilities(provider1, provider2, ...)` to construct the generated command, condition, and trajectory-generator capabilities. Provider order does not matter. This fixed bootstrap avoids importing a class emitted during the processor's final aggregation round, while the generated class still owns direct typed calls and compiled catalog identity. `generated(...)` remains available for command-only integrations.
 
-See [`../examples/bordeaux-template-robot`](../examples/bordeaux-template-robot) for a complete GradleRIO project and [`examples`](examples) for integration snippets. The fixed `bordeauxCatalog` task copies the processor resource to `build/bordeaux/catalog-v1.json`, which is the only generated project file the app reads.
+See [`../examples/bordeaux-template-robot`](../examples/bordeaux-template-robot) for a complete
+GradleRIO project. The [`examples`](examples) gallery has compile-checked vendor-neutral command,
+drive, IMU, vision, generation, and simulation examples, plus hardware recipes for CTRE, YAGSL, REV
+MAXSwerve, custom swerve, multiple IMUs and vision systems, PathPlanner, and Choreo. Every vendor
+recipe states whether it is compile-checked, source/API-verified, or an integration sketch. The fixed
+`bordeauxCatalog` task copies the processor resource to `build/bordeaux/catalog-v1.json`, which is the
+only generated project file the app reads.
+
+If a test or custom integration builds `BordeauxCommandRegistry` by hand, use the four-argument `register` overload and repeat the factory's argument reads in a side-effect-free validator:
+
+```java
+.register("score", Set.of("count"),
+    args -> args.requireLong("count", "1", "5"),
+    args -> score(args.requireLong("count", "1", "5")))
+```
+
+Event and routine runners call the validator during construction so malformed autonomous arguments fail before motion or command creation. The older three-argument overload remains available for direct `registry.create(...)` use, but registries containing those entries are deliberately rejected by the runners because their factories cannot be safely invoked during preflight.
+
 
 ## Catalog identity
 
 Set `-Abordeaux.catalogId=<team-stable-id>` on `JavaCompile`; otherwise the first provider type is the fallback ID. The generated catalog uses `schemaVersion: "1.3"`, `supportVersion: "0.4.0"`, and a deterministic `catalogHash`. It includes the closed `bordeaux.wait` built-in and any strictly bounded `@BordeauxTrajectoryGenerator` descriptors. Both the ID and hash are compiled into `BordeauxGeneratedBindings` and its capabilities.
 
 The hash is `sha256:` plus lowercase SHA-256 of UTF-8 canonical JSON for `{builtIns,commands,conditions,trajectoryGenerators}`. Capability arrays are sorted by ID, authored inputs by name, and canonical JSON recursively sorts every object key lexicographically. A `bordeaux-trajectory/1.0` document carries the same ID and hash in `catalog`; capability runners reject either mismatch and any unknown condition before scheduling anything.
+
+## Connect an existing drivetrain and estimator
+
+`BordeauxDriveAdapter` sits above swerve module, motor-controller, and IMU vendors. A working CTRE,
+YAGSL, REV, or custom drivetrain can expose its corrected pose, measured robot-relative speeds, and
+robot-relative output without Bordeaux importing that vendor's API:
+
+```java
+var drive = BordeauxDriveAdapter.forSubsystem(drivetrain)
+    .state(drivetrain::getBordeauxDriveState)
+    .output(drivetrain::driveRobotRelative)
+    .resetPose(drivetrain::resetPose)
+    .visionMeasurement(observation -> drivetrain.addVisionMeasurement(
+        observation.fieldPose(), observation.captureTimestampS(),
+        VecBuilder.fill(observation.xStdDevM(), observation.yStdDevM(),
+            observation.headingStdDevRad())))
+    .stop(drivetrain::stop)
+    .limits(new BordeauxDriveLimits(4.8, 7.0, 9.0, 18.0))
+    .build();
+```
+
+`getBordeauxDriveState()` returns one robot-owned snapshot containing corrected pose, measured speeds,
+and the source observation time in FPGA seconds. Build it from the same cached estimator update;
+do not stamp older sensor data with the current loop time. Vision is normalized as
+`BordeauxVisionObservation`: source ID, field pose, FPGA capture timestamp, and explicit X/Y/heading
+standard deviations. If the team-owned estimator is already fused—as with many CTRE and YAGSL
+drivetrains—it remains the single estimator owner. The vision callback is optional when the robot does
+not use Bordeaux vision sources, and unsupported delivery fails clearly instead of discarding a
+measurement.
+
+Every drive request is checked for finite values and the robot-owned linear/angular velocity limits
+before it reaches the subsystem. Acceleration limits are exposed to callers and the staged
+command-returning follower; the current adapter does not infer acceleration between calls, and
+generated-trajectory containment reads the separate limits supplied through
+`BordeauxGenerationContext.safetyLimits()`. Map both from the same tested robot constants.
+Deterministic simulation supplies the same timestamped state contract as hardware.
 
 ## Runtime lifecycle
 

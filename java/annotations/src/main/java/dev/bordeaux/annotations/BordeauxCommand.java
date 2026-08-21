@@ -5,11 +5,9 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
-/** Marks a robot-owned factory method as an action Bordeaux may place on a path. */
-@Target(ElementType.METHOD)
 @Retention(RetentionPolicy.SOURCE)
 public @interface BordeauxCommand {
-    /** Stable deployed identifier. Defaults to {@code fully.qualified.Provider#method}. */
+    /** Stable deployed identifier. Defaults to {@code fully.qualified.Provider#member}. */
     String id() default "";
 
     String label() default "";
