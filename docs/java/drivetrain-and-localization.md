@@ -1,3 +1,45 @@
+# Drivetrain and localization
+
+> **Current status:** Bordeaux ships the vendor-neutral `BordeauxDrive` seam, its method-reference
+> adapter, normalized vision observations, enforced output velocity limits, and compile-checked
+> examples. The
+> command-returning Bordeaux holonomic follower and Bordeaux-owned localization runtime are staged;
+> no current production `Command` consumes `BordeauxDrive` automatically.
+
+The robot remains the owner of its modules, motor controllers, IMU, odometry thread, and corrected
+pose estimator. Bordeaux sees the drivetrain at chassis level, so changing an SDS, REV, WCP,
+Thrifty, or custom module does not require a new core runtime type.
+
+## The shipped drive seam
+
+[`BordeauxDrive`](../../java/runtime/src/main/java/dev/bordeaux/runtime/BordeauxDrive.java) covers
+these responsibilities:
+
+- return the drivetrain's WPILib `Subsystem` requirement;
+- return one corrected pose, measured robot-relative speed, and source timestamp snapshot;
+- expose tested linear and angular velocity/acceleration limits;
+- accept finite robot-relative `ChassisSpeeds` output;
+- reset estimator pose without implicitly zeroing physical IMU hardware;
+- report whether normalized vision delivery is supported;
+- optionally deliver a normalized vision measurement to that same estimator; and
+- issue the drivetrain's immediate safe-stop operation.
+
+Connect an existing subsystem with
+[`BordeauxDriveAdapter`](../../java/runtime/src/main/java/dev/bordeaux/runtime/BordeauxDriveAdapter.java):
+
+```java
+BordeauxDrive bordeauxDrive = BordeauxDriveAdapter.forSubsystem(drivetrain)
+    .state(stateCache::state)
+    .output(drivetrain::driveRobotRelative)
+    .resetPose(drivetrain::resetPose)
+    .visionMeasurement(drivetrain::addVisionMeasurement)
+    .stop(drivetrain::stop)
+    .limits(new BordeauxDriveLimits(4.8, 7.0, 9.0, 18.0))
+    .build();
+```
+
+The vision callback is optional. If it is omitted, `acceptsVisionMeasurements()` is false and
+`addVisionMeasurement(...)` fails explicitly instead of silently dropping a correction. The builder
 requires state, output, reset, stop, and limits callbacks.
 
 `driveRobotRelative(...)` currently checks that all three values are finite and that translation and
