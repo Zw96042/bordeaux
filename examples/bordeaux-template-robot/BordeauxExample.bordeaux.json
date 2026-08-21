@@ -364,5 +364,51 @@
       "id": "routine_740109f1-344e-42d0-9fb5-0eece8d4c4ce"
     }
   ],
-  "activeRoutineId": "routine_740109f1-344e-42d0-9fb5-0eece8d4c4ce"
+      },
+      {
+        "id": "d_3",
+        "type": "decision",
+        "cond": "vision.targetVisible",
+        "thenLabel": "Yes",
+        "elseLabel": "No",
+        "then": [
+          {
+            "id": "c_4",
+            "type": "function",
+            "cat": "command",
+            "title": "Set output",
+            "invocation": {
+              "commandId": "example.set-output",
+              "arguments": {
+                "request": {
+                  "output": 0.35,
+                  "signal": "READY"
+                }
+              }
+            }
+          }
+        ],
+        "else": [
+          {
+            "id": "c_5",
+            "type": "function",
+            "cat": "command",
+            "title": "Set status",
+            "invocation": {
+              "commandId": "example.set-status",
+              "arguments": {
+                "signal": "SCORE"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "p_2",
+        "type": "path",
+        "ref": "path_e60cdf10-13b3-47d7-b45c-422de31ebbe7"
+      }
+    ],
+    "id": "routine_740109f1-344e-42d0-9fb5-0eece8d4c4ce"
+  }
 }

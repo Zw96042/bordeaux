@@ -1,3 +1,21 @@
+# Systemcore-era WPILib Commands v3
+
+Research date: 2026-08-20
+
+## Conclusion
+
+“Commands v3 from Systemcore” is the official **WPILib Commands v3** Java framework for the 2027 Systemcore software stack, not a separate Systemcore or third-party project. Its released package is `org.wpilib.command3`; the primary command type is `org.wpilib.command3.Command`. ([WPILib repository identity](https://github.com/wpilibsuite/allwpilib/blob/878da3d54cbc6b64d663bded17d87d5bed040ed9/README.md#L1-L8), [v3 `Command`](https://github.com/wpilibsuite/allwpilib/blob/878da3d54cbc6b64d663bded17d87d5bed040ed9/commandsv3/src/main/java/org/wpilib/command3/Command.java#L5-L39))
+
+Bordeaux should support it, but **not** by adding v3 imports to the current v2 runtime or trying to wrap a v2 command as a v3 command. The two frameworks have different command types, lifecycle models, requirement types, schedulers, and interruption rules. More decisively, WPILib's own vendordep metadata rejects projects that install both Commands v2 and Commands v3. ([v2 command contract](https://github.com/wpilibsuite/allwpilib/blob/878da3d54cbc6b64d663bded17d87d5bed040ed9/commandsv2/src/main/java/org/wpilib/command2/Command.java#L21-L84), [v3 command contract](https://github.com/wpilibsuite/allwpilib/blob/878da3d54cbc6b64d663bded17d87d5bed040ed9/commandsv3/src/main/java/org/wpilib/command3/Command.java#L97-L165), [vendordep conflict](https://github.com/wpilibsuite/allwpilib/blob/878da3d54cbc6b64d663bded17d87d5bed040ed9/commandsv3/CommandsV3.json#L9-L14))
+
+The right product meaning of “v2 and v3 compatibility” is:
+
+- one Bordeaux annotation, catalog, Aquitaine format, and user workflow;
+- two native framework implementations, but three season/framework compatibility baselines built and tested separately;
+- 2026 Commands v2 (`edu.wpi.first.wpilibj2`), 2027 Commands v2 (`org.wpilib.command2`), and 2027 Commands v3 (`org.wpilib.command3`) artifacts or build variants;
+- no robot program or integration-test classpath containing both official vendordeps.
+
+Commands v3 should remain **experimental** in Bordeaux until WPILib publishes a sufficiently stable 2027 release. The latest published version found is `2027.0.0-alpha-6`, explicitly marked a pre-release, and the official documentation still says Commands v3 documentation is in progress. The post-alpha source has already changed `Mechanism` from a class to an interface, changed scheduling/fork result APIs, and renamed the Maven artifact. ([alpha-6 release](https://github.com/wpilibsuite/allwpilib/releases/tag/v2027.0.0-alpha-6), [2027 changelog](https://docs.wpilib.org/en/latest/docs/yearly-overview/yearly-changelog.html#major-changes-java-c-python), [released `Mechanism`](https://github.com/wpilibsuite/allwpilib/blob/878da3d54cbc6b64d663bded17d87d5bed040ed9/commandsv3/src/main/java/org/wpilib/command3/Mechanism.java#L12-L35), [current `Mechanism`](https://github.com/wpilibsuite/allwpilib/blob/d2e21fafca6d2cbebfef6455743add253af306ee/commandsv3/src/main/java/org/wpilib/command3/Mechanism.java#L12-L40), [current scheduling result](https://github.com/wpilibsuite/allwpilib/blob/d2e21fafca6d2cbebfef6455743add253af306ee/commandsv3/src/main/java/org/wpilib/command3/Scheduler.java#L339-L451), [artifact rename](https://github.com/wpilibsuite/allwpilib/pull/9231))
 
 ## Verified release and distribution snapshot
 
