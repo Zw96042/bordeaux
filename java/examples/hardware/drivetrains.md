@@ -1,3 +1,25 @@
+# Drivetrains and swerve modules
+
+The Bordeaux boundary is chassis-level, so a robot keeps its existing module construction, encoder
+offsets, motor control, odometry thread, simulation, and characterization. Connect that subsystem to
+[`MethodReferenceDriveAdapter`](../src/main/java/dev/bordeaux/examples/drive/MethodReferenceDriveAdapter.java),
+or copy its six method references into `RobotContainer`.
+
+## Generic template — compile-checked
+
+```java
+private final BordeauxDrive bordeauxDrive = BordeauxDriveAdapter.forSubsystem(drive)
+    .state(drive::bordeauxState)                  // pose + measured speeds + source time
+    .output(drive::driveRobotRelative)            // robot-relative ChassisSpeeds
+    .resetPose(drive::resetPose)                  // estimator reset, not a physical gyro zero
+    .visionMeasurement(drive::addVisionMeasurement)
+    .stop(drive::stop)
+    .limits(new BordeauxDriveLimits(4.8, 7.0, 9.0, 18.0))
+    .build();
+```
+
+The limits are robot limits, not optimistic free-speed calculations. Translation and rotation can be
+requested together; neither axis is silently discarded.
 
 ## CTRE Phoenix 6 swerve — vendor API verified
 
