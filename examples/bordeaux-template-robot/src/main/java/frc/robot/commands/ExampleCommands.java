@@ -6,6 +6,7 @@ import dev.bordeaux.annotations.BordeauxParam;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.Commands;
 import frc.robot.subsystems.ExampleSubsystem;
+import java.util.function.Supplier;
 
 public final class ExampleCommands {
     public enum Signal {
@@ -18,8 +19,19 @@ public final class ExampleCommands {
 
     private final ExampleSubsystem subsystem;
 
+    /** Reuses one instance when teleop and Bordeaux ownership are guaranteed to be mutually exclusive. */
+    @BordeauxCommand(id = "example.stop", label = "Stop output")
+    public final Command stopCommand;
+
+    /** A supplier creates a fresh command every time an Aquitaine step invokes it. */
+    @BordeauxCommand(id = "example.pulse", label = "Pulse output")
+    public final Supplier<Command> pulseCommand;
+
     public ExampleCommands(ExampleSubsystem subsystem) {
         this.subsystem = subsystem;
+        stopCommand = Commands.runOnce(subsystem::stop, subsystem);
+        pulseCommand = () -> Commands.startEnd(
+                () -> subsystem.setOutput(0.35), subsystem::stop, subsystem).withTimeout(0.25);
     }
 
     @BordeauxCondition(

@@ -1,21 +1,36 @@
 package frc.robot;
 
 import dev.bordeaux.runtime.BordeauxBindings;
-import dev.bordeaux.runtime.BordeauxCommandRegistry;
+import dev.bordeaux.runtime.BordeauxCapabilities;
 import dev.bordeaux.runtime.BordeauxEventRunner;
 import dev.bordeaux.runtime.BordeauxPathEvents;
+import dev.bordeaux.runtime.BordeauxRuntimeCompatibility;
 import dev.bordeaux.runtime.BordeauxTrajectoryReader;
 import edu.wpi.first.wpilibj.Filesystem;
 import frc.robot.commands.ExampleCommands;
+import frc.robot.paths.DynamicPaths;
 import frc.robot.subsystems.ExampleSubsystem;
 import java.io.IOException;
 import java.nio.file.Files;
 
 public final class RobotContainer {
+    private static final String SUPPORT_VERSION = "0.4.0";
+    private static final String FIELD_ID = "2026-rebuilt";
+    private static final String FIELD_REVISION = "2026-manual-tu19-welded-4";
+    private static final String FIELD_COORDINATE_SCHEMA_ID = "bordeaux-field/1.0";
+
     private final ExampleSubsystem exampleSubsystem = new ExampleSubsystem();
     private final ExampleCommands exampleCommands = new ExampleCommands(exampleSubsystem);
-    private final BordeauxCommandRegistry commandRegistry =
-            BordeauxBindings.generated(exampleCommands);
+    private final DynamicPaths dynamicPaths = new DynamicPaths();
+    private final BordeauxCapabilities bordeauxCapabilities =
+            BordeauxBindings.generatedCapabilities(exampleCommands, dynamicPaths);
+    private final BordeauxRuntimeCompatibility bordeauxCompatibility = new BordeauxRuntimeCompatibility(
+            bordeauxCapabilities.catalogId(),
+            bordeauxCapabilities.catalogHash(),
+            SUPPORT_VERSION,
+            FIELD_ID,
+            FIELD_REVISION,
+            FIELD_COORDINATE_SCHEMA_ID);
 
     private BordeauxEventRunner eventRunner;
     private double pathDurationS;
@@ -25,15 +40,19 @@ public final class RobotContainer {
         var trajectory = Filesystem.getDeployDirectory().toPath()
                 .resolve("bordeaux")
                 .resolve(fileName);
+        BordeauxPathEvents path;
         try (var input = Files.newInputStream(trajectory)) {
-            BordeauxPathEvents path = BordeauxTrajectoryReader.read(input, pathIdOrName);
-            eventRunner = new BordeauxEventRunner(path, commandRegistry);
-            pathDurationS = path.totalTimeS();
+            path = BordeauxTrajectoryReader.read(input, pathIdOrName, bordeauxCompatibility);
         }
+        eventRunner = new BordeauxEventRunner(path, bordeauxCapabilities);
+        pathDurationS = path.totalTimeS();
     }
 
-    /** Processes the final event tick before applying path-end cancellation. */
+    /** Simulation-only fallback: estimates progress from time and owns planned completion. */
     public boolean pollBordeauxEvents(double elapsedS) {
+        double plannedFraction = pathDurationS > 0
+                ? Math.max(0, Math.min(1, elapsedS / pathDurationS))
+                : 0;
         return pollBordeauxEvents(elapsedS, plannedFraction);
     }
 
