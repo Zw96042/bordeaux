@@ -1,3 +1,106 @@
+two-argument streaming overload selects one path and is not a substitute for this full-document
+preflight. Rebuild and export from a compatible Bordeaux version; do not patch schema or hash fields
+by hand.
+The exact compatibility invariants are listed in the
+[Java command contract](../java-commands.md#contract-invariants).
+
+## WPILib command lifecycle
+
+### A command runs once, will not restart, or stops from another binding
+
+A concrete `Command` object has one WPILib lifecycle. If a trigger, chooser, autonomous group, and
+Bordeaux might schedule independently, expose a `Supplier<? extends Command>` so every Bordeaux
+invocation receives a fresh instance. Use one public final `Command` field only when all owners are
+mutually exclusive.
+
+Do not expose an instance that was already composed into a command group. Expose the group or a
+factory that creates the intended top-level behavior. See [Connecting existing commands](commands.md)
+for the decision rule.
+
+### Event commands remain scheduled after a path ends
+
+Only events authored with **Cancel at path end** are owned and canceled by
+`BordeauxEventRunner.endPath()`. Other commands intentionally keep their normal WPILib lifecycle.
+Always call `endPath()` before replacing a runner; otherwise the old runner cannot apply its
+cancellation policy. The compile-checked snippet above shows the replacement sequence.
+
+### Events repeat, skip, or fire at the wrong progress
+
+- Supply the same monotonic elapsed path time used by the follower.
+- Supply monotonic measured progress for position-triggered events.
+- Reset the runner before reusing it for another run.
+- Do not move elapsed time backward; end/reset and start a new lifecycle instead.
+
+The runtime catches up repeated events through their authored window, so normal loop jitter should
+not skip them. A non-monotonic clock or two different notions of path progress will still produce
+incorrect behavior.
+
+## Drivetrain and pose
+
+### The robot follows the reference in the wrong direction
+
+`BordeauxSample.headingRad()` is the robot's physical heading. Holonomic travel direction comes from
+`fieldVelocityXMps()` and `fieldVelocityYMps()`, not from where the robot is facing. A controller
+that projects translation along robot heading cannot strafe and rotate independently.
+
+The shipped `BordeauxReferenceFollower` returns a complete reference but does not own a drivetrain
+controller. Preserve the team's existing holonomic controller or path-tool command while migrating.
+The command-returning Bordeaux holonomic follower is staged, not a current production API.
+
+### State is noisy or internally inconsistent
+
+Publish corrected pose, measured robot-relative speeds, and their source timestamp as one snapshot.
+Do not read pose and velocity on separate loops and stamp both with the current time. Use the
+[`AtomicDriveStateCache`](../../java/examples/src/main/java/dev/bordeaux/examples/drive/AtomicDriveStateCache.java)
+pattern when the vendor callback and robot loop differ.
+
+The source timestamp must use FPGA seconds. Convert vendor time domains before constructing
+`BordeauxDriveState`; do not merely rename a device timestamp.
+
+### A drive request is rejected
+
+`BordeauxDriveAdapter` rejects non-finite or over-limit robot-relative chassis speeds before they
+reach hardware. Check the combined translation magnitude and angular velocity against the robot's
+real limits. The adapter does not infer acceleration from successive calls; generated-path
+containment uses separately supplied `BordeauxTrajectoryGeneratorLimits`.
+
+Start with the [drivetrain and localization guide](drivetrain-and-localization.md) and the
+[`MethodReferenceDriveAdapter`](../../java/examples/src/main/java/dev/bordeaux/examples/drive/MethodReferenceDriveAdapter.java)
+example.
+
+## Vision and pose correction
+
+### Vision makes pose jump or drift
+
+Verify all of these before tuning gains:
+
+- the pose uses the same field origin and coordinate convention as odometry;
+- the timestamp is the source's documented estimator time converted to FPGA seconds—normally image
+  capture time, but QuestNav documents its NetworkTables data-reception timestamp for estimation;
+- X, Y, and heading standard deviations are finite, positive, and match the observation quality;
+- stale, off-field, impossible, or high-ambiguity observations are rejected; and
+- exactly one estimator owns fusion and pose reset.
+
+If a CTRE or YAGSL drivetrain already owns a fused estimator, forward observations to it rather than
+creating a second competing estimator in Bordeaux. PhotonVision, Limelight, and QuestNav do not
+share one universal covariance policy; the team must derive uncertainty from its camera geometry and
+quality metrics.
+
+Use
+[`VisionObservationFactory.tryFromCaptureTimestamp`](../../java/examples/src/main/java/dev/bordeaux/examples/vision/VisionObservationFactory.java)
+to keep malformed external data out of the robot loop, then follow the
+[vision hardware recipes](../../java/examples/hardware/vision.md).
+
+## Aquitaine and generated trajectories
+
+### A generated step takes its fallback or safe-stops
+
+Containment releases no partial trajectory. The robot loop receives only a bounded failure outcome,
+not the generator worker's internal exception. Add safe team-side diagnostics around generator input
+and output during development, and check these common causes:
+
+- the generator exceeded its deadline or threw;
+- current pose or field-relative velocity did not match the generated start;
 - a sample was non-finite, out of order, or outside the field;
 - duration, distance, velocity, acceleration, angular velocity, or curvature exceeded the stricter
   descriptor/robot limit;
