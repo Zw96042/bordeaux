@@ -1,3 +1,102 @@
+# Troubleshooting the Java integration
+
+Start at the boundary nearest the failure: catalog generation, export and load, command scheduling,
+drivetrain state, vision, or generated-trajectory containment. Bordeaux rejects incompatible input
+before it schedules a command or releases generated samples, so the first exception is usually the
+most useful one.
+
+For the normal setup sequence, see [Getting started](getting-started.md). The
+[compile-checked example gallery](../../java/examples/README.md) contains the smallest working
+version of each vendor-neutral integration.
+
+## Catalog and command discovery
+
+### A command appears in source preview but not in the editor
+
+Source preview is advisory. The generated catalog is authoritative.
+
+1. Make the provider type public.
+2. Expose either a public annotated command factory method, a public final `Command` field, or a
+   public final `Supplier<? extends Command>` field.
+3. Run the fixed project task:
+
+   ```text
+   ./gradlew bordeauxCatalog --no-daemon --console=plain
+   ```
+
+4. Confirm that `build/bordeaux/catalog-v1.json` contains the stable command ID.
+5. Rebuild the catalog in Bordeaux before exporting again.
+
+Compilation errors from the annotation processor are intentional contract checks. Fix the reported
+provider, return type, duplicate ID, or unsupported parameter shape instead of hand-editing the
+catalog. The [command guide](commands.md) lists the supported exposure patterns, and
+[`ExistingCommandProvider`](../../java/examples/src/main/java/dev/bordeaux/examples/commands/ExistingCommandProvider.java)
+shows all three.
+
+### “Trajectory catalog ID/hash does not match”
+
+The JSON was exported against a different compiled capability set. Treat the catalog and export as
+one versioned pair:
+
+1. build the catalog from the exact robot source being deployed;
+2. load that catalog in Bordeaux;
+3. export the project again; and
+4. deploy both the robot program and the new JSON.
+
+Do not weaken or bypass this check. It prevents an old event ID or argument schema from invoking the
+wrong robot behavior.
+
+### “Unknown Bordeaux command/condition/generator ID”
+
+Pass every non-static provider compiled into the catalog to the same
+`BordeauxBindings.generatedCapabilities(...)` call, even if the current export does not reference all
+of them. Then rebuild and re-export. Provider order does not matter, but omitting a provider does. If
+the ID exists only in a handwritten registry or an old catalog, it is not part of the compiled
+capability set.
+
+## Export and trajectory loading
+
+### The exported file cannot be found on the robot
+
+Linked-project exports are written to:
+
+```text
+src/main/deploy/bordeaux/<project>.bordeaux.json
+```
+
+At runtime, resolve the same `bordeaux` directory below `Filesystem.getDeployDirectory()`:
+
+```java
+var file = Filesystem.getDeployDirectory().toPath()
+    .resolve("bordeaux")
+    .resolve("example.bordeaux.json");
+```
+
+The short [`RobotContainerSnippet`](../../java/examples/RobotContainerSnippet.java) demonstrates
+this lookup and full-document validation. GradleRIO deploys the file; Bordeaux does not deploy robot
+code or files itself.
+
+### A path selector is missing or ambiguous
+
+Pass the exported stable path ID when possible.
+`BordeauxTrajectoryReader.read(input, selector, compatibility)` accepts an ID or name, but
+duplicate display names are ambiguous. Inspect the export rather than guessing a renamed path. For
+an Auto-tab routine, use the validated `readWithRoutine(...)` overload instead of selecting one path
+and expecting the routine graph to be retained.
+
+### The validated reader rejects the JSON before autonomous starts
+
+Keep the rejection. Common causes are:
+
+- a trajectory schema, support version, field identity, or coordinate schema mismatch;
+- duplicate path, node, or event IDs;
+- malformed samples or event windows;
+- a routine branch that references a missing exported path; or
+- a document that exceeds a runtime resource limit.
+
+Use the three-argument `read(input, selector, compatibility)` or
+`readWithRoutine(input, selector, compatibility)` overload so acquisition is capped at 16 MiB and
+catalog/field identity plus every path and deployable routine branch are checked before motion. The
 two-argument streaming overload selects one path and is not a substitute for this full-document
 preflight. Rebuild and export from a compatible Bordeaux version; do not patch schema or hash fields
 by hand.
