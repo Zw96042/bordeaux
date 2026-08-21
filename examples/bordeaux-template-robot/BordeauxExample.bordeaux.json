@@ -38,82 +38,6 @@
           "y": 4,
           "prevC": {
             "x": 4.216,
-            "y": 4
-          },
-          "nextC": {
-            "x": 5.784,
-            "y": 4
-          }
-        }
-      ],
-      "targets": [],
-      "markers": [
-        {
-          "id": "event_message",
-          "f": 0.15,
-          "name": "Hello",
-          "invocation": {
-            "commandId": "example.print-message",
-            "arguments": {
-              "message": "Hello from Bordeaux"
-            }
-          }
-        },
-        {
-          "id": "event_output",
-          "f": 0.4,
-          "name": "Set output",
-          "invocation": {
-            "commandId": "example.set-output",
-            "arguments": {
-              "request": {
-                "output": 0.35,
-                "signal": "READY"
-              }
-            }
-          }
-        },
-        {
-          "id": "event_status",
-          "f": 0.65,
-          "name": "Score status",
-          "invocation": {
-            "commandId": "example.set-status",
-            "arguments": {
-              "signal": "SCORE"
-            },
-            "cancelOnPathEnd": false
-          }
-        },
-        {
-          "id": "event_hold",
-          "f": 0.8,
-          "name": "Hold until end",
-          "invocation": {
-            "commandId": "example.hold-output",
-            "arguments": {
-              "output": 0.25
-            },
-            "cancelOnPathEnd": true
-          }
-        }
-      ],
-      "ranges": [],
-      "constraints": {
-        "maxVel": 4.2,
-        "maxAccel": 6.5,
-        "maxDecel": 6.5,
-        "maxAngVel": 540,
-        "maxAngAccel": 720,
-        "maxAngDecel": 720,
-        "maxJerk": 0,
-        "maxAngJerk": 0
-      },
-      "headingMode": "targets",
-      "startVel": 0,
-      "goalVel": 0,
-      "exportable": true
-    },
     {
       "id": "path_c172acaa-d672-496c-9382-51c148efb37f",
       "name": "LeftAuto1",
@@ -171,12 +95,7 @@
           },
           "segType": "bezier",
           "segmentHeadingMode": "targets",
-          "corner": false,
-          "headingTransition": {
-            "placement": "after",
-            "rotationPriority": "translation",
-            "distanceM": 0.75
-          }
+          "corner": false
         },
         {
           "linked": true,
@@ -258,12 +177,7 @@
             "x": 5.216716597159319,
             "y": 3.993602884972327
           },
-          "corner": false,
-          "headingTransition": {
-            "placement": "after",
-            "rotationPriority": "translation",
-            "distanceM": 0.75
-          }
+          "corner": false
         },
         {
           "linked": true,
@@ -300,7 +214,7 @@
       "goalVel": 0
     }
   ],
-  "plannerId": "profiledSpline",
+  "plannerId": "optimizedTrajectory",
   "pathLinks": [
     {
       "id": "pathlink_2c0e45ca-a81f-44ad-9db7-b698d1cb8964",
@@ -364,6 +278,17 @@
       "id": "routine_740109f1-344e-42d0-9fb5-0eece8d4c4ce"
     }
   ],
+  "activeRoutineId": "routine_740109f1-344e-42d0-9fb5-0eece8d4c4ce",
+  "editor": {
+    "activePathId": "path_c172acaa-d672-496c-9382-51c148efb37f"
+  },
+  "routine": {
+    "name": "Autonomous Routine",
+    "nodes": [
+      {
+        "id": "p_1",
+        "type": "path",
+        "ref": "path_c172acaa-d672-496c-9382-51c148efb37f"
       },
       {
         "id": "d_3",
