@@ -1,3 +1,45 @@
+package dev.bordeaux.examples.simulation;
+
+import dev.bordeaux.runtime.BordeauxDrive;
+import dev.bordeaux.runtime.BordeauxDriveAdapter;
+import dev.bordeaux.runtime.BordeauxDriveLimits;
+import dev.bordeaux.runtime.BordeauxDriveState;
+import edu.wpi.first.math.geometry.Pose2d;
+import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.kinematics.ChassisSpeeds;
+import edu.wpi.first.wpilibj2.command.Subsystem;
+
+/** Fixed-step first-order plant for repeatable adapter and controller tests, not robot physics. */
+public final class DeterministicSwervePlant implements Subsystem {
+    private BordeauxDriveState state =
+            new BordeauxDriveState(new Pose2d(), new ChassisSpeeds(), 0);
+    private ChassisSpeeds request = new ChassisSpeeds();
+
+    public BordeauxDrive drive(BordeauxDriveLimits limits) {
+        return BordeauxDriveAdapter.forSubsystem(this)
+                .state(this::state)
+                .output(this::accept)
+                .resetPose(this::resetPose)
+                .stop(this::stop)
+                .limits(limits)
+                .build();
+    }
+
+    public BordeauxDriveState state() {
+        return state;
+    }
+
+    public ChassisSpeeds request() {
+        return new ChassisSpeeds(
+                request.vxMetersPerSecond,
+                request.vyMetersPerSecond,
+                request.omegaRadiansPerSecond);
+    }
+
+    public void step(double dtS) {
+        if (!Double.isFinite(dtS) || dtS <= 0) {
+            throw new IllegalArgumentException("dtS must be positive and finite");
+        }
         Pose2d pose = state.pose();
         double heading = pose.getRotation().getRadians();
         double fieldVelocityX = request.vxMetersPerSecond * Math.cos(heading)
