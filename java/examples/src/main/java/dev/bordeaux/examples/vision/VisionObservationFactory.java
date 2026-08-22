@@ -1,3 +1,36 @@
+package dev.bordeaux.examples.vision;
+
+import dev.bordeaux.runtime.BordeauxVisionObservation;
+import edu.wpi.first.math.geometry.Pose2d;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.function.Predicate;
+
+/** Normalizes camera results before they cross the Bordeaux drivetrain boundary. */
+public final class VisionObservationFactory {
+    private VisionObservationFactory() {}
+
+    public static BordeauxVisionObservation fromCaptureTimestamp(
+            String cameraId,
+            Pose2d fieldPose,
+            double captureTimestampS,
+            double translationStdDevM,
+            double headingStdDevRad) {
+        return new BordeauxVisionObservation(
+                cameraId,
+                fieldPose,
+                captureTimestampS,
+                translationStdDevM,
+                translationStdDevM,
+                headingStdDevRad);
+    }
+
+    /** Filters untrusted camera output without throwing on the robot loop. */
+    public static Optional<BordeauxVisionObservation> tryFromCaptureTimestamp(
+            String cameraId,
+            Pose2d fieldPose,
+            double captureTimestampS,
+            double xStdDevM,
             double yStdDevM,
             double headingStdDevRad,
             Predicate<Pose2d> isInsideField) {
