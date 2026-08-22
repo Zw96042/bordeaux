@@ -118,13 +118,11 @@ public final class BordeauxReferenceFollower {
             return new SearchResult(search.sampleIndex, search.samplesChecked);
         }
 
-        private void search(Node node, int minimumIndex, double x, double y, Search best) {
-            if (node == null || node.maximumIndex < minimumIndex) return;
             double lowerBound = node.distanceSquaredToBounds(x, y);
             if (lowerBound > best.distanceSquared
                     || (lowerBound == best.distanceSquared && node.minimumIndex >= best.sampleIndex)) return;
 
-            if (node.sampleIndex >= minimumIndex) {
+            if (node.sampleIndex >= minimumIndex && node.sampleIndex <= maximumIndex) {
                 BordeauxSample sample = samples.get(node.sampleIndex);
                 double candidate = squared(sample.xM() - x) + squared(sample.yM() - y);
                 best.samplesChecked++;
@@ -141,8 +139,8 @@ public final class BordeauxReferenceFollower {
                 first = node.right;
                 second = node.left;
             }
-            search(first, minimumIndex, x, y, best);
-            search(second, minimumIndex, x, y, best);
+            search(first, minimumIndex, maximumIndex, x, y, best);
+            search(second, minimumIndex, maximumIndex, x, y, best);
         }
 
         private static int compareBounds(Node left, Node right, double x, double y) {
