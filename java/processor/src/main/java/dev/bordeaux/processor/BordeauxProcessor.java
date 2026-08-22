@@ -125,20 +125,20 @@ public final class BordeauxProcessor extends AbstractProcessor {
         }
 
         for (Element element : annotated) {
-            if (element.getKind() != ElementKind.METHOD) {
-                error(element, "@BordeauxCommand may only annotate methods");
+            } else if (element.getKind() == ElementKind.FIELD) {
+                command = inspectCommandField((VariableElement) element);
+            } else {
+                error(element, "@BordeauxCommand may only annotate methods or fields");
                 invalid = true;
                 continue;
             }
-            ExecutableElement method = (ExecutableElement) element;
-            CommandMethod command = inspect(method);
             if (command == null) {
                 invalid = true;
                 continue;
             }
-            ExecutableElement previous = collectedIds.putIfAbsent(command.id(), method);
+            Element previous = collectedIds.putIfAbsent(command.id(), element);
             if (previous != null || collectedConditionIds.containsKey(command.id()) || collectedGeneratorIds.containsKey(command.id())) {
-                error(method, previous == null ? "Duplicate Bordeaux capability ID '" + command.id() + "'"
+                error(element, previous == null ? "Duplicate Bordeaux capability ID '" + command.id() + "'"
                         : "Duplicate Bordeaux command ID '" + command.id() + "'");
                 if (previous != null) error(previous, "Duplicate Bordeaux command ID '" + command.id() + "'");
                 invalid = true;
@@ -401,12 +401,6 @@ public final class BordeauxProcessor extends AbstractProcessor {
             valid = false;
         }
 
-        String ownerName = owner.getQualifiedName().toString();
-        String id = annotation.id().isBlank() ? ownerName + "#" + method.getSimpleName() : annotation.id().trim();
-        if (id.length() > 256 || !id.matches("[A-Za-z0-9_.:#()$,-]+")) {
-            error(method, "Bordeaux command ID must be 1-256 stable identifier characters");
-            valid = false;
-        }
         List<Parameter> parameters = new ArrayList<>();
         if (method.getParameters().size() > MAX_PARAMETERS) {
             error(method, "Bordeaux command methods cannot exceed " + MAX_PARAMETERS + " parameters");
@@ -418,9 +412,88 @@ public final class BordeauxProcessor extends AbstractProcessor {
             else parameters.add(inspected);
         }
         if (!valid) return null;
-        String label = annotation.label().isBlank() ? humanize(method.getSimpleName().toString()) : annotation.label();
-        if (label.length() > 256 || annotation.description().length() > 2_048) {
-            error(method, "Bordeaux command labels and descriptions exceed catalog limits");
+        return command(method, owner, annotation, CommandMemberKind.METHOD, parameters);
+    }
+
+    private CommandMethod inspectCommandField(VariableElement field) {
+        Elements elements = processingEnv.getElementUtils();
+        Types types = processingEnv.getTypeUtils();
+        TypeElement owner = (TypeElement) field.getEnclosingElement();
+        boolean valid = true;
+        if (!field.getModifiers().contains(Modifier.PUBLIC)) {
+            error(field, "Bordeaux command fields must be public");
+            valid = false;
+        }
+        if (!field.getModifiers().contains(Modifier.FINAL)) {
+            error(field, "Bordeaux command fields must be final");
+            valid = false;
+        }
+        if (!owner.getModifiers().contains(Modifier.PUBLIC)) {
+            error(owner, "Bordeaux command provider types must be public");
+            valid = false;
+        }
+        if (!owner.getTypeParameters().isEmpty()) {
+            error(field, "Generic Bordeaux command providers are not supported");
+            valid = false;
+        }
+        if (!field.getModifiers().contains(Modifier.STATIC)
+                && owner.getNestingKind().isNested()
+                && !owner.getModifiers().contains(Modifier.STATIC)) {
+            error(owner, "Nested Bordeaux command providers must be static");
+            valid = false;
+        }
+
+        TypeElement commandElement = elements.getTypeElement(COMMAND_TYPE);
+        TypeElement supplierElement = elements.getTypeElement(SUPPLIER_TYPE);
+        if (commandElement == null) {
+            error(field, "WPILib Command API was not found on the annotation processor classpath");
+            return null;
+        }
+        CommandMemberKind memberKind = null;
+        if (types.isAssignable(types.erasure(field.asType()), types.erasure(commandElement.asType()))) {
+            memberKind = CommandMemberKind.COMMAND_FIELD;
+        } else if (supplierElement != null
+                && types.isAssignable(types.erasure(field.asType()), types.erasure(supplierElement.asType()))) {
+            TypeMirror suppliedType = suppliedCommandType(field.asType(), supplierElement, new HashSet<>());
+            if (suppliedType != null
+                    && types.isAssignable(types.erasure(suppliedType), types.erasure(commandElement.asType()))) {
+                memberKind = CommandMemberKind.SUPPLIER_FIELD;
+            } else {
+                error(field, "@BordeauxCommand suppliers must provide " + COMMAND_TYPE + " or a subtype");
+                valid = false;
+            }
+        } else {
+            error(field, "@BordeauxCommand fields must contain " + COMMAND_TYPE
+                    + " or java.util.function.Supplier<? extends " + COMMAND_TYPE + ">");
+            valid = false;
+        }
+        if (!valid) return null;
+        return command(field, owner, field.getAnnotation(BordeauxCommand.class), memberKind, List.of());
+    }
+
+    private TypeMirror suppliedCommandType(TypeMirror type, TypeElement supplierElement, Set<String> visited) {
+        Types types = processingEnv.getTypeUtils();
+        if (!visited.add(type.toString())) return null;
+        if (type instanceof DeclaredType declared
+                && types.isSameType(types.erasure(type), types.erasure(supplierElement.asType()))) {
+            if (declared.getTypeArguments().size() != 1) return null;
+            TypeMirror supplied = declared.getTypeArguments().get(0);
+            if (supplied instanceof WildcardType wildcard) return wildcard.getExtendsBound();
+            return supplied;
+        }
+        for (TypeMirror supertype : types.directSupertypes(type)) {
+            TypeMirror supplied = suppliedCommandType(supertype, supplierElement, visited);
+            if (supplied != null) return supplied;
+        }
+        return null;
+    }
+
+    private CommandMethod command(Element element, TypeElement owner, BordeauxCommand annotation,
+            CommandMemberKind memberKind, List<Parameter> parameters) {
+        String ownerName = owner.getQualifiedName().toString();
+        String id = annotation.id().isBlank() ? ownerName + "#" + element.getSimpleName() : annotation.id().trim();
+        if (id.length() > 256 || !id.matches("[A-Za-z0-9_.:#()$,-]+")) {
+            error(element, "Bordeaux command ID must be 1-256 stable identifier characters");
             return null;
         }
         String label = annotation.label().isBlank() ? humanize(element.getSimpleName().toString()) : annotation.label();
