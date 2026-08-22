@@ -150,6 +150,27 @@ public final class BordeauxEventRunner implements AutoCloseable {
         return firedCount;
     }
 
+                continue;
+            }
+            while (nextTimeS <= elapsedS + 1e-9
+                    && (event.endTimeS() == null || nextTimeS <= event.endTimeS() + 1e-9)) {
+                addInvocation(invocations, index, nextTimeS);
+                nextTimeS += event.repeatEveryS();
+            }
+        }
+        invocations.sort(Comparator.comparingDouble(DueInvocation::timeS)
+                .thenComparingInt(DueInvocation::eventIndex));
+        return new CatchUpPlan(invocations, expiredIndexes);
+    }
+
+    private static void addInvocation(List<DueInvocation> invocations, int eventIndex, double timeS) {
+        if (invocations.size() >= MAX_INVOCATIONS_PER_UPDATE) {
+            throw new BordeauxRuntimeException("Event catch-up exceeds the safe per-update limit of "
+                    + MAX_INVOCATIONS_PER_UPDATE + " invocations");
+        }
+        invocations.add(new DueInvocation(eventIndex, timeS));
+    }
+
     private void schedule(BordeauxEvent event) {
         try {
             Command command = registry.create(event.commandId(), event.arguments());
@@ -176,4 +197,8 @@ public final class BordeauxEventRunner implements AutoCloseable {
         private boolean complete;
         private double nextTimeS;
     }
+
+    private record DueInvocation(int eventIndex, double timeS) {}
+
+    private record CatchUpPlan(List<DueInvocation> invocations, List<Integer> expiredIndexes) {}
 }

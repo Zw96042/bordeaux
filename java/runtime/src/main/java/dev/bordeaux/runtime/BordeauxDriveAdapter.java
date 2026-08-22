@@ -1,3 +1,30 @@
+package dev.bordeaux.runtime;
+
+import edu.wpi.first.math.geometry.Pose2d;
+import edu.wpi.first.math.kinematics.ChassisSpeeds;
+import edu.wpi.first.wpilibj2.command.Subsystem;
+import java.util.Objects;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
+
+/** Method-reference adapter for an existing team-owned drivetrain and pose estimator. */
+public final class BordeauxDriveAdapter implements BordeauxDrive {
+    private static final double LIMIT_EPSILON = 1e-9;
+
+    private final Subsystem requirement;
+    private final Supplier<BordeauxDriveState> state;
+    private final Consumer<ChassisSpeeds> output;
+    private final Consumer<Pose2d> resetPose;
+    private final Consumer<BordeauxVisionObservation> visionMeasurement;
+    private final Runnable stop;
+    private final BordeauxDriveLimits limits;
+
+    private BordeauxDriveAdapter(Builder builder) {
+        requirement = builder.requirement;
+        state = builder.state;
+        output = builder.output;
+        resetPose = builder.resetPose;
+        visionMeasurement = builder.visionMeasurement;
         stop = builder.stop;
         limits = builder.limits;
     }
