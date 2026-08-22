@@ -5,115 +5,23 @@
     "drive": "swerve",
     "w": 0.84,
     "l": 0.84,
-    "maxSpeed": 5
+    "maxSpeed": 5.346559406159112,
+    "driveModel": {
+      "motorId": "custom",
+      "motorFreeRpm": 6784,
+      "motorMaxTorqueNm": 3.6,
+      "motorCount": 4,
+      "gearRatio": 6.75,
+      "wheelDiameterM": 0.1016,
+      "massKg": 54,
+      "moiKgM2": 6.3504,
+      "wheelbaseM": 0.6599999999999999,
+      "trackwidthM": 0.6599999999999999,
+      "wheelFrictionCoefficient": 1.2
+    },
+    "heightM": 0.5
   },
   "paths": [
-    {
-      "id": "path_example",
-      "name": "NewPath1",
-      "waypoints": [
-        {
-          "linked": true,
-          "thetaOn": true,
-          "theta": 0,
-          "stop": false,
-          "x": 2.2,
-          "y": 4,
-          "segType": "bezier",
-          "prevC": {
-            "x": 1.4160000000000001,
-            "y": 4
-          },
-          "nextC": {
-            "x": 2.984,
-            "y": 4
-          }
-        },
-        {
-          "linked": true,
-          "thetaOn": true,
-          "theta": 0,
-          "stop": false,
-          "x": 5,
-          "y": 4,
-          "prevC": {
-            "x": 4.216,
-            "y": 4
-          },
-          "nextC": {
-            "x": 5.784,
-            "y": 4
-          }
-        }
-      ],
-      "targets": [],
-      "markers": [
-        {
-          "id": "event_message",
-          "f": 0.15,
-          "name": "Hello",
-          "invocation": {
-            "commandId": "example.print-message",
-            "arguments": {
-              "message": "Hello from Bordeaux"
-            }
-          }
-        },
-        {
-          "id": "event_output",
-          "f": 0.4,
-          "name": "Set output",
-          "invocation": {
-            "commandId": "example.set-output",
-            "arguments": {
-              "request": {
-                "output": 0.35,
-                "signal": "READY"
-              }
-            }
-          }
-        },
-        {
-          "id": "event_status",
-          "f": 0.65,
-          "name": "Score status",
-          "invocation": {
-            "commandId": "example.set-status",
-            "arguments": {
-              "signal": "SCORE"
-            },
-            "cancelOnPathEnd": false
-          }
-        },
-        {
-          "id": "event_hold",
-          "f": 0.8,
-          "name": "Hold until end",
-          "invocation": {
-            "commandId": "example.hold-output",
-            "arguments": {
-              "output": 0.25
-            },
-            "cancelOnPathEnd": true
-          }
-        }
-      ],
-      "ranges": [],
-      "constraints": {
-        "maxVel": 4.2,
-        "maxAccel": 6.5,
-        "maxDecel": 6.5,
-        "maxAngVel": 540,
-        "maxAngAccel": 720,
-        "maxAngDecel": 720,
-        "maxJerk": 0,
-        "maxAngJerk": 0
-      },
-      "headingMode": "targets",
-      "startVel": 0,
-      "goalVel": 0,
-      "exportable": true
-    },
     {
       "id": "path_c172acaa-d672-496c-9382-51c148efb37f",
       "name": "LeftAuto1",
@@ -171,12 +79,7 @@
           },
           "segType": "bezier",
           "segmentHeadingMode": "targets",
-          "corner": false,
-          "headingTransition": {
-            "placement": "after",
-            "rotationPriority": "translation",
-            "distanceM": 0.75
-          }
+          "corner": false
         },
         {
           "linked": true,
@@ -258,12 +161,7 @@
             "x": 5.216716597159319,
             "y": 3.993602884972327
           },
-          "corner": false,
-          "headingTransition": {
-            "placement": "after",
-            "rotationPriority": "translation",
-            "distanceM": 0.75
-          }
+          "corner": false
         },
         {
           "linked": true,
@@ -300,7 +198,7 @@
       "goalVel": 0
     }
   ],
-  "plannerId": "profiledSpline",
+  "plannerId": "optimizedTrajectory",
   "pathLinks": [
     {
       "id": "pathlink_2c0e45ca-a81f-44ad-9db7-b698d1cb8964",
@@ -364,5 +262,62 @@
       "id": "routine_740109f1-344e-42d0-9fb5-0eece8d4c4ce"
     }
   ],
-  "activeRoutineId": "routine_740109f1-344e-42d0-9fb5-0eece8d4c4ce"
+  "activeRoutineId": "routine_740109f1-344e-42d0-9fb5-0eece8d4c4ce",
+  "editor": {
+    "activePathId": "path_c172acaa-d672-496c-9382-51c148efb37f"
+  },
+  "routine": {
+    "name": "Autonomous Routine",
+    "nodes": [
+      {
+        "id": "p_1",
+        "type": "path",
+        "ref": "path_c172acaa-d672-496c-9382-51c148efb37f"
+      },
+      {
+        "id": "d_3",
+        "type": "decision",
+        "cond": "vision.targetVisible",
+        "thenLabel": "Yes",
+        "elseLabel": "No",
+        "then": [
+          {
+            "id": "c_4",
+            "type": "function",
+            "cat": "command",
+            "title": "Set output",
+            "invocation": {
+              "commandId": "example.set-output",
+              "arguments": {
+                "request": {
+                  "output": 0.35,
+                  "signal": "READY"
+                }
+              }
+            }
+          }
+        ],
+        "else": [
+          {
+            "id": "c_5",
+            "type": "function",
+            "cat": "command",
+            "title": "Set status",
+            "invocation": {
+              "commandId": "example.set-status",
+              "arguments": {
+                "signal": "SCORE"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "p_2",
+        "type": "path",
+        "ref": "path_e60cdf10-13b3-47d7-b45c-422de31ebbe7"
+      }
+    ],
+    "id": "routine_740109f1-344e-42d0-9fb5-0eece8d4c4ce"
+  }
 }
