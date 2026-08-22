@@ -36,6 +36,7 @@ import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
+import javax.lang.model.type.WildcardType;
 import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
@@ -46,6 +47,7 @@ import javax.tools.StandardLocation;
 @SupportedOptions("bordeaux.catalogId")
 public final class BordeauxProcessor extends AbstractProcessor {
     private static final String COMMAND_TYPE = "edu.wpi.first.wpilibj2.command.Command";
+    private static final String SUPPLIER_TYPE = "java.util.function.Supplier";
     private static final String GENERATION_CONTEXT_TYPE = "dev.bordeaux.runtime.BordeauxGenerationContext";
     private static final String GENERATED_TRAJECTORY_TYPE = "dev.bordeaux.runtime.BordeauxGeneratedTrajectory";
     private static final String GENERATED_PACKAGE = "dev.bordeaux.generated";
@@ -58,7 +60,7 @@ public final class BordeauxProcessor extends AbstractProcessor {
     private static final int MAX_CATALOG_BYTES = 2 * 1024 * 1024;
     private static final String BUILT_INS_JSON = "[{\"description\":\"Pause the routine before its next step.\",\"id\":\"bordeaux.wait\",\"kind\":\"wait\",\"label\":\"Wait\",\"parameters\":[{\"defaultValue\":1,\"description\":\"Time to wait before continuing the routine.\",\"javaType\":\"double\",\"label\":\"Duration\",\"max\":15,\"min\":0.02,\"name\":\"durationS\",\"role\":\"argument\",\"schema\":{\"javaType\":\"double\",\"kind\":\"number\"},\"unit\":\"s\"}]}]";
     private final List<CommandMethod> collectedMethods = new ArrayList<>();
-    private final Map<String, ExecutableElement> collectedIds = new HashMap<>();
+    private final Map<String, Element> collectedIds = new HashMap<>();
     private final List<ConditionMethod> collectedConditions = new ArrayList<>();
     private final Map<String, ExecutableElement> collectedConditionIds = new HashMap<>();
     private final List<GeneratorMethod> collectedGenerators = new ArrayList<>();
@@ -125,6 +127,9 @@ public final class BordeauxProcessor extends AbstractProcessor {
         }
 
         for (Element element : annotated) {
+            CommandMethod command;
+            if (element.getKind() == ElementKind.METHOD) {
+                command = inspect((ExecutableElement) element);
             } else if (element.getKind() == ElementKind.FIELD) {
                 command = inspectCommandField((VariableElement) element);
             } else {
