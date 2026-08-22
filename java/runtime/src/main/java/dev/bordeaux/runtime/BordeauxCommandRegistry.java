@@ -7,7 +7,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-/** Robot-owned mapping from stable Bordeaux IDs to fresh WPILib command factories. */
+/** Robot-owned mapping from stable Bordeaux IDs to validated WPILib command providers. */
 public final class BordeauxCommandRegistry {
     @FunctionalInterface
     public interface Factory {
@@ -50,20 +50,31 @@ public final class BordeauxCommandRegistry {
         }
     }
 
-    void preflight(String id, ObjectNode values) {
-        Entry entry = entry(id);
-        BordeauxArguments arguments = new BordeauxArguments(id, values);
-        arguments.assertOnly(entry.parameterNames());
-        if (entry.validator() != null) entry.validator().validate(arguments);
-    }
-
     void preflightValidatedFallback(String id, ObjectNode values) {
         Entry entry = entry(id);
         if (entry.validator() == null) {
             throw new BordeauxRuntimeException("Generated trajectory fallback command '" + id
                     + "' requires an authoritative typed argument validator");
         }
-        preflight(id, values);
+        validateInvocation(id, values);
+    }
+
+    void validateInvocation(String id, ObjectNode values) {
+        Entry entry = entry(id);
+        BordeauxArguments arguments = new BordeauxArguments(id, values);
+        arguments.assertOnly(entry.parameterNames());
+        if (entry.validator() == null) {
+            throw new BordeauxRuntimeException("Command '" + id
+                    + "' has no side-effect-free argument validator; rebuild the generated Bordeaux bindings");
+        }
+        try {
+            entry.validator().validate(arguments);
+        } catch (BordeauxRuntimeException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw new BordeauxRuntimeException(
+                    "Command argument validator '" + id + "' failed: " + exception.getMessage(), exception);
+        }
     }
 
     private Entry entry(String id) {
@@ -103,14 +114,15 @@ public final class BordeauxCommandRegistry {
             return this;
         }
 
+        /** Direct creation remains supported, but event and routine runners require the validating overload. */
         public Builder register(String id, Set<String> parameterNames, Factory factory) {
             return registerEntry(id, parameterNames, null, factory);
         }
 
         public Builder register(String id, Set<String> parameterNames,
                 ArgumentValidator validator, Factory factory) {
-            return registerEntry(id, parameterNames,
-                    Objects.requireNonNull(validator, "validator"), factory);
+            Objects.requireNonNull(validator, "validator");
+            return registerEntry(id, parameterNames, validator, factory);
         }
 
         private Builder registerEntry(String id, Set<String> parameterNames,
@@ -118,8 +130,7 @@ public final class BordeauxCommandRegistry {
             if (id == null || id.isBlank()) throw new IllegalArgumentException("Command ID is required");
             Objects.requireNonNull(parameterNames, "parameterNames");
             Objects.requireNonNull(factory, "factory");
-            Entry previous = entries.putIfAbsent(id,
-                    new Entry(Set.copyOf(parameterNames), validator, factory));
+            Entry previous = entries.putIfAbsent(id, new Entry(Set.copyOf(parameterNames), validator, factory));
             if (previous != null) throw new IllegalArgumentException("Duplicate Bordeaux command ID '" + id + "'");
             return this;
         }
