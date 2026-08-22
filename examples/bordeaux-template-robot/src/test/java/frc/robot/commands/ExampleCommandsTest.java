@@ -18,6 +18,8 @@ final class ExampleCommandsTest {
         assertNotNull(first);
         assertNotNull(commands.printMessage("test"));
         assertNotNull(commands.setOutput(new ExampleCommands.OutputRequest(0.5, ExampleCommands.Signal.READY)));
+        assertNotNull(commands.stopCommand);
+        assertNotSame(commands.pulseCommand.get(), commands.pulseCommand.get());
         assertNotSame(first, second);
     }
 }
