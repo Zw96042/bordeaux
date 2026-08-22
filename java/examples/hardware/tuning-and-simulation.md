@@ -1,3 +1,76 @@
+# Tuning, simulation, and bring-up
+
+There are three separate tuning layers. Keeping them separate makes failures diagnosable:
+
+1. **Hardware control:** wheel radius, ratios, offsets, inversion, current limits, steer PID, drive
+   velocity PID/feedforward, and characterization. This stays in CTRE, YAGSL, REV, or team code.
+2. **Localization:** odometry noise, per-camera X/Y/heading standard deviations, rejection gates, and
+   timestamp alignment. This stays with the estimator that owns `BordeauxDriveState`.
+3. **Path following:** translation/rotation feedback, motion feedforward, tolerances, and replanning.
+   This belongs to the Bordeaux command-returning follower as that runtime slice lands.
+
+Do not tune path feedback around a drivetrain that cannot accurately hold a requested constant robot-
+relative speed.
+
+## Hard robot limits — compile-checked
+
+```java
+var limits = new BordeauxDriveLimits(
+    4.8,   // maximum linear velocity, m/s
+    7.0,   // maximum linear acceleration, m/s^2
+    9.0,   // maximum angular velocity, rad/s
+    18.0); // maximum angular acceleration, rad/s^2
+```
+
+Every current `BordeauxDriveAdapter` output is checked for finite values and linear/angular velocity
+before reaching the subsystem. Generated-trajectory containment uses acceleration limits between
+successive samples. The staged command-returning follower will use the same limits at its output seam.
+Map those same drivetrain constants into each `BordeauxGenerationContext.safetyLimits()`; the current
+runtime does not convert `BordeauxDriveLimits` into generator limits automatically.
+Start with tested values below theoretical free speed, then raise them from logs. A velocity limit is
+not a substitute for motor current limiting or module-level slew/torque control.
+
+## Module and drivetrain tuning
+
+Before following a path, verify each item independently:
+
+- absolute angle offsets survive reboot and every module reports forward at the same physical angle;
+- positive chassis X drives forward, positive Y drives left, and positive omega turns counterclockwise;
+- measured module velocity uses meters per second, not motor RPM;
+- measured chassis speed comes from actual module states, not the latest requested state;
+- robot-relative closed-loop output tracks positive and negative X/Y/omega together;
+- wheel-speed desaturation preserves the requested direction;
+- safe stop sends a real zero/idle request and is tested while the robot is enabled on blocks;
+- the estimator reset changes field pose without unexpectedly zeroing physical sensors.
+
+Use the vendor's SysId/characterization and closed-loop tooling for this layer. Bordeaux intentionally
+does not rewrite Talon or SPARK configuration.
+
+## Vision covariance and correction
+
+Tune each source separately. Record estimator pose and raw vision pose while driving known lines,
+turning in place, viewing one tag at increasing distance, viewing multiple tags, and briefly losing
+tracking. Use the residual distribution to choose positive standard deviations.
+
+Typical policy inputs include tag count, distance, ambiguity, tag span, motion blur/angular speed, and
+camera health. The numbers are standard deviations, not arbitrary trust percentages. A very large
+heading standard deviation is appropriate when a source should correct translation but not heading;
+zero is never appropriate.
+
+Validate latency by replaying a fast turn. If delayed observations pull the estimate along the robot's
+current heading instead of its capture-time heading, the timestamp epoch or latency is wrong.
+
+## Generated-path tuning
+
+Generator annotations are hard containment, not desired operating points. Set bounds no larger than
+the robot and field can safely accept. The robot's `BordeauxGenerationContext.safetyLimits()` may be
+stricter; Bordeaux takes the stricter value in every dimension.
+
+Test at least:
+
+- exactly two samples and maximum sample count;
+- current robot pose and a nonzero current velocity;
+- field edges and obstacle clearance;
 - timeout, thrown exception, NaN, duplicate time, and backward distance;
 - excessive linear, centripetal, angular velocity, and acceleration;
 - validated static fallback and safe-stop-only failure;
