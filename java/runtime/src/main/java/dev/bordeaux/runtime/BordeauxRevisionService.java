@@ -78,6 +78,17 @@ public final class BordeauxRevisionService {
 
     public synchronized BordeauxRuntimeStatus status() {
         return storage.withExclusiveLock(() -> status(loadOrCreateState()));
+                BordeauxTrajectoryReader.validateDocument(payload, compatibility);
+                if (!state.active().revisionId().equals(BordeauxRevisionReader.revisionIdForPayload(payload, compatibility))) {
+                    throw new BordeauxRuntimeException("Active revision metadata does not match its export payload");
+                }
+                publisher.publishActiveRevision(current, payload);
+            } else {
+                // Keep diagnostics and recovery available, without advertising an unreadable baseline.
+                publisher.publish(current);
+            }
+            return current;
+        });
     }
 
     public synchronized BordeauxActivationAck activate(Path stagedEnvelope) {
@@ -198,8 +209,6 @@ public final class BordeauxRevisionService {
             throw new BordeauxRuntimeException("Staged revision envelope path is required");
         try (InputStream input = Files.newInputStream(path)) {
             return BordeauxRevisionReader.validate(input, compatibility);
-        } catch (BordeauxRuntimeException exception) {
-            throw exception;
         } catch (IOException exception) {
             throw new BordeauxRuntimeException(
                     "Could not read staged Bordeaux revision envelope", exception);
@@ -211,8 +220,6 @@ public final class BordeauxRevisionService {
             throw new BordeauxRuntimeException("Staged retention control path is required");
         try (InputStream input = Files.newInputStream(path)) {
             return BordeauxRetentionControl.read(input);
-        } catch (BordeauxRuntimeException exception) {
-            throw exception;
         } catch (IOException exception) {
             throw new BordeauxRuntimeException(
                     "Could not read staged Bordeaux retention control", exception);
@@ -370,8 +377,6 @@ public final class BordeauxRevisionService {
                     new RuntimeState(runtimeId, active, recent, pinned, nonces, latest);
             state.validate();
             return state;
-        } catch (BordeauxRuntimeException exception) {
-            throw exception;
         } catch (IOException exception) {
             throw new BordeauxRuntimeException(
                     "Could not parse persisted Bordeaux runtime state: " + exception.getMessage(),

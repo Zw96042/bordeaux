@@ -48,7 +48,7 @@ record BordeauxRetentionControl(
   }
 
   static BordeauxRetentionControl read(InputStream input) {
-    try (InputStream bounded = new BoundedInputStream(input);
+    try (InputStream bounded = new BoundedInputStream(input, MAX_BYTES, "control exceeds " + MAX_BYTES + " bytes");
         JsonParser parser = MAPPER.createParser(bounded)) {
       if (parser.nextToken() != JsonToken.START_OBJECT) {
         throw invalid("root must be an object");
@@ -81,8 +81,6 @@ record BordeauxRetentionControl(
           expectedActive,
           text(target, "revisionId", "target"),
           text(target, "payloadSha256", "target"));
-    } catch (BordeauxRuntimeException exception) {
-      throw exception;
     } catch (IOException exception) {
       throw new BordeauxRuntimeException(
           "Could not parse Bordeaux retention control: " + exception.getMessage(), exception);
@@ -119,25 +117,4 @@ record BordeauxRetentionControl(
     return new BordeauxRuntimeException("Bordeaux retention control is invalid: " + detail);
   }
 
-  private static final class BoundedInputStream extends InputStream {
-    private final InputStream delegate;
-    private int count;
-
-    private BoundedInputStream(InputStream delegate) {
-      this.delegate = delegate;
-    }
-
-    @Override
-    public int read() throws IOException {
-      int value = delegate.read();
-      if (value >= 0) add(1);
-      return value;
-    }
-
-    @Override
-    public int read(byte[] bytes, int offset, int length) throws IOException {
-      int read = delegate.read(bytes, offset, length);
-      if (read > 0) add(read);
-      return read;
-    }
 }
