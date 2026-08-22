@@ -241,27 +241,37 @@ final class BordeauxGeneratedTrajectoryExecutor implements AutoCloseable {
             if (!safety.collisionValidator().isCollisionFree(previous, sample, limits.minClearanceM())) {
                 throw new BordeauxRuntimeException("Generated trajectory is not collision free");
             }
+            canonicalSamples.add(withDynamics(
+                    sample, speed, acceleration, angularVelocity, curvature, travelHeading));
             previousVelocityX = velocityX;
             previousVelocityY = velocityY;
+            previousSpeed = speed;
             previousAngularVelocity = angularVelocity;
-            previousSegmentDurationS = elapsedS;
-            if (Double.isFinite(segmentDirection)) {
-                previousSegmentDirection = segmentDirection;
-                previousSegmentDistanceM = segmentDistanceM;
-            }
+            if (speed > EPSILON) previousTravelHeading = travelHeading;
+            if (segmentDistanceM > EPSILON) previousSegmentDistanceM = segmentDistanceM;
         }
         BordeauxSample last = samples.get(samples.size() - 1);
         if (last.timeS() > limits.maxDurationS() + EPSILON || Math.abs(last.fraction() - 1) > EPSILON) {
             throw new BordeauxRuntimeException("Generated trajectory duration or final fraction is invalid");
         }
-        return List.copyOf(samples);
+        return List.copyOf(canonicalSamples);
+    }
+
+    private static BordeauxSample withDynamics(BordeauxSample sample, double velocityMps,
+            double accelerationMps2, double angularVelocityRadps, double curvatureInvM,
+            double travelHeadingRad) {
+        return new BordeauxSample(sample.index(), sample.timeS(), sample.distanceM(), sample.fraction(),
+                sample.xM(), sample.yM(), sample.headingRad(), velocityMps,
+                accelerationMps2, angularVelocityRadps, curvatureInvM, travelHeadingRad);
     }
 
     private static boolean finite(BordeauxSample value) {
         return Double.isFinite(value.timeS()) && Double.isFinite(value.distanceM())
                 && Double.isFinite(value.fraction()) && Double.isFinite(value.xM())
                 && Double.isFinite(value.yM()) && Double.isFinite(value.headingRad())
-                && Double.isFinite(value.velocityMps());
+                && Double.isFinite(value.velocityMps()) && Double.isFinite(value.accelerationMps2())
+                && Double.isFinite(value.angularVelocityRadps()) && Double.isFinite(value.curvatureInvM())
+                && Double.isFinite(value.travelHeadingRad());
     }
 
     private static double angleDifference(double current, double previous) {

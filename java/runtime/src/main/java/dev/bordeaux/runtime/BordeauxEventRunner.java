@@ -3,15 +3,23 @@ package dev.bordeaux.runtime;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 
 /** Schedules due events exactly once from the robot's normal periodic loop. */
 public final class BordeauxEventRunner implements AutoCloseable {
+    private static final int MAX_INVOCATIONS_PER_UPDATE = 64;
+
     public interface Scheduler {
         void schedule(Command command);
 
         void cancel(Command command);
+
+        /** Reports whether a command is still running. Non-WPILib custom schedulers must override this. */
+        default boolean isScheduled(Command command) {
+            return CommandScheduler.getInstance().isScheduled(command);
+        }
 
         static Scheduler wpilib() {
             return new Scheduler() {
@@ -61,7 +69,7 @@ public final class BordeauxEventRunner implements AutoCloseable {
             throw new BordeauxRuntimeException("Trajectory catalog hash " + path.catalogHash()
                     + " does not match robot registry " + registry.catalogHash());
         }
-        conditions.preflight(path.events().stream().map(BordeauxEvent::conditionId).toList());
+        validatePath();
         reset();
     }
 
@@ -93,33 +101,24 @@ public final class BordeauxEventRunner implements AutoCloseable {
         if (elapsedS < lastElapsedS) {
             throw new BordeauxRuntimeException("Elapsed path time moved backwards; call reset() before restarting a path");
         }
+        double updatedMaximumFraction = Math.max(maximumFraction, measuredFraction);
+        CatchUpPlan plan = planCatchUp(elapsedS, updatedMaximumFraction);
         lastElapsedS = elapsedS;
-        maximumFraction = Math.max(maximumFraction, measuredFraction);
-        List<BordeauxEvent> events = path.events();
-        int scheduledThisUpdate = 0;
-        for (int index = 0; index < events.size(); index++) {
-            BordeauxEvent event = events.get(index);
-            EventState state = states.get(index);
-            if (state.complete) continue;
-            boolean expired = event.endTimeS() != null && elapsedS > event.endTimeS() + 1e-9;
-            if (expired && (!state.activated || event.repeatEveryS() == null)) { state.complete = true; continue; }
-            boolean due = event.trigger() == BordeauxEvent.Trigger.TIME
-                    ? elapsedS >= event.timeS() : maximumFraction >= event.fraction();
-            if (!state.activated && due) {
+        maximumFraction = updatedMaximumFraction;
+        for (int index : plan.expiredIndexes()) states.get(index).complete = true;
+        for (DueInvocation invocation : plan.invocations()) {
+            BordeauxEvent event = path.events().get(invocation.eventIndex());
+            EventState state = states.get(invocation.eventIndex());
+            if (!state.activated) {
                 state.activated = true;
-                state.nextTimeS = event.trigger() == BordeauxEvent.Trigger.TIME ? event.timeS() : elapsedS;
+                state.nextTimeS = invocation.timeS();
             }
-            if (!state.activated) continue;
             if (event.repeatEveryS() == null) {
                 if (conditions.evaluate(event.conditionId())) { schedule(event); state.complete = true; }
                 continue;
             }
-            while (state.nextTimeS <= elapsedS + 1e-9
-                    && (event.endTimeS() == null || state.nextTimeS <= event.endTimeS() + 1e-9)) {
-                if (conditions.evaluate(event.conditionId())) schedule(event);
-                state.nextTimeS += event.repeatEveryS();
-                if (++scheduledThisUpdate > 10_000) throw new BordeauxRuntimeException("Event repetition catch-up exceeds 10000 executions");
-            }
+            if (conditions.evaluate(event.conditionId())) schedule(event);
+            state.nextTimeS = invocation.timeS() + event.repeatEveryS();
             if (event.endTimeS() != null && state.nextTimeS > event.endTimeS() + 1e-9) state.complete = true;
         }
     }
@@ -150,6 +149,43 @@ public final class BordeauxEventRunner implements AutoCloseable {
         return firedCount;
     }
 
+    private void validatePath() {
+        validateEvents(path.events(), registry, conditions);
+    }
+
+    static void validateEvents(List<BordeauxEvent> events, BordeauxCommandRegistry registry,
+            BordeauxConditionRegistry conditions) {
+        for (BordeauxEvent event : events) {
+            try {
+                registry.validateInvocation(event.commandId(), event.arguments());
+                conditions.validateReference(event.conditionId());
+            } catch (RuntimeException exception) {
+                throw new BordeauxRuntimeException(
+                        "Event '" + event.eventId() + "' is invalid: " + exception.getMessage(), exception);
+            }
+        }
+    }
+
+    private CatchUpPlan planCatchUp(double elapsedS, double measuredFraction) {
+        List<DueInvocation> invocations = new ArrayList<>();
+        List<Integer> expiredIndexes = new ArrayList<>();
+        for (int index = 0; index < path.events().size(); index++) {
+            BordeauxEvent event = path.events().get(index);
+            EventState state = states.get(index);
+            if (state.complete) continue;
+            boolean expired = event.endTimeS() != null && elapsedS > event.endTimeS() + 1e-9;
+            if (expired && (!state.activated || event.repeatEveryS() == null)) {
+                expiredIndexes.add(index);
+                continue;
+            }
+            boolean due = event.trigger() == BordeauxEvent.Trigger.TIME
+                    ? elapsedS >= event.timeS() : measuredFraction >= event.fraction();
+            if (!state.activated && !due) continue;
+            double nextTimeS = state.activated
+                    ? state.nextTimeS
+                    : (event.trigger() == BordeauxEvent.Trigger.TIME ? event.timeS() : elapsedS);
+            if (event.repeatEveryS() == null) {
+                addInvocation(invocations, index, nextTimeS);
                 continue;
             }
             while (nextTimeS <= elapsedS + 1e-9
