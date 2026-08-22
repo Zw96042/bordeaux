@@ -9,7 +9,7 @@ import java.io.IOException;
 
 public final class Robot extends TimedRobot {
     private static final String TRAJECTORY_FILE = "Untitled.bordeaux.json";
-    private static final String PATH_SELECTOR = "NewPath";
+    private static final String PATH_SELECTOR = "LeftAuto1";
 
     private final Timer autonomousTimer = new Timer();
     private RobotContainer container;
