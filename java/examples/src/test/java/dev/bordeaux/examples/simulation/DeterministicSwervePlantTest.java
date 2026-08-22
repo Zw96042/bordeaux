@@ -1,3 +1,24 @@
+package dev.bordeaux.examples.simulation;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+import dev.bordeaux.runtime.BordeauxDriveLimits;
+import edu.wpi.first.math.geometry.Pose2d;
+import edu.wpi.first.math.kinematics.ChassisSpeeds;
+import org.junit.jupiter.api.Test;
+
+class DeterministicSwervePlantTest {
+    private static final BordeauxDriveLimits LIMITS = new BordeauxDriveLimits(4, 6, 8, 12);
+
+    @Test
+    void repeatsCombinedTranslationAndRotationExactly() {
+        Pose2d first = runTrace();
+        Pose2d second = runTrace();
+
+        assertEquals(first, second);
+        assertEquals(2, first.getRotation().getRadians(), 1e-12);
+    }
+
     @Test
     void stopZerosTheAppliedRequest() {
         var plant = new DeterministicSwervePlant();

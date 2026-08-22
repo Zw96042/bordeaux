@@ -423,11 +423,16 @@ public final class BordeauxProcessor extends AbstractProcessor {
             error(method, "Bordeaux command labels and descriptions exceed catalog limits");
             return null;
         }
-        List<String> aliases = boundedTerms(method, annotation.aliases(), "aliases", false);
-        List<String> semanticTags = boundedTerms(method, annotation.semanticTags(), "semantic tags", true);
+        String label = annotation.label().isBlank() ? humanize(element.getSimpleName().toString()) : annotation.label();
+        if (label.length() > 256 || annotation.description().length() > 2_048) {
+            error(element, "Bordeaux command labels and descriptions exceed catalog limits");
+            return null;
+        }
+        List<String> aliases = boundedTerms(element, annotation.aliases(), "aliases", false);
+        List<String> semanticTags = boundedTerms(element, annotation.semanticTags(), "semantic tags", true);
         if (aliases == null || semanticTags == null) return null;
         return new CommandMethod(id, label, annotation.description(), aliases, semanticTags, ownerName,
-                method.getSimpleName().toString(), method.getModifiers().contains(Modifier.STATIC), parameters);
+                element.getSimpleName().toString(), element.getModifiers().contains(Modifier.STATIC), memberKind, parameters);
     }
 
     private List<String> boundedTerms(Element element, String[] values, String label, boolean kebabCase) {
@@ -873,15 +878,22 @@ public final class BordeauxProcessor extends AbstractProcessor {
                     + ".catalogId(CATALOG_ID).catalogHash(CATALOG_HASH);\n");
             for (CommandMethod method : methods) {
                 String names = method.parameters().stream().map(parameter -> quoteJava(parameter.name())).reduce((a, b) -> a + ", " + b).orElse("");
-                writer.write("    builder.register(" + quoteJava(method.id()) + ", java.util.Set.of(" + names + "), args -> {");
+                writer.write("    builder.register(" + quoteJava(method.id()) + ", java.util.Set.of(" + names + "), args -> {\n");
                 for (Parameter parameter : method.parameters()) {
-                    writer.write(" " + argumentExpression(parameter) + ";");
+                    writer.write("      " + argumentExpression(parameter) + ";\n");
                 }
-                writer.write(" }, args -> ");
+                writer.write("    }, args -> ");
                 writer.write(method.isStatic() ? method.owner() : providers.get(method.owner()));
-                writer.write("." + method.member() + "(");
-                writer.write(method.parameters().stream().map(this::argumentExpression).reduce((a, b) -> a + ", " + b).orElse(""));
-                writer.write("));\n");
+                writer.write("." + method.member());
+                if (method.memberKind() == CommandMemberKind.METHOD) {
+                    writer.write("(");
+                    writer.write(method.parameters().stream().map(this::argumentExpression)
+                            .reduce((a, b) -> a + ", " + b).orElse(""));
+                    writer.write(")");
+                } else if (method.memberKind() == CommandMemberKind.SUPPLIER_FIELD) {
+                    writer.write(".get()");
+                }
+                writer.write(");\n");
             }
             writer.write("    return builder.build();\n  }\n\n  public dev.bordeaux.runtime.BordeauxConditionRegistry conditions() {\n");
             writer.write("    var builder = dev.bordeaux.runtime.BordeauxConditionRegistry.builder()"
@@ -1147,7 +1159,9 @@ public final class BordeauxProcessor extends AbstractProcessor {
 
     private record CommandMethod(
             String id, String label, String description, List<String> aliases, List<String> semanticTags, String owner, String member,
-            boolean isStatic, List<Parameter> parameters) {}
+            boolean isStatic, CommandMemberKind memberKind, List<Parameter> parameters) {}
+
+    private enum CommandMemberKind { METHOD, COMMAND_FIELD, SUPPLIER_FIELD }
 
     private record ConditionMethod(
             String id, String label, String description, List<String> aliases, List<String> semanticTags, String owner,
