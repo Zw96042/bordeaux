@@ -1,3 +1,106 @@
+`BordeauxBindings.generatedCapabilities(...)`. The compile-checked
+[`ExistingCommandProvider`](../src/main/java/dev/bordeaux/examples/commands/ExistingCommandProvider.java)
+also shows a parameterized factory.
+
+Do not expose an instance that WPILib has already composed into a command group.
+
+## PathPlanner — 2026.1.2 API verified
+
+After configuring `AutoBuilder` normally, build complex autos once at robot startup and expose the
+resulting command. Parameterized pathfinding commands can still be created per invocation:
+
+```java
+public final class PathPlannerAutos {
+    @BordeauxCommand(id = "pathplanner.center", label = "PathPlanner center auto")
+    public final Command centerAuto;
+
+    public PathPlannerAutos() {
+        // Construct once at robot startup, after AutoBuilder.configure(...).
+        centerAuto = AutoBuilder.buildAuto("Center Auto");
+    }
+
+    @BordeauxCommand(id = "pathplanner.to-pose", label = "Pathfind to pose")
+    public Command pathfindToPose(
+            @BordeauxParam(label = "X", unit = "m", min = "0", max = "17.6") double xM,
+            @BordeauxParam(label = "Y", unit = "m", min = "0", max = "8.1") double yM,
+            @BordeauxParam(label = "Heading", unit = "rad", min = "-3.142", max = "3.142") double headingRad) {
+        var goal = new Pose2d(xM, yM, new Rotation2d(headingRad));
+        var constraints = new PathConstraints(3.0, 4.0, Math.toRadians(540), Math.toRadians(720));
+        return AutoBuilder.pathfindToPose(goal, constraints);
+    }
+}
+```
+
+PathPlanner warns that building complex autos may introduce significant delay, so do not call
+`buildAuto` inside a supplier on the scheduler loop.
+
+PathPlanner's `AutoBuilder` uses the same pose/reset/robot-relative speed/output seam as Bordeaux. Its
+[`Build an Auto`](https://pathplanner.dev/pplib-build-an-auto.html) guide documents configuration,
+and the official [`pathfinding` guide](https://pathplanner.dev/pplib-pathfinding.html) documents
+`pathfindToPose`.
+
+A wrapped PathPlanner command keeps PathPlanner's controller, feedforwards, event markers, and command
+requirements. Do not also author the same PathPlanner event as a Bordeaux event around that wrapper.
+
+PathPlanner can generate trajectories from waypoints, but current `BordeauxSample` cannot retain all
+of `PathPlannerTrajectoryState`'s module feedforwards. Command wrapping is therefore functional and
+lossless for existing behavior; converting it into an Aquitaine generated-trajectory node is not yet
+lossless. See the official
+[`PathPlannerTrajectoryState`](https://github.com/mjansen4857/pathplanner/blob/e02bbf3176588166e8fe5192ab8dea85f6d62f7a/pathplannerlib/src/main/java/com/pathplanner/lib/trajectory/PathPlannerTrajectoryState.java#L14-L40).
+
+## Choreo — 2026.0.3 API verified
+
+Expose the same top-level auto factory the robot already uses so its `AutoRoutine`, triggers, and
+bindings stay intact:
+
+```java
+public final class ChoreoAutos {
+    @BordeauxCommand(id = "choreo.pickup", label = "Follow Choreo pickup")
+    public final Supplier<Command> pickup;
+
+    public ChoreoAutos(Supplier<Command> existingPickupAutoFactory) {
+        pickup = existingPickupAutoFactory;
+    }
+}
+```
+
+Pass the factory that builds/returns the robot's existing `AutoRoutine.cmd()` (or its complete composed
+auto command), after all `AutoBindings` are installed. Keep the same Choreo warmup command the robot
+schedules at startup. This preserves the controller, module-force handling, triggers, and bindings.
+
+`autoFactory.trajectoryCmd("pickup")` is only appropriate for a deliberately binding-free standalone
+trajectory. Choreo documents that this escape hatch does not invoke bindings added through
+`AutoFactory.bind`; do not substitute it for an existing bound routine. Choreo documents both flows in
+its
+[`Auto Factory` guide](https://choreo.autos/choreolib/auto-factory/) and
+[`AutoFactory` API](https://choreo.autos/api/choreolib/java/choreo/auto/AutoFactory.html).
+
+Do not send `SwerveSample.getChassisSpeeds()` directly to Bordeaux's robot-relative output: Choreo's
+X/Y sample velocity is field-relative. Let the Choreo controller calculate robot-relative output.
+Direct conversion also loses Choreo's per-module force arrays with the current Bordeaux sample model.
+
+## Aquitaine capabilities
+
+Aquitaine is Bordeaux's own routine graph. A runtime document can contain:
+
+| Aquitaine step | Robot-side behavior |
+| --- | --- |
+| Bordeaux path | Exposes a stable path ID to the follower |
+| Command | Creates the generated, typed WPILib command and schedules it |
+| Wait | Advances from the caller's monotonic periodic loop |
+| Decision | Evaluates a generated `@BordeauxCondition` and selects one branch |
+| Generated trajectory | Invokes a bounded provider off-thread, validates all samples, then exposes them |
+| Validated fallback | Takes the compiled static branch only after generation failure |
+| Safe stop | Calls the robot-owned stop callback exactly once when no validated path may run |
+
+### Commands and sensor decisions
+
+```java
+@BordeauxCondition(id = "intake.has-piece", label = "Has game piece")
+public boolean hasPiece() {
+    return intake.hasPiece();
+}
+
 @BordeauxCommand(id = "score.release", label = "Release game piece")
 public Command release() {
     return superstructure.releaseCommand();
