@@ -140,10 +140,4 @@ record BordeauxRetentionControl(
       if (read > 0) add(read);
       return read;
     }
-
-    private void add(int added) throws IOException {
-      count += added;
-      if (count > MAX_BYTES) throw new IOException("control exceeds " + MAX_BYTES + " bytes");
-    }
-  }
 }
