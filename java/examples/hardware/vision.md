@@ -1,3 +1,40 @@
+# Vision and pose correction
+
+Every vision source ends at the same record:
+
+```java
+new BordeauxVisionObservation(
+    sourceId, fieldPose, captureTimestampS,
+    xStdDevM, yStdDevM, headingStdDevRad);
+```
+
+The pose uses WPILib's blue-origin field frame, the timestamp is FPGA seconds at image capture (or the
+vendor's documented equivalent), and uncertainty is positive and explicit. Reject invalid frames
+before creating the record. The drivetrain's one authoritative estimator receives the result.
+
+Use the robot footprint, not just the field center point, for the predicate shown below:
+
+```java
+private boolean isInsideField(Pose2d pose) {
+    return pose.getX() >= ROBOT_RADIUS_M
+        && pose.getX() <= FIELD_LENGTH_M - ROBOT_RADIUS_M
+        && pose.getY() >= ROBOT_RADIUS_M
+        && pose.getY() <= FIELD_WIDTH_M - ROBOT_RADIUS_M;
+}
+```
+
+## WPILib pose-estimator bridge — compile-checked
+
+The gallery's [`WpilibPoseEstimatorVision`](../src/main/java/dev/bordeaux/examples/vision/WpilibPoseEstimatorVision.java)
+turns normalized measurements into WPILib Kalman corrections:
+
+```java
+.visionMeasurement(WpilibPoseEstimatorVision.consumer(poseEstimator))
+```
+
+It delegates to the three-standard-deviation overload of `addVisionMeasurement`. Keep odometry and
+vision in the same `SwerveDrivePoseEstimator`; do not fuse once in a vendor drivetrain and again in a
+second Bordeaux estimator. [`VisionObservationFactory`](../src/main/java/dev/bordeaux/examples/vision/VisionObservationFactory.java)
 is compile-checked for sources that provide either a capture timestamp or a total-latency value.
 
 ## PhotonVision — v2026.3.2 API verified
