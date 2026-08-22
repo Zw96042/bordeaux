@@ -1,3 +1,33 @@
+# Existing path tools and Aquitaine
+
+The fastest migration is to expose the command the robot already runs. Bordeaux does not need to
+reimplement a PathPlanner or Choreo auto before Aquitaine can call it.
+
+## Any existing WPILib command — compile-checked
+
+Use the exact instance when it is safe to reuse, or a supplier when each invocation should build a new
+command:
+
+```java
+public final class ExistingAutos {
+    @BordeauxCommand(id = "drive.align", label = "Align to target")
+    public final Command alignCommand;
+
+    @BordeauxCommand(id = "auto.center", label = "Run center auto")
+    public final Supplier<Command> centerAuto;
+
+    public ExistingAutos(Drive drive, Supplier<Command> centerAutoFactory) {
+        alignCommand = drive.alignCommand();
+        centerAuto = centerAutoFactory;
+    }
+}
+```
+
+An exact command instance can stay on a trigger or in a chooser when ownership is mutually exclusive
+and no command group already owns it. WPILib does not give each caller a separate lifecycle: a second
+schedule while that instance is running is a no-op, and cancellation from either caller ends the same
+run. If ownership could overlap, restart independently, or a composition owns the command, expose a
+factory for the complete group or a supplier that creates a fresh command instead. Give the provider to
 `BordeauxBindings.generatedCapabilities(...)`. The compile-checked
 [`ExistingCommandProvider`](../src/main/java/dev/bordeaux/examples/commands/ExistingCommandProvider.java)
 also shows a parameterized factory.
