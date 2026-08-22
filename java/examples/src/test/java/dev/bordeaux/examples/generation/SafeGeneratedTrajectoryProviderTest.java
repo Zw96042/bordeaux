@@ -1,3 +1,85 @@
+package dev.bordeaux.examples.generation;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import dev.bordeaux.examples.commands.ExistingCommandProvider;
+import dev.bordeaux.runtime.BordeauxBindings;
+import dev.bordeaux.runtime.BordeauxCapabilities;
+import dev.bordeaux.runtime.BordeauxGenerationContext;
+import dev.bordeaux.runtime.BordeauxPathEvents;
+import dev.bordeaux.runtime.BordeauxRoutine;
+import dev.bordeaux.runtime.BordeauxRoutineNode;
+import dev.bordeaux.runtime.BordeauxRoutineProgress;
+import dev.bordeaux.runtime.BordeauxSample;
+import dev.bordeaux.runtime.BordeauxTrajectoryGeneratorLimits;
+import edu.wpi.first.wpilibj2.command.Commands;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.Test;
+
+class SafeGeneratedTrajectoryProviderTest {
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final BordeauxTrajectoryGeneratorLimits LIMITS =
+            new BordeauxTrajectoryGeneratorLimits(40, 16, 4, 2, 2, 2, 2, 4, 8, 0.2);
+
+    @Test
+    void generatesFromTheInjectedFusedPose() {
+        var context = new BordeauxGenerationContext(
+                2, 3, Math.PI / 2,
+                "field", "revision", "coordinates", LIMITS);
+
+        var trajectory = new SafeGeneratedTrajectoryProvider().forward(context, 1.5);
+
+        assertEquals(4, trajectory.samples().size());
+        assertEquals(2, trajectory.samples().get(0).xM(), 1e-12);
+        assertEquals(3, trajectory.samples().get(0).yM(), 1e-12);
+        assertEquals(2, trajectory.samples().get(3).xM(), 1e-12);
+        assertEquals(4.5, trajectory.samples().get(3).yM(), 1e-12);
+        assertEquals(1, trajectory.samples().get(3).fraction());
+    }
+
+    @Test
+    void refusesTheIntroductoryGeneratorWhileMoving() {
+        var context = new BordeauxGenerationContext(
+                0, 0, 0,
+                "field", "revision", "coordinates", LIMITS,
+                0.1, 0, 0);
+
+        assertThrows(IllegalStateException.class,
+                () -> new SafeGeneratedTrajectoryProvider().forward(context, 1));
+    }
+
+    @Test
+    void maximumRequestPassesRuntimeContainmentWithStationarySensorNoise() throws Exception {
+        var generator = new SafeGeneratedTrajectoryProvider();
+        BordeauxCapabilities capabilities = BordeauxBindings.generatedCapabilities(
+                new ExistingCommandProvider(Commands.none(), Commands::none, ignored -> Commands.none()),
+                generator);
+        var context = new BordeauxGenerationContext(
+                3, 3, 0,
+                "test-field", "revision", "blue-origin", LIMITS,
+                0, 0.0009, 0.0009);
+        AtomicInteger safeStops = new AtomicInteger();
+        ObjectNode arguments = MAPPER.createObjectNode().put("distanceM", 2);
+        var generatedNode = new BordeauxRoutineNode.GeneratedTrajectory(
+                "dynamic", "paths.forward", arguments,
+                new BordeauxRoutineNode.GeneratedFallback.SafeStop());
+        var document = new BordeauxPathEvents(
+                "auto", "Auto", 1, capabilities.catalogId(), capabilities.catalogHash(),
+                List.of(), List.of(), List.of(),
+                new BordeauxRoutine("Dynamic", List.of(
+                        generatedNode,
+                        new BordeauxRoutineNode.Wait("settle", 0.02))));
+        var runner = ContainedGeneratedRoutine.create(
+                document,
+                capabilities,
+                "test-field",
+                "revision",
                 "blue-origin",
                 () -> context,
                 (sample, clearance) -> sample.xM() >= clearance && sample.yM() >= clearance,
