@@ -9,6 +9,22 @@ import java.util.Optional;
 import java.util.function.DoubleSupplier;
 /** Resolves sensor decisions and commands only between completed path steps. */
 public final class BordeauxRoutineRunner implements AutoCloseable {
+    public enum Status { READY, PATH_ACTIVE, WAITING_FOR_COMMAND, WAITING, GENERATING, GENERATED_TRAJECTORY, COMPLETE, STOPPED }
+
+    /** Common transition view shared by command waits and generated trajectory progress. */
+    public record Transition(Status status, Optional<String> pathId) {
+        public Transition {
+            Objects.requireNonNull(status, "status");
+            Objects.requireNonNull(pathId, "pathId");
+            if ((status == Status.PATH_ACTIVE) != pathId.isPresent()) {
+                throw new IllegalArgumentException("Only an active-path transition may carry a path ID");
+            }
+        }
+    }
+
+    private Command activeCommand;
+    private boolean stopped;
+
     private final BordeauxRoutine routine;
     private final BordeauxCommandRegistry commands;
     private final BordeauxConditionRegistry conditions;
@@ -46,6 +62,8 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
         if (!document.catalogId().equals(commands.catalogId()) || !document.catalogHash().equals(commands.catalogHash())) {
             throw new BordeauxRuntimeException("Routine catalog does not match the robot command registry");
         }
+        validateNodes(routine.nodes());
+        validateRoutinePathEvents(document);
         reset();
     }
 
@@ -67,8 +85,7 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
         if (!document.catalogId().equals(capabilities.catalogId()) || !document.catalogHash().equals(capabilities.catalogHash())) {
             throw new BordeauxRuntimeException("Routine catalog does not match generated Bordeaux capabilities");
         }
-        capabilities.conditions().preflight(decisionConditionIds(document.routine().nodes()));
-        preflightCommands(document.routine().nodes(), capabilities.commands(), false);
+
     }
 
     /** Uses generated capabilities and robot-owned containment for dynamic trajectories. */
@@ -94,12 +111,13 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
     }
     /** Resolves entry decisions and commands, returning the first path to run. */
     public Optional<String> start() {
-        return legacy(startProgress());
+        return legacyPath(this::startProgress);
     }
 
     /** Resolves entry nodes and reports a path, a pending built-in wait, or completion. */
     public BordeauxRoutineProgress startProgress() {
         if (!active) throw new BordeauxRuntimeException("Routine runner is stopped; call reset() before start()");
+        if (activeCommand != null) throw new BordeauxRuntimeException("Routine has an active command; call periodic()");
         if (currentPathId != null) throw new BordeauxRuntimeException("Routine already has an active path");
         if (waitDeadlineS != null) throw new BordeauxRuntimeException("Routine has an active wait; call periodic() to advance it");
         if (currentGenerated != null) {
@@ -109,7 +127,7 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
     }
     /** Marks the active path complete and returns the next selected path, if any. */
     public Optional<String> completePath(String completedPathId) {
-        return legacy(completePathProgress(completedPathId));
+        return legacyPath(() -> completePathProgress(completedPathId));
     }
 
     /** Marks an active path complete and reports the next caller-driven routine state. */
@@ -142,6 +160,10 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
         if (terminalProgress != null) return terminalProgress;
         if (!active) return new BordeauxRoutineProgress.Complete();
         if (currentPathId != null) return new BordeauxRoutineProgress.Path(currentPathId);
+        if (activeCommand != null) {
+            if (scheduler.isScheduled(activeCommand)) return new BordeauxRoutineProgress.CommandWaiting();
+            activeCommand = null;
+        }
         if (currentGenerated != null) return generatedProgress();
         if (waitDeadlineS == null) return advance();
         double remainingS = waitDeadlineS - now();
@@ -150,6 +172,8 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
         return advance();
     }
     public void reset() {
+        cancelActiveCommand();
+        stopped = false;
         if (generatedExecutor != null) generatedExecutor.close();
         pending.clear();
         prepend(routine.nodes());
@@ -163,6 +187,8 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
     }
 
     public void stop() {
+        cancelActiveCommand();
+        stopped = true;
         pending.clear();
         currentPathId = null;
         waitDeadlineS = null;
@@ -182,6 +208,9 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
         while (!pending.isEmpty()) {
             if (++evaluated > 10_000) throw new BordeauxRuntimeException("Routine transition exceeds 10000 steps");
             BordeauxRoutineNode node = pending.removeFirst();
+            if (legacyOnly && !(node instanceof BordeauxRoutineNode.Path) && !(node instanceof BordeauxRoutineNode.Decision)) {
+                throw new BordeauxRuntimeException("Routine requires startTransition(), completePathTransition(...), and periodic(); generated paths use the progress API");
+            }
             if (node instanceof BordeauxRoutineNode.Path path) {
                 currentPathId = path.pathId();
                 return new BordeauxRoutineProgress.Path(currentPathId);
@@ -191,7 +220,9 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
             } else if (node instanceof BordeauxRoutineNode.Command invocation) {
                 Command command = commands.create(invocation.commandId(), invocation.arguments());
                 scheduler.schedule(command);
+                activeCommand = command;
                 commandCount++;
+                return new BordeauxRoutineProgress.CommandWaiting();
             } else if (node instanceof BordeauxRoutineNode.Wait wait) {
                 double startedAtS = now();
                 double deadlineS = startedAtS + wait.durationS();
@@ -265,6 +296,12 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
         for (int index = nodes.size() - 1; index >= 0; index--) pending.addFirst(nodes.get(index));
     }
 
+    private void validateNodes(List<BordeauxRoutineNode> nodes) {
+        Deque<BordeauxRoutineNode> remaining = new ArrayDeque<>();
+        prepend(remaining, nodes);
+        while (!remaining.isEmpty()) {
+            BordeauxRoutineNode node = remaining.removeFirst();
+            try {
                 if (node instanceof BordeauxRoutineNode.Decision decision) {
                     conditions.validateReference(decision.conditionId());
                     prepend(remaining, decision.whenFalse());
