@@ -1,0 +1,23 @@
+    },
+    {
+      "file": "assets/wallpaper/mobile-1290x2796.svg",
+      "width": 1290,
+      "height": 2796,
+      "format": "SVG"
+    },
+    {
+      "file": "assets/wallpaper/mobile-1290x2796.png",
+      "width": 1290,
+      "height": 2796,
+      "format": "PNG"
+    },
+    {
+      "file": "assets/generated/bordeaux-launch-key-art.png",
+      "width": 1920,
+      "height": 1080,
+      "format": "PNG",
+      "source": "prototypes/startup-animations/exports/spill-route.mp4",
+      "sourceFrame": 78
+    }
+  ]
+}
