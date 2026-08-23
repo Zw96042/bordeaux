@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Monochrome Bordeaux wine glass mark"><g transform="translate(0 0) scale(1)">
+      <path d="M286 216C299 432 365 558 512 582C659 558 725 432 738 216Z" fill="none" stroke="#171319" stroke-width="22" stroke-linejoin="round"/>
+      <path d="M332 374C430 347 594 347 692 374C675 492 616 556 512 574C408 556 349 492 332 374Z" fill="#171319"/>
+      <ellipse cx="512" cy="216" rx="226" ry="31" fill="none" stroke="#171319" stroke-width="22"/>
+      <path d="M512 582V755" fill="none" stroke="#171319" stroke-width="24" stroke-linecap="round"/>
+      <path d="M350 817C402 779 459 762 512 762C565 762 622 779 674 817Z" fill="none" stroke="#171319" stroke-width="22" stroke-linejoin="round"/>
+    </g></svg>
