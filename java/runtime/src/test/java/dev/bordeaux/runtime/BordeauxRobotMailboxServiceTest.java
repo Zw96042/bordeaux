@@ -34,6 +34,44 @@ class BordeauxRobotMailboxServiceTest {
     Path temporaryDirectory;
 
     @Test
+    void exportsVerifiedActivePayloadFromNondefaultPrivateStorage() throws IOException {
+        Path namespace = namespace();
+        Path state = temporaryDirectory.resolve("custom-private-storage");
+        BordeauxRevisionService revisions = new BordeauxRevisionService(state, 9604, () -> true, COMPATIBILITY);
+        BordeauxRobotMailboxService mailbox = new BordeauxRobotMailboxService(namespace, revisions);
+        mailbox.periodic();
+        JsonNode empty = MAPPER.readTree(Files.readAllBytes(namespace.resolve("status.json")));
+        assertEquals(BordeauxRobotStatusPublisher.ACTIVE_REVISION_READ_VERSION, empty.path("activeRevisionRead").textValue());
+        assertTrue(empty.path("activeRevisionId").isNull());
+        assertFalse(Files.exists(namespace.resolve("active-trajectory.json")));
+
+        Files.writeString(namespace.resolve("inbox/export.bordeaux-revision.json"), envelope("export", null));
+        mailbox.periodic();
+        assertEquals(payload(), Files.readString(namespace.resolve("active-trajectory.json")));
+        JsonNode active = MAPPER.readTree(Files.readAllBytes(namespace.resolve("status.json")));
+        assertEquals(revisionId(payload()), active.path("activeRevisionId").textValue());
+        assertEquals(sha256(payload()), active.path("activePayloadSha256").textValue());
+        assertEquals(BordeauxRobotStatusPublisher.ACTIVE_REVISION_READ_VERSION, active.path("activeRevisionRead").textValue());
+        assertFalse(active.toString().contains("custom-private-storage"));
+    }
+
+    @Test
+    void missingOrCorruptRetainedPayloadDoesNotAdvertiseReadableBaseline() throws IOException {
+        Path namespace = namespace();
+        BordeauxRevisionService revisions = revisions(true);
+        BordeauxActivationAck active = revisions.activate(writeStaged("export", null));
+        Path retained = temporaryDirectory.resolve("state/revisions/" + active.revisionId().substring(7) + ".bdx");
+        Files.writeString(retained, "corrupt");
+        new BordeauxRobotMailboxService(namespace, revisions).periodic();
+        JsonNode status = MAPPER.readTree(Files.readAllBytes(namespace.resolve("status.json")));
+        assertFalse(status.has("activeRevisionRead"));
+        assertEquals(active.revisionId(), status.path("activeRevisionId").textValue());
+        Files.delete(retained);
+        new BordeauxRobotMailboxService(namespace, revisions).periodic();
+        assertFalse(MAPPER.readTree(Files.readAllBytes(namespace.resolve("status.json"))).has("activeRevisionRead"));
+    }
+
+    @Test
     void callerPollActivatesOneInboxRevisionAndPublishesAnExactActiveAcknowledgement() throws IOException {
         Path namespace = namespace();
         BordeauxRevisionService revisions = revisions(true);

@@ -1,6 +1,7 @@
 package dev.bordeaux.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -52,6 +53,10 @@ class BordeauxRevisionReaderTest {
         BordeauxRuntimeException mismatch = assertThrows(BordeauxRuntimeException.class,
                 () -> BordeauxTrajectoryReader.validateDocument(bytes(currentDocument.replace("\"schemaVersion\":\"1.1\"", "\"schemaVersion\":\"1.0\"")), current));
         assertTrue(mismatch.getMessage().contains("schema/support"), mismatch::getMessage);
+    }
+
+    @Test
+    void validatedReadChecksTheWholeDocumentAndCompiledFieldBeforeSelecting() {
         byte[] document = bytes(trajectory("""
                 ,"routine":{"name":"Auto","nodes":[
                   {"id":"start","type":"path","ref":"auto"}]}

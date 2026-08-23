@@ -712,6 +712,30 @@ class BordeauxRuntimeTest {
         assertTrue(scheduler.scheduled.isEmpty());
     }
 
+                """
+                {"eventId":"later","name":"Later","timeS":0.5,"fraction":0.5,
+                 "commandId":"exact","arguments":{"sequence":"not-a-number"},"cancelOnPathEnd":false}
+                """);
+        BordeauxRuntimeException argumentFailure = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxRoutineRunner(badArguments, registry, conditions, scheduler));
+        assertTrue(argumentFailure.getMessage().contains("path-b"));
+        assertTrue(argumentFailure.getMessage().contains("sequence"));
+
+        BordeauxPathEvents badCondition = readRoutineWithLaterEvent(
+                """
+                {"eventId":"later","name":"Later","timeS":0.5,"fraction":0.5,
+                 "commandId":"exact","arguments":{"sequence":"2"},"cancelOnPathEnd":false,
+                 "conditionId":"missing-condition"}
+                """);
+        BordeauxRuntimeException conditionFailure = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxRoutineRunner(badCondition, registry, conditions, scheduler));
+        assertTrue(conditionFailure.getMessage().contains("path-b"));
+        assertTrue(conditionFailure.getMessage().contains("Unknown Bordeaux condition ID"));
+
+        assertEquals(0, factoryCalls[0]);
+        assertTrue(scheduler.scheduled.isEmpty());
+    }
+
     private static BordeauxPathEvents read(String json) {
         return BordeauxTrajectoryReader.read(
                 new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), "auto");
@@ -733,15 +757,36 @@ class BordeauxRuntimeTest {
                 """.formatted(fallbackNodes);
     }
 
+    private static BordeauxPathEvents readRoutineWithLaterEvent(String eventJson) {
+        String json = """
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
+                 "catalog":{"schemaVersion":"1.0","catalogId":"test-robot","supportVersion":"0.1.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "routine":{"name":"Choose path","nodes":[
+                   {"id":"first","type":"path","ref":"path-a"},
+                   {"id":"choose","type":"decision","cond":"choose-path","thenLabel":"yes","elseLabel":"no",
+                    "then":[{"id":"second","type":"path","ref":"path-b"}],
+                    "else":[{"id":"fallback","type":"path","ref":"path-a"}]}]},
+                 "paths":[
+                   {"id":"path-a","name":"A","totalTimeS":1,"samples":[],"events":[]},
+                   {"id":"path-b","name":"B","totalTimeS":1,"samples":[],"events":[%s]}]}
+                """.formatted(eventJson);
+        return BordeauxTrajectoryReader.readWithRoutine(
+                new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), "path-a");
+    }
+
     private static BordeauxSample sample(int index, double timeS, double xM) {
         return new BordeauxSample(index, timeS, xM, xM / 4, xM, 0, 0, index == 4 ? 0 : 1);
+    }
+
+    private static BordeauxSample positionedSample(int index, double xM, double yM) {
+        return new BordeauxSample(index, index * 0.2, index, index / 4.0, xM, yM, 0, index == 4 ? 0 : 1);
     }
 
     private static BordeauxCommandRegistry registry(List<String> created, String... ids) {
         BordeauxCommandRegistry.Builder builder = BordeauxCommandRegistry.builder()
                 .catalogId(CATALOG_ID).catalogHash(HASH);
         for (String id : ids) {
-            builder.register(id, Set.of(), args -> {
+            builder.register(id, Set.of(), args -> {}, args -> {
                 created.add(id);
                 return new TestCommand(id);
             });
@@ -758,15 +803,27 @@ class BordeauxRuntimeTest {
     private static final class RecordingScheduler implements BordeauxEventRunner.Scheduler {
         private final List<Command> scheduled = new ArrayList<>();
         private final List<Command> cancelled = new ArrayList<>();
+        private final List<Command> active = new ArrayList<>();
 
         @Override
         public void schedule(Command command) {
             scheduled.add(command);
+            active.add(command);
         }
 
         @Override
         public void cancel(Command command) {
             cancelled.add(command);
+            active.remove(command);
+        }
+
+        @Override
+        public boolean isScheduled(Command command) {
+            return active.contains(command);
+        }
+
+        private void finish(Command command) {
+            if (!active.remove(command)) throw new AssertionError("Command was not scheduled");
         }
     }
 }
