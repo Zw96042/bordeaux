@@ -19,6 +19,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Assumptions;
@@ -84,7 +85,8 @@ class BordeauxRuntimeTest {
                 "dynamic", "detour", (ObjectNode) MAPPER.readTree("{}"),
                 new BordeauxRoutineNode.GeneratedFallback.SafeStop())));
         BordeauxPathEvents document = new BordeauxPathEvents("auto", "Auto", 1,
-                capabilities.catalogId(), capabilities.catalogHash(), List.of(), List.of(), List.of(), routine);
+                capabilities.catalogId(), capabilities.catalogHash(), List.of(), List.of(), List.of(), routine,
+                Map.of("next-path", List.of(), "path-a", List.of(), "path-b", List.of()));
         BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, capabilities, new RecordingScheduler());
 
         BordeauxRuntimeException failure = assertThrows(BordeauxRuntimeException.class, runner::startProgress);
@@ -100,11 +102,14 @@ class BordeauxRuntimeTest {
                         new BordeauxRoutineNode.Command("collect", "collect", arguments),
                         new BordeauxRoutineNode.Path("next", "next-path")), List.of())));
         BordeauxPathEvents document = new BordeauxPathEvents("start", "Start", 1,
-                capabilities.catalogId(), capabilities.catalogHash(), List.of(), List.of(), List.of(), routine);
+                capabilities.catalogId(), capabilities.catalogHash(), List.of(), List.of(), List.of(), routine,
+                Map.of("next-path", List.of(), "path-a", List.of(), "path-b", List.of()));
         RecordingScheduler scheduler = new RecordingScheduler();
         BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, capabilities, scheduler);
 
-        assertEquals("next-path", runner.start().orElseThrow());
+        assertEquals(new BordeauxRoutineProgress.CommandWaiting(), runner.startProgress());
+        scheduler.active.clear();
+        assertEquals(new BordeauxRoutineProgress.Path("next-path"), runner.periodic());
         assertEquals(1, scheduler.scheduled.size());
     }
 
@@ -119,6 +124,8 @@ class BordeauxRuntimeTest {
                         new BordeauxRoutineNode.Command("collect", "collect", arguments),
                         new BordeauxRoutineNode.Path("next", "path-b")), List.of())));
         BordeauxPathEvents document = new BordeauxPathEvents("path-a", "A", 1,
+                capabilities.catalogId(), capabilities.catalogHash(), List.of(), List.of(), List.of(), routine,
+                Map.of("next-path", List.of(), "path-a", List.of(), "path-b", List.of()));
         double[] time = {100};
         RecordingScheduler scheduler = new RecordingScheduler();
         BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, capabilities, scheduler, () -> time[0]);
