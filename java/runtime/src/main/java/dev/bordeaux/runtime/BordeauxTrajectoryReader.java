@@ -45,19 +45,12 @@ public final class BordeauxTrajectoryReader {
     public static void validateDocument(byte[] contents, BordeauxRuntimeCompatibility compatibility) {
         if (contents == null) throw new BordeauxRuntimeException("Trajectory contents are required");
         if (compatibility == null) throw new BordeauxRuntimeException("Runtime compatibility is required");
-        ObjectNode document = readDocument(contents);
-        String schemaVersion = text(document, "schemaVersion", "$");
-        if (!"bordeaux-trajectory/1.0".equals(schemaVersion)) {
-            throw new BordeauxRuntimeException("$.schemaVersion must be exactly 'bordeaux-trajectory/1.0'");
-        }
-        if (!"bordeaux".equals(text(document, "generator", "$"))) {
-            throw new BordeauxRuntimeException("$.generator must be exactly 'bordeaux'");
-        }
-        ObjectNode catalog = requireObject(document.get("catalog"), "$.catalog must be an object");
-        validateCatalog(catalog, compatibility);
-        ObjectNode field = requireObject(document.get("field"), "$.field must be an object");
-        validateField(field, compatibility, "$.field");
+        // A null selector preflights the document without retaining a selected path.
+        readDocument(new ByteArrayInputStream(contents), null, true, compatibility);
+    }
 
+    /** Validates the complete document and compiled robot identity before selecting one path. */
+    public static BordeauxPathEvents read(
             byte[] contents, String pathSelector, BordeauxRuntimeCompatibility compatibility) {
         return readValidated(copyBounded(contents), pathSelector, compatibility, false);
     }
