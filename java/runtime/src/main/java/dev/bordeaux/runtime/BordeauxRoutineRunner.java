@@ -265,39 +265,91 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
         for (int index = nodes.size() - 1; index >= 0; index--) pending.addFirst(nodes.get(index));
     }
 
-    private static List<String> decisionConditionIds(List<BordeauxRoutineNode> nodes) {
-        List<String> ids = new java.util.ArrayList<>();
-        collectDecisionConditionIds(nodes, ids);
-        return ids;
-    }
-
-    private static void collectDecisionConditionIds(List<BordeauxRoutineNode> nodes, List<String> ids) {
-        for (BordeauxRoutineNode node : nodes) {
-            if (node instanceof BordeauxRoutineNode.Decision decision) {
-                ids.add(decision.conditionId());
-                collectDecisionConditionIds(decision.whenTrue(), ids);
-                collectDecisionConditionIds(decision.whenFalse(), ids);
-            } else if (node instanceof BordeauxRoutineNode.GeneratedTrajectory generated
-                    && generated.fallback() instanceof BordeauxRoutineNode.GeneratedFallback.Branch branch) {
-                collectDecisionConditionIds(branch.nodes(), ids);
+                if (node instanceof BordeauxRoutineNode.Decision decision) {
+                    conditions.validateReference(decision.conditionId());
+                    prepend(remaining, decision.whenFalse());
+                    prepend(remaining, decision.whenTrue());
+                } else if (node instanceof BordeauxRoutineNode.GeneratedTrajectory generated
+                        && generated.fallback() instanceof BordeauxRoutineNode.GeneratedFallback.Branch branch) {
+                    prepend(remaining, branch.nodes());
+                } else if (node instanceof BordeauxRoutineNode.Command invocation) {
+                    commands.validateInvocation(invocation.commandId(), invocation.arguments());
+                }
+            } catch (RuntimeException exception) {
+                throw new BordeauxRuntimeException(
+                        "Routine node '" + node.id() + "' is invalid: " + exception.getMessage(), exception);
             }
         }
     }
 
-    private static void preflightCommands(
-            List<BordeauxRoutineNode> nodes, BordeauxCommandRegistry commands, boolean fallback) {
-        for (BordeauxRoutineNode node : nodes) {
-            if (node instanceof BordeauxRoutineNode.Command command) {
-                if (fallback) commands.preflightValidatedFallback(command.commandId(), command.arguments());
-                else commands.preflight(command.commandId(), command.arguments());
+    private void validateRoutinePathEvents(BordeauxPathEvents document) {
+        java.util.Set<String> pathIds = new java.util.LinkedHashSet<>();
+        collectPathIds(routine.nodes(), pathIds);
+        for (String pathId : pathIds) {
+            List<BordeauxEvent> events = document.routinePathEvents().get(pathId);
+            if (events == null) {
+                throw new BordeauxRuntimeException(
+                        "Routine path '" + pathId + "' has no event metadata; load the document with "
+                                + "BordeauxTrajectoryReader.readWithRoutine(...) or provide every routine path event list");
+            }
+            try {
+                BordeauxEventRunner.validateEvents(events, commands, conditions);
+            } catch (BordeauxRuntimeException exception) {
+                throw new BordeauxRuntimeException(
+                        "Routine path '" + pathId + "' is invalid: " + exception.getMessage(), exception);
+            }
+        }
+    }
+
+    private void collectPathIds(List<BordeauxRoutineNode> nodes, java.util.Set<String> pathIds) {
+        Deque<BordeauxRoutineNode> remaining = new ArrayDeque<>();
+        prepend(remaining, nodes);
+        while (!remaining.isEmpty()) {
+            BordeauxRoutineNode node = remaining.removeFirst();
+            if (node instanceof BordeauxRoutineNode.Path path) {
+                pathIds.add(path.pathId());
+            } else if (node instanceof BordeauxRoutineNode.GeneratedTrajectory generated
+                    && generated.fallback() instanceof BordeauxRoutineNode.GeneratedFallback.Branch branch) {
+                prepend(remaining, branch.nodes());
             } else if (node instanceof BordeauxRoutineNode.Decision decision) {
-                preflightCommands(decision.whenTrue(), commands, fallback);
-                preflightCommands(decision.whenFalse(), commands, fallback);
-            } else if (node instanceof BordeauxRoutineNode.GeneratedTrajectory generated
-                    && generated.fallback() instanceof BordeauxRoutineNode.GeneratedFallback.Branch branch) {
-                preflightCommands(branch.nodes(), commands, true);
+                prepend(remaining, decision.whenFalse());
+                prepend(remaining, decision.whenTrue());
             }
         }
+    }
+
+    public Transition startTransition() { startProgress(); return transition(); }
+    public Transition completePathTransition(String id) { completePathProgress(id); return transition(); }
+    public Transition periodicTransition() { periodic(); return transition(); }
+    private Transition transition() { return new Transition(status(), Optional.ofNullable(currentPathId)); }
+    public Status status() {
+        if (stopped || terminalProgress instanceof BordeauxRoutineProgress.SafeStopped) return Status.STOPPED;
+        if (!active) return Status.COMPLETE;
+        if (activeCommand != null) return Status.WAITING_FOR_COMMAND;
+        if (currentPathId != null) return Status.PATH_ACTIVE;
+        if (waitDeadlineS != null) return Status.WAITING;
+        if (currentGenerated != null) return currentGeneratedSamples == null ? Status.GENERATING : Status.GENERATED_TRAJECTORY;
+        return Status.READY;
+    }
+
+    private Optional<String> legacyPath(java.util.function.Supplier<BordeauxRoutineProgress> operation) {
+        Deque<BordeauxRoutineNode> saved = new ArrayDeque<>(pending);
+        String savedPath = currentPathId;
+        boolean savedActive = active;
+        boolean savedLegacy = legacyOnly;
+        legacyOnly = true;
+        try { return legacy(operation.get()); }
+        catch (BordeauxRuntimeException exception) {
+            pending.clear(); pending.addAll(saved);
+            currentPathId = savedPath; active = savedActive;
+            throw exception;
+        } finally { legacyOnly = savedLegacy; }
+    }
+    private boolean legacyOnly;
+    private void cancelActiveCommand() {
+        if (activeCommand != null) scheduler.cancel(activeCommand);
+        activeCommand = null;
+    }
     private static void prepend(Deque<BordeauxRoutineNode> target, List<BordeauxRoutineNode> nodes) {
         for (int index = nodes.size() - 1; index >= 0; index--) target.addFirst(nodes.get(index));
     }
