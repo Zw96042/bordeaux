@@ -460,25 +460,47 @@ class BordeauxRuntimeTest {
                 new BordeauxRoutineNode.Path("first", "path-a"),
                 new BordeauxRoutineNode.Decision("choose", "has-note",
                         List.of(new BordeauxRoutineNode.Command("collect", "collect", arguments),
+                                new BordeauxRoutineNode.Command("score", "score", arguments),
                                 new BordeauxRoutineNode.Path("a-next", "path-b")),
                         List.of(new BordeauxRoutineNode.Path("b-next", "path-c")))));
         BordeauxPathEvents document = new BordeauxPathEvents(
-                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), routine);
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), routine,
+                Map.of("path-a", List.of(), "path-b", List.of(), "path-c", List.of()));
         boolean[] hasNote = {true};
         List<String> created = new ArrayList<>();
         RecordingScheduler scheduler = new RecordingScheduler();
-        BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, registry(created, "collect"),
+        BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, registry(created, "collect", "score"),
                 BordeauxConditionRegistry.builder().register("has-note", () -> hasNote[0]).build(), scheduler);
 
-        assertEquals("path-a", runner.start().orElseThrow());
-        assertEquals("path-b", runner.completePath("path-a").orElseThrow());
+        BordeauxRoutineRunner.Transition firstPath = runner.startTransition();
+        assertEquals(BordeauxRoutineRunner.Status.PATH_ACTIVE, firstPath.status());
+        assertEquals("path-a", firstPath.pathId().orElseThrow());
+
+        BordeauxRoutineRunner.Transition collecting = runner.completePathTransition("path-a");
+        assertEquals(BordeauxRoutineRunner.Status.WAITING_FOR_COMMAND, collecting.status());
+        assertTrue(collecting.pathId().isEmpty());
         assertEquals(List.of("collect"), created);
         assertEquals(1, runner.commandCount());
-        assertTrue(runner.completePath("path-b").isEmpty());
+        assertEquals(collecting, runner.periodicTransition());
+        assertEquals(List.of("collect"), created);
+
+        scheduler.finish(scheduler.scheduled.get(0));
+        BordeauxRoutineRunner.Transition scoring = runner.periodicTransition();
+        assertEquals(BordeauxRoutineRunner.Status.WAITING_FOR_COMMAND, scoring.status());
+        assertEquals(List.of("collect", "score"), created);
+        assertEquals(2, runner.commandCount());
+        assertEquals(scoring, runner.periodicTransition());
+
+        scheduler.finish(scheduler.scheduled.get(1));
+        BordeauxRoutineRunner.Transition secondPath = runner.periodicTransition();
+        assertEquals(BordeauxRoutineRunner.Status.PATH_ACTIVE, secondPath.status());
+        assertEquals("path-b", secondPath.pathId().orElseThrow());
+        assertEquals(BordeauxRoutineRunner.Status.COMPLETE,
+                runner.completePathTransition("path-b").status());
 
         hasNote[0] = false;
         runner.reset();
-        runner.start();
+        assertEquals("path-a", runner.start().orElseThrow());
         assertEquals("path-c", runner.completePath("path-a").orElseThrow());
         assertThrows(BordeauxRuntimeException.class, () -> runner.completePath("wrong"));
     }
@@ -502,6 +524,74 @@ class BordeauxRuntimeTest {
                 new RecordingScheduler()));
         assertThrows(BordeauxRuntimeException.class, () -> new BordeauxEventRunner(eventPath, capabilities,
                 new RecordingScheduler()));
+    }
+
+    @Test
+    void legacyRoutineMethodsFailFastForCommandWaitsButKeepTrueCompletionEmpty() throws Exception {
+        ObjectNode arguments = (ObjectNode) MAPPER.readTree("{}");
+        RecordingScheduler scheduler = new RecordingScheduler();
+        List<String> created = new ArrayList<>();
+        BordeauxCommandRegistry commands = registry(created, "collect");
+
+        BordeauxRoutine startsWithCommand = new BordeauxRoutine("Command first", List.of(
+                new BordeauxRoutineNode.Command("collect", "collect", arguments),
+                new BordeauxRoutineNode.Path("path", "path-a")));
+        BordeauxRoutineRunner startRunner = new BordeauxRoutineRunner(new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), startsWithCommand),
+                commands, BordeauxConditionRegistry.empty(), scheduler);
+
+        BordeauxRuntimeException startFailure = assertThrows(BordeauxRuntimeException.class, startRunner::start);
+        assertTrue(startFailure.getMessage().contains("startTransition()"));
+        assertTrue(startFailure.getMessage().contains("completePathTransition(...)"));
+        assertTrue(startFailure.getMessage().contains("periodic()"));
+        assertEquals(BordeauxRoutineRunner.Status.READY, startRunner.status());
+        assertTrue(created.isEmpty());
+        assertTrue(scheduler.scheduled.isEmpty());
+
+        BordeauxRoutine pathThenCommand = new BordeauxRoutine("Command second", List.of(
+                new BordeauxRoutineNode.Path("path", "path-a"),
+                new BordeauxRoutineNode.Command("collect", "collect", arguments)));
+        BordeauxRoutineRunner completeRunner = new BordeauxRoutineRunner(new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), pathThenCommand),
+                commands, BordeauxConditionRegistry.empty(), scheduler);
+
+        assertEquals("path-a", completeRunner.start().orElseThrow());
+        BordeauxRuntimeException completeFailure = assertThrows(BordeauxRuntimeException.class,
+                () -> completeRunner.completePath("path-a"));
+        assertTrue(completeFailure.getMessage().contains("completePathTransition(...)"));
+        assertEquals(BordeauxRoutineRunner.Status.PATH_ACTIVE, completeRunner.status());
+        assertTrue(created.isEmpty());
+        assertTrue(scheduler.scheduled.isEmpty());
+
+        BordeauxRoutine pathOnly = new BordeauxRoutine("Path only", List.of(
+                new BordeauxRoutineNode.Path("path", "path-a")));
+        BordeauxRoutineRunner finishedRunner = new BordeauxRoutineRunner(new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), pathOnly),
+                commands, BordeauxConditionRegistry.empty(), scheduler);
+        assertEquals("path-a", finishedRunner.start().orElseThrow());
+        assertTrue(finishedRunner.completePath("path-a").isEmpty());
+        assertEquals(BordeauxRoutineRunner.Status.COMPLETE, finishedRunner.status());
+
+        BordeauxRoutineRunner emptyRunner = new BordeauxRoutineRunner(new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(),
+                new BordeauxRoutine("Empty", List.of())), commands, BordeauxConditionRegistry.empty(), scheduler);
+        assertTrue(emptyRunner.start().isEmpty());
+        assertEquals(BordeauxRoutineRunner.Status.COMPLETE, emptyRunner.status());
+    }
+
+    @Test
+    void cancelsActiveRoutineCommandOnResetStopAndClose() throws Exception {
+        ObjectNode arguments = (ObjectNode) MAPPER.readTree("{}");
+        BordeauxRoutine routine = new BordeauxRoutine("Command lifecycle", List.of(
+                new BordeauxRoutineNode.Path("first", "path-a"),
+                new BordeauxRoutineNode.Command("collect", "collect", arguments),
+                new BordeauxRoutineNode.Path("second", "path-b")));
+        BordeauxPathEvents document = new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), routine,
+                Map.of("path-a", List.of(), "path-b", List.of()));
+        RecordingScheduler scheduler = new RecordingScheduler();
+        BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, registry(new ArrayList<>(), "collect"),
+                BordeauxConditionRegistry.empty(), scheduler);
 
         runner.start();
         runner.completePathTransition("path-a");
