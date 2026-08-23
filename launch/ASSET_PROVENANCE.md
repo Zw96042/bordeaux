@@ -1,3 +1,8 @@
+# Asset provenance and clearance
+
+Updated: August 10, 2026
+
+## Project-owned source
 
 - Wine-glass mark: `build/icon-assets/wine-glass.svg` and `build/icon.png`. Full-color launch lockups embed the canonical SVG source directly; light-background and one-color files are contrast adaptations of the same geometry.
 - App icon: `build/icon.png`
