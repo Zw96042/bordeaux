@@ -298,6 +298,8 @@ public final class BordeauxRoutineRunner implements AutoCloseable {
                 preflightCommands(branch.nodes(), commands, true);
             }
         }
+    private static void prepend(Deque<BordeauxRoutineNode> target, List<BordeauxRoutineNode> nodes) {
+        for (int index = nodes.size() - 1; index >= 0; index--) target.addFirst(nodes.get(index));
     }
 
     @Override

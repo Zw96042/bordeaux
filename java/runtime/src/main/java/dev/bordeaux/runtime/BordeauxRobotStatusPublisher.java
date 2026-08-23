@@ -17,11 +17,12 @@ import java.util.Objects;
 
 /**
  * Publishes the local robot runtime state for a paired Bordeaux desktop over its constrained file-transfer boundary.
- * This class only writes {@value #STATUS_FILE_NAME}; it does not open sockets, watch directories, invoke commands,
+ * This class writes status and a fixed active trajectory export; it does not open sockets, watch directories, invoke commands,
  * or activate revisions.
  */
 public final class BordeauxRobotStatusPublisher {
     public static final String PROTOCOL_VERSION = "bordeaux-robot-push/1.0";
+    public static final String ACTIVE_REVISION_READ_VERSION = "bordeaux-active-revision/1.0";
     public static final String PRODUCTION_DEPLOYMENT_NAMESPACE = "/home/lvuser/deploy/bordeaux/push-v1";
     public static final int MAX_STATUS_BYTES = 16 * 1024;
     private static final String STATUS_FILE_NAME = "status.json";
@@ -41,15 +42,36 @@ public final class BordeauxRobotStatusPublisher {
 
     /** Atomically replaces the bounded status document and returns its fixed path. */
     public Path publish(BordeauxRuntimeStatus status) {
+        return publishStatus(status, false);
+    }
+
+    /** Publishes a verified export before advertising it; readers check status again after reading. */
+    Path publishActiveRevision(BordeauxRuntimeStatus status, byte[] payload) {
+        if ((status.activeRevisionId() == null) != (payload == null)) {
+            throw new BordeauxRuntimeException("Active revision export identity is incomplete");
+        }
+        if (payload != null) {
+            if (payload.length == 0 || payload.length > BordeauxRevisionReader.MAX_PAYLOAD_BYTES) {
+                throw new BordeauxRuntimeException("Active revision export exceeds the payload size limit");
+            }
+            Path target = namespace.resolve("active-trajectory.json");
+            requireSafeDirectory(namespace, "Bordeaux deployment namespace");
+            rejectSymbolicLink(target, "Bordeaux active trajectory export");
+            writeAtomically(payload, target);
+        }
+        return publishStatus(status, true);
+    }
+
+    private Path publishStatus(BordeauxRuntimeStatus status, boolean activeRevisionRead) {
         Objects.requireNonNull(status, "status");
         requireSafeDirectory(namespace, "Bordeaux deployment namespace");
         rejectSymbolicLink(statusFile, "Bordeaux status file");
-        byte[] document = serialize(status);
+        byte[] document = serialize(status, activeRevisionRead);
         if (document.length > MAX_STATUS_BYTES) {
             throw new BordeauxRuntimeException("Bordeaux robot status exceeds the size limit of "
                     + MAX_STATUS_BYTES + " bytes");
         }
-        writeAtomically(document);
+        writeAtomically(document, statusFile);
         return statusFile;
     }
 
@@ -71,9 +93,10 @@ public final class BordeauxRobotStatusPublisher {
         }
     }
 
-    private static byte[] serialize(BordeauxRuntimeStatus status) {
+    private static byte[] serialize(BordeauxRuntimeStatus status, boolean activeRevisionRead) {
         ObjectNode document = MAPPER.createObjectNode();
         document.put("protocolVersion", PROTOCOL_VERSION);
+        if (activeRevisionRead) document.put("activeRevisionRead", ACTIVE_REVISION_READ_VERSION);
         document.put("deploymentNamespace", PRODUCTION_DEPLOYMENT_NAMESPACE);
         document.put("runtimeId", status.runtimeId());
         document.put("teamNumber", status.teamNumber());
@@ -105,7 +128,7 @@ public final class BordeauxRobotStatusPublisher {
         }
     }
 
-    private void writeAtomically(byte[] document) {
+    private void writeAtomically(byte[] document, Path target) {
         Path temporary = null;
         try {
             temporary = Files.createTempFile(namespace, ".status-", ".tmp");
@@ -115,12 +138,10 @@ public final class BordeauxRobotStatusPublisher {
                 channel.force(true);
             }
             try {
-                Files.move(temporary, statusFile, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             } catch (AtomicMoveNotSupportedException exception) {
                 throw new BordeauxRuntimeException("Atomic replacement is required for Bordeaux robot status", exception);
             }
-        } catch (BordeauxRuntimeException exception) {
-            throw exception;
         } catch (IOException exception) {
             throw new BordeauxRuntimeException("Could not publish Bordeaux robot status", exception);
         } finally {

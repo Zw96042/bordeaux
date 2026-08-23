@@ -97,8 +97,6 @@ public final class BordeauxRobotMailboxService {
                 else if (retention.matches())
                     result.add(new Candidate(entry, retention.group(1), Kind.RETENTION));
             }
-        } catch (BordeauxRuntimeException exception) {
-            throw exception;
         } catch (IOException exception) {
             throw new BordeauxRuntimeException("Could not inspect the Bordeaux inbox", exception);
         }
@@ -219,8 +217,7 @@ public final class BordeauxRobotMailboxService {
     }
 
     private void publishCurrentStatus() {
-        BordeauxRuntimeStatus status = revisions.status();
-        statusPublisher.publish(status);
+        BordeauxRuntimeStatus status = revisions.publishStatus(statusPublisher);
         publishedDisabled = status.disabled();
         publishedStatus = status;
     }
@@ -256,8 +253,6 @@ public final class BordeauxRobotMailboxService {
                 throw new BordeauxRuntimeException(
                         "Atomic replacement is required for Bordeaux acknowledgments", exception);
             }
-        } catch (BordeauxRuntimeException exception) {
-            throw exception;
         } catch (IOException exception) {
             throw new BordeauxRuntimeException(
                     "Could not publish Bordeaux acknowledgment", exception);

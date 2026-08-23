@@ -78,6 +78,18 @@ public final class BordeauxRevisionService {
 
     public synchronized BordeauxRuntimeStatus status() {
         return storage.withExclusiveLock(() -> status(loadOrCreateState()));
+    }
+
+    /** Exports through the configured storage boundary while holding the activation lock. */
+    synchronized BordeauxRuntimeStatus publishStatus(BordeauxRobotStatusPublisher publisher) {
+        return storage.withExclusiveLock(() -> {
+            RuntimeState state = loadOrCreateState();
+            BordeauxRuntimeStatus current = status(state);
+            if (state.active() == null) {
+                publisher.publishActiveRevision(current, null);
+            } else if (current.retention().revisions().stream().anyMatch(entry ->
+                    entry.revisionId().equals(state.active().revisionId()) && entry.availability().equals("retained"))) {
+                byte[] payload = storage.readRevision(state.active().revisionId(), state.active().payloadSha256());
                 BordeauxTrajectoryReader.validateDocument(payload, compatibility);
                 if (!state.active().revisionId().equals(BordeauxRevisionReader.revisionIdForPayload(payload, compatibility))) {
                     throw new BordeauxRuntimeException("Active revision metadata does not match its export payload");

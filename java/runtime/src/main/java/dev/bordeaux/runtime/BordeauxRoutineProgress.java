@@ -4,6 +4,8 @@ import java.util.List;
 
 /** The routine's caller-driven state after a transition or periodic evaluation. */
 public sealed interface BordeauxRoutineProgress {
+    record CommandWaiting() implements BordeauxRoutineProgress {}
+
     record Path(String pathId) implements BordeauxRoutineProgress {}
 
     record Waiting(double remainingS) implements BordeauxRoutineProgress {
