@@ -1,5 +1,107 @@
     },
     {
+      "file": "assets/product/feature-java-1600x900.png",
+      "width": 1600,
+      "height": 900,
+      "format": "PNG"
+    },
+    {
+      "file": "assets/video/title-card-1920x1080.svg",
+      "width": 1920,
+      "height": 1080,
+      "format": "SVG"
+    },
+    {
+      "file": "assets/video/title-card-1920x1080.png",
+      "width": 1920,
+      "height": 1080,
+      "format": "PNG"
+    },
+    {
+      "file": "assets/video/chapter-plan-1920x1080.svg",
+      "width": 1920,
+      "height": 1080,
+      "format": "SVG"
+    },
+    {
+      "file": "assets/video/chapter-plan-1920x1080.png",
+      "width": 1920,
+      "height": 1080,
+      "format": "PNG"
+    },
+    {
+      "file": "assets/video/chapter-compose-1920x1080.svg",
+      "width": 1920,
+      "height": 1080,
+      "format": "SVG"
+    },
+    {
+      "file": "assets/video/chapter-compose-1920x1080.png",
+      "width": 1920,
+      "height": 1080,
+      "format": "PNG"
+    },
+    {
+      "file": "assets/video/chapter-export-1920x1080.svg",
+      "width": 1920,
+      "height": 1080,
+      "format": "SVG"
+    },
+    {
+      "file": "assets/video/chapter-export-1920x1080.png",
+      "width": 1920,
+      "height": 1080,
+      "format": "PNG"
+    },
+    {
+      "file": "assets/video/end-card-1920x1080.svg",
+      "width": 1920,
+      "height": 1080,
+      "format": "SVG"
+    },
+    {
+      "file": "assets/video/end-card-1920x1080.png",
+      "width": 1920,
+      "height": 1080,
+      "format": "PNG"
+    },
+    {
+      "file": "assets/video/lower-third-1920x1080.svg",
+      "width": 1920,
+      "height": 1080,
+      "format": "SVG"
+    },
+    {
+      "file": "assets/video/lower-third-1920x1080.png",
+      "width": 1920,
+      "height": 1080,
+      "format": "PNG"
+    },
+    {
+      "file": "assets/social/quote-card-1200x1200.svg",
+      "width": 1200,
+      "height": 1200,
+      "format": "SVG"
+    },
+    {
+      "file": "assets/social/quote-card-1200x1200.png",
+      "width": 1200,
+      "height": 1200,
+      "format": "PNG"
+    },
+    {
+      "file": "assets/wallpaper/desktop-2560x1440.svg",
+      "width": 2560,
+      "height": 1440,
+      "format": "SVG"
+    },
+    {
+      "file": "assets/wallpaper/desktop-2560x1440.png",
+      "width": 2560,
+      "height": 1440,
+      "format": "PNG"
+    },
+    {
       "file": "assets/wallpaper/mobile-1290x2796.svg",
       "width": 1290,
       "height": 2796,
