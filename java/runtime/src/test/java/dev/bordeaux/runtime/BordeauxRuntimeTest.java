@@ -502,6 +502,30 @@ class BordeauxRuntimeTest {
                 new RecordingScheduler()));
         assertThrows(BordeauxRuntimeException.class, () -> new BordeauxEventRunner(eventPath, capabilities,
                 new RecordingScheduler()));
+
+        runner.start();
+        runner.completePathTransition("path-a");
+        Command resetCommand = scheduler.scheduled.get(0);
+        runner.reset();
+        assertEquals(BordeauxRoutineRunner.Status.READY, runner.status());
+
+        runner.start();
+        runner.completePathTransition("path-a");
+        Command stopCommand = scheduler.scheduled.get(1);
+        runner.stop();
+        assertEquals(BordeauxRoutineRunner.Status.STOPPED, runner.status());
+
+        runner.reset();
+        runner.start();
+        runner.completePathTransition("path-a");
+        Command closeCommand = scheduler.scheduled.get(2);
+        runner.close();
+
+        assertEquals(List.of(resetCommand, stopCommand, closeCommand), scheduler.cancelled);
+        assertEquals(BordeauxRoutineRunner.Status.STOPPED, runner.status());
+        assertFalse(scheduler.isScheduled(resetCommand));
+        assertFalse(scheduler.isScheduled(stopCommand));
+        assertFalse(scheduler.isScheduled(closeCommand));
     }
 
     @Test
@@ -531,6 +555,53 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void timeFollowingConsumesOneUpdateAcrossEveryTimeSectionBoundary() {
+        List<BordeauxSample> samples = List.of(
+                sample(0, 0, 0), sample(1, 0.25, 1), sample(2, 0.5, 2),
+                sample(3, 0.75, 3), sample(4, 1, 4));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "time-sections", "Time sections", 1, CATALOG_ID, HASH, List.of(), samples, List.of(
+                        new BordeauxFollowSection(0, BordeauxFollowSection.Mode.TIME, 0, 1),
+                        new BordeauxFollowSection(1, BordeauxFollowSection.Mode.TIME, 1, 2),
+                        new BordeauxFollowSection(2, BordeauxFollowSection.Mode.TIME, 2, 3),
+                        new BordeauxFollowSection(3, BordeauxFollowSection.Mode.TIME, 3, 4)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(3, follower.update(0.8, 0, 0).index());
+        assertEquals(3, follower.sectionIndex());
+        assertFalse(follower.isFinished());
+        assertEquals(4, follower.update(0.2, 0, 0).index());
+        assertTrue(follower.isFinished());
+
+        follower.reset();
+        assertEquals(4, follower.update(1, 0, 0).index());
+        assertTrue(follower.isFinished());
+    }
+
+    @Test
+    void completesATerminalPositionWaitUsingTheTrailingTimeSection() {
+        List<BordeauxSample> samples = List.of(
+                new BordeauxSample(0, 0, 0, 0, 0, 0, 0, 1),
+                new BordeauxSample(1, 0.5, 1, 0.5, 1, 0, 0, 1),
+                new BordeauxSample(2, 1, 2, 1, 2, 0, 0, 0),
+                new BordeauxSample(3, 1.5, 2, 1, 2, 0, 0, 0),
+                new BordeauxSample(4, 2, 2, 1, 2, 0, 0, 0));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "terminal-wait", "Terminal wait", 2, CATALOG_ID, HASH, List.of(), samples, List.of(
+                        new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 2),
+                        new BordeauxFollowSection(0, BordeauxFollowSection.Mode.TIME, 2, 4)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(2, follower.update(0.02, 2, 0).index());
+        assertEquals(1, follower.sectionIndex());
+        assertFalse(follower.isFinished());
+        assertEquals(3, follower.update(0.5, 2, 0).index());
+        assertFalse(follower.isFinished());
+        assertEquals(4, follower.update(0.5, 2, 0).index());
+        assertTrue(follower.isFinished());
+    }
+
+    @Test
     void stationaryPositionUpdatesDoNotAdvanceTheLookahead() {
         List<BordeauxSample> samples = List.of(
                 sample(0, 0, 0), sample(1, 0.2, 1), sample(2, 0.4, 2),
@@ -557,6 +628,37 @@ class BordeauxRuntimeTest {
 
         assertEquals(3, follower.update(0.02, 1, 0).index());
         assertEquals(4, follower.update(0.02, 0, 0).index());
+    }
+
+    @Test
+    void positionFollowingDoesNotJumpToANearbyFutureLoopEndpoint() {
+        List<BordeauxSample> samples = List.of(
+                positionedSample(0, 0, 0), positionedSample(1, 1, 0),
+                positionedSample(2, 1, 1), positionedSample(3, 0, 1),
+                positionedSample(4, 0.01, 0));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "loop", "Loop", 1, CATALOG_ID, HASH, List.of(), samples,
+                List.of(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 4)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(2, follower.update(0.02, 0.01, 0).index());
+        assertFalse(follower.isFinished());
+        follower.update(0.02, 1, 0);
+        follower.update(0.02, 1, 1);
+        follower.update(0.02, 0, 1);
+        follower.update(0.02, 0.01, 0);
+        assertTrue(follower.isFinished());
+    }
+
+    @Test
+    void sparsePositionFollowingCanCompleteWithoutFollowingEveryPolylineVertex() {
+        List<BordeauxSample> samples = List.of(
+                positionedSample(0, 0, 0), positionedSample(1, 1, 0), positionedSample(2, 1, 1));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "sparse", "Sparse", 1, CATALOG_ID, HASH, List.of(), samples,
+                List.of(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 2)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
         assertEquals(2, follower.update(0.02, 0, 0).index());
         assertEquals(2, follower.update(0.02, 1, 1).index());
         follower.update(0.02, 1, 1);
