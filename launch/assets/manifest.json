@@ -1,3 +1,66 @@
+{
+  "generator": "launch/generate-assets.mjs",
+  "canonicalLogoSource": "build/icon-assets/wine-glass.svg",
+  "palette": {
+    "ink": "#0a0a0b",
+    "inkRaised": "#141317",
+    "ivory": "#f5efe6",
+    "muted": "#aaa4a0",
+    "wine": "#b95770",
+    "wineBright": "#c9677e",
+    "wineDeep": "#702238",
+    "blue": "#7ea2ed",
+    "green": "#77c795",
+    "line": "#2b292e"
+  },
+  "exports": [
+    {
+      "file": "assets/brand/wordmark-on-dark.svg",
+      "width": 1600,
+      "height": 400,
+      "format": "SVG"
+    },
+    {
+      "file": "assets/brand/wordmark-on-dark.png",
+      "width": 1600,
+      "height": 400,
+      "format": "PNG"
+    },
+    {
+      "file": "assets/brand/wordmark-on-light.svg",
+      "width": 1600,
+      "height": 400,
+      "format": "SVG"
+    },
+    {
+      "file": "assets/brand/wordmark-on-light.png",
+      "width": 1600,
+      "height": 400,
+      "format": "PNG"
+    },
+    {
+      "file": "assets/brand/stacked-lockup.svg",
+      "width": 1200,
+      "height": 1200,
+      "format": "SVG"
+    },
+    {
+      "file": "assets/brand/stacked-lockup.png",
+      "width": 1200,
+      "height": 1200,
+      "format": "PNG"
+    },
+    {
+      "file": "assets/brand/mark-monochrome.svg",
+      "width": 1024,
+      "height": 1024,
+      "format": "SVG"
+    },
+    {
+      "file": "assets/brand/mark-monochrome.png",
+      "width": 1024,
+      "height": 1024,
+      "format": "PNG"
     },
     {
       "file": "assets/generated/bordeaux-brand-board.svg",
