@@ -53,7 +53,14 @@ class BordeauxGeneratedTrajectoryRuntimeTest {
         BordeauxRoutineProgress.GeneratedTrajectory generated =
                 (BordeauxRoutineProgress.GeneratedTrajectory) settle(runner);
         assertEquals("dynamic", generated.nodeId());
-        assertEquals(validTrajectory().samples(), generated.samples());
+        assertEquals(validTrajectory().samples().get(0), generated.samples().get(0));
+        assertEquals(2, generated.samples().get(1).velocityMps());
+        assertEquals(2, generated.samples().get(1).accelerationMps2());
+        assertEquals(0, generated.samples().get(1).angularVelocityRadps());
+        assertEquals(0, generated.samples().get(1).curvatureInvM());
+        assertEquals(0, generated.samples().get(1).travelHeadingRad());
+        assertEquals(2, generated.samples().get(1).fieldVelocityXMps());
+        assertEquals(0, generated.samples().get(1).fieldVelocityYMps());
         assertEquals(2, fieldChecks.get());
         assertEquals(1, collisionChecks.get());
         assertEquals(0, safeStops.get());
@@ -64,6 +71,83 @@ class BordeauxGeneratedTrajectoryRuntimeTest {
         assertEquals(2, collisionChecks.get());
         assertEquals(new BordeauxRoutineProgress.Path("static-finish"),
                 runner.completeGeneratedTrajectoryProgress("dynamic-2"));
+    }
+
+    @Test
+    void alignsGeneratedAccelerationAndTerminalVelocityToSampleTimestamps() throws Exception {
+        BordeauxGeneratedTrajectory braking = new BordeauxGeneratedTrajectory(List.of(
+                new BordeauxSample(0, 0, 0, 0, 1, 1, 0, 99, 99, 99, 99),
+                new BordeauxSample(1, 1, 1, 1, 2, 1, 0, 99, 99, 99, 99)));
+        BordeauxCapabilities capabilities = capabilities(BordeauxTrajectoryGeneratorRegistry.FallbackPolicy.SAFE_STOP_ONLY,
+                (context, arguments) -> braking);
+        BordeauxGenerationContext moving = new BordeauxGenerationContext(1, 1, 0,
+                "2026-rebuilt", "rev", "bordeaux-field/1.0", ROBOT_LIMITS, 2, 0, 0);
+        BordeauxRoutineRunner runner = runner(new BordeauxRoutine("Brake", List.of(
+                generated(new BordeauxRoutineNode.GeneratedFallback.SafeStop()))), capabilities,
+                safety(() -> moving, (sample, clearance) -> true, (from, to, clearance) -> true, () -> {}),
+                new double[] {0});
+
+        runner.startProgress();
+        BordeauxRoutineProgress.GeneratedTrajectory generated =
+                (BordeauxRoutineProgress.GeneratedTrajectory) settle(runner);
+
+        assertEquals(2, generated.samples().get(0).velocityMps());
+        assertEquals(0, generated.samples().get(1).velocityMps());
+        assertEquals(-2, generated.samples().get(1).accelerationMps2());
+        assertEquals(0, generated.samples().get(1).angularVelocityRadps());
+        assertEquals(0, generated.samples().get(1).curvatureInvM());
+    }
+
+    @Test
+    void rejectsInitialMotionAboveTheStricterDescriptorLimits() throws Exception {
+        BordeauxTrajectoryGeneratorLimits robotLimits = new BordeauxTrajectoryGeneratorLimits(
+                50, 512, 5, 12, 6, 8, 6, 12, 20, 0.2);
+        for (boolean angular : List.of(false, true)) {
+            BordeauxGenerationContext moving = new BordeauxGenerationContext(1, 1, 0,
+                    "2026-rebuilt", "rev", "bordeaux-field/1.0", robotLimits,
+                    angular ? 0 : 5, 0, angular ? 11 : 0);
+            // Both trajectories brake to an allowed endpoint, so the initial state
+            // must be checked independently of the subsequent sample limits.
+            double duration = angular ? 0.5 : 1;
+            double distance = angular ? 0 : 2.5;
+            double heading = angular ? 3 : 0;
+            BordeauxGeneratedTrajectory braking = new BordeauxGeneratedTrajectory(List.of(
+                    new BordeauxSample(0, 0, 0, 0, 1, 1, 0, 0),
+                    new BordeauxSample(1, duration, distance, 1, 1 + distance, 1, heading, 0)));
+            BordeauxCapabilities capabilities = capabilities(
+                    BordeauxTrajectoryGeneratorRegistry.FallbackPolicy.SAFE_STOP_ONLY,
+                    (context, arguments) -> braking);
+            AtomicInteger safeStops = new AtomicInteger();
+            BordeauxRoutineRunner runner = runner(new BordeauxRoutine("Brake", List.of(
+                    generated(new BordeauxRoutineNode.GeneratedFallback.SafeStop()))), capabilities,
+                    safety(() -> moving, (sample, clearance) -> true,
+                            (from, to, clearance) -> true, safeStops::incrementAndGet), new double[] {0});
+
+            runner.startProgress();
+            assertTrue(settle(runner) instanceof BordeauxRoutineProgress.SafeStopped);
+            assertEquals(1, safeStops.get());
+        }
+    }
+
+    @Test
+    void rejectsAHiddenDirectionReversalInsideAZeroDistanceSegment() throws Exception {
+        BordeauxGeneratedTrajectory reversal = new BordeauxGeneratedTrajectory(List.of(
+                new BordeauxSample(0, 0, 0, 0, 1, 1, 0, 1),
+                new BordeauxSample(1, 1, 0, 1, 1, 1, 0, 1)));
+        BordeauxCapabilities capabilities = capabilities(BordeauxTrajectoryGeneratorRegistry.FallbackPolicy.SAFE_STOP_ONLY,
+                (context, arguments) -> reversal);
+        BordeauxGenerationContext moving = new BordeauxGenerationContext(1, 1, 0,
+                "2026-rebuilt", "rev", "bordeaux-field/1.0", ROBOT_LIMITS, 1, 0, 0);
+        AtomicInteger safeStops = new AtomicInteger();
+        BordeauxRoutineRunner runner = runner(new BordeauxRoutine("Reverse", List.of(
+                generated(new BordeauxRoutineNode.GeneratedFallback.SafeStop()))), capabilities,
+                safety(() -> moving, (sample, clearance) -> true, (from, to, clearance) -> true,
+                        safeStops::incrementAndGet), new double[] {0});
+
+        runner.startProgress();
+
+        assertEquals(new BordeauxRoutineProgress.SafeStopped("dynamic", "detour"), settle(runner));
+        assertEquals(1, safeStops.get());
     }
 
     @Test
@@ -120,7 +204,7 @@ class BordeauxGeneratedTrajectoryRuntimeTest {
         BordeauxCapabilities invalid = capabilities(BordeauxTrajectoryGeneratorRegistry.FallbackPolicy.SAFE_STOP_ONLY,
                 (context, arguments) -> new BordeauxGeneratedTrajectory(List.of(
                         new BordeauxSample(0, 0, 0, 0, 1, 1, 0, 0),
-                        new BordeauxSample(2, 1, 1, 1, Double.NaN, 1, 0, 1))));
+                        new BordeauxSample(1, 1, 1, 1, 2, 1, 0, 1, Double.NaN, 0, 0))));
         BordeauxRoutineRunner invalidRunner = runner(new BordeauxRoutine("Invalid", List.of(
                 generated(new BordeauxRoutineNode.GeneratedFallback.SafeStop()))), invalid,
                 safety(() -> context(), (sample, clearance) -> true, (from, to, clearance) -> true,
@@ -318,7 +402,8 @@ class BordeauxGeneratedTrajectoryRuntimeTest {
     private static BordeauxRoutineRunner runner(BordeauxRoutine routine, BordeauxCapabilities capabilities,
             BordeauxGeneratedTrajectorySafety safety, double[] time) {
         BordeauxPathEvents document = new BordeauxPathEvents("auto", "Auto", 1, CATALOG_ID, HASH,
-                List.of(), List.of(), List.of(), routine);
+                List.of(), List.of(), List.of(), routine, java.util.Map.of(
+                        "fallback-path", List.of(), "static-finish", List.of()));
         return new BordeauxRoutineRunner(document, capabilities, new NoopScheduler(), () -> time[0], safety);
     }
 

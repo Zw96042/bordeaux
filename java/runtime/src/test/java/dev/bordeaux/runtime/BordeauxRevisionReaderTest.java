@@ -52,6 +52,13 @@ class BordeauxRevisionReaderTest {
         BordeauxRuntimeException mismatch = assertThrows(BordeauxRuntimeException.class,
                 () -> BordeauxTrajectoryReader.validateDocument(bytes(currentDocument.replace("\"schemaVersion\":\"1.1\"", "\"schemaVersion\":\"1.0\"")), current));
         assertTrue(mismatch.getMessage().contains("schema/support"), mismatch::getMessage);
+    void validatedStreamRejectsOversizedInputBeforeParsing() {
+        var oversized = new ByteArrayInputStream(new byte[BordeauxTrajectoryReader.MAX_BYTES + 1]);
+
+        BordeauxRuntimeException failure = assertThrows(BordeauxRuntimeException.class,
+                () -> BordeauxTrajectoryReader.read(oversized, "auto", COMPATIBILITY));
+
+        assertTrue(failure.getMessage().contains("exceeds the " + BordeauxTrajectoryReader.MAX_BYTES));
     }
 
     @Test
@@ -174,6 +181,7 @@ class BordeauxRevisionReaderTest {
         assertEquals(revisionId(payload), revision.revisionId());
         assertEquals("nonce-1", revision.activationNonce());
         assertEquals(payload, new String(revision.payload(), StandardCharsets.UTF_8));
+        assertEquals(revision.revisionId(), BordeauxRevisionReader.revisionIdForPayload(revision.payload(), COMPATIBILITY));
     }
 
     @Test
