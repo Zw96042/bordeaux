@@ -547,23 +547,39 @@ public final class BordeauxTrajectoryReader {
         } catch (BordeauxRuntimeException exception) {
             throw exception;
         } catch (IOException exception) {
-            throw new BordeauxRuntimeException("Could not parse Bordeaux trajectory JSON: " + exception.getMessage(), exception);
+                    "Could not read Bordeaux trajectory JSON: " + exception.getMessage(), exception);
         }
     }
 
-    private static void validateCatalog(ObjectNode catalog, BordeauxRuntimeCompatibility compatibility) {
+    private static byte[] copyBounded(byte[] contents) {
+        if (contents == null) throw new BordeauxRuntimeException("Trajectory contents are required");
+        if (contents.length > MAX_BYTES) {
+            throw new BordeauxRuntimeException("trajectory exceeds the " + MAX_BYTES + " byte limit");
+        }
+        return contents.clone();
+    }
+
+    private static BordeauxPathEvents readValidated(byte[] contents, String pathSelector,
+            BordeauxRuntimeCompatibility compatibility, boolean includeRoutine) {
+        if (compatibility == null) throw new BordeauxRuntimeException("Runtime compatibility is required");
+        requireSelector(pathSelector);
+        return readDocument(new ByteArrayInputStream(contents), pathSelector, includeRoutine, compatibility);
+    }
+
+    private static CatalogIdentity readCatalog(ObjectNode catalog, BordeauxRuntimeCompatibility compatibility) {
         String schemaVersion = text(catalog, "schemaVersion", "$.catalog");
         String supportVersion = text(catalog, "supportVersion", "$.catalog");
-        String expectedSchema = switch (compatibility.supportVersion()) {
-            case "0.1.0" -> "1.0";
-            case "0.2.0" -> "1.1";
-            case "0.3.0" -> "1.2";
-            case "0.4.0" -> "1.3";
-            default -> throw new BordeauxRuntimeException("Compiled Bordeaux support version is not supported: " + compatibility.supportVersion());
-        };
-        if (!expectedSchema.equals(schemaVersion) || !compatibility.supportVersion().equals(supportVersion)) {
-            throw new BordeauxRuntimeException("$.catalog must exactly match compiled schema/support "
-                    + expectedSchema + "/" + compatibility.supportVersion());
+        if (compatibility != null) {
+            String expectedSchema = catalogSchema(compatibility.supportVersion());
+            if (expectedSchema == null) {
+                throw new BordeauxRuntimeException("Compiled Bordeaux support version is not supported: " + compatibility.supportVersion());
+            }
+            if (!expectedSchema.equals(schemaVersion) || !compatibility.supportVersion().equals(supportVersion)) {
+                throw new BordeauxRuntimeException("$.catalog must exactly match compiled schema/support "
+                        + expectedSchema + "/" + compatibility.supportVersion());
+            }
+        } else if (!schemaVersion.equals(catalogSchema(supportVersion))) {
+            throw new BordeauxRuntimeException("$.catalog must use a supported schema/support pair from 1.0/0.1.0 through 1.3/0.4.0");
         }
         String catalogId = text(catalog, "catalogId", "$.catalog");
         if (catalogId.length() > 256) throw new BordeauxRuntimeException("$.catalog.catalogId exceeds 256 characters");
@@ -571,15 +587,25 @@ public final class BordeauxTrajectoryReader {
         if (!catalogHash.matches("sha256:[0-9a-f]{64}")) {
             throw new BordeauxRuntimeException("$.catalog.catalogHash must use sha256:<64 lowercase hex characters>");
         }
-        if (!compatibility.catalogId().equals(catalogId)) {
-            throw new BordeauxRuntimeException("Trajectory catalog ID does not match the compiled robot catalog");
+        if (compatibility != null) {
+            if (!compatibility.catalogId().equals(catalogId)) {
+                throw new BordeauxRuntimeException("Trajectory catalog ID does not match the compiled robot catalog");
+            }
+            if (!compatibility.catalogHash().equals(catalogHash)) {
+                throw new BordeauxRuntimeException("Trajectory catalog hash does not match the compiled robot catalog");
+            }
         }
-        if (!compatibility.catalogHash().equals(catalogHash)) {
-            throw new BordeauxRuntimeException("Trajectory catalog hash does not match the compiled robot catalog");
-        }
-        if (!compatibility.supportVersion().equals(supportVersion)) {
-            throw new BordeauxRuntimeException("Trajectory catalog support version does not match the compiled robot support");
-        }
+        return new CatalogIdentity(catalogId, catalogHash, schemaVersion);
+    }
+
+    private static String catalogSchema(String supportVersion) {
+        return switch (supportVersion) {
+            case "0.1.0" -> "1.0";
+            case "0.2.0" -> "1.1";
+            case "0.3.0" -> "1.2";
+            case "0.4.0" -> "1.3";
+            default -> null;
+        };
     }
 
     private static void validateField(ObjectNode field, BordeauxRuntimeCompatibility compatibility, String path) {
@@ -635,6 +661,38 @@ public final class BordeauxTrajectoryReader {
         return nonnegativeFinite(value, context);
     }
 
+    private static double optionalFinite(JsonNode value, String context, double defaultValue) {
+        return value == null ? defaultValue : finite(value, context);
+    }
+
+    private static void applyTravelHeadings(List<BordeauxSample> samples) {
+        for (int index = 0; index < samples.size(); index++) {
+            BordeauxSample sample = samples.get(index);
+            double travelHeadingRad = travelHeading(samples, index);
+            samples.set(index, new BordeauxSample(sample.index(), sample.timeS(), sample.distanceM(),
+                    sample.fraction(), sample.xM(), sample.yM(), sample.headingRad(), sample.velocityMps(),
+                    sample.accelerationMps2(), sample.angularVelocityRadps(), sample.curvatureInvM(),
+                    travelHeadingRad));
+        }
+    }
+
+    private static double travelHeading(List<BordeauxSample> samples, int index) {
+        BordeauxSample sample = samples.get(index);
+        int before = Math.max(0, index - 1);
+        int after = Math.min(samples.size() - 1, index + 1);
+        double dx = samples.get(after).xM() - samples.get(before).xM();
+        double dy = samples.get(after).yM() - samples.get(before).yM();
+        if (Math.hypot(dx, dy) <= 1e-9 && index + 1 < samples.size()) {
+            dx = samples.get(index + 1).xM() - sample.xM();
+            dy = samples.get(index + 1).yM() - sample.yM();
+        }
+        if (Math.hypot(dx, dy) <= 1e-9 && index > 0) {
+            dx = sample.xM() - samples.get(index - 1).xM();
+            dy = sample.yM() - samples.get(index - 1).yM();
+        }
+        return Math.hypot(dx, dy) <= 1e-9 ? sample.headingRad() : Math.atan2(dy, dx);
+    }
+
     private static int requiredInt(JsonNode value, String context) {
         if (value == null || !value.isIntegralNumber() || !value.canConvertToInt() || value.intValue() < 0) {
             throw new BordeauxRuntimeException(context + " must be a nonnegative integer");
@@ -653,8 +711,4 @@ public final class BordeauxTrajectoryReader {
 
     private record IndexedEvent(int index, BordeauxEvent event) {}
 
-    private static final class BoundedInputStream extends InputStream {
-        private final InputStream delegate;
-        private final long maxBytes;
-        private long read;
 }
