@@ -1,3 +1,13 @@
+# Bordeaux press kit copy
+
+## One sentence
+
+Bordeaux is a focused desktop editor for authoring FRC robot paths, autonomous routines, physical constraints, and typed Java command events in one inspectable project.
+
+## 50-word boilerplate
+
+Bordeaux helps FRC teams author splines, preview trajectories, compose complete autonomous routines, model robot geometry and limits, and export a typed Java event contract. Optional agent planning is off by default and stages bounded proposals for explicit review. The current release is beta software for Java 17 teams.
+
 ## 100-word boilerplate
 
 Bordeaux is a desktop authoring environment for FRC autonomous work. Its Plan workspace combines waypoints, headings, rotation targets, event markers, local constraints, and timeline playback. Aquitaine composes paths with commands, waits, stationary actions, and sensor decisions, while the Robot workspace defines drivetrain geometry and physical limits. A managed Java integration discovers annotated command factories and exports a versioned, validated JSON contract without editing `RobotContainer` or deploying robot code. Optional local MCP access is disabled by default, and every agent proposal remains behind Apply/Reject controls. Bordeaux is currently beta and should be validated in simulation and on a safely controlled robot.
