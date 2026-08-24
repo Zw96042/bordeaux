@@ -1,3 +1,97 @@
+/* Exact articulated Chap rig rendered by WRLP's production ChapBird component. */
+window.WrlpChapMarkup = String.raw`<svg viewBox="95 40 860 424" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Chap, the Westlake Chaparral mascot, running" class="h-auto w-full max-w-[360px] select-none md:max-w-[500px]" style="aspect-ratio:860 / 424;display:block;pointer-events:none;user-select:none" data-paused="false"><style>
+        .chap-anim {
+          animation-duration: 460ms;
+          animation-timing-function: ease-in-out;
+          animation-iteration-count: infinite;
+        }
+
+        .chap-bob { animation-name: chap-bob; }
+        .chap-tail { animation-name: chap-tail; }
+        .chap-neck { animation-name: chap-neck; }
+        .chap-head { animation-name: chap-head; }
+        .chap-leg-l { animation-name: chap-leg-l; }
+        .chap-shin-l { animation-name: chap-shin-l; }
+        .chap-foot-l { animation-name: chap-foot-l; }
+        .chap-leg-r { animation-name: chap-leg-r; }
+        .chap-shin-r { animation-name: chap-shin-r; }
+        .chap-foot-r { animation-name: chap-foot-r; }
+
+        .chap-shadow {
+          animation: chap-shadow 460ms ease-in-out infinite;
+          transform-box: fill-box;
+          transform-origin: center;
+        }
+
+        .chap-dust {
+          animation: chap-dust 920ms ease-out infinite;
+          transform-box: fill-box;
+          transform-origin: center;
+          opacity: 0;
+        }
+        .chap-dust-2 { animation-delay: -460ms; }
+        .chap-dust-3 { animation-delay: -230ms; }
+
+        svg[data-paused="true"] .chap-anim,
+        svg[data-paused="true"] .chap-shadow,
+        svg[data-paused="true"] .chap-dust {
+          animation-play-state: paused;
+        }
+
+        /* Two footfalls per stride: low on contact (0/50), airborne between. */
+        @keyframes chap-bob {
+          0%, 50%, 100% { transform: translateY(5px) rotate(0.8deg); }
+          25%, 75% { transform: translateY(-8px) rotate(-1.2deg); }
+        }
+
+        @keyframes chap-tail {
+          0%, 100% { transform: rotate(3deg); }
+          50% { transform: rotate(-3.5deg); }
+        }
+
+        @keyframes chap-neck {
+          0%, 100% { transform: rotate(-2deg); }
+          50% { transform: rotate(2.5deg); }
+        }
+
+        /* Counter-rotation: birds stabilize their heads while running. */
+        @keyframes chap-head {
+          0%, 100% { transform: rotate(1.4deg); }
+          50% { transform: rotate(-2deg); }
+        }
+
+        /*
+         * Run cycle. The art is drawn mid-stride: left leg reaching forward,
+         * right leg trailing. Each leg sweeps to the opposite extreme and
+         * back, so the legs always move in anti-phase.
+         */
+        @keyframes chap-leg-l {
+          0%, 100% { transform: rotate(0deg); }
+          50% { transform: rotate(-74deg); }
+        }
+        @keyframes chap-shin-l {
+          0%, 45%, 100% { transform: rotate(0deg); }
+          72% { transform: rotate(38deg); }
+        }
+        @keyframes chap-foot-l {
+          0%, 100% { transform: rotate(0deg); }
+          40% { transform: rotate(-26deg); }
+          72% { transform: rotate(18deg); }
+        }
+
+        @keyframes chap-leg-r {
+          0%, 100% { transform: rotate(0deg); }
+          50% { transform: rotate(74deg); }
+        }
+        @keyframes chap-shin-r {
+          0%, 100% { transform: rotate(0deg); }
+          22% { transform: rotate(-38deg); }
+          50% { transform: rotate(-8deg); }
+        }
+        @keyframes chap-foot-r {
+          0%, 100% { transform: rotate(0deg); }
+          22% { transform: rotate(30deg); }
+          50% { transform: rotate(58deg); }
           78% { transform: rotate(20deg); }
         }
 
