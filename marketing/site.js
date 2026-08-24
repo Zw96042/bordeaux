@@ -1,3 +1,10 @@
+const header = document.querySelector("[data-header]");
+const menuButton = document.querySelector("[data-menu-button]");
+const navigation = document.querySelector("[data-navigation]");
+const mobileNavigation = window.matchMedia("(max-width: 840px)");
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+const setMenuOpen = (open) => {
   if (!menuButton || !navigation) return;
   menuButton.setAttribute("aria-expanded", String(open));
   menuButton.querySelector(".sr-only").textContent = open ? "Close navigation" : "Open navigation";

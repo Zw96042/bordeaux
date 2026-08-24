@@ -1,0 +1,61 @@
+    transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out), visibility 0s;
+  }
+
+  .site-nav a { min-height: 48px; padding-inline: 14px; }
+  .workspace-grid { grid-template-columns: 1fr; }
+  .workspace-grid article { max-width: 44ch; }
+}
+
+@media (max-width: 600px) {
+  .shell { width: min(var(--content), calc(100% - 32px)); }
+  .hero { min-height: auto; padding-block: calc(var(--header-height) + 74px) 80px; }
+  .hero-grid { gap: 66px; }
+  .hero h1 { font-size: clamp(58px, 17.4vw, 82px); }
+  .hero-copy > p { font-size: 16px; }
+  .hero-actions { align-items: stretch; }
+  .hero-actions .action { flex: 1 1 100%; }
+  .chap-stage { min-height: 250px; width: 100%; margin-inline-start: 0; }
+  .principle { padding-block: 96px; }
+  .principle h2 { font-size: clamp(44px, 13vw, 60px); }
+  .craft { padding-block: 36px 104px; }
+  .craft-grid,
+  .workflow-grid,
+  .java-grid,
+  .control-grid,
+  .faq-grid { gap: 58px; }
+  .section-heading h2,
+  .control h2 { font-size: clamp(46px, 13vw, 64px); }
+  .boundary-index h3 { font-size: 30px; }
+  .workspaces { padding-block: 100px; }
+  .workspace-grid { gap: 54px; }
+  .workflow { padding-block: 104px; }
+  .workflow-list { margin-block-start: 0; }
+  .workflow-list li { font-size: 18px; }
+  .java-section { padding-block: 104px; }
+  .code-sample { width: calc(100% + 32px); margin-inline-start: -16px; }
+  .code-sample pre { padding: 12px 16px 28px; font-size: 10.5px; }
+  .control { padding-block: 104px; }
+  .control-copy dl > div { gap: 16px; }
+  .control-copy dt { font-size: 14px; }
+  .faq { padding-block: 104px; }
+  .closing { min-height: 68svh; padding-block: 104px; }
+  .closing h2 { font-size: clamp(54px, 15.5vw, 68px); }
+  .footer-grid { grid-template-columns: 1fr; }
+  .footer-grid nav { justify-content: flex-start; margin-inline-start: -10px; }
+  .footer-meta { grid-column: auto; }
+  .legal-page { padding-block-start: calc(var(--header-height) + 80px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .site-header,
+  .site-nav,
+  .menu-lines,
+  .menu-lines::before,
+  .menu-lines::after,
+  .site-nav a,
+  .action,
+  .button,
+  .chap-motion-toggle,
+  .faq-list summary::after { transition: none; }
+}
