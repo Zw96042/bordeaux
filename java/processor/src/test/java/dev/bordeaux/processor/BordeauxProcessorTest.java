@@ -3,11 +3,15 @@ package dev.bordeaux.processor;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.bordeaux.runtime.BordeauxCommandRegistry;
 import java.io.IOException;
+import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -212,6 +216,91 @@ class BordeauxProcessorTest {
         JsonNode secondCatalog = MAPPER.readTree(Files.readString(
                 second.classes().resolve("META-INF/bordeaux/commands.json")));
         assertEquals(catalog.path("catalogHash"), secondCatalog.path("catalogHash"));
+    }
+
+    @Test
+    void adaptsExistingCommandsAndSuppliersWithoutWrapperMethods() throws Exception {
+        Compilation result = compile("frc/robot/ExistingCommands.java", """
+                package frc.robot;
+                import dev.bordeaux.annotations.BordeauxCommand;
+                import edu.wpi.first.wpilibj2.command.Command;
+                import java.util.function.Supplier;
+                public final class ExistingCommands {
+                  public static final class CommandFactory implements Supplier<Command> {
+                    public Command get() { return new Command() {}; }
+                  }
+
+                  @BordeauxCommand(id="intake", label="Run intake")
+                  public final Command intakeCommand = new Command() {};
+
+                  @BordeauxCommand(id="align")
+                  public final Supplier<? extends Command> alignCommand = () -> new Command() {};
+
+                  @BordeauxCommand(id="factory")
+                  public final CommandFactory commandFactory = new CommandFactory();
+
+                  @BordeauxCommand(id="stop")
+                  public static final Command stopCommand = new Command() {};
+                }
+                """);
+        assertTrue(result.success(), result.messages());
+
+        JsonNode catalog = MAPPER.readTree(Files.readString(
+                result.classes().resolve("META-INF/bordeaux/commands.json")));
+        assertEquals(List.of("align", "factory", "intake", "stop"), StreamSupport.stream(
+                catalog.path("commands").spliterator(), false).map(value -> value.path("id").textValue()).toList());
+        assertEquals("Run intake", catalog.path("commands").get(2).path("label").textValue());
+        assertTrue(StreamSupport.stream(catalog.path("commands").spliterator(), false)
+                .allMatch(value -> value.path("parameters").isEmpty()));
+
+        String bindings = Files.readString(result.generated().resolve(
+                "dev/bordeaux/generated/BordeauxGeneratedBindings.java"));
+        assertTrue(bindings.contains("private final frc.robot.ExistingCommands provider0"));
+        assertTrue(bindings.contains("args -> provider0.intakeCommand)"));
+        assertTrue(bindings.contains("args -> provider0.alignCommand.get())"));
+        assertTrue(bindings.contains("args -> provider0.commandFactory.get())"));
+        assertTrue(bindings.contains("args -> frc.robot.ExistingCommands.stopCommand)"));
+        assertTrue(Files.exists(result.classes().resolve("dev/bordeaux/generated/BordeauxGeneratedBindings.class")));
+
+        try (var loader = new URLClassLoader(
+                new java.net.URL[] {result.classes().toUri().toURL()}, getClass().getClassLoader())) {
+            Class<?> providerType = loader.loadClass("frc.robot.ExistingCommands");
+            Object provider = providerType.getConstructor().newInstance();
+            Object generated = loader.loadClass("dev.bordeaux.generated.BordeauxGeneratedBindings")
+                    .getConstructor(providerType).newInstance(provider);
+            BordeauxCommandRegistry registry = (BordeauxCommandRegistry) generated.getClass()
+                    .getMethod("registry").invoke(generated);
+
+            assertSame(providerType.getField("intakeCommand").get(provider),
+                    registry.create("intake", MAPPER.createObjectNode()));
+            assertNotSame(registry.create("align", MAPPER.createObjectNode()),
+                    registry.create("align", MAPPER.createObjectNode()));
+            assertNotSame(registry.create("factory", MAPPER.createObjectNode()),
+                    registry.create("factory", MAPPER.createObjectNode()));
+        }
+    }
+
+    @Test
+    void rejectsCommandFieldsThatAreNotStableCommandSources() throws Exception {
+        Compilation result = compile("frc/robot/InvalidFields.java", """
+                package frc.robot;
+                import dev.bordeaux.annotations.BordeauxCommand;
+                import edu.wpi.first.wpilibj2.command.Command;
+                import java.util.function.Supplier;
+                public final class InvalidFields {
+                  @BordeauxCommand private final Command hidden = new Command() {};
+                  @BordeauxCommand public Command mutable = new Command() {};
+                  @BordeauxCommand public final String wrong = "not a command";
+                  @BordeauxCommand public final Supplier<String> wrongSupplier = () -> "not a command";
+                  @BordeauxCommand public final Supplier rawSupplier = () -> new Command() {};
+                }
+                """);
+
+        assertFalse(result.success());
+        assertTrue(result.messages().contains("Bordeaux command fields must be public"), result.messages());
+        assertTrue(result.messages().contains("Bordeaux command fields must be final"), result.messages());
+        assertTrue(result.messages().contains("@BordeauxCommand fields must contain"), result.messages());
+        assertTrue(result.messages().contains("@BordeauxCommand suppliers must provide"), result.messages());
     }
 
     @Test
