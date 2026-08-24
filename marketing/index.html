@@ -1,0 +1,73 @@
+  public Command hold(
+      @BordeauxParam(
+          label = "Output",
+          min = "-1",
+          max = "1")
+      double output) {
+    return Commands.startEnd(
+        () -&gt; intake.set(output),
+        intake::stop,
+        intake);
+  }
+}</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="control" id="control" aria-labelledby="control-title">
+      <div class="shell control-grid">
+        <h2 id="control-title">Technology that asks before it acts.</h2>
+        <div class="control-copy">
+          <p>Optional agent access is local and off by default. It can inspect, analyze, repair, and propose. The authoring boundary remains deliberate: every ready candidate stays a preview until a person chooses Apply.</p>
+          <dl>
+            <div><dt>Inspect project context</dt><dd>Allowed</dd></div>
+            <div><dt>Stage bounded candidates</dt><dd>Allowed</dd></div>
+            <div><dt>Apply a proposal</dt><dd>Team only</dd></div>
+            <div><dt>Save or export</dt><dd>Team only</dd></div>
+            <div><dt>Deploy robot code</dt><dd>Never</dd></div>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <section class="faq light-section" aria-labelledby="faq-title">
+      <div class="shell faq-grid">
+        <div class="section-heading"><h2 id="faq-title">Questions, answered plainly.</h2></div>
+        <div class="faq-list">
+          <details><summary>Is Bordeaux ready for competition use?</summary><p>Bordeaux is beta software. Validate exported trajectories in simulation and on a safely controlled robot, and keep a known-good autonomous fallback.</p></details>
+          <details><summary>Which robots and languages does it support?</summary><p>The maintained application is focused on FRC and Java 17, with swerve and tank robot models.</p></details>
+          <details><summary>Does Bordeaux change or deploy robot code?</summary><p>No. It previews managed support changes, does not edit <code>RobotContainer</code>, and never performs robot deployment.</p></details>
+          <details><summary>Which platforms are packaged?</summary><p>The repository includes packaging targets for macOS, Windows, and Linux. Check each beta release for the exact available artifacts.</p></details>
+          <details><summary>Is Bordeaux open source?</summary><p>Yes. The source, releases, issue tracker, and current license are available in the public GitHub repository.</p></details>
+        </div>
+      </div>
+    </section>
+
+    <section class="closing" aria-labelledby="closing-title">
+      <div class="shell">
+        <h2 id="closing-title"><span>Draw the path.</span><span>Know the run.</span></h2>
+        <div class="hero-actions">
+          <a class="action action-primary" href="https://github.com/Zw96042/bordeaux/releases">Download the beta</a>
+          <a class="action action-secondary" href="https://github.com/Zw96042/bordeaux">View the source</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="shell footer-grid">
+      <p>Bordeaux · Cultivated engineering for FRC autonomous</p>
+      <nav aria-label="Footer navigation">
+        <a href="https://github.com/Zw96042/bordeaux">Source</a>
+        <a href="https://github.com/Zw96042/bordeaux/releases">Releases</a>
+        <a href="https://github.com/Zw96042/bordeaux/issues">Issues</a>
+        <a href="privacy.html">Privacy</a>
+      </nav>
+      <p class="footer-meta">Built for FRC teams · <span data-year>2026</span></p>
+    </div>
+  </footer>
+
+  <script src="assets/figures/wrlp-chap-markup.js"></script>
+  <script src="site.js" defer></script>
+</body>
+</html>
