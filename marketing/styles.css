@@ -1,3 +1,105 @@
+  grid-template-columns: repeat(3, 1fr);
+  gap: clamp(48px, 6vw, 88px);
+}
+
+.workspace-grid article {
+  max-width: 38ch;
+}
+
+.workspace-grid h3 {
+  margin-block-end: 18px;
+  font: 400 42px/1 var(--display);
+  letter-spacing: -0.035em;
+}
+
+.workspace-grid p {
+  max-width: 37ch;
+  color: var(--paper-muted);
+  font-size: 15px;
+}
+
+.workflow { padding-block: 152px 166px; }
+
+.workflow-grid {
+  grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
+  align-items: start;
+}
+
+.workflow-list {
+  display: grid;
+  gap: 30px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workflow-list li {
+  max-width: 34ch;
+  color: var(--paper-ink);
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.java-section {
+  padding-block: 154px;
+  color: var(--paper-ink);
+  background: var(--paper-soft);
+}
+
+.java-grid { align-items: center; }
+
+.java-section .section-heading > p { color: var(--paper-muted); }
+.java-section .section-heading code { color: var(--paper-ink); }
+
+.code-sample {
+  min-width: 0;
+  background: var(--page-deep);
+  box-shadow: 0 22px 72px oklch(0 0 0 / 0.22);
+}
+
+.code-heading {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-inline: 20px 8px;
+  color: var(--faint);
+  font: 500 10px/1 var(--mono);
+}
+
+.code-heading button {
+  min-width: 64px;
+  min-height: 44px;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.code-sample pre {
+  margin: 0;
+  padding: 16px 30px 34px;
+  overflow-x: auto;
+  color: oklch(0.84 0.006 18);
+  font-size: 12px;
+  line-height: 1.75;
+  tab-size: 2;
+}
+
+.control {
+  padding-block: 154px;
+  background: var(--wine-surface);
+}
+
+.control-grid { grid-template-columns: 1.05fr 0.95fr; align-items: start; }
+.control h2 { max-width: 10ch; margin: 0; font-size: clamp(60px, 6.5vw, 102px); line-height: 0.89; }
+.control-copy > p { max-width: 48ch; color: var(--muted); }
+
+.control-copy dl {
+  display: grid;
+  gap: 16px;
+  margin-block-start: 42px;
 }
 
 .control-copy dl > div {
