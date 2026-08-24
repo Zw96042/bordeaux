@@ -1,3 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1290" height="2796" viewBox="0 0 1290 2796" role="img" aria-label="Bordeaux mobile wallpaper"><defs>
+    <linearGradient id="wine" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#b95770"/><stop offset="1" stop-color="#702238"/></linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f5efe6" stop-opacity=".16"/><stop offset="1" stop-color="#c8c1bc" stop-opacity=".04"/></linearGradient>
     <radialGradient id="wineGlow"><stop stop-color="#b95770" stop-opacity=".38"/><stop offset="1" stop-color="#b95770" stop-opacity="0"/></radialGradient>
     <radialGradient id="blueGlow"><stop stop-color="#7ea2ed" stop-opacity=".2"/><stop offset="1" stop-color="#7ea2ed" stop-opacity="0"/></radialGradient>
     <linearGradient id="pathGradient" x1="0" x2="1"><stop stop-color="#7ea2ed"/><stop offset=".48" stop-color="#c9677e"/><stop offset="1" stop-color="#7ea2ed"/></linearGradient>
