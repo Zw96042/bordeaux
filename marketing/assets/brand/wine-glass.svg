@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Bordeaux wine glass</title>
+  <desc id="desc">A simple wine glass in rich Bordeaux red, warm black, and neutral white.</desc>
+
+  <path d="M286 216C299 432 365 558 512 582C659 558 725 432 738 216Z" fill="#f1ebeb" fill-opacity=".06" stroke="#f1ebeb" stroke-width="22" stroke-linejoin="round"/>
+  <path d="M332 374C430 347 594 347 692 374C675 492 616 556 512 574C408 556 349 492 332 374Z" fill="#892934"/>
+  <path d="M332 374C430 347 594 347 692 374C594 402 430 402 332 374Z" fill="#d55661"/>
+  <ellipse cx="512" cy="216" rx="226" ry="31" fill="#0f0b0b" stroke="#f1ebeb" stroke-width="22"/>
+  <path d="M337 259C350 352 372 422 413 481" fill="none" stroke="#f1ebeb" stroke-opacity=".72" stroke-width="20" stroke-linecap="round"/>
+  <path d="M512 582V755" fill="none" stroke="#f1ebeb" stroke-width="24" stroke-linecap="round"/>
+  <path d="M350 817C402 779 459 762 512 762C565 762 622 779 674 817Z" fill="#f1ebeb" fill-opacity=".04" stroke="#f1ebeb" stroke-width="22" stroke-linejoin="round"/>
+</svg>

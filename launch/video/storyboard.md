@@ -1,3 +1,8 @@
+# Launch film storyboard
+
+## 1. Identity / problem — 0:00–0:04
+
+Near-black frame. The wine glass sits above a single burgundy-to-periwinkle route. The headline arrives in two editorial lines. No UI yet; establish the identity before asking the viewer to parse software.
 
 ## 2. Plan chapter — 0:04–0:06.5
 
