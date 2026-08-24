@@ -1,3 +1,105 @@
+}
+
+function validateHtml(path, siteRoot) {
+  const source = readFileSync(path, "utf8");
+  const ids = [...source.matchAll(/\sid=["']([^"']+)["']/g)].map((match) => match[1]);
+  check(ids.length === new Set(ids).size, `${relative(repoRoot, path)} contains duplicate IDs`);
+
+  for (const match of source.matchAll(/\s(?:src|href|poster)=["']([^"']+)["']/g)) {
+    const target = localReference(path, match[1], siteRoot);
+    if (target) check(existsSync(target), `${relative(repoRoot, path)} references missing ${relative(repoRoot, target)}`);
+  }
+
+  for (const match of source.matchAll(/aria-controls=["']([^"']+)["']/g)) {
+    check(ids.includes(match[1]), `${relative(repoRoot, path)} aria-controls target #${match[1]} is missing`);
+  }
+
+  for (const match of source.matchAll(/<script\s+type=["']application\/ld\+json["']>([\s\S]*?)<\/script>/g)) {
+    try {
+      JSON.parse(match[1]);
+      check(true, `${relative(repoRoot, path)} structured data parses`);
+    } catch (error) {
+      check(false, `${relative(repoRoot, path)} structured data is invalid: ${error.message}`);
+    }
+  }
+}
+
+for (const path of walk(marketingRoot, (file) => extname(file) === ".html")) validateHtml(path, marketingRoot);
+validateHtml(join(prototypeRoot, "index.html"), prototypeRoot);
+
+const siteScript = readFileSync(join(marketingRoot, "site.js"), "utf8");
+try {
+  new vm.Script(siteScript, { filename: "marketing/site.js" });
+  check(true, "marketing/site.js parses");
+} catch (error) {
+  check(false, `marketing/site.js does not parse: ${error.message}`);
+}
+
+const prototypeSource = readFileSync(join(prototypeRoot, "index.html"), "utf8");
+for (const [index, match] of [...prototypeSource.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].entries()) {
+  try {
+    new vm.Script(match[1], { filename: `prototype-inline-${index + 1}.js` });
+    check(true, `prototype inline script ${index + 1} parses`);
+  } catch (error) {
+    check(false, `prototype inline script ${index + 1} does not parse: ${error.message}`);
+  }
+}
+
+const css = readFileSync(join(marketingRoot, "styles.css"), "utf8");
+for (const match of css.matchAll(/url\(["']?([^"')]+)["']?\)/g)) {
+  const target = localReference(join(marketingRoot, "styles.css"), match[1], marketingRoot);
+  if (target) check(existsSync(target), `marketing/styles.css references missing ${relative(repoRoot, target)}`);
+}
+
+for (const path of [...walk(marketingRoot), ...walk(launchRoot)].filter((file) => [".svg", ".xml"].includes(extname(file)))) {
+  try {
+    execFileSync(xmlLint, ["--noout", path], { stdio: "ignore" });
+    check(true, `${relative(repoRoot, path)} is valid XML`);
+  } catch {
+    check(false, `${relative(repoRoot, path)} is not valid XML`);
+  }
+}
+
+for (const path of [...walk(marketingRoot), ...walk(launchRoot), ...walk(prototypeRoot)].filter((file) => extname(file) === ".md")) {
+  const source = readFileSync(path, "utf8");
+  for (const match of source.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)) {
+    const target = localReference(path, match[1]);
+    if (target) check(existsSync(target), `${relative(repoRoot, path)} links to missing ${relative(repoRoot, target)}`);
+  }
+}
+
+for (const jsonPath of [join(marketingRoot, "site.webmanifest"), join(launchRoot, "assets/manifest.json")]) {
+  try {
+    JSON.parse(readFileSync(jsonPath, "utf8"));
+    check(true, `${relative(repoRoot, jsonPath)} parses`);
+  } catch (error) {
+    check(false, `${relative(repoRoot, jsonPath)} is invalid JSON: ${error.message}`);
+  }
+}
+
+const siteManifest = JSON.parse(readFileSync(join(marketingRoot, "site.webmanifest"), "utf8"));
+for (const icon of siteManifest.icons ?? []) {
+  check(existsSync(join(marketingRoot, icon.src.replace(/^\//, ""))), `site manifest icon is missing: ${icon.src}`);
+}
+const fontRoot = join(marketingRoot, "assets/fonts");
+const expectedFontHashes = {
+  "space-grotesk-latin.woff2": "a0d054c4af557de20afd6ca59f47ab353bcaec49c63ff04b6c9d39d0f8910557",
+  "jetbrains-mono-latin.woff2": "2c32b9b3ee358c119e210f6f5195f9bd34894d78a785ff2e95d60e718e400af4",
+};
+for (const [file, expectedHash] of Object.entries(expectedFontHashes)) {
+  check(sha256(join(fontRoot, file)) === expectedHash, `${file} no longer matches its documented official source`);
+}
+check(existsSync(join(fontRoot, "FONT-LICENSES.txt")), "font license notices are missing");
+check(existsSync(join(fontRoot, "SOURCES.md")), "font source record is missing");
+
+const manifest = JSON.parse(readFileSync(join(launchRoot, "assets/manifest.json"), "utf8"));
+check(manifest.canonicalLogoSource === "build/icon-assets/wine-glass.svg", "launch manifest must identify the canonical logo source");
+for (const item of manifest.exports) {
+  check(existsSync(join(launchRoot, item.file)), `manifest export is missing: ${item.file}`);
+}
+const monochromeMark = readFileSync(join(launchRoot, "assets/brand/mark-monochrome.svg"), "utf8");
+const monochromeColors = [...monochromeMark.matchAll(/#[0-9a-fA-F]{6}/g)].map((match) => match[0].toLowerCase());
+check(new Set(monochromeColors).size === 1, "monochrome mark contains more than one ink color");
 for (const generatedAsset of ["assets/generated/bordeaux-brand-board.svg", "assets/generated/bordeaux-brand-board.png", "assets/generated/bordeaux-launch-key-art.png"]) {
   check(existsSync(join(launchRoot, generatedAsset)), `generated campaign asset is missing: ${generatedAsset}`);
 }
