@@ -7,7 +7,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-/** Robot-owned mapping from stable Bordeaux IDs to fresh WPILib command factories. */
+/** Robot-owned mapping from stable Bordeaux IDs to validated WPILib command providers. */
 public final class BordeauxCommandRegistry {
     @FunctionalInterface
     public interface Factory {

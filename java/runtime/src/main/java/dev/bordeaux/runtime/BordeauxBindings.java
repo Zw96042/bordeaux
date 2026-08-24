@@ -25,8 +25,6 @@ public final class BordeauxBindings {
             Object result = bindings.getClass().getMethod("registry").invoke(bindings);
             if (result instanceof BordeauxCommandRegistry registry) return registry;
             throw new BordeauxRuntimeException("Generated Bordeaux bindings returned an invalid registry");
-        } catch (BordeauxRuntimeException exception) {
-            throw exception;
         } catch (InvocationTargetException exception) {
             throw generatedFailure(exception);
         } catch (ReflectiveOperationException exception) {
@@ -42,8 +40,6 @@ public final class BordeauxBindings {
             Object result = capabilities.invoke(bindings);
             if (result instanceof BordeauxCapabilities generatedCapabilities) return generatedCapabilities;
             throw new BordeauxRuntimeException("Generated Bordeaux bindings returned invalid capabilities");
-        } catch (BordeauxRuntimeException exception) {
-            throw exception;
         } catch (InvocationTargetException exception) {
             throw generatedFailure(exception);
         } catch (ReflectiveOperationException exception) {
@@ -61,10 +57,7 @@ public final class BordeauxBindings {
         try {
             Class<?> bindingsType = Class.forName(GENERATED_BINDINGS);
             Constructor<?> constructor = generatedConstructor(bindingsType);
-            Object bindings = constructor.newInstance(orderProviders(constructor.getParameterTypes(), available));
-            return bindings;
-        } catch (BordeauxRuntimeException exception) {
-            throw exception;
+            return constructor.newInstance(orderProviders(constructor.getParameterTypes(), available));
         } catch (ClassNotFoundException exception) {
             throw new BordeauxRuntimeException(
                     "Generated Bordeaux bindings are missing; install support and run bordeauxCatalog", exception);
