@@ -1,3 +1,86 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const launchRoot = dirname(fileURLToPath(import.meta.url));
+const repoRoot = dirname(launchRoot);
+const renderer = process.env.RSVG_CONVERT_BIN || "rsvg-convert";
+const ffmpeg = process.env.FFMPEG_BIN || "ffmpeg";
+const exports = [];
+const canonicalGlassSource = "build/icon-assets/wine-glass.svg";
+const canonicalGlassData = Buffer.from(readFileSync(join(repoRoot, canonicalGlassSource), "utf8")).toString("base64");
+
+const palette = {
+  ink: "#0a0a0b",
+  inkRaised: "#141317",
+  ivory: "#f5efe6",
+  muted: "#aaa4a0",
+  wine: "#b95770",
+  wineBright: "#c9677e",
+  wineDeep: "#702238",
+  blue: "#7ea2ed",
+  green: "#77c795",
+  line: "#2b292e",
+};
+
+function defs() {
+  return `<defs>
+    <linearGradient id="wine" x1="0" y1="0" x2="0" y2="1"><stop stop-color="${palette.wine}"/><stop offset="1" stop-color="${palette.wineDeep}"/></linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f5efe6" stop-opacity=".16"/><stop offset="1" stop-color="#c8c1bc" stop-opacity=".04"/></linearGradient>
+    <radialGradient id="wineGlow"><stop stop-color="${palette.wine}" stop-opacity=".38"/><stop offset="1" stop-color="${palette.wine}" stop-opacity="0"/></radialGradient>
+    <radialGradient id="blueGlow"><stop stop-color="${palette.blue}" stop-opacity=".2"/><stop offset="1" stop-color="${palette.blue}" stop-opacity="0"/></radialGradient>
+    <linearGradient id="pathGradient" x1="0" x2="1"><stop stop-color="${palette.blue}"/><stop offset=".48" stop-color="${palette.wineBright}"/><stop offset="1" stop-color="${palette.blue}"/></linearGradient>
+    <pattern id="grid" width="52" height="52" patternUnits="userSpaceOnUse"><path d="M52 0H0V52" fill="none" stroke="#fff" stroke-opacity=".045"/></pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%"><feDropShadow dx="0" dy="24" stdDeviation="30" flood-color="#000" flood-opacity=".42"/></filter>
+  </defs>`;
+}
+
+function svg(width, height, content, { background = null, label = "Bordeaux launch asset", includeDefs = true } = {}) {
+  const backgroundRect = background ? `<rect width="${width}" height="${height}" fill="${background}"/>` : "";
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${label}">${includeDefs ? defs() : ""}${backgroundRect}${content}</svg>`;
+}
+
+function glass(x, y, size, { light = false, monochrome = false } = {}) {
+  if (!light && !monochrome) {
+    return `<image x="${x}" y="${y}" width="${size}" height="${size}" href="data:image/svg+xml;base64,${canonicalGlassData}"/>`;
+  }
+
+  const stroke = "#171319";
+  if (monochrome) {
+    return `<g transform="translate(${x} ${y}) scale(${size / 1024})">
+      <path d="M286 216C299 432 365 558 512 582C659 558 725 432 738 216Z" fill="none" stroke="${stroke}" stroke-width="22" stroke-linejoin="round"/>
+      <path d="M332 374C430 347 594 347 692 374C675 492 616 556 512 574C408 556 349 492 332 374Z" fill="${stroke}"/>
+      <ellipse cx="512" cy="216" rx="226" ry="31" fill="none" stroke="${stroke}" stroke-width="22"/>
+      <path d="M512 582V755" fill="none" stroke="${stroke}" stroke-width="24" stroke-linecap="round"/>
+      <path d="M350 817C402 779 459 762 512 762C565 762 622 779 674 817Z" fill="none" stroke="${stroke}" stroke-width="22" stroke-linejoin="round"/>
+    </g>`;
+  }
+
+  return `<g transform="translate(${x} ${y}) scale(${size / 1024})">
+    <path d="M286 216C299 432 365 558 512 582C659 558 725 432 738 216Z" fill="#171319" fill-opacity=".05" stroke="${stroke}" stroke-width="22" stroke-linejoin="round"/>
+    <path d="M332 374C430 347 594 347 692 374C675 492 616 556 512 574C408 556 349 492 332 374Z" fill="url(#wine)"/>
+    <path d="M332 374C430 347 594 347 692 374C594 402 430 402 332 374Z" fill="${palette.wineBright}"/>
+    <ellipse cx="512" cy="216" rx="226" ry="31" fill="#fff" fill-opacity=".72" stroke="${stroke}" stroke-width="22"/>
+    <path d="M337 259C350 352 372 422 413 481" fill="none" stroke="${stroke}" stroke-opacity=".26" stroke-width="20" stroke-linecap="round"/>
+    <path d="M512 582V755" fill="none" stroke="${stroke}" stroke-width="24" stroke-linecap="round"/>
+    <path d="M350 817C402 779 459 762 512 762C565 762 622 779 674 817Z" fill="none" stroke="${stroke}" stroke-width="22" stroke-linejoin="round"/>
+  </g>`;
+}
+
+function eyebrow(x, y, text, anchor = "start", color = palette.muted) {
+  return `<text x="${x}" y="${y}" text-anchor="${anchor}" fill="${color}" font-family="Arial, sans-serif" font-size="18" font-weight="700" letter-spacing="3.6">${text.toUpperCase()}</text>`;
+}
+
+function title(x, y, lines, { size = 92, anchor = "start", color = palette.ivory, lineHeight = 0.95 } = {}) {
+  return `<text x="${x}" y="${y}" text-anchor="${anchor}" fill="${color}" font-family="Georgia, serif" font-size="${size}" font-weight="500" letter-spacing="-${Math.round(size * 0.045)}">${lines.map((line, index) => `<tspan x="${x}" dy="${index ? size * lineHeight : 0}">${line}</tspan>`).join("")}</text>`;
+}
+
+function body(x, y, lines, { size = 28, anchor = "start", color = palette.muted, lineHeight = 1.45 } = {}) {
+  return `<text x="${x}" y="${y}" text-anchor="${anchor}" fill="${color}" font-family="Arial, sans-serif" font-size="${size}" font-weight="400">${lines.map((line, index) => `<tspan x="${x}" dy="${index ? size * lineHeight : 0}">${line}</tspan>`).join("")}</text>`;
+}
+
+function route(x, y, width, height, { dots = true, strokeWidth = 7 } = {}) {
   const startX = x;
   const startY = y + height * 0.75;
   const midX = x + width * 0.5;
