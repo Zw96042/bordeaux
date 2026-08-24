@@ -1,3 +1,105 @@
+  const startX = x;
+  const startY = y + height * 0.75;
+  const midX = x + width * 0.5;
+  const midY = y + height * 0.35;
+  const endX = x + width;
+  const endY = y + height * 0.15;
+  const d = `M${startX} ${startY}C${x + width * 0.25} ${y + height},${x + width * 0.25} ${y},${midX} ${midY}S${x + width * 0.75} ${y + height},${endX} ${endY}`;
+  return `<path d="${d}" fill="none" stroke="#fff" stroke-opacity=".07" stroke-width="${strokeWidth * 3}" stroke-linecap="round"/><path d="${d}" fill="none" stroke="url(#pathGradient)" stroke-width="${strokeWidth}" stroke-linecap="round"/>${dots ? `<g fill="${palette.inkRaised}" stroke-width="${Math.max(3, strokeWidth * 0.55)}"><circle cx="${startX}" cy="${startY}" r="${strokeWidth * 1.6}" stroke="${palette.blue}"/><circle cx="${midX}" cy="${midY}" r="${strokeWidth * 1.6}" stroke="${palette.wineBright}"/><circle cx="${endX}" cy="${endY}" r="${strokeWidth * 1.6}" stroke="${palette.blue}"/></g>` : ""}`;
+}
+
+function brandLine(x, y, { size = 54, anchor = "start", color = palette.ivory } = {}) {
+  return `<text x="${x}" y="${y}" text-anchor="${anchor}" fill="${color}" font-family="Arial, sans-serif" font-size="${size}" font-weight="650" letter-spacing="-${Math.round(size * .03)}">Bordeaux</text>`;
+}
+
+function render(relativePath, source, width, height, png = true) {
+  const svgPath = join(launchRoot, relativePath);
+  mkdirSync(dirname(svgPath), { recursive: true });
+  writeFileSync(svgPath, source);
+  exports.push({ file: relativePath, width, height, format: "SVG" });
+
+  if (png) {
+    const pngPath = svgPath.replace(/\.svg$/, ".png");
+    execFileSync(renderer, ["-w", String(width), "-h", String(height), "-o", pngPath, svgPath]);
+    exports.push({ file: relativePath.replace(/\.svg$/, ".png"), width, height, format: "PNG" });
+  }
+}
+
+function editorialBackground(width, height) {
+  return `<circle cx="${width * .78}" cy="${height * .2}" r="${Math.min(width, height) * .52}" fill="url(#wineGlow)"/><circle cx="${width * .62}" cy="${height * .8}" r="${Math.min(width, height) * .38}" fill="url(#blueGlow)"/><rect width="${width}" height="${height}" fill="url(#grid)" opacity=".36"/>`;
+}
+
+function brandBoard() {
+  const panelLabel = (number, label, x, y) => `<text x="${x}" y="${y}" fill="${palette.muted}" font-family="monospace" font-size="15" font-weight="600" letter-spacing="2.4"><tspan fill="${palette.ivory}">${number}</tspan><tspan dx="14">${label.toUpperCase()}</tspan></text>`;
+  const swatch = (x, color, name, value, darkText = false) => `<g transform="translate(${x} 564)"><rect width="128" height="214" fill="${color}"/><text x="14" y="158" fill="${darkText ? palette.ink : palette.ivory}" font-family="monospace" font-size="13" font-weight="700">${name}</text><text x="14" y="184" fill="${darkText ? palette.ink : palette.ivory}" fill-opacity=".72" font-family="monospace" font-size="12">${value}</text></g>`;
+  const uiCard = (x, y, width, label, value, accent) => `<g transform="translate(${x} ${y})"><rect width="${width}" height="72" rx="10" fill="#1b1b20" stroke="${palette.line}"/><circle cx="34" cy="36" r="10" fill="${accent}"/><text x="60" y="29" fill="${palette.muted}" font-family="monospace" font-size="11" letter-spacing="1.6">${label}</text><text x="60" y="52" fill="${palette.ivory}" font-family="Arial, sans-serif" font-size="17" font-weight="600">${value}</text></g>`;
+
+  return svg(2400, 1350, `
+    ${editorialBackground(2400, 1350)}
+    <g stroke="#fff" stroke-opacity=".16"><path d="M800 0v1350M1600 0v1350M0 450h2400M0 900h2400"/></g>
+
+    <g>
+      <circle cx="236" cy="198" r="190" fill="url(#wineGlow)"/>
+      ${glass(66, 38, 330)}
+      ${title(400, 198, ["Bordeaux"], { size: 78 })}
+      ${body(404, 246, ["Draw the path. Know the run."], { size: 20, color: palette.wineBright })}
+      ${panelLabel("01", "Hero mark", 38, 414)}
+    </g>
+
+    <g>
+      ${glass(845, 82, 240)}
+      ${title(1070, 208, ["Bordeaux"], { size: 72 })}
+      ${eyebrow(1074, 252, "FRC trajectory authoring", "start", palette.wineBright)}
+      <path d="M1072 292h370" stroke="${palette.line}"/>
+      ${body(1074, 333, ["Plan  ·  Compose  ·  Review"], { size: 17, color: palette.ivory })}
+      ${panelLabel("02", "Primary lockup", 838, 414)}
+    </g>
+
+    <g>
+      <rect x="1638" y="34" width="724" height="332" rx="14" fill="#0e0f12" stroke="${palette.line}"/>
+      <rect x="1638" y="34" width="724" height="332" rx="14" fill="url(#grid)" opacity=".55"/>
+      ${route(1694, 90, 612, 230, { strokeWidth: 7 })}
+      ${panelLabel("03", "Path and waypoint motif", 1638, 414)}
+    </g>
+
+    <g>
+      <rect x="70" y="500" width="292" height="292" rx="72" fill="#19191d" stroke="#fff" stroke-opacity=".13" stroke-width="4"/>
+      <circle cx="216" cy="646" r="150" fill="url(#wineGlow)"/>
+      ${glass(68, 497, 296)}
+      ${title(404, 632, ["Bordeaux"], { size: 58 })}
+      ${body(408, 679, ["Desktop app icon", "and product signature"], { size: 18 })}
+      ${panelLabel("04", "App icon", 38, 864)}
+    </g>
+
+    <g>
+      <rect x="838" y="500" width="724" height="320" rx="14" fill="#0e0f12" stroke="${palette.line}"/>
+      <rect x="838" y="500" width="724" height="50" rx="14" fill="#19191d"/>
+      ${eyebrow(864, 532, "Plan · Compose · Review", "start", palette.wineBright)}
+      ${uiCard(864, 578, 284, "WAYPOINT", "WP-04 · 2.10 m", palette.blue)}
+      ${uiCard(864, 666, 284, "CONSTRAINT", "Max velocity · 3.5 m/s", palette.wineBright)}
+      <rect x="1172" y="578" width="362" height="160" rx="10" fill="#111318" stroke="${palette.line}"/>
+      ${route(1204, 600, 298, 112, { strokeWidth: 4 })}
+      <rect x="1172" y="754" width="174" height="42" rx="9" fill="${palette.ivory}"/><text x="1259" y="780" text-anchor="middle" fill="${palette.ink}" font-family="Arial, sans-serif" font-size="13" font-weight="700">APPLY</text>
+      <rect x="1360" y="754" width="174" height="42" rx="9" fill="#19191d" stroke="${palette.line}"/><text x="1447" y="780" text-anchor="middle" fill="${palette.ivory}" font-family="Arial, sans-serif" font-size="13" font-weight="700">REJECT</text>
+      ${panelLabel("05", "Product material language", 838, 864)}
+    </g>
+
+    <g>
+      <rect x="1638" y="500" width="724" height="320" rx="14" fill="#0e0f12" stroke="${palette.line}"/>
+      ${swatch(1680, palette.inkRaised, "GRAPHITE", "#141317")}
+      ${swatch(1808, palette.ivory, "WARM IVORY", "#F5EFE6", true)}
+      ${swatch(1936, palette.wine, "BORDEAUX", "#B95770")}
+      ${swatch(2064, palette.wineDeep, "WINE DEEP", "#702238")}
+      ${swatch(2192, palette.blue, "PATH", "#7EA2ED", true)}
+      ${panelLabel("06", "Color palette", 1638, 864)}
+    </g>
+
+    <g>
+      ${title(52, 1010, ["Bordeaux"], { size: 70 })}
+      ${title(52, 1088, ["Draw the path."], { size: 46, color: palette.wineBright })}
+      ${title(52, 1142, ["Know the run."], { size: 46, color: palette.wineBright })}
+      ${body(478, 1008, ["DISPLAY", "Georgia Medium"], { size: 14, color: palette.muted })}
+      ${body(478, 1092, ["INTERFACE", "Space Grotesk Semibold"], { size: 14, color: palette.muted })}
       <text x="478" y="1190" fill="${palette.blue}" font-family="monospace" font-size="15">FRC TRAJECTORY AUTHORING</text>
       <text x="52" y="1245" fill="${palette.ivory}" font-family="Arial, sans-serif" font-size="20" letter-spacing="5">PLAN  ·  COMPOSE  ·  REVIEW</text>
       ${panelLabel("07", "Typographic hierarchy", 38, 1314)}
