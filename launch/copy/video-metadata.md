@@ -1,3 +1,10 @@
+# Launch video metadata
+
+## Title options
+
+1. Bordeaux — Draw the path. Know the run.
+2. Meet Bordeaux: FRC autonomous authoring from path to Java
+3. Bordeaux beta product demo — paths, routines, constraints, and typed events
 
 ## Description
 
