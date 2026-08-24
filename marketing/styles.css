@@ -1,5 +1,107 @@
 }
 
+.control-copy dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.control-copy dt { color: var(--ink); }
+.control-copy dd {
+  flex: 0 0 auto;
+  color: var(--ink);
+  font: 650 10px/1.5 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.faq { padding-block: 150px; }
+.faq-grid { grid-template-columns: 0.72fr 1.28fr; }
+
+.faq-list { display: grid; }
+
+.faq-list details {
+  border-block-start: 1px solid var(--line-light);
+}
+
+.faq-list details:last-child { border-block-end: 1px solid var(--line-light); }
+
+.faq-list summary {
+  position: relative;
+  min-height: 76px;
+  display: flex;
+  align-items: center;
+  padding-inline-end: 44px;
+  color: var(--paper-ink);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.faq-list summary::-webkit-details-marker { display: none; }
+.faq-list summary::after {
+  content: "+";
+  position: absolute;
+  inset-inline-end: 8px;
+  color: var(--paper-muted);
+  font: 400 24px/1 var(--sans);
+  transition: transform 160ms var(--ease-out);
+}
+
+.faq-list details[open] summary::after { transform: rotate(45deg); }
+.faq-list details p { max-width: 62ch; margin: -4px 48px 28px 0; color: var(--paper-muted); font-size: 14px; }
+
+.closing {
+  min-height: 78svh;
+  display: grid;
+  align-items: center;
+  padding-block: 130px;
+  background: var(--page-deep);
+}
+
+.closing h2 {
+  max-width: none;
+  margin: 0;
+  font-size: clamp(76px, 8vw, 128px);
+  line-height: 0.88;
+}
+
+.closing h2 span { display: block; white-space: nowrap; }
+
+.site-footer {
+  padding-block: 56px;
+  background: var(--page-deep);
+}
+
+.footer-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 18px 50px;
+  align-items: start;
+}
+
+.footer-grid > p {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.footer-grid nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.footer-grid nav a {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  padding-inline: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  text-decoration: none;
+}
+
 .footer-meta {
   grid-column: 1 / -1;
   font: 500 9px/1.5 var(--mono) !important;
