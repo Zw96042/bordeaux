@@ -1,3 +1,105 @@
+  width: 24px;
+  height: 1px;
+  display: block;
+  background: currentColor;
+  transition: transform 160ms var(--ease-out), opacity 160ms ease-out;
+}
+
+.menu-lines { position: relative; }
+.menu-lines::before,
+.menu-lines::after { content: ""; position: absolute; inset-inline-start: 0; }
+.menu-lines::before { transform: translateY(-7px); }
+.menu-lines::after { transform: translateY(7px); }
+.menu-button[aria-expanded="true"] .menu-lines { background: transparent; }
+.menu-button[aria-expanded="true"] .menu-lines::before { transform: rotate(45deg); }
+.menu-button[aria-expanded="true"] .menu-lines::after { transform: rotate(-45deg); }
+
+.hero {
+  position: relative;
+  min-height: 100svh;
+  display: grid;
+  align-items: center;
+  overflow: hidden;
+  padding-block: calc(var(--header-height) + 72px) 84px;
+  background: var(--page);
+}
+
+.hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.88fr) minmax(520px, 1.12fr);
+  gap: clamp(44px, 6vw, 92px);
+  align-items: center;
+}
+
+.hero-copy { position: relative; z-index: 1; }
+
+.hero h1 {
+  max-width: 8.5ch;
+  margin-block-end: 32px;
+  font: 400 clamp(76px, 7vw, 116px) / 0.85 var(--display);
+  letter-spacing: -0.058em;
+  font-kerning: normal;
+}
+
+.hero-copy > p {
+  max-width: 45ch;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1.55;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-block-start: 34px;
+}
+
+.action,
+.button {
+  min-height: 52px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding-inline: 22px;
+  font-size: 14px;
+  font-weight: 650;
+  text-decoration: none;
+  transition: color 150ms ease-out, background-color 150ms ease-out, transform 100ms var(--ease-out);
+}
+
+.action-primary,
+.button-primary {
+  color: var(--ink);
+  background: var(--action);
+}
+
+.action-secondary,
+.button-text {
+  color: var(--ink);
+  background: transparent;
+}
+
+.chap-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 420px;
+  display: grid;
+  place-items: center;
+  color: var(--ink);
+  user-select: none;
+}
+
+.chap-figure {
+  position: relative;
+  width: min(100%, 780px);
+  padding-block-end: 44px;
+}
+
+.chap-canvas { pointer-events: none; }
+
+.chap-stage svg {
   width: 100%;
   height: auto;
   --chap-hi: var(--ink);
