@@ -1,3 +1,42 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { dirname, extname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import vm from "node:vm";
+
+const launchRoot = dirname(fileURLToPath(import.meta.url));
+const repoRoot = dirname(launchRoot);
+const marketingRoot = join(repoRoot, "marketing");
+const prototypeRoot = join(repoRoot, "prototypes/startup-animations");
+const xmlLint = process.env.XMLLINT_BIN || "xmllint";
+const failures = [];
+let checks = 0;
+
+function check(condition, message) {
+  checks += 1;
+  if (!condition) failures.push(message);
+}
+
+function sha256(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function walk(root, predicate = () => true) {
+  const files = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) files.push(...walk(path, predicate));
+    else if (predicate(path)) files.push(path);
+  }
+  return files;
+}
+
+function localReference(baseFile, value, siteRoot = dirname(baseFile)) {
+  if (!value || value.includes("${") || /^(?:https?:|mailto:|data:|#|%23)/.test(value)) return null;
+  const clean = value.split(/[?#]/)[0];
+  if (!clean) return null;
+  return clean.startsWith("/") ? join(siteRoot, clean.slice(1)) : resolve(dirname(baseFile), clean);
 }
 
 function validateHtml(path, siteRoot) {
