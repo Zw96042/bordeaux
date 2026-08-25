@@ -1,3 +1,105 @@
+    film.final.root.location = (-1.45, 0.10, mix(-0.03, 0.04, enter))
+    film.final.root.rotation_euler = (0, 0, math.radians(-7.0))
+    film.final.root.scale = (scale, scale, scale)
+    film.camera.location = (0.18, -9.55, 2.55)
+    film.focus.location = (-0.05, 0.0, 1.50)
+    look_at(film.camera, film.focus.location)
+    bpy.context.view_layer.update()
+    set_wine_fill_surface(film.final, WINE_REST_Z)
+
+    word = phase(time, start, start + 0.34, ease_out)
+    set_visible(film.title, word > 0)
+    set_text_alpha(film.title, word)
+    title_scale = mix(0.97, 1.0, word)
+    film.title.scale = (title_scale, title_scale, title_scale)
+    film.title.location.z = mix(1.58, 1.64, word)
+    tag = phase(time, start + 0.16, start + 0.46, ease_out)
+    set_visible(film.tagline, tag > 0)
+    set_text_alpha(film.tagline, tag)
+    film.tagline.scale = (1.0, 1.0, 1.0)
+
+    final_path = sample_cubic(
+        Vector((-0.55, 0.05, 0.18)),
+        Vector((0.10, 0.15, 0.18)),
+        Vector((0.62, -0.22, 0.18)),
+        Vector((1.36, 0.02, 0.18)),
+        180,
+    )
+    signal_radii = [mix(0.58, 0.82, math.sin(index / 179 * math.pi)) for index in range(180)]
+    set_curve_points(film.route, final_path, signal_radii)
+    set_curve_points(film.route_glow, final_path, signal_radii)
+    set_curve_material(film.route, film.signal_material)
+    set_curve_material(film.route_glow, film.signal_glow_material)
+    film.route.data.bevel_depth = 0.020
+    film.route_glow.data.bevel_depth = 0.032
+    film.route.data.bevel_factor_end = phase(time, start + 0.08, start + 0.50, ease_out)
+    film.route_glow.data.bevel_factor_end = film.route.data.bevel_factor_end
+    film.route.data.bevel_factor_start = 0.0
+    film.route_glow.data.bevel_factor_start = 0.0
+    set_visible(film.route, True)
+    set_visible(film.route_glow, True)
+
+
+def update_spill_route(film: FilmScene, time: float) -> None:
+    if time >= 2.12:
+        update_final(film, time, 2.18)
+        wipe_out = 1.0 - phase(time, 2.18, 2.52, ease_out)
+        set_visible(film.wipe, wipe_out > 0.01)
+        film.wipe.location = (0.8, -4.7, 2.0)
+        film.wipe.scale = (7.0 * wipe_out, 1.0 * wipe_out, 4.5 * wipe_out)
+        return
+
+    hero = film.hero
+    appear = phase(time, 0.04, 0.34, ease_out)
+    anticipation = phase(time, 0.30, 0.54, ease_out)
+    fall = phase(time, 0.52, 1.24, ease_in_out)
+    impact_time = 1.18
+    elapsed = max(0.0, time - impact_time)
+    recoil = math.exp(-6.3 * elapsed) * math.sin(elapsed * 16.0) if elapsed > 0 else 0.0
+    # The bowl falls toward +X. The leading (+X) rim, airborne pour, impact,
+    # and grounded route all share that direction; the small negative move is
+    # the physical anticipation before the fall.
+    angle = math.radians(-3.5 * anticipation + 64 * fall - 5.5 * recoil)
+    scale = mix(0.87, 0.94, appear)
+    hero.root.rotation_euler = (0, angle, math.radians(-6))
+    hero.root.scale = (scale, scale, scale)
+    foot_contact = Vector((0.72, 0.0, 0.0125)) * scale
+    contact_offset = hero.root.rotation_euler.to_matrix() @ foot_contact
+    contact_pivot = Vector((mix(-0.82, -0.55, fall), 0.0, 0.045))
+    hero.root.location = contact_pivot - contact_offset
+
+    drain = phase(time, 0.82, 1.54, ease_out)
+    wine_z_scale = mix(1.0, 0.18, drain)
+    wine_surface_z = WINE_BOTTOM_Z + (WINE_REST_Z - WINE_BOTTOM_Z) * wine_z_scale
+
+    camera_drift = phase(time, 0.15, 1.62, ease_in_out)
+    shake = math.exp(-11 * elapsed) * math.sin(elapsed * 92) if elapsed > 0 else 0.0
+    film.camera.location = (
+        mix(0.62, 0.48, camera_drift) + shake * 0.025,
+        mix(-9.15, -8.72, camera_drift),
+        2.83 + shake * 0.018,
+    )
+    film.focus.location = (mix(-0.28, 0.34, camera_drift), 0.0, 1.48)
+    look_at(film.camera, film.focus.location)
+
+    bpy.context.view_layer.update()
+    pool_retention = 1.0 - phase(time, 1.18, 1.40, ease_in_out)
+    set_wine_fill_surface(hero, wine_surface_z, pouring=time >= 0.76, retention=pool_retention)
+    origin = hero.pour_origin.matrix_world.translation.copy()
+    ground = Vector((2.58, 0.02, 0.10))
+    air_path = sample_cubic(
+        origin,
+        origin + Vector((0.42, 0.02, -0.08)),
+        ground + Vector((-0.32, 0.0, 0.60)),
+        ground,
+        58,
+    )
+    ground_path = sample_cubic(
+        ground,
+        Vector((3.04, -0.12, 0.075)),
+        Vector((2.96, -0.88, 0.075)),
+        Vector((2.12, -1.34, 0.075)),
+        92,
     )
     ground_path += sample_cubic(
         Vector((2.12, -1.34, 0.075)),
