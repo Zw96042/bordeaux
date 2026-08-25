@@ -93,8 +93,6 @@ final class FileBordeauxRevisionStorage implements BordeauxRevisionStorage {
                 throw new BordeauxRuntimeException("Retained Bordeaux revision payload is missing or corrupt");
             }
             return contents;
-        } catch (BordeauxRuntimeException exception) {
-            throw exception;
         } catch (IOException exception) {
             throw new BordeauxRuntimeException("Could not read retained Bordeaux revision", exception);
         }
