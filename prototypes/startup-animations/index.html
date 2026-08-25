@@ -1,3 +1,105 @@
+      }
+    }
+
+    function playActive() {
+      if (!video) return;
+      if (video.ended) video.currentTime = 0;
+      userWantsPlayback = true;
+      video.playbackRate = Number(speedSelect.value);
+      video.play().then(setPlayState).catch(() => {
+        const button = stage.querySelector('.stage-play');
+        if (button) button.hidden = false;
+        setPlayState();
+      });
+    }
+
+    async function loadSeekableMaster(boundVideo, motion, preview) {
+      const preferredSource = boundVideo.canPlayType('video/webm; codecs="vp9"')
+        ? motion.webm
+        : motion.mp4;
+      try {
+        const response = await fetch(preferredSource);
+        if (!response.ok) throw new Error(`Master request failed: ${response.status}`);
+        const blob = await response.blob();
+        if (video !== boundVideo) return;
+        if (mediaObjectUrl) URL.revokeObjectURL(mediaObjectUrl);
+        mediaObjectUrl = URL.createObjectURL(blob);
+        await new Promise((resolve, reject) => {
+          boundVideo.addEventListener('loadeddata', resolve, { once: true });
+          boundVideo.addEventListener('error', reject, { once: true });
+          boundVideo.src = mediaObjectUrl;
+          boundVideo.load();
+        });
+      } catch {
+        if (video !== boundVideo) return;
+        boundVideo.load();
+        if (boundVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+          await new Promise((resolve) => boundVideo.addEventListener('loadeddata', resolve, { once: true }));
+        }
+      }
+      if (video !== boundVideo) return;
+      preview.removeAttribute('data-loading');
+      if (!reducedMotion.matches && userWantsPlayback) playActive();
+      else setPlayState();
+    }
+
+    function bindStage() {
+      const motion = manifest.animations[current];
+      const preview = stage.querySelector('.motion-preview');
+      video = preview.querySelector('video');
+      const stagePlay = preview.querySelector('.stage-play');
+      meta.textContent = `${motion.title} · ${motion.axis} · ${motion.durationSeconds.toFixed(2)} s`;
+      scrubber.max = String(motion.frameCount - 1);
+      scrubber.disabled = false;
+      speedSelect.disabled = false;
+      playPause.disabled = false;
+      copyConfig.disabled = false;
+      copyStatus.textContent = '';
+      userWantsPlayback = !reducedMotion.matches;
+      updateFrameReadout(0);
+
+      video.playbackRate = Number(speedSelect.value);
+      video.addEventListener('error', () => {
+        preview.removeAttribute('data-loading');
+        preview.innerHTML = '<p class="stage-error">The rendered master could not be loaded. Run the Blender export pipeline, then reload.</p>';
+        meta.textContent = `${motion.title} · rendered master unavailable`;
+        scrubber.disabled = true;
+        speedSelect.disabled = true;
+        playPause.disabled = true;
+        video = null;
+      }, { once: true });
+      video.addEventListener('play', setPlayState);
+      video.addEventListener('pause', setPlayState);
+      video.addEventListener('ended', setPlayState);
+      video.addEventListener('timeupdate', () => {
+        if (!('requestVideoFrameCallback' in video)) {
+          updateFrameReadout(Math.round(video.currentTime * manifest.fps));
+        }
+      });
+      stagePlay.addEventListener('click', () => {
+        stagePlay.hidden = true;
+        playActive();
+      });
+      loadSeekableMaster(video, motion, preview);
+    }
+
+    function mount(i) {
+      if (!variants.length) return;
+      if (video && frameCallback !== null && 'cancelVideoFrameCallback' in video) {
+        video.cancelVideoFrameCallback(frameCallback);
+      }
+      frameCallback = null;
+      if (video) video.pause();
+      video = null;
+      if (mediaObjectUrl) {
+        URL.revokeObjectURL(mediaObjectUrl);
+        mediaObjectUrl = null;
+      }
+      stage.innerHTML = variants[i]();
+      bindStage();
+    }
+
+    function setActive(i) {
       if (i < 0 || i >= variants.length) return;
       current = i;
       items.forEach((el, j) => {
