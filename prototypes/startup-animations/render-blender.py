@@ -1,3 +1,105 @@
+        "Trajectory signal glow",
+        (0.08, 0.18, 0.58, 1.0),
+        roughness=0.22,
+        emission=(0.14, 0.30, 1.0, 1.0),
+        emission_strength=1.0,
+    )
+    title_material = make_material(
+        "Warm type",
+        WARM_WHITE,
+        roughness=0.24,
+        emission=(0.22, 0.19, 0.16, 1.0),
+        emission_strength=0.22,
+    )
+    title_material.surface_render_method = "DITHERED"
+    tagline_material = title_material.copy()
+    tagline_material.name = "Warm type detail"
+    floor_material = make_material("Black mirror", (0.006, 0.005, 0.009, 1.0), roughness=0.22, coat=0.16)
+    wall_material = make_material("Black cyclorama", (0.009, 0.005, 0.012, 1.0), roughness=0.48)
+    wipe_material = make_material(
+        "Wine wipe",
+        (0.34, 0.012, 0.052, 1.0),
+        roughness=0.92,
+        emission=(0.34, 0.012, 0.052, 1.0),
+        emission_strength=1.0,
+    )
+
+    hero = create_glass("Hero", glass_material, wine_material, meniscus_material)
+    final = create_glass("Final", glass_material, wine_material, meniscus_material)
+
+    bpy.ops.mesh.primitive_plane_add(size=28, location=(0, 0, 0))
+    floor = bpy.context.object
+    floor.name = "Reflective floor"
+    floor.data.materials.append(floor_material)
+
+    bpy.ops.mesh.primitive_plane_add(size=24, location=(0, 3.2, 5.0), rotation=(math.radians(90), 0, 0))
+    wall = bpy.context.object
+    wall.name = "Cyclorama wall"
+    wall.data.materials.append(wall_material)
+
+    route = make_curve("Wine route", route_material, 0.055, 180)
+    route_glow = make_curve("Wine route glow", route_glow_material, 0.085, 180)
+    liquid_sheet = make_liquid_sheet("Wine liquid sheet", route_material, 180)
+    liquid_sheet_glow = make_liquid_sheet("Wine liquid sheet glow", route_glow_material, 180)
+    liquid_sheet_glow.location.y = 0.024
+
+    title = create_text(
+        "Bordeaux wordmark",
+        "bordeaux",
+        0.72,
+        (0.15, -0.12, 1.64),
+        title_material,
+        str(SPACE_GROTESK),
+    )
+    tagline = create_text(
+        "Bordeaux tagline",
+        "DRAW THE PATH   ·   KNOW THE RUN",
+        0.105,
+        (0.20, -0.10, 1.14),
+        tagline_material,
+        str(JETBRAINS_MONO),
+    )
+    tagline.data.space_character = 1.15
+
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=128, ring_count=64, radius=1.0)
+    wipe = bpy.context.object
+    wipe.name = "Wine lens wipe"
+    wipe.data.materials.append(wipe_material)
+
+    droplets: list[bpy.types.Object] = []
+    for index in range(12):
+        bpy.ops.mesh.primitive_uv_sphere_add(
+            segments=32,
+            ring_count=16,
+            radius=0.048 if index % 3 == 0 else 0.034,
+        )
+        droplet = bpy.context.object
+        droplet.name = f"Wine droplet {index + 1:02d}"
+        droplet.data.materials.append(route_material)
+        shade_smooth(droplet)
+        droplets.append(droplet)
+
+    splash_rings: list[bpy.types.Object] = []
+    for index, (major, minor) in enumerate(((0.42, 0.022), (0.48, 0.013))):
+        ring = add_torus(f"Splash ring {index + 1}", major, minor, (0, 0, 0.06), route_glow_material)
+        splash_rings.append(ring)
+
+    camera_data = bpy.data.cameras.new("Cinema camera")
+    camera = bpy.data.objects.new("Cinema camera", camera_data)
+    bpy.context.collection.objects.link(camera)
+    camera.location = (0.45, -9.2, 2.85)
+    camera_data.lens = 58
+    camera_data.sensor_width = 36
+    camera_data.dof.use_dof = True
+    camera_data.dof.aperture_fstop = 3.2
+    camera_data.dof.aperture_blades = 9
+    camera_data.dof.aperture_ratio = 1.0
+    focus = bpy.data.objects.new("Focus target", None)
+    bpy.context.collection.objects.link(focus)
+    focus.location = (-0.15, 0.0, 1.65)
+    camera_data.dof.focus_object = focus
+    look_at(camera, focus.location)
+    scene.camera = camera
 
     add_area_light("Key softbox", (-4.4, -4.8, 6.6), (-0.5, 0, 1.7), (1.0, 0.86, 0.72), 1_250, 4.4, "RECTANGLE")
     add_area_light("Wine edge", (4.8, -1.8, 3.8), (0, 0, 1.8), (0.72, 0.025, 0.07), 1_000, 3.0, "RECTANGLE")
