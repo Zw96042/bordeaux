@@ -1,5 +1,6 @@
 package dev.bordeaux.runtime;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.DoubleSupplier;
@@ -48,6 +49,10 @@ final class BordeauxGeneratedTrajectoryExecutor implements AutoCloseable {
                     safety.generationContext().get(), "generationContext returned null");
             validateContext(context);
             BordeauxTrajectoryGeneratorLimits limits = stricter(entry.limits(), context.safetyLimits());
+            if (Math.hypot(context.velocityXMps(), context.velocityYMps()) > limits.maxVelocityMps() + EPSILON
+                    || Math.abs(context.angularVelocityRadps()) > limits.maxAngularVelocityRadps() + EPSILON) {
+                throw new BordeauxRuntimeException("Generation velocity exceeds trajectory descriptor limits");
+            }
             double startedAtS = now();
             double deadlineS = startedAtS + limits.timeoutMs() / 1_000.0;
             if (!Double.isFinite(deadlineS) || deadlineS <= startedAtS) {
@@ -162,13 +167,13 @@ final class BordeauxGeneratedTrajectoryExecutor implements AutoCloseable {
         if (samples.size() < 2 || samples.size() > limits.maxSamples()) {
             throw new BordeauxRuntimeException("Generated trajectory sample count is outside runtime limits");
         }
+        List<BordeauxSample> canonicalSamples = new ArrayList<>(samples.size());
         double geometricDistanceM = 0;
         double previousVelocityX = context.velocityXMps();
         double previousVelocityY = context.velocityYMps();
+        double previousSpeed = Math.hypot(previousVelocityX, previousVelocityY);
         double previousAngularVelocity = context.angularVelocityRadps();
-        double previousSegmentDurationS = Double.NaN;
-        double contextSpeed = Math.hypot(previousVelocityX, previousVelocityY);
-        double previousSegmentDirection = contextSpeed > EPSILON
+        double previousTravelHeading = previousSpeed > EPSILON
                 ? Math.atan2(previousVelocityY, previousVelocityX) : Double.NaN;
         double previousSegmentDistanceM = 0;
         for (int index = 0; index < samples.size(); index++) {
@@ -177,8 +182,7 @@ final class BordeauxGeneratedTrajectoryExecutor implements AutoCloseable {
                 throw new BordeauxRuntimeException("Generated trajectory samples must be finite and sequentially indexed");
             }
             if (sample.timeS() < -EPSILON || sample.distanceM() < -EPSILON
-                    || sample.fraction() < -EPSILON || sample.fraction() > 1 + EPSILON
-                    || Math.abs(sample.velocityMps()) > limits.maxVelocityMps() + EPSILON) {
+                    || sample.fraction() < -EPSILON || sample.fraction() > 1 + EPSILON) {
                 throw new BordeauxRuntimeException("Generated trajectory sample exceeds runtime bounds");
             }
             if (!safety.fieldValidator().contains(sample, limits.minClearanceM())) {
@@ -193,6 +197,10 @@ final class BordeauxGeneratedTrajectoryExecutor implements AutoCloseable {
                                 > START_HEADING_TOLERANCE_RAD) {
                     throw new BordeauxRuntimeException("Generated trajectory must start at the current robot pose");
                 }
+                double initialTravelHeading = Double.isFinite(previousTravelHeading)
+                        ? previousTravelHeading : sample.travelHeadingRad();
+                canonicalSamples.add(withDynamics(
+                        sample, previousSpeed, 0, previousAngularVelocity, 0, initialTravelHeading));
                 continue;
             }
             BordeauxSample previous = samples.get(index - 1);
@@ -203,37 +211,50 @@ final class BordeauxGeneratedTrajectoryExecutor implements AutoCloseable {
                 throw new BordeauxRuntimeException("Generated trajectory samples must be time and distance ordered");
             }
             double segmentDistanceM = Math.hypot(sample.xM() - previous.xM(), sample.yM() - previous.yM());
-            double velocityX = (sample.xM() - previous.xM()) / elapsedS;
-            double velocityY = (sample.yM() - previous.yM()) / elapsedS;
-            double geometricSpeed = Math.hypot(velocityX, velocityY);
-            double accelerationIntervalS = Double.isFinite(previousSegmentDurationS)
-                    ? (previousSegmentDurationS + elapsedS) / 2 : elapsedS / 2;
+            double averageVelocityX = (sample.xM() - previous.xM()) / elapsedS;
+            double averageVelocityY = (sample.yM() - previous.yM()) / elapsedS;
+            // Under the piecewise-linear velocity model, these endpoint values integrate
+            // exactly to the segment displacement from the prior sample-aligned state.
+            double velocityX = 2 * averageVelocityX - previousVelocityX;
+            double velocityY = 2 * averageVelocityY - previousVelocityY;
+            double speed = Math.hypot(velocityX, velocityY);
+            double accelerationX = (velocityX - previousVelocityX) / elapsedS;
+            double accelerationY = (velocityY - previousVelocityY) / elapsedS;
+            double segmentDirection = segmentDistanceM > EPSILON
+                    ? Math.atan2(sample.yM() - previous.yM(), sample.xM() - previous.xM()) : Double.NaN;
+            if (segmentDistanceM <= EPSILON && (previousSpeed > EPSILON || speed > EPSILON)) {
+                throw new BordeauxRuntimeException(
+                        "Generated trajectory cannot hide a direction reversal in a zero-distance segment");
+            }
             geometricDistanceM += segmentDistanceM;
             if (distanceDeltaM + EPSILON < segmentDistanceM
                     || geometricDistanceM > limits.maxDistanceM() + EPSILON
                     || sample.distanceM() > limits.maxDistanceM() + EPSILON
-                    || geometricSpeed > limits.maxVelocityMps() + EPSILON
-                    || Math.hypot(velocityX - previousVelocityX, velocityY - previousVelocityY)
-                            / accelerationIntervalS > limits.maxAccelerationMps2() + EPSILON
-                    || Math.abs(sample.velocityMps() - previous.velocityMps()) / elapsedS
+                    || speed > limits.maxVelocityMps() + EPSILON
+                    || Math.hypot(accelerationX, accelerationY)
                             > limits.maxAccelerationMps2() + EPSILON) {
                 throw new BordeauxRuntimeException("Generated trajectory exceeds robot translational limits");
             }
+            double acceleration = (speed - previousSpeed) / elapsedS;
             double headingDelta = angleDifference(sample.headingRad(), previous.headingRad());
-            double angularVelocity = headingDelta / elapsedS;
+            double averageAngularVelocity = headingDelta / elapsedS;
+            double angularVelocity = 2 * averageAngularVelocity - previousAngularVelocity;
             if (Math.abs(angularVelocity) > limits.maxAngularVelocityRadps() + EPSILON
-                    || Math.abs(angularVelocity - previousAngularVelocity) / accelerationIntervalS
+                    || Math.abs(angularVelocity - previousAngularVelocity) / elapsedS
                             > limits.maxAngularAccelerationRadps2() + EPSILON) {
                 throw new BordeauxRuntimeException("Generated trajectory exceeds robot angular limits");
             }
-            double segmentDirection = segmentDistanceM > EPSILON
-                    ? Math.atan2(sample.yM() - previous.yM(), sample.xM() - previous.xM()) : Double.NaN;
-            if (Double.isFinite(previousSegmentDirection) && Double.isFinite(segmentDirection)) {
-                double curvature = Math.abs(angleDifference(segmentDirection, previousSegmentDirection))
+            double travelHeading = speed > EPSILON
+                    ? Math.atan2(velocityY, velocityX)
+                    : Double.isFinite(segmentDirection) ? segmentDirection
+                    : Double.isFinite(previousTravelHeading) ? previousTravelHeading
+                    : sample.travelHeadingRad();
+            double curvature = 0;
+            if (previousSpeed > EPSILON && speed > EPSILON && Double.isFinite(previousTravelHeading)) {
+                curvature = angleDifference(travelHeading, previousTravelHeading)
                         / Math.max((previousSegmentDistanceM + segmentDistanceM) / 2, EPSILON);
-                double centripetalSpeed = Math.max(
-                        Math.hypot(previousVelocityX, previousVelocityY), geometricSpeed);
-                if (centripetalSpeed * centripetalSpeed * curvature
+                double centripetalSpeed = Math.max(previousSpeed, speed);
+                if (centripetalSpeed * centripetalSpeed * Math.abs(curvature)
                         > limits.maxCentripetalAccelerationMps2() + EPSILON) {
                     throw new BordeauxRuntimeException("Generated trajectory exceeds robot centripetal limits");
                 }
@@ -241,27 +262,39 @@ final class BordeauxGeneratedTrajectoryExecutor implements AutoCloseable {
             if (!safety.collisionValidator().isCollisionFree(previous, sample, limits.minClearanceM())) {
                 throw new BordeauxRuntimeException("Generated trajectory is not collision free");
             }
+            // Generated declarations are untrusted. Release dynamics derived from the same
+            // geometry and timing that passed containment so follower feedforward cannot disagree.
+            canonicalSamples.add(withDynamics(
+                    sample, speed, acceleration, angularVelocity, curvature, travelHeading));
             previousVelocityX = velocityX;
             previousVelocityY = velocityY;
+            previousSpeed = speed;
             previousAngularVelocity = angularVelocity;
-            previousSegmentDurationS = elapsedS;
-            if (Double.isFinite(segmentDirection)) {
-                previousSegmentDirection = segmentDirection;
-                previousSegmentDistanceM = segmentDistanceM;
-            }
+            if (speed > EPSILON) previousTravelHeading = travelHeading;
+            if (segmentDistanceM > EPSILON) previousSegmentDistanceM = segmentDistanceM;
         }
         BordeauxSample last = samples.get(samples.size() - 1);
         if (last.timeS() > limits.maxDurationS() + EPSILON || Math.abs(last.fraction() - 1) > EPSILON) {
             throw new BordeauxRuntimeException("Generated trajectory duration or final fraction is invalid");
         }
-        return List.copyOf(samples);
+        return List.copyOf(canonicalSamples);
+    }
+
+    private static BordeauxSample withDynamics(BordeauxSample sample, double velocityMps,
+            double accelerationMps2, double angularVelocityRadps, double curvatureInvM,
+            double travelHeadingRad) {
+        return new BordeauxSample(sample.index(), sample.timeS(), sample.distanceM(), sample.fraction(),
+                sample.xM(), sample.yM(), sample.headingRad(), velocityMps,
+                accelerationMps2, angularVelocityRadps, curvatureInvM, travelHeadingRad);
     }
 
     private static boolean finite(BordeauxSample value) {
         return Double.isFinite(value.timeS()) && Double.isFinite(value.distanceM())
                 && Double.isFinite(value.fraction()) && Double.isFinite(value.xM())
                 && Double.isFinite(value.yM()) && Double.isFinite(value.headingRad())
-                && Double.isFinite(value.velocityMps());
+                && Double.isFinite(value.velocityMps()) && Double.isFinite(value.accelerationMps2())
+                && Double.isFinite(value.angularVelocityRadps()) && Double.isFinite(value.curvatureInvM())
+                && Double.isFinite(value.travelHeadingRad());
     }
 
     private static double angleDifference(double current, double previous) {
