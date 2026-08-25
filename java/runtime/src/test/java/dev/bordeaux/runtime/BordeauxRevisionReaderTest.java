@@ -1,6 +1,7 @@
 package dev.bordeaux.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -52,6 +53,119 @@ class BordeauxRevisionReaderTest {
         BordeauxRuntimeException mismatch = assertThrows(BordeauxRuntimeException.class,
                 () -> BordeauxTrajectoryReader.validateDocument(bytes(currentDocument.replace("\"schemaVersion\":\"1.1\"", "\"schemaVersion\":\"1.0\"")), current));
         assertTrue(mismatch.getMessage().contains("schema/support"), mismatch::getMessage);
+    }
+
+    @Test
+    void validatedReadChecksTheWholeDocumentAndCompiledFieldBeforeSelecting() {
+        byte[] document = bytes(trajectory("""
+                ,"routine":{"name":"Auto","nodes":[
+                  {"id":"start","type":"path","ref":"auto"}]}
+                ,"paths":[{"id":"auto","name":"Auto","totalTimeS":1,"samples":[],"events":[]}]
+                """));
+
+        assertEquals("auto", BordeauxTrajectoryReader.read(document, "auto", COMPATIBILITY).id());
+        BordeauxPathEvents routine =
+                BordeauxTrajectoryReader.readWithRoutine(document, "auto", COMPATIBILITY);
+        assertEquals("auto", routine.id());
+        assertEquals(new BordeauxRoutineNode.Path("start", "auto"), routine.routine().nodes().get(0));
+        assertEquals("auto", BordeauxTrajectoryReader.read(
+                new ByteArrayInputStream(document), "auto", COMPATIBILITY).id());
+
+        var wrongField = new BordeauxRuntimeCompatibility(
+                CATALOG_ID, HASH, "0.1.0", "other-field",
+                "2026-manual-tu19-welded-4", "bordeaux-field/1.0");
+        BordeauxRuntimeException mismatch = assertThrows(BordeauxRuntimeException.class,
+                () -> BordeauxTrajectoryReader.read(document, "auto", wrongField));
+        assertTrue(mismatch.getMessage().contains("field ID"), mismatch::getMessage);
+
+        byte[] invalidUnselectedPath = bytes(trajectory("""
+                ,"paths":[
+                  {"id":"auto","name":"Auto","totalTimeS":1,"samples":[],"events":[]},
+                  {"id":"other","name":"Other","totalTimeS":1,"samples":[],"events":[
+                    {"eventId":"late","name":"Late","timeS":2,"fraction":0,
+                     "commandId":"score","arguments":{},"cancelOnPathEnd":false}]}]
+                """));
+        BordeauxRuntimeException unselectedFailure = assertThrows(BordeauxRuntimeException.class,
+                () -> BordeauxTrajectoryReader.read(invalidUnselectedPath, "auto", COMPATIBILITY));
+        assertTrue(unselectedFailure.getMessage().contains("after path totalTimeS"),
+                unselectedFailure::getMessage);
+    }
+
+    @Test
+    void selectsByIdBeforeNameWhenMetadataFollowsPaths() {
+        String document = """
+                {"paths":[
+                  {"id":"first","name":"auto","totalTimeS":1,"samples":[],"events":[]},
+                  {"id":"auto","name":"Auto","totalTimeS":1,"samples":[
+                    {"i":0,"t":0,"s":0,"f":0,"x":1,"y":1,"headingRad":0,"velocityMps":0},
+                    {"i":1,"t":1,"s":1,"f":1,"x":2,"y":1,"headingRad":0,"velocityMps":1}],"events":[]}],
+                 "routine":{"name":"Auto","nodes":[{"id":"start","type":"path","ref":"auto"}]},
+                """ + trajectory("").strip().substring(1);
+        BordeauxPathEvents legacy = BordeauxTrajectoryReader.readWithRoutine(
+                new ByteArrayInputStream(bytes(document)), "auto");
+        BordeauxPathEvents checked = BordeauxTrajectoryReader.readWithRoutine(bytes(document), "auto", COMPATIBILITY);
+
+        assertEquals(legacy, checked);
+        assertEquals("auto", checked.id());
+        assertEquals(2, checked.samples().size());
+        assertEquals(CATALOG_ID, checked.catalogId());
+        assertEquals(HASH, checked.catalogHash());
+        assertEquals(new BordeauxRoutineNode.Path("start", "auto"), checked.routine().nodes().get(0));
+        assertTrue(BordeauxTrajectoryReader.read(bytes(document), "auto", COMPATIBILITY).routine().nodes().isEmpty());
+    }
+
+    @Test
+    void keepsLegacyIdSelectionIndependentOfMalformedNameMatches() {
+        String document = trajectory("""
+                ,"paths":[
+                  {"id":"first","name":"auto","totalTimeS":1,"samples":[{}],"events":[]},
+                  {"id":"auto","name":"Auto","totalTimeS":1,"samples":[],"events":[]}]
+                """);
+
+        assertEquals("auto", BordeauxTrajectoryReader.read(new ByteArrayInputStream(bytes(document)), "auto").id());
+        assertThrows(BordeauxRuntimeException.class,
+                () -> BordeauxTrajectoryReader.read(bytes(document), "auto", COMPATIBILITY));
+    }
+
+    @Test
+    void checkedReadsRejectInvalidRoutinesEvenWhenTheCallerDoesNotRequestOne() {
+        String document = trajectory("""
+                ,"paths":[{"id":"auto","name":"Auto","totalTimeS":1,"samples":[],"events":[]}],
+                 "routine":{"name":"Auto","nodes":[{"id":"start","type":"path","ref":"missing"}]}
+                """);
+
+        assertEquals("auto", BordeauxTrajectoryReader.read(new ByteArrayInputStream(bytes(document)), "auto").id());
+        assertThrows(BordeauxRuntimeException.class,
+                () -> BordeauxTrajectoryReader.read(bytes(document), "auto", COMPATIBILITY));
+    }
+
+    @Test
+    void readersKeepOwnershipOfInputStreamsWithTheirCallers() {
+        String document = trajectory(",\"paths\":[{\"id\":\"auto\",\"name\":\"Auto\",\"totalTimeS\":1,\"samples\":[],\"events\":[]}]");
+        boolean[] closed = {false};
+        for (boolean checked : new boolean[] {false, true}) {
+            var input = new ByteArrayInputStream(bytes(document)) {
+                @Override public void close() { closed[0] = true; }
+            };
+            if (checked) BordeauxTrajectoryReader.read(input, "auto", COMPATIBILITY);
+            else BordeauxTrajectoryReader.read(input, "auto");
+            assertFalse(closed[0]);
+        }
+        var envelope = new ByteArrayInputStream(bytes(revision(document, sha256(document), CATALOG_ID, "nonce-1"))) {
+            @Override public void close() { closed[0] = true; }
+        };
+        BordeauxRevisionReader.validate(envelope, COMPATIBILITY);
+        assertFalse(closed[0]);
+    }
+
+    @Test
+    void validatedStreamRejectsOversizedInputBeforeParsing() {
+        var oversized = new ByteArrayInputStream(new byte[BordeauxTrajectoryReader.MAX_BYTES + 1]);
+
+        BordeauxRuntimeException failure = assertThrows(BordeauxRuntimeException.class,
+                () -> BordeauxTrajectoryReader.read(oversized, "auto", COMPATIBILITY));
+
+        assertTrue(failure.getMessage().contains("exceeds the " + BordeauxTrajectoryReader.MAX_BYTES));
     }
 
     @Test
@@ -174,6 +288,7 @@ class BordeauxRevisionReaderTest {
         assertEquals(revisionId(payload), revision.revisionId());
         assertEquals("nonce-1", revision.activationNonce());
         assertEquals(payload, new String(revision.payload(), StandardCharsets.UTF_8));
+        assertEquals(revision.revisionId(), BordeauxRevisionReader.revisionIdForPayload(revision.payload(), COMPATIBILITY));
     }
 
     @Test
