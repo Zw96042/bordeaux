@@ -1,3 +1,105 @@
+
+    add_area_light("Key softbox", (-4.4, -4.8, 6.6), (-0.5, 0, 1.7), (1.0, 0.86, 0.72), 1_250, 4.4, "RECTANGLE")
+    add_area_light("Wine edge", (4.8, -1.8, 3.8), (0, 0, 1.8), (0.72, 0.025, 0.07), 1_000, 3.0, "RECTANGLE")
+    add_area_light("Blue rim", (-3.8, 2.0, 4.8), (-0.3, 0, 2.0), (0.18, 0.34, 1.0), 850, 3.2, "RECTANGLE")
+    add_area_light("Top line", (0.2, -0.2, 7.6), (0, 0, 1.2), (1.0, 0.92, 0.80), 900, 3.0, "DISK")
+
+    return FilmScene(
+        scene=scene,
+        camera=camera,
+        focus=focus,
+        hero=hero,
+        final=final,
+        route=route,
+        route_glow=route_glow,
+        liquid_sheet=liquid_sheet,
+        liquid_sheet_glow=liquid_sheet_glow,
+        title=title,
+        tagline=tagline,
+        wipe=wipe,
+        floor=floor,
+        droplets=tuple(droplets),
+        splash_rings=tuple(splash_rings),
+        route_wine_material=route_material,
+        route_glow_material=route_glow_material,
+        signal_material=signal_material,
+        signal_glow_material=signal_glow_material,
+    )
+
+
+def set_visible(obj: bpy.types.Object, visible: bool) -> None:
+    obj.hide_render = not visible
+    obj.hide_viewport = not visible
+
+
+def set_curve_material(obj: bpy.types.Object, material: bpy.types.Material) -> None:
+    if len(obj.data.materials) == 0:
+        obj.data.materials.append(material)
+    elif obj.data.materials[0] != material:
+        obj.data.materials[0] = material
+
+
+def set_text_alpha(obj: bpy.types.Object, alpha: float) -> None:
+    material = obj.data.materials[0]
+    value = clamp01(alpha)
+    set_principled_input(material, "Alpha", value)
+    material.diffuse_color = (*material.diffuse_color[:3], value)
+
+
+def set_rig_visible(rig: GlassRig, visible: bool) -> None:
+    for part in rig.parts:
+        set_visible(part, visible)
+
+
+def reset_scene(film: FilmScene) -> None:
+    set_rig_visible(film.hero, True)
+    set_rig_visible(film.final, False)
+    set_visible(film.route, False)
+    set_visible(film.route_glow, False)
+    set_visible(film.liquid_sheet, False)
+    set_visible(film.liquid_sheet_glow, False)
+    set_visible(film.title, False)
+    set_visible(film.tagline, False)
+    set_visible(film.wipe, False)
+    for droplet in film.droplets:
+        set_visible(droplet, False)
+        droplet.scale = (1, 1, 1)
+    for ring in film.splash_rings:
+        set_visible(ring, False)
+        ring.scale = (1, 1, 1)
+    film.hero.root.location = (0, 0, 0)
+    film.hero.root.rotation_euler = (0, 0, 0)
+    film.hero.root.scale = (1, 1, 1)
+    film.hero.liquid_root.location = (0, 0, 0)
+    film.hero.liquid_root.rotation_euler = (0, 0, 0)
+    film.hero.liquid_root.scale = (1, 1, 1)
+    film.final.root.location = (0, 0, 0)
+    film.final.root.rotation_euler = (0, 0, 0)
+    film.final.root.scale = (1, 1, 1)
+    for rig in (film.hero, film.final):
+        rig.shell.scale = (1, 1, 1)
+        rig.rim.scale = (1, 1, 1)
+        rig.stem.scale = (1, 1, 1)
+        rig.foot.scale = (1, 1, 1)
+        rig.foot_rim.scale = (1, 1, 1)
+        rig.wine.location = (0, 0, 0)
+        rig.wine.rotation_euler = (0, 0, 0)
+        rig.wine.scale = (1, 1, 1)
+        set_visible(rig.meniscus, False)
+        rig.meniscus.location = (0, 0, 2.39)
+        rig.meniscus.rotation_euler = (0, 0, 0)
+        rig.meniscus.scale = (1, 1, 1)
+    film.route.data.bevel_factor_end = 1.0
+    film.route_glow.data.bevel_factor_end = 1.0
+    film.route.data.bevel_factor_start = 0.0
+    film.route_glow.data.bevel_factor_start = 0.0
+
+
+def update_final(film: FilmScene, time: float, start: float) -> None:
+    set_rig_visible(film.hero, False)
+    set_rig_visible(film.final, True)
+    enter = phase(time, start, start + 0.42, ease_out)
+    scale = mix(0.61, 0.68, enter)
     film.final.root.location = (-1.45, 0.10, mix(-0.03, 0.04, enter))
     film.final.root.rotation_euler = (0, 0, math.radians(-7.0))
     film.final.root.scale = (scale, scale, scale)
