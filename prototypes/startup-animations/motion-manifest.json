@@ -1,3 +1,13 @@
+{
+  "generator": "render-animations.mjs",
+  "source": "render-blender.py",
+  "renderer": {
+    "application": "Blender",
+    "version": "5.2 LTS",
+    "engine": "Eevee",
+    "samples": 64,
+    "motionBlur": {
+      "shutter": 0.46,
       "steps": 8
     }
   },
