@@ -1,3 +1,105 @@
+    leader = film.droplets[0]
+    set_visible(leader, 0.001 < trace < 0.999)
+    if 0.001 < trace < 0.999:
+        head_position = trace * (len(path) - 1)
+        head_floor = int(math.floor(head_position))
+        head_ceil = min(len(path) - 1, head_floor + 1)
+        leader.location = path[head_floor].lerp(
+            path[head_ceil],
+            head_position - head_floor,
+        )
+        leader.scale = (1.72, 0.96, 1.42)
+    for index, droplet in enumerate(film.droplets[1:4]):
+        release_start = 0.98 + index * 0.055
+        bead_progress = phase(time, release_start, 1.88 + index * 0.025, gravity_ease)
+        bead_visible = release_start <= time < 1.94 and bead_progress < 0.985
+        set_visible(droplet, bead_visible)
+        if bead_visible:
+            bead_position = bead_progress * (len(path) - 1)
+            bead_floor = int(math.floor(bead_position))
+            bead_ceil = min(len(path) - 1, bead_floor + 1)
+            droplet.location = path[bead_floor].lerp(
+                path[bead_ceil],
+                bead_position - bead_floor,
+            )
+            bead_scale = (0.88, 0.70, 1.20) if index == 0 else (0.68, 0.62, 0.98)
+            droplet.scale = bead_scale
+    wipe_in = phase(time, 1.72, 2.02, ease_out)
+    if wipe_in > 0:
+        set_visible(film.wipe, True)
+        film.wipe.location = (0.6, -4.7, 2.0)
+        radius = mix(0.01, 7.0, wipe_in)
+        film.wipe.scale = (radius, radius * 0.18, radius * 0.64)
+
+
+def update_precision_lock(film: FilmScene, time: float) -> None:
+    set_rig_visible(film.hero, False)
+    set_rig_visible(film.final, True)
+    rig = film.final
+    rig.root.location = (-1.45, 0.10, 0.04)
+    rig.root.rotation_euler = (0, 0, math.radians(mix(-12, -7, phase(time, 0.08, 1.24, ease_in_out))))
+    rig.root.scale = (0.68, 0.68, 0.68)
+    film.camera.location = (mix(0.52, 0.18, phase(time, 0, 1.35, ease_in_out)), mix(-9.90, -9.55, phase(time, 0, 1.35, ease_in_out)), mix(2.52, 2.55, phase(time, 0, 1.35, ease_in_out)))
+    film.focus.location = (-0.05, 0.0, 1.50)
+    look_at(film.camera, film.focus.location)
+
+    base_in = phase(time, 0.06, 0.30, ease_out)
+    for part in (rig.foot, rig.foot_rim):
+        set_visible(part, base_in > 0.001)
+        part.scale = (base_in, base_in, base_in)
+    stem_in = phase(time, 0.20, 0.50, ease_out)
+    set_visible(rig.stem, stem_in > 0.001)
+    rig.stem.scale = (1, 1, max(0.001, stem_in))
+    rig.stem.location.z = 0.06 + 0.59 * stem_in
+    bowl_in = phase(time, 0.38, 0.78, drawer_ease)
+    for part in (rig.shell, rig.rim):
+        set_visible(part, bowl_in > 0.001)
+        part.scale = (bowl_in, bowl_in, bowl_in)
+    fill = phase(time, 0.72, 1.12, ease_out)
+    bpy.context.view_layer.update()
+    set_wine_fill_surface(rig, mix(WINE_BOTTOM_Z, WINE_REST_Z, fill))
+
+    orbit: list[Vector] = []
+    for index in range(180):
+        progress = index / 179
+        angle = mix(-1.25 * math.pi, 1.70 * math.pi, progress)
+        radius = mix(2.36, 0.72, progress)
+        orbit.append(
+            Vector(
+                (
+                    -1.36 + math.cos(angle) * radius,
+                    math.sin(angle) * radius * 0.52,
+                    mix(0.18, 2.62, progress),
+                )
+            )
+        )
+    signal_radii = [mix(0.42, 0.82, index / 179) for index in range(180)]
+    set_curve_points(film.route, orbit, signal_radii)
+    set_curve_points(film.route_glow, orbit, signal_radii)
+    set_curve_material(film.route, film.signal_material)
+    set_curve_material(film.route_glow, film.signal_glow_material)
+    film.route.data.bevel_depth = 0.012
+    film.route_glow.data.bevel_depth = 0.020
+    trace = phase(time, 0.04, 0.94, ease_in_out)
+    film.route.data.bevel_factor_end = trace
+    film.route_glow.data.bevel_factor_end = trace
+    tracer = film.droplets[0]
+    set_visible(tracer, 0.001 < trace < 0.999)
+    if len(tracer.data.materials) == 0:
+        tracer.data.materials.append(film.signal_material)
+    elif tracer.data.materials[0] != film.signal_material:
+        tracer.data.materials[0] = film.signal_material
+    if 0.001 < trace < 0.999:
+        tracer_position = trace * (len(orbit) - 1)
+        tracer_floor = int(math.floor(tracer_position))
+        tracer_ceil = min(len(orbit) - 1, tracer_floor + 1)
+        tracer.location = orbit[tracer_floor].lerp(
+            orbit[tracer_ceil],
+            tracer_position - tracer_floor,
+        )
+        tracer.scale = (0.72, 0.72, 0.72)
+    route_tail = phase(time, 1.02, 1.42, ease_out)
+    film.route.data.bevel_factor_start = route_tail
     film.route_glow.data.bevel_factor_start = route_tail
     set_visible(film.route, route_tail < 0.995)
     set_visible(film.route_glow, route_tail < 0.995)
