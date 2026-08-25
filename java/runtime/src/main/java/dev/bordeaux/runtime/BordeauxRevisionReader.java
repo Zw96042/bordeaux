@@ -56,7 +56,7 @@ public final class BordeauxRevisionReader {
         if (!payloadSha256.equals(sha256(payload))) {
             throw new BordeauxRuntimeException("$.revision.payloadSha256 does not match the decoded payload");
         }
-        String expectedRevisionId = revisionId(payloadSha256, catalog, field);
+        String expectedRevisionId = revisionId(payloadSha256, compatibility);
         if (!revisionId.equals(expectedRevisionId)) {
             throw new BordeauxRuntimeException("$.revision.revisionId does not match the immutable revision metadata");
         }
@@ -77,7 +77,7 @@ public final class BordeauxRevisionReader {
     }
 
     private static ObjectNode readEnvelope(InputStream input) {
-        try (JsonParser parser = MAPPER.createParser(new BoundedInputStream(input, MAX_REVISION_BYTES))) {
+        try (JsonParser parser = MAPPER.createParser(new BoundedInputStream(input, MAX_REVISION_BYTES, "revision exceeds the " + MAX_REVISION_BYTES + " byte limit"))) {
             if (parser.nextToken() != JsonToken.START_OBJECT) {
                 throw new BordeauxRuntimeException("$ must be a JSON object");
             }
@@ -86,8 +86,6 @@ public final class BordeauxRevisionReader {
                 throw new BordeauxRuntimeException("Could not parse Bordeaux revision JSON: trailing JSON value");
             }
             return envelope;
-        } catch (BordeauxRuntimeException exception) {
-            throw exception;
         } catch (IOException exception) {
             throw new BordeauxRuntimeException("Could not parse Bordeaux revision JSON: " + exception.getMessage(), exception);
         }
@@ -137,18 +135,18 @@ public final class BordeauxRevisionReader {
         }
     }
 
-    private static String revisionId(String payloadSha256, ObjectNode catalog, ObjectNode field) {
+    private static String revisionId(String payloadSha256, BordeauxRuntimeCompatibility compatibility) {
         ObjectNode metadata = JsonNodeFactory.instance.objectNode();
         metadata.put("protocolVersion", "bordeaux-revision/1.0");
         metadata.put("payloadSha256", payloadSha256);
         ObjectNode metadataCatalog = metadata.putObject("catalog");
-        metadataCatalog.put("catalogId", text(catalog, "catalogId", "$.revision.catalog"));
-        metadataCatalog.put("catalogHash", text(catalog, "catalogHash", "$.revision.catalog"));
-        metadataCatalog.put("supportVersion", text(catalog, "supportVersion", "$.revision.catalog"));
+        metadataCatalog.put("catalogId", compatibility.catalogId());
+        metadataCatalog.put("catalogHash", compatibility.catalogHash());
+        metadataCatalog.put("supportVersion", compatibility.supportVersion());
         ObjectNode metadataField = metadata.putObject("field");
-        metadataField.put("id", text(field, "id", "$.revision.field"));
-        metadataField.put("revision", text(field, "revision", "$.revision.field"));
-        metadataField.put("coordinateSchemaId", text(field, "coordinateSchemaId", "$.revision.field"));
+        metadataField.put("id", compatibility.fieldId());
+        metadataField.put("revision", compatibility.fieldRevision());
+        metadataField.put("coordinateSchemaId", compatibility.fieldCoordinateSchemaId());
         try {
             return sha256(MAPPER.writeValueAsBytes(metadata));
         } catch (IOException exception) {
@@ -158,16 +156,7 @@ public final class BordeauxRevisionReader {
 
     /** Recomputes the immutable revision ID for an already-retained payload against compiled compatibility. */
     static String revisionIdForPayload(byte[] payload, BordeauxRuntimeCompatibility compatibility) {
-        String payloadSha256 = sha256(payload);
-        ObjectNode catalog = JsonNodeFactory.instance.objectNode();
-        catalog.put("catalogId", compatibility.catalogId());
-        catalog.put("catalogHash", compatibility.catalogHash());
-        catalog.put("supportVersion", compatibility.supportVersion());
-        ObjectNode field = JsonNodeFactory.instance.objectNode();
-        field.put("id", compatibility.fieldId());
-        field.put("revision", compatibility.fieldRevision());
-        field.put("coordinateSchemaId", compatibility.fieldCoordinateSchemaId());
-        return revisionId(payloadSha256, catalog, field);
+        return revisionId(sha256(payload), compatibility);
     }
 
     private static String sha256(byte[] value) {
@@ -198,33 +187,4 @@ public final class BordeauxRevisionReader {
         return value;
     }
 
-    private static final class BoundedInputStream extends InputStream {
-        private final InputStream delegate;
-        private final long maxBytes;
-        private long read;
-
-        private BoundedInputStream(InputStream delegate, long maxBytes) {
-            this.delegate = delegate;
-            this.maxBytes = maxBytes;
-        }
-
-        @Override
-        public int read() throws IOException {
-            int value = delegate.read();
-            if (value >= 0) add(1);
-            return value;
-        }
-
-        @Override
-        public int read(byte[] buffer, int offset, int length) throws IOException {
-            int count = delegate.read(buffer, offset, length);
-            if (count > 0) add(count);
-            return count;
-        }
-
-        private void add(long count) throws IOException {
-            read += count;
-            if (read > maxBytes) throw new IOException("revision exceeds the " + maxBytes + " byte limit");
-        }
-    }
 }
