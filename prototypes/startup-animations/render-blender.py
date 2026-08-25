@@ -1,3 +1,105 @@
+    final: GlassRig
+    route: bpy.types.Object
+    route_glow: bpy.types.Object
+    liquid_sheet: bpy.types.Object
+    liquid_sheet_glow: bpy.types.Object
+    title: bpy.types.Object
+    tagline: bpy.types.Object
+    wipe: bpy.types.Object
+    floor: bpy.types.Object
+    droplets: tuple[bpy.types.Object, ...]
+    splash_rings: tuple[bpy.types.Object, ...]
+    route_wine_material: bpy.types.Material
+    route_glow_material: bpy.types.Material
+    signal_material: bpy.types.Material
+    signal_glow_material: bpy.types.Material
+
+
+def configure_render(scene: bpy.types.Scene, args: argparse.Namespace) -> None:
+    scene.render.engine = "BLENDER_EEVEE"
+    scene.eevee.taa_render_samples = args.samples if not args.preview else min(args.samples, 32)
+    scene.eevee.use_raytracing = True
+    scene.eevee.ray_tracing_method = "SCREEN"
+    scene.eevee.use_fast_gi = True
+    scene.eevee.fast_gi_quality = 1.0
+    scene.eevee.fast_gi_ray_count = 8
+    scene.eevee.fast_gi_step_count = 16
+    scene.eevee.use_bokeh_jittered = True
+    scene.render.resolution_x = args.width
+    scene.render.resolution_y = args.height
+    scene.render.resolution_percentage = 100
+    scene.render.image_settings.file_format = "PNG"
+    scene.render.image_settings.color_mode = "RGBA"
+    scene.render.film_transparent = False
+    scene.render.use_file_extension = True
+    scene.render.fps = FPS
+    scene.render.use_motion_blur = True
+    scene.render.motion_blur_shutter = 0.46
+    scene.eevee.motion_blur_steps = 8
+    scene.render.image_settings.color_depth = "8"
+    scene.render.filepath = str(Path(args.output).resolve())
+
+    world = bpy.data.worlds.new("Bordeaux World")
+    world.use_nodes = True
+    background = world.node_tree.nodes.get("Background")
+    background.inputs["Color"].default_value = NEAR_BLACK
+    background.inputs["Strength"].default_value = 0.08
+    scene.world = world
+
+
+def build_scene(args: argparse.Namespace) -> FilmScene:
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    scene = bpy.context.scene
+    configure_render(scene, args)
+
+    glass_material = make_studio_glass_material()
+
+    wine_material = make_material(
+        "Bordeaux wine",
+        (0.42, 0.008, 0.035, 1.0),
+        roughness=0.14,
+        transmission=0.0,
+        ior=1.36,
+        coat=0.32,
+        emission=(0.16, 0.001, 0.010, 1.0),
+        emission_strength=0.90,
+    )
+    meniscus_material = make_material(
+        "Wine meniscus",
+        WINE_HIGHLIGHT,
+        roughness=0.08,
+        transmission=0.06,
+        ior=1.36,
+        coat=0.45,
+        emission=(0.30, 0.002, 0.018, 1.0),
+        emission_strength=0.72,
+    )
+    route_material = make_material(
+        "Wine ribbon",
+        (0.48, 0.010, 0.055, 1.0),
+        roughness=0.14,
+        transmission=0.04,
+        ior=1.36,
+        coat=0.32,
+        emission=(0.17, 0.001, 0.012, 1.0),
+        emission_strength=0.16,
+    )
+    route_glow_material = make_material(
+        "Wine ribbon glow",
+        (0.20, 0.001, 0.010, 1.0),
+        roughness=0.22,
+        emission=(0.50, 0.004, 0.035, 1.0),
+        emission_strength=1.0,
+    )
+    signal_material = make_material(
+        "Trajectory signal",
+        (0.18, 0.34, 0.86, 1.0),
+        roughness=0.16,
+        coat=0.24,
+        emission=(0.06, 0.12, 0.44, 1.0),
+        emission_strength=0.48,
+    )
+    signal_glow_material = make_material(
         "Trajectory signal glow",
         (0.08, 0.18, 0.58, 1.0),
         roughness=0.22,
