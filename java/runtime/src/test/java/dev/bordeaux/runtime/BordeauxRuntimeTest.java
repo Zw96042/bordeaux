@@ -369,8 +369,10 @@ class BordeauxRuntimeTest {
                  "catalog":{"schemaVersion":"1.0","catalogId":"test-robot","supportVersion":"0.1.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
                  "paths":[{"id":"auto","name":"Auto","totalTimeS":2,
                  "samples":[
-                   {"i":0,"t":0,"s":0,"f":0,"x":1,"y":2,"headingRad":0,"velocityMps":0},
-                   {"i":1,"t":1,"s":1,"f":0.5,"x":2,"y":2,"headingRad":0,"velocityMps":1},
+                   {"i":0,"t":0,"s":0,"f":0,"x":1,"y":2,"headingRad":0,"velocityMps":0,
+                    "accelerationMps2":1.5,"angularVelocityRadps":0.25,"curvatureInvM":-0.4},
+                   {"i":1,"t":1,"s":1,"f":0.5,"x":2,"y":2,"headingRad":0,"velocityMps":1,
+                    "accelerationMps2":-1.5,"angularVelocityRadps":-0.25,"curvatureInvM":0.4},
                    {"i":2,"t":2,"s":2,"f":1,"x":3,"y":2,"headingRad":0,"velocityMps":0}],
                  "followSections":[
                    {"segmentIndex":0,"mode":"time","startSample":0,"endSample":1},
@@ -382,6 +384,28 @@ class BordeauxRuntimeTest {
         assertEquals(2, path.followSections().size());
         assertEquals(BordeauxFollowSection.Mode.POSITION, path.followSections().get(1).mode());
         assertEquals(3, path.samples().get(2).xM());
+        assertEquals(1.5, path.samples().get(0).accelerationMps2());
+        assertEquals(-0.25, path.samples().get(1).angularVelocityRadps());
+        assertEquals(-0.4, path.samples().get(0).curvatureInvM());
+        assertEquals(0, path.samples().get(2).accelerationMps2());
+        assertEquals(0, path.samples().get(2).angularVelocityRadps());
+        assertEquals(0, path.samples().get(2).curvatureInvM());
+        assertEquals(0, path.samples().get(1).travelHeadingRad());
+        assertEquals(1, path.samples().get(1).fieldVelocityXMps());
+        assertEquals(0, path.samples().get(1).fieldVelocityYMps());
+    }
+
+    @Test
+    void rejectsNonfiniteOptionalTrajectoryDynamics() {
+        BordeauxRuntimeException failure = assertThrows(BordeauxRuntimeException.class, () -> read("""
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
+                 "catalog":{"schemaVersion":"1.0","catalogId":"test-robot","supportVersion":"0.1.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "paths":[{"id":"auto","name":"Auto","totalTimeS":1,
+                 "samples":[{"i":0,"t":0,"s":0,"f":0,"x":1,"y":2,"headingRad":0,"velocityMps":0,
+                 "accelerationMps2":"fast"}],"events":[]}]}
+                """));
+
+        assertTrue(failure.getMessage().contains("acceleration"));
     }
 
     @Test
