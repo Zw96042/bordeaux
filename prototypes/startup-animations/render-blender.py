@@ -1,3 +1,105 @@
+            droplet.scale = (0.72, 0.72, 1.38)
+
+    wipe_in = phase(time, 1.82, 2.16, ease_out)
+    if wipe_in > 0:
+        set_visible(film.wipe, True)
+        film.wipe.location = (0.8, -4.7, 2.0)
+        radius = mix(0.01, 7.0, wipe_in)
+        film.wipe.scale = (radius, radius * 0.18, radius * 0.64)
+
+
+def update_ribbon_flight(film: FilmScene, time: float) -> None:
+    if time >= 1.98:
+        update_final(film, time, 2.02)
+        wipe_out = 1.0 - phase(time, 2.02, 2.32, ease_out)
+        set_visible(film.wipe, wipe_out > 0.01)
+        film.wipe.location = (0.6, -4.7, 2.0)
+        film.wipe.scale = (7.0 * wipe_out, 1.0 * wipe_out, 4.5 * wipe_out)
+        return
+    hero = film.hero
+    enter = phase(time, 0.04, 0.44, ease_out)
+    tip = phase(time, 0.18, 0.78, drawer_ease)
+    scale = mix(0.63, 0.74, enter)
+    hero.root.location = (mix(-3.05, -2.22, enter), 0.30, 0.92 + math.sin(time * 2.4) * 0.028)
+    hero.root.rotation_euler = (math.radians(-3), math.radians(mix(-4, 58, tip)), math.radians(5))
+    hero.root.scale = (scale, scale, scale)
+    drain = phase(time, 0.52, 1.48, ease_out)
+    wine_z_scale = mix(1.0, 0.16, drain)
+    wine_surface_z = WINE_BOTTOM_Z + (WINE_REST_Z - WINE_BOTTOM_Z) * wine_z_scale
+
+    travel = phase(time, 0.12, 1.78, ease_in_out)
+    film.camera.location = (mix(0.82, 0.10, travel), mix(-9.20, -8.45, travel), mix(2.88, 3.18, travel))
+    film.focus.location = (mix(-0.45, 0.28, travel), -0.10, mix(1.58, 1.44, travel))
+    look_at(film.camera, film.focus.location)
+    bpy.context.view_layer.update()
+    pool_retention = 1.0 - phase(time, 1.18, 1.54, ease_in_out)
+    set_wine_fill_surface(hero, wine_surface_z, pouring=time >= 0.36, retention=pool_retention)
+    origin = hero.pour_origin.matrix_world.translation.copy()
+    path = sample_cubic(
+        origin,
+        origin + Vector((0.48, -0.08, -0.02)),
+        origin + Vector((1.02, -0.58, -0.30)),
+        origin + Vector((1.34, -1.10, -0.96)),
+        68,
+    )
+    fall_point = path[-1]
+    landing = Vector((2.35, 0.28, 0.18))
+    path += sample_cubic(
+        fall_point,
+        fall_point + Vector((0.38, -0.30, -0.24)),
+        landing + Vector((-0.30, -0.18, 0.42)),
+        landing,
+        66,
+        True,
+    )
+    path += sample_cubic(
+        landing,
+        Vector((2.50, 0.82, 0.12)),
+        Vector((3.02, 0.24, 0.14)),
+        Vector((3.12, -0.62, 0.16)),
+        48,
+        True,
+    )
+    for index, point in enumerate(path):
+        progress = index / (len(path) - 1)
+        envelope = math.sin(progress * math.pi)
+        point.y += math.sin(progress * math.pi * 5 - time * 3.2) * 0.045 * envelope
+        point.z += math.sin(progress * math.pi * 3.5 - time * 2.0) * 0.022 * envelope
+    ribbon_radii = [
+        0.52
+        + math.sin(index / (len(path) - 1) * math.pi) ** 0.72 * 0.78
+        + math.sin(index / (len(path) - 1) * math.pi * 6) * 0.055
+        for index in range(len(path))
+    ]
+    trace = phase(time, 0.36, 1.66, gravity_ease)
+    # Once the reservoir has committed most of its volume, the emitted ribbon
+    # becomes a finite advecting slug. Its tail pinches free, follows the head,
+    # and thins under stretch instead of remaining tethered to the bowl.
+    tail_progress = phase(time, 0.92, 1.90, gravity_ease)
+    slug_stretch = mix(1.0, 0.70, tail_progress)
+    source_shutoff = phase(time, 0.76, 0.98, ease_out)
+    ribbon_widths: list[float] = []
+    for index, radius in enumerate(ribbon_radii):
+        progress = index / (len(path) - 1)
+        if tail_progress <= 0.0001:
+            tail_taper = mix(1.0, 0.16, source_shutoff) if index == 0 else 1.0
+        else:
+            tail_distance = clamp01((progress - tail_progress) / 0.050)
+            tail_taper = mix(0.10, 1.0, math.sin(tail_distance * math.pi * 0.5))
+        head_distance = clamp01((trace - progress) / 0.035)
+        head_taper = mix(0.34, 1.0, math.sin(head_distance * math.pi * 0.5))
+        ribbon_widths.append(radius * 0.060 * tail_taper * head_taper * slug_stretch)
+    set_liquid_sheet(film.liquid_sheet, path, ribbon_widths, trace, tail_progress)
+    set_liquid_sheet(
+        film.liquid_sheet_glow,
+        path,
+        [radius * 1.34 for radius in ribbon_widths],
+        trace,
+        tail_progress,
+    )
+    sheet_visible = trace > 0.001 and tail_progress < 0.995
+    set_visible(film.liquid_sheet, sheet_visible)
+    set_visible(film.liquid_sheet_glow, sheet_visible)
     leader = film.droplets[0]
     set_visible(leader, 0.001 < trace < 0.999)
     if 0.001 < trace < 0.999:
