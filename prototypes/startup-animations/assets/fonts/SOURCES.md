@@ -1,3 +1,8 @@
+# Font sources
+
+Verified August 10, 2026. The Blender source uses redistributable variable
+TrueType fonts so the scene renders consistently without relying on system
+fonts.
 
 | Local file | Official upstream file | SHA-256 |
 | --- | --- | --- |

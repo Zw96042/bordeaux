@@ -1,0 +1,97 @@
+      if (i < 0 || i >= variants.length) return;
+      current = i;
+      items.forEach((el, j) => {
+        el.toggleAttribute('data-active', j === i);
+        if (j === i) el.setAttribute('aria-current', 'true');
+        else el.removeAttribute('aria-current');
+      });
+      moveHighlight();
+      const url = new URL(location);
+      url.searchParams.set('v', i + 1);
+      history.replaceState(null, '', url);
+      mount(i);
+    }
+
+    items.forEach((el, i) => el.addEventListener('click', () => setActive(i)));
+    replay.addEventListener('click', () => mount(current));
+    window.addEventListener('resize', moveHighlight);
+
+    playPause.addEventListener('click', () => {
+      if (!video) return;
+      if (video.paused || video.ended) playActive();
+      else {
+        userWantsPlayback = false;
+        video.pause();
+      }
+    });
+
+    scrubber.addEventListener('input', () => {
+      if (!video) return;
+      userWantsPlayback = false;
+      video.pause();
+      const frame = Number(scrubber.value);
+      video.currentTime = frame / manifest.fps;
+      updateFrameReadout(frame);
+    });
+
+    speedSelect.addEventListener('change', () => {
+      const rate = Number(speedSelect.value);
+      speedOutput.value = `${rate}×`;
+      if (video) video.playbackRate = rate;
+    });
+
+    copyConfig.addEventListener('click', async () => {
+      const motion = manifest.animations[current];
+      const config = [
+        `variant: ${motion.id}`,
+        `playback-speed: ${speedSelect.value}x`,
+        `frame: ${scrubber.value}/${motion.frameCount - 1}`,
+        `duration: ${Math.round(motion.durationSeconds * 1000)}ms`,
+        `ease: ${motion.primaryEasing}`,
+        `master: ${manifest.width}x${manifest.height}@${manifest.fps}fps`
+      ].join(' · ');
+      try {
+        await navigator.clipboard.writeText(config);
+        copyStatus.textContent = 'Copied exact config';
+      } catch {
+        copyStatus.textContent = 'Clipboard unavailable';
+      }
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (!video) return;
+      if (document.hidden) video.pause();
+      else if (userWantsPlayback && !reducedMotion.matches && !video.ended) playActive();
+    });
+
+    reducedMotion.addEventListener('change', () => mount(current));
+
+    document.addEventListener('keydown', (event) => {
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName) || event.target.isContentEditable) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const number = parseInt(event.key, 10);
+      if (number >= 1 && number <= variants.length) setActive(number - 1);
+      else if (event.key === 'ArrowRight') setActive((current + 1) % variants.length);
+      else if (event.key === 'ArrowLeft') setActive((current - 1 + variants.length) % variants.length);
+      else if (event.key === 'r' || event.key === 'R') mount(current);
+    });
+
+    fetch('motion-manifest.json')
+      .then((response) => {
+        if (!response.ok) throw new Error(`Manifest request failed: ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        manifest = data;
+        variants = manifest.animations.map((motion) => () => variantMarkup(motion));
+        const requested = (parseInt(new URLSearchParams(location.search).get('v'), 10) || 1) - 1;
+        setActive(Math.max(0, Math.min(variants.length - 1, requested)));
+        setTimeout(() => picker.setAttribute('data-ready', ''), 0);
+      })
+      .catch((error) => {
+        stage.innerHTML = `<p class="stage-error">${error.message}</p>`;
+        meta.textContent = 'Motion manifest unavailable';
+      });
+  </script>
+</body>
+</html>
