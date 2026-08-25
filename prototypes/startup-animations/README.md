@@ -1,3 +1,6 @@
+# Bordeaux startup films
+
+Three isolated startup-film prototypes, authored as real 3D scenes in Blender
 and delivered as finished 60 fps video masters. The browser player only
 selects, scrubs, and replays those masters; it does not assemble the motion
 from DOM or SVG parts.
