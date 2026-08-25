@@ -1,3 +1,105 @@
+    width: options.width,
+    height: options.height
+  })) {
+    if (!Number.isInteger(number) || number < 1) {
+      throw new Error(`--${name} must be a positive integer`);
+    }
+  }
+  if (options.framesDir && options.film === "all") {
+    throw new Error("--frames-dir requires a single --film");
+  }
+  if (options.film !== "all" && !films.some((film) => film.id === options.film)) {
+    throw new Error(`Unknown film: ${options.film}`);
+  }
+  return options;
+}
+
+function findBlender() {
+  const candidates = [
+    process.env.BLENDER_BIN,
+    "/Applications/Blender.app/Contents/MacOS/Blender",
+    "/Volumes/Blender/Blender.app/Contents/MacOS/Blender",
+    "blender"
+  ].filter(Boolean);
+  return candidates.find((candidate) => candidate === "blender" || existsSync(candidate));
+}
+
+function run(binary, args, { quiet = false } = {}) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(binary, args, {
+      cwd: here,
+      stdio: quiet ? ["ignore", "pipe", "pipe"] : "inherit"
+    });
+    let output = "";
+    if (quiet) {
+      child.stdout.on("data", (chunk) => { output += chunk; });
+      child.stderr.on("data", (chunk) => { output += chunk; });
+    }
+    child.on("error", rejectPromise);
+    child.on("exit", (code, signal) => {
+      if (code === 0) resolvePromise(output);
+      else rejectPromise(new Error(`${binary} exited with ${signal || code}${output ? `\n${output}` : ""}`));
+    });
+  });
+}
+
+function splitFrames(frameCount, jobCount) {
+  const chunks = [];
+  const size = Math.ceil(frameCount / Math.min(frameCount, jobCount));
+  for (let start = 1; start <= frameCount; start += size) {
+    chunks.push([start, Math.min(frameCount, start + size - 1)]);
+  }
+  return chunks;
+}
+
+function assertFrames(frameDirectory, film) {
+  const pattern = new RegExp(`^${film.id}-\\d{4}\\.png$`);
+  const names = new Set(readdirSync(frameDirectory).filter((name) => pattern.test(name)));
+  const missing = [];
+  for (let frame = 1; frame <= film.frames; frame += 1) {
+    const name = `${film.id}-${String(frame).padStart(4, "0")}.png`;
+    if (!names.has(name)) missing.push(frame);
+  }
+  if (missing.length || names.size !== film.frames) {
+    const detail = missing.length ? `; missing ${missing.slice(0, 8).join(", ")}` : "";
+    throw new Error(`${film.id}: expected frames 1–${film.frames}, found ${names.size}${detail}`);
+  }
+}
+
+async function renderFrames(blender, film, options, frameDirectory) {
+  const prefix = join(frameDirectory, `${film.id}-`);
+  const chunks = splitFrames(film.frames, options.jobs);
+  if (film.id !== "precision-lock") {
+    console.log(`${film.id}: auditing lip attachment and world-space flow`);
+    await run(blender, [
+      "--background",
+      "--factory-startup",
+      "--python", blenderSource,
+      "--",
+      "--film", film.id,
+      "--frame", "1",
+      "--output", join(frameDirectory, `${film.id}-audit.png`),
+      "--width", "320",
+      "--height", "200",
+      "--samples", "1",
+      "--preview",
+      "--audit"
+    ], { quiet: true });
+  }
+  console.log(`${film.id}: rendering ${film.frames} frames across ${chunks.length} Blender workers`);
+  await Promise.all(chunks.map(([start, end]) => run(blender, [
+    "--background",
+    "--factory-startup",
+    "--python", blenderSource,
+    "--",
+    "--film", film.id,
+    "--animation",
+    "--frame-start", String(start),
+    "--frame-end", String(end),
+    "--output", prefix,
+    "--width", String(options.width),
+    "--height", String(options.height),
+    "--samples", String(options.samples)
   ])));
 }
 
