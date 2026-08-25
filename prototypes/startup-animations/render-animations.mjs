@@ -1,3 +1,71 @@
+#!/usr/bin/env node
+
+import { availableParallelism, tmpdir } from "node:os";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const blenderSource = join(here, "render-blender.py");
+const exportDir = join(here, "exports");
+const reviewDir = join(here, "review");
+
+const films = [
+  { id: "spill-route", frames: 204, seconds: 3.4 },
+  { id: "ribbon-flight", frames: 174, seconds: 2.9 },
+  { id: "precision-lock", frames: 117, seconds: 1.95 }
+];
+
+function parseArguments(argv) {
+  const options = {
+    film: "all",
+    jobs: Math.min(6, availableParallelism()),
+    samples: 64,
+    width: 1440,
+    height: 900,
+    framesDir: null,
+    keepFrames: false
+  };
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index];
+    if (value === "--film") options.film = argv[++index];
+    else if (value === "--jobs") options.jobs = Number(argv[++index]);
+    else if (value === "--samples") options.samples = Number(argv[++index]);
+    else if (value === "--width") options.width = Number(argv[++index]);
+    else if (value === "--height") options.height = Number(argv[++index]);
+    else if (value === "--frames-dir") options.framesDir = resolve(argv[++index]);
+    else if (value === "--keep-frames") options.keepFrames = true;
+    else if (value === "--help" || value === "-h") {
+      console.log(`Usage: node render-animations.mjs [options]
+
+Options:
+  --film <id|all>       Render one film or all three (default: all)
+  --jobs <count>        Parallel Blender processes (default: up to 6)
+  --samples <count>     Eevee render samples (default: 64)
+  --width <pixels>      Output width (default: 1440)
+  --height <pixels>     Output height (default: 900)
+  --frames-dir <path>   Encode an existing frame directory; requires --film
+  --keep-frames         Preserve generated PNG frames after encoding
+
+Set BLENDER_BIN or FFMPEG_BIN to override executable discovery.`);
+      process.exit(0);
+    } else {
+      throw new Error(`Unknown option: ${value}`);
+    }
+  }
+
+  for (const [name, number] of Object.entries({
+    jobs: options.jobs,
+    samples: options.samples,
     width: options.width,
     height: options.height
   })) {
