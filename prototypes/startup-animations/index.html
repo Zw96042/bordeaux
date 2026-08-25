@@ -1,3 +1,105 @@
+
+  <main id="stage" tabindex="-1" aria-live="polite"></main>
+
+  <aside class="proto-controls" aria-label="Motion inspector">
+    <h2>Motion inspector</h2>
+    <p class="motion-meta" id="motion-meta">Loading motion manifest…</p>
+    <div class="control-stack">
+      <label class="control-row" for="frame-scrubber">
+        <span>Frame</span>
+        <output id="frame-output" for="frame-scrubber">—</output>
+        <input id="frame-scrubber" type="range" min="0" max="1" value="0" step="1" disabled>
+      </label>
+      <label class="control-row" for="speed-select">
+        <span>Playback speed</span>
+        <output id="speed-output" for="speed-select">1×</output>
+        <select id="speed-select" disabled>
+          <option value="1">1×</option>
+          <option value="0.5">0.5×</option>
+          <option value="0.25">0.25×</option>
+        </select>
+      </label>
+      <div class="control-actions">
+        <button class="control-button" id="play-pause" type="button" disabled>Pause</button>
+        <button class="control-button" id="copy-config" type="button" disabled>Copy config</button>
+      </div>
+      <p class="copy-status" id="copy-status" role="status"></p>
+    </div>
+  </aside>
+
+  <nav class="proto-picker" aria-label="Prototype variants">
+    <span class="proto-picker-highlight" aria-hidden="true"></span>
+    <button class="proto-picker-item" data-active aria-current="true">Spill</button>
+    <button class="proto-picker-item">Ribbon</button>
+    <button class="proto-picker-item">Precision</button>
+    <span class="proto-picker-divider" aria-hidden="true"></span>
+    <button class="proto-picker-item proto-picker-replay" aria-label="Replay animation (R)">↻</button>
+  </nav>
+
+  <script>
+    const stage = document.getElementById('stage');
+    const picker = document.querySelector('.proto-picker');
+    const highlight = picker.querySelector('.proto-picker-highlight');
+    const items = [...picker.querySelectorAll('.proto-picker-item:not(.proto-picker-replay)')];
+    const replay = picker.querySelector('.proto-picker-replay');
+    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+    const meta = document.getElementById('motion-meta');
+    const scrubber = document.getElementById('frame-scrubber');
+    const frameOutput = document.getElementById('frame-output');
+    const speedSelect = document.getElementById('speed-select');
+    const speedOutput = document.getElementById('speed-output');
+    const playPause = document.getElementById('play-pause');
+    const copyConfig = document.getElementById('copy-config');
+    const copyStatus = document.getElementById('copy-status');
+
+    let manifest;
+    let variants = [];
+    let current = 0;
+    let video = null;
+    let frameCallback = null;
+    let mediaObjectUrl = null;
+    let userWantsPlayback = true;
+
+    function moveHighlight() {
+      const el = items[current];
+      highlight.style.transform = `translateX(${el.offsetLeft}px)`;
+    }
+
+    function variantMarkup(motion) {
+      const playHidden = reducedMotion.matches ? '' : ' hidden';
+      return `
+        <section class="motion-preview" data-loading aria-label="${motion.title} startup film">
+          <video muted playsinline preload="metadata" poster="${motion.poster}"
+            aria-label="${motion.title}: ${motion.purpose}">
+            <source src="${motion.webm}" type="video/webm">
+            <source src="${motion.mp4}" type="video/mp4">
+          </video>
+          <button class="stage-play" type="button"${playHidden}>Play film</button>
+          <p class="render-note">Blender · Eevee · ${manifest.width}×${manifest.height} / ${manifest.fps} fps</p>
+        </section>`;
+    }
+
+    function updateFrameReadout(frame) {
+      const motion = manifest.animations[current];
+      const clamped = Math.max(0, Math.min(motion.frameCount - 1, frame));
+      scrubber.value = String(clamped);
+      frameOutput.value = `${String(clamped + 1).padStart(3, '0')} / ${motion.frameCount}`;
+    }
+
+    function watchFrames() {
+      if (!video) return;
+      frameCallback = null;
+      updateFrameReadout(Math.round(video.currentTime * manifest.fps));
+      if (!video.paused && !video.ended && 'requestVideoFrameCallback' in video) {
+        frameCallback = video.requestVideoFrameCallback(watchFrames);
+      }
+    }
+
+    function setPlayState() {
+      if (!video) return;
+      playPause.textContent = video.paused || video.ended ? 'Play' : 'Pause';
+      if (!video.paused && frameCallback === null && 'requestVideoFrameCallback' in video) {
+        frameCallback = video.requestVideoFrameCallback(watchFrames);
       }
     }
 
