@@ -1,3 +1,105 @@
+    )
+    ground_path += sample_cubic(
+        Vector((2.12, -1.34, 0.075)),
+        Vector((1.30, -1.82, 0.075)),
+        Vector((0.42, -1.46, 0.075)),
+        Vector((0.02, -0.68, 0.075)),
+        89,
+        True,
+    )
+
+    stream_progress = phase(time, 0.76, impact_time, gravity_ease)
+    air_tail = phase(time, 1.34, 1.62, gravity_ease)
+    stream_width = mix(1.0, 0.62, air_tail)
+    air_radii: list[float] = []
+    for index in range(len(air_path)):
+        path_progress = index / (len(air_path) - 1)
+        if air_tail <= 0.0001:
+            tail_taper = 1.0
+        else:
+            tail_distance = clamp01((path_progress - air_tail) / 0.09)
+            tail_taper = mix(0.10, 1.0, math.sin(tail_distance * math.pi * 0.5))
+        air_radii.append(
+            mix(0.054, 0.027, path_progress)
+            * (1.0 + math.sin(path_progress * math.pi) * 0.16)
+            * stream_width
+            * tail_taper
+        )
+    set_liquid_sheet(
+        film.liquid_sheet,
+        air_path,
+        air_radii,
+        stream_progress,
+        air_tail,
+    )
+    set_liquid_sheet(
+        film.liquid_sheet_glow,
+        air_path,
+        [radius * 1.30 for radius in air_radii],
+        stream_progress,
+        air_tail,
+    )
+    stream_visible = stream_progress > 0.001 and air_tail < 0.995
+    set_visible(film.liquid_sheet, stream_visible)
+    set_visible(film.liquid_sheet_glow, stream_visible)
+
+    ground_radii = [
+        mix(1.36, 0.34, index / (len(ground_path) - 1))
+        + math.sin(index / (len(ground_path) - 1) * math.pi * 4) * 0.055
+        for index in range(len(ground_path))
+    ]
+    set_curve_points(film.route, ground_path, ground_radii)
+    set_curve_points(film.route_glow, ground_path, ground_radii)
+    set_curve_material(film.route, film.route_wine_material)
+    set_curve_material(film.route_glow, film.route_glow_material)
+    film.route.data.bevel_depth = 0.046
+    film.route_glow.data.bevel_depth = 0.070
+    route_progress = phase(time, impact_time, 1.74, ease_out)
+    film.route.data.bevel_factor_end = route_progress
+    film.route_glow.data.bevel_factor_end = route_progress
+    film.route.data.bevel_factor_start = 0.0
+    film.route_glow.data.bevel_factor_start = 0.0
+    set_visible(film.route, route_progress > 0.001)
+    set_visible(film.route_glow, route_progress > 0.001)
+
+    ring_progress = phase(time, impact_time, impact_time + 0.46, ease_out)
+    echo_progress = phase(time, impact_time + 0.09, impact_time + 0.72, ease_out)
+    for ring, progress, size in (
+        (film.splash_rings[0], ring_progress, 1.85),
+        (film.splash_rings[1], echo_progress, 2.45),
+    ):
+        set_visible(ring, 0.001 < progress < 0.995)
+        ring.location = ground
+        ring.scale = (mix(0.24, size, progress), mix(0.24, size, progress), 1.0)
+
+    velocities = (
+        Vector((0.55, 0.12, 2.55)), Vector((1.15, -0.42, 2.05)),
+        Vector((1.65, 0.38, 1.65)), Vector((0.18, -0.62, 2.82)),
+        Vector((-0.42, 0.52, 2.20)), Vector((2.05, -0.16, 1.30)),
+        Vector((0.82, 0.76, 3.00)), Vector((1.34, -0.82, 2.48)),
+        Vector((-0.12, -0.30, 1.92)), Vector((1.92, 0.68, 1.82)),
+        Vector((0.38, 0.92, 2.32)), Vector((1.48, 0.18, 2.72)),
+    )
+    for index, (droplet, velocity) in enumerate(zip(film.droplets, velocities)):
+        if index == 0 and time < impact_time and stream_progress > 0.001:
+            head_position = stream_progress * (len(air_path) - 1)
+            head_floor = int(math.floor(head_position))
+            head_ceil = min(len(air_path) - 1, head_floor + 1)
+            set_visible(droplet, True)
+            droplet.location = air_path[head_floor].lerp(
+                air_path[head_ceil],
+                head_position - head_floor,
+            )
+            droplet.scale = (1.20, 0.78, 1.08)
+            continue
+        local_time = time - impact_time - (index % 4) * 0.012
+        visible = 0.0 <= local_time <= 0.92
+        set_visible(droplet, visible)
+        if visible:
+            position = ground + velocity * local_time + Vector((0, 0, -4.9 * local_time * local_time))
+            if position.z < 0.055:
+                position.z = 0.055 + abs(position.z - 0.055) * 0.16
+            droplet.location = position
             droplet.scale = (0.72, 0.72, 1.38)
 
     wipe_in = phase(time, 1.82, 2.16, ease_out)
