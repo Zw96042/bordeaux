@@ -1,3 +1,105 @@
+    mesh = obj.data
+    if not points:
+        return
+    last_source = len(points) - 1
+    head_position = clamp01(progress) * last_source
+    head_floor = int(math.floor(head_position))
+    head_ceil = min(last_source, head_floor + 1)
+    head_mix = head_position - head_floor
+    head = points[head_floor].lerp(points[head_ceil], head_mix)
+    head_width = mix(half_widths[head_floor], half_widths[head_ceil], head_mix)
+    tail_position = min(head_position, clamp01(start_progress) * last_source)
+    tail_floor = int(math.floor(tail_position))
+    tail_ceil = min(last_source, tail_floor + 1)
+    tail_mix = tail_position - tail_floor
+    tail = points[tail_floor].lerp(points[tail_ceil], tail_mix)
+    tail_width = mix(half_widths[tail_floor], half_widths[tail_ceil], tail_mix)
+
+    for index in range(len(mesh.vertices) // 2):
+        if index < tail_floor:
+            position = tail
+            half_width = 0.0
+            source_index = tail_floor
+        elif index == tail_floor:
+            position = tail
+            half_width = tail_width
+            source_index = tail_floor
+        elif index <= head_floor and index <= last_source:
+            position = points[index]
+            half_width = half_widths[min(index, len(half_widths) - 1)]
+            source_index = index
+        elif index == head_floor + 1 and index <= last_source:
+            position = head
+            half_width = head_width
+            source_index = head_floor
+        else:
+            position = head
+            half_width = 0.0
+            source_index = head_floor
+
+        previous = points[max(0, source_index - 1)]
+        following = points[min(last_source, source_index + 1)]
+        tangent = (following - previous).normalized()
+        screen_normal = Vector((0.0, -1.0, 0.0)).cross(tangent)
+        floor_normal = Vector((-tangent.y, tangent.x, 0.0))
+        if screen_normal.length < 0.0001:
+            screen_normal = Vector((1.0, 0.0, 0.0))
+        if floor_normal.length < 0.0001:
+            floor_normal = Vector((0.0, 1.0, 0.0))
+        screen_normal.normalize()
+        floor_normal.normalize()
+        groundness = clamp01((0.27 - position.z) / 0.18)
+        normal = screen_normal.lerp(floor_normal, groundness).normalized()
+        mesh.vertices[index * 2].co = position - normal * half_width
+        mesh.vertices[index * 2 + 1].co = position + normal * half_width
+    mesh.update()
+
+
+def look_at(obj: bpy.types.Object, target: Iterable[float]) -> None:
+    direction = Vector(target) - obj.location
+    obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
+
+
+def add_area_light(name: str, location, target, color, energy: float, size: float, shape="DISK") -> bpy.types.Object:
+    data = bpy.data.lights.new(name, "AREA")
+    data.color = color
+    data.energy = energy
+    data.shape = shape
+    data.size = size
+    if shape == "RECTANGLE":
+        data.size_y = size * 0.45
+    obj = bpy.data.objects.new(name, data)
+    bpy.context.collection.objects.link(obj)
+    obj.location = location
+    look_at(obj, target)
+    return obj
+
+
+def create_text(name: str, body: str, size: float, location, material, font_path: str | None = None) -> bpy.types.Object:
+    curve = bpy.data.curves.new(f"{name}Curve", "FONT")
+    curve.body = body
+    curve.align_x = "LEFT"
+    curve.align_y = "CENTER"
+    curve.size = size
+    curve.extrude = 0.008
+    curve.bevel_depth = 0.003
+    curve.bevel_resolution = 3
+    if font_path and Path(font_path).exists():
+        curve.font = bpy.data.fonts.load(font_path)
+    curve.materials.append(material)
+    obj = bpy.data.objects.new(name, curve)
+    bpy.context.collection.objects.link(obj)
+    obj.location = location
+    obj.rotation_euler.x = math.radians(90)
+    return obj
+
+
+@dataclass
+class FilmScene:
+    scene: bpy.types.Scene
+    camera: bpy.types.Object
+    focus: bpy.types.Object
+    hero: GlassRig
     final: GlassRig
     route: bpy.types.Object
     route_glow: bpy.types.Object
