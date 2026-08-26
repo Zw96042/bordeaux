@@ -1,3 +1,105 @@
+        radius = wine_bowl_radius(z)
+        for segment in range(WINE_FILL_SEGMENTS):
+            angle = segment / WINE_FILL_SEGMENTS * math.tau
+            vertices.append((radius * math.cos(angle), radius * math.sin(angle), z))
+    for ring in range(WINE_FILL_RINGS - 1):
+        for segment in range(WINE_FILL_SEGMENTS):
+            following = (segment + 1) % WINE_FILL_SEGMENTS
+            current = ring * WINE_FILL_SEGMENTS + segment
+            next_ring = (ring + 1) * WINE_FILL_SEGMENTS + segment
+            faces.append((current, ring * WINE_FILL_SEGMENTS + following, (ring + 1) * WINE_FILL_SEGMENTS + following, next_ring))
+
+    bottom_center = len(vertices)
+    vertices.append((0.0, 0.0, WINE_BOTTOM_Z))
+    for segment in range(WINE_FILL_SEGMENTS):
+        faces.append((bottom_center, (segment + 1) % WINE_FILL_SEGMENTS, segment))
+
+    top_center = len(vertices)
+    vertices.append((0.0, 0.0, WINE_REST_Z))
+    top_offset = (WINE_FILL_RINGS - 1) * WINE_FILL_SEGMENTS
+    top_face_start = len(faces)
+    for segment in range(WINE_FILL_SEGMENTS):
+        faces.append((top_center, top_offset + segment, top_offset + (segment + 1) % WINE_FILL_SEGMENTS))
+
+    mesh = bpy.data.meshes.new(f"{name}Mesh")
+    mesh.from_pydata(vertices, [], faces)
+    mesh.materials.append(wine_material)
+    mesh.materials.append(meniscus_material)
+    mesh.update()
+    for polygon in mesh.polygons:
+        if polygon.index >= top_face_start:
+            polygon.material_index = 1
+            polygon.use_smooth = False
+        else:
+            polygon.use_smooth = True
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.collection.objects.link(obj)
+    add_bevel(obj, 0.010, 2)
+    return obj
+
+
+def set_wine_fill_surface(
+    rig: "GlassRig",
+    surface_z: float,
+    *,
+    pouring: bool = False,
+    retention: float = 1.0,
+) -> None:
+    retained_scale = clamp01(retention)
+    if retained_scale <= 0.01:
+        set_visible(rig.wine, False)
+        set_visible(rig.meniscus, False)
+        return
+    matrix = rig.root.matrix_world
+    rest_plane_z = (matrix @ Vector((0.0, 0.0, surface_z))).z
+    if pouring:
+        lip_z = rig.pour_origin.matrix_world.translation.z
+        plane_z = min(rest_plane_z, lip_z + 0.008)
+    else:
+        plane_z = rest_plane_z
+    if retained_scale < 0.999:
+        floor_z = WINE_BOTTOM_Z + 0.004
+        floor_radius = wine_bowl_radius(floor_z)
+        retainable_plane_z = max(
+            (
+                matrix
+                @ Vector(
+                    (
+                        floor_radius * math.cos(segment / WINE_FILL_SEGMENTS * math.tau),
+                        floor_radius * math.sin(segment / WINE_FILL_SEGMENTS * math.tau),
+                        floor_z,
+                    )
+                )
+            ).z
+            for segment in range(WINE_FILL_SEGMENTS)
+        )
+        plane_z = max(plane_z, retainable_plane_z + 0.0005)
+
+    top_heights: list[float] = []
+    for segment in range(WINE_FILL_SEGMENTS):
+        angle = segment / WINE_FILL_SEGMENTS * math.tau
+        cosine = math.cos(angle)
+        sine = math.sin(angle)
+
+        def world_height(local_z: float) -> float:
+            radius = wine_bowl_radius(local_z)
+            return (matrix @ Vector((radius * cosine, radius * sine, local_z))).z
+
+        low = WINE_BOTTOM_Z
+        high = WINE_MAX_Z
+        if world_height(low) >= plane_z:
+            top_height = low
+        elif world_height(high) <= plane_z:
+            top_height = high
+        else:
+            for _ in range(18):
+                middle = (low + high) * 0.5
+                if world_height(middle) < plane_z:
+                    low = middle
+                else:
+                    high = middle
+            top_height = (low + high) * 0.5
+        top_heights.append(top_height)
 
     mesh = rig.wine.data
     for ring in range(WINE_FILL_RINGS):
