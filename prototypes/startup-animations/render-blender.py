@@ -1,3 +1,105 @@
+
+    mesh = rig.wine.data
+    for ring in range(WINE_FILL_RINGS):
+        ring_progress = ring / (WINE_FILL_RINGS - 1)
+        for segment, top_height in enumerate(top_heights):
+            z = mix(WINE_BOTTOM_Z, top_height, ring_progress)
+            angle = segment / WINE_FILL_SEGMENTS * math.tau
+            radius = wine_bowl_radius(z)
+            mesh.vertices[ring * WINE_FILL_SEGMENTS + segment].co = (
+                radius * math.cos(angle),
+                radius * math.sin(angle),
+                z,
+            )
+
+    top_center_index = WINE_FILL_RINGS * WINE_FILL_SEGMENTS + 1
+    matrix_z = matrix[2][2]
+    center_z = (plane_z - matrix.translation.z) / matrix_z if abs(matrix_z) > 0.0001 else WINE_BOTTOM_Z
+    mesh.vertices[top_center_index].co = (0.0, 0.0, center_z)
+    mesh.update()
+    pivot_segment = max(range(WINE_FILL_SEGMENTS), key=top_heights.__getitem__)
+    pivot_angle = pivot_segment / WINE_FILL_SEGMENTS * math.tau
+    pivot_radius = wine_bowl_radius(WINE_BOTTOM_Z)
+    pivot = Vector(
+        (
+            pivot_radius * math.cos(pivot_angle),
+            pivot_radius * math.sin(pivot_angle),
+            WINE_BOTTOM_Z,
+        )
+    )
+    rig.wine.scale = (retained_scale, retained_scale, retained_scale)
+    rig.wine.location = pivot * (1.0 - retained_scale)
+    set_visible(rig.wine, surface_z > WINE_BOTTOM_Z + 0.012 and retained_scale > 0.01)
+    set_visible(rig.meniscus, False)
+
+
+def add_cylinder(name: str, radius: float, depth: float, location, material, bevel: float) -> bpy.types.Object:
+    bpy.ops.mesh.primitive_cylinder_add(vertices=128, radius=radius, depth=depth, location=location)
+    obj = bpy.context.object
+    obj.name = name
+    obj.data.materials.append(material)
+    shade_smooth(obj)
+    add_bevel(obj, bevel, 4)
+    return obj
+
+
+def add_torus(name: str, major_radius: float, minor_radius: float, location, material) -> bpy.types.Object:
+    bpy.ops.mesh.primitive_torus_add(
+        major_radius=major_radius,
+        minor_radius=minor_radius,
+        major_segments=160,
+        minor_segments=20,
+        location=location,
+    )
+    obj = bpy.context.object
+    obj.name = name
+    obj.data.materials.append(material)
+    shade_smooth(obj)
+    return obj
+
+
+def parent_keep_transform(child: bpy.types.Object, parent: bpy.types.Object) -> None:
+    child.parent = parent
+    child.matrix_parent_inverse = parent.matrix_world.inverted()
+
+
+@dataclass
+class GlassRig:
+    root: bpy.types.Object
+    liquid_root: bpy.types.Object
+    shell: bpy.types.Object
+    rim: bpy.types.Object
+    stem: bpy.types.Object
+    foot: bpy.types.Object
+    foot_rim: bpy.types.Object
+    wine: bpy.types.Object
+    meniscus: bpy.types.Object
+    pour_origin: bpy.types.Object
+    parts: tuple[bpy.types.Object, ...]
+
+
+def create_glass(name: str, glass_material, wine_material, meniscus_material) -> GlassRig:
+    root = bpy.data.objects.new(f"{name}Root", None)
+    bpy.context.collection.objects.link(root)
+    liquid_root = bpy.data.objects.new(f"{name}LiquidRoot", None)
+    bpy.context.collection.objects.link(liquid_root)
+    liquid_root.parent = root
+
+    shell_profile = (
+        (0.12, 1.23),
+        (0.18, 1.28),
+        (0.31, 1.39),
+        (0.50, 1.58),
+        (0.72, 1.86),
+        (0.91, 2.19),
+        (1.04, 2.56),
+        (1.09, 2.91),
+        (1.06, 3.34),
+    )
+    shell = create_revolved_surface(f"{name}Bowl", shell_profile, glass_material)
+    solidify = shell.modifiers.new("Real glass wall", "SOLIDIFY")
+    solidify.thickness = 0.035
+    solidify.offset = 0.0
     add_bevel(shell, 0.012, 3)
 
     rim = add_torus(f"{name}Rim", 1.06, 0.026, (0, 0, 3.34), glass_material)
