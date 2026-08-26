@@ -1,3 +1,105 @@
+  await action(() => controller.prepareRetention(actionName, { revisionId: revision, payloadSha256: revision }));
+  await resolve(mock.retentionPrepares.at(-1), { operationId: 'retention-1', action: actionName, targetRevision: revision, payloadHash: revision, activeRevision: oldRevision, robot: 'Team 2468' });
+}
+async function test(name, run) {
+  try { const source = await mount(); await run(source); results.push({ name, ok: true }); }
+  catch (error) { results.push({ name, ok: false, error: error.stack || String(error) }); }
+}
+
+await test('Freeze selected scope and project bytes while browsing during preparation', async (source) => {
+  await action(() => controller.requestPush({ kind: 'paths', pathIds: ['A'] }));
+  source.editor.activePathId = 'B'; source.paths[0].name = 'Edited later';
+  await update({ getProject: () => source });
+  await resolve(mock.prepares[0], preview());
+  equal(mock.prepares[0].args[1], { kind: 'paths', pathIds: ['A'] }, 'Selection must stay A');
+  equal(mock.prepares[0].args[0].paths[0].name, 'A', 'Prepared bytes must precede subsequent edits');
+  equal(controller.preview.summary.pathIds, ['A'], 'Review must keep selected A');
+  assert(document.querySelector('dialog').textContent.includes('This reviewed snapshot is fixed'), 'Dialog must explain fixed snapshot');
+});
+for (const field of ['projectKey', 'catalogKey', 'bookmarkKey']) {
+  await test(`Discard deferred preparation when ${field} changes`, async () => {
+    await action(() => controller.requestPush({ kind: 'paths', pathIds: ['A'] }));
+    await update({ [field]: field + '-changed' });
+    await resolve(mock.prepares[0], preview());
+    assert(controller.phase !== 'review' && !controller.preview, 'Stale preparation must not reopen review');
+    equal(mock.canceled, ['push-1'], 'Stale prepared operation should be cancelled');
+  });
+}
+await test('Cancel an existing review on catalog change', async () => {
+  await prepare(); await update({ catalogKey: 'catalog-2' });
+  assert(!controller.preview, 'Catalog switch must clear existing review');
+  equal(mock.canceled, ['push-1'], 'Old review should be canceled');
+});
+await test('Keep active push available across project switch until its exact result arrives', async () => {
+  await prepare(); await action(() => controller.confirmPush());
+  await update({ projectKey: 'another-project', getProject: () => project() });
+  assert(controller.busy && controller.preview.operationId === 'push-1', 'Sending operation must survive navigation');
+  await resolve(mock.confirms[0], { state: 'staged', operationId: 'push-1', message: 'Acceptance unconfirmed' });
+  equal(controller.phase, 'staged', 'Staged must not become accepted');
+  assert(document.querySelector('dialog').textContent.includes('Acceptance unconfirmed'), 'Unconfirmed result must be explicit');
+});
+await test('Terminal progress cannot unlock a second push before confirmation RPC settles', async () => {
+  await prepare(); await action(() => controller.confirmPush());
+  await action(() => mock.pushListeners.forEach((listener) => listener({ operationId: 'push-1', state: 'active' })));
+  assert(controller.busy, 'Terminal progress alone must not unlock controller before RPC resolution');
+  await action(() => controller.requestPush({ kind: 'paths', pathIds: ['B'] }));
+  equal(mock.prepares.length, 1, 'Second preparation must not start before prior RPC settles');
+  await resolve(mock.confirms[0], { state: 'active', operationId: 'push-1' });
+  assert(!controller.busy, 'Completion response should release busy state');
+});
+await test('Every paired connection open refreshes history', async () => {
+  await action(() => controller.openConnection());
+  equal(mock.inspections.length, 1, 'First connection open should inspect');
+  await resolve(mock.inspections[0], checked());
+  await action(() => controller.close());
+  await action(() => controller.openConnection());
+  equal(mock.inspections.length, 2, 'Reopening connection should inspect again');
+  await resolve(mock.inspections[1], checked(revision));
+  equal(controller.status.activeRevisionId, revision, 'Reopened history must use latest revision');
+});
+await test('Accepted push automatically refreshes library and history', async () => {
+  await prepare(); await action(() => controller.confirmPush());
+  await resolve(mock.confirms[0], { state: 'active', operationId: 'push-1' });
+  equal(mock.inspections.length, 1, 'Accepted push should trigger inspection');
+  await resolve(mock.inspections[0], checked(revision));
+  equal(controller.status.activeRevisionId, revision, 'Post-push history should update');
+});
+for (const actionName of ['rollback', 'pin']) {
+  await test(`Accepted ${actionName} automatically refreshes library and history`, async () => {
+    await prepareRetention(actionName); await action(() => controller.confirmRetention());
+    await resolve(mock.retentionConfirms[0], { state: actionName === 'pin' ? 'pinned' : 'active', operationId: 'retention-1' });
+    equal(mock.inspections.length, 1, 'Accepted retention should trigger inspection');
+    await resolve(mock.inspections[0], checked(revision));
+    equal(controller.status.activeRevisionId, revision, 'Post-retention history should update');
+  });
+}
+await test('Unsupported baseline reader falls back to legacy status and history', async () => {
+  await action(() => controller.refreshStatus());
+  await reject(mock.inspections[0], 'Runtime does not support verified active-revision reads');
+  equal(mock.fallbackCalls, 1, 'Legacy status API should be called');
+  equal(controller.status.activeRevisionId, oldRevision, 'Legacy history should be available');
+  assert(!controller.inspection, 'Legacy fallback must not manufacture item comparisons');
+});
+await test('Rollback discards stale inspections started before confirmation', async () => {
+  await action(() => controller.refreshStatus());
+  await prepareRetention(); await action(() => controller.confirmRetention());
+  await resolve(mock.inspections[0], checked());
+  assert(!controller.inspection, 'Pre-rollback comparison must not repopulate after send starts');
+  await resolve(mock.retentionConfirms[0], { state: 'staged', operationId: 'retention-1' });
+  equal(controller.phase, 'staged', 'Unconfirmed rollback remains staged');
+});
+await test('Unconfirmed push reconciles only the reviewed active revision', async () => {
+  await prepare(); await action(() => controller.confirmPush());
+  await resolve(mock.confirms[0], { state: 'staged', operationId: 'push-1' });
+  await action(() => controller.refreshStatus()); await resolve(mock.inspections.at(-1), checked(oldRevision));
+  equal(controller.phase, 'staged', 'Another active revision is not acceptance');
+  await action(() => controller.refreshStatus()); await resolve(mock.inspections.at(-1), checked(revision));
+  equal(controller.phase, 'active', 'Exact reviewed revision should reconcile acceptance');
+  assert(controller.result.reconciled, 'Reconciled result should distinguish inspection evidence');
+});
+await test('Wrong payload hash never reconciles unconfirmed push acceptance', async () => {
+  await prepare(); await action(() => controller.confirmPush());
+  await resolve(mock.confirms[0], { state: 'staged', operationId: 'push-1' });
   const mismatched = checked(revision); mismatched.status.activePayloadSha256 = oldRevision;
   await action(() => controller.refreshStatus()); await resolve(mock.inspections.at(-1), mismatched);
   equal(controller.phase, 'staged', 'Matching revision text without matching payload is insufficient');
