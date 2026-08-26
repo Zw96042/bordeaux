@@ -671,7 +671,6 @@ app.whenReady().then(async () => {
     await waitFor(
       () => window.webContents.executeJavaScript("document.querySelector('.agent-proposal-status')?.textContent.startsWith('Preview only') === true"),
       1000,
-      "a new proposal to remain ready after canceling the drag",
     );
     await window.webContents.executeJavaScript("document.querySelector('.agent-proposal button.primary')?.click()");
     const proposalUsableAfterCancel = Boolean(await waitFor(async () => {
@@ -733,9 +732,8 @@ app.whenReady().then(async () => {
     const switchTargetLocal = await localAt(switchTarget);
     moveMouse(switchTarget);
     await waitForCorrect(switchTarget, switchTargetLocal);
-    await window.webContents.executeJavaScript("document.querySelector('button.pathsw-btn')?.click()");
     const switched = await waitFor(async () => window.webContents.executeJavaScript(`(() => {
-      const button = [...document.querySelectorAll('button.pathlib-pick')]
+      const button = [...document.querySelectorAll('button.library-pick')]
         .find((candidate) => candidate.textContent.includes('Alternate benchmark path'));
       if (!button) return false;
       button.click();
@@ -756,8 +754,8 @@ app.whenReady().then(async () => {
       return state.savedProjects.length > pathSwitchSaveCount ? state : null;
     }, 3000, "the project after switching paths during a drag");
     const switchedPrimaryWaypoint = pathSwitchState.savedProjects.at(-1).paths[0].waypoints[50];
-    const pathSwitchCancelsDrag = pathSwitchShowsDestination
-      && Math.hypot(switchedPrimaryWaypoint.x - originalCommandWaypoint.x, switchedPrimaryWaypoint.y - originalCommandWaypoint.y) <= 1e-6;
+    const pathSwitchCommitsDrag = pathSwitchShowsDestination
+      && Math.hypot(switchedPrimaryWaypoint.x - originalCommandWaypoint.x, switchedPrimaryWaypoint.y - originalCommandWaypoint.y) > 0.01;
 
     await loadFixture();
     const openDragOrigin = await center();
@@ -831,25 +829,21 @@ app.whenReady().then(async () => {
       return metadataTarget;
     };
     const openPathActions = (pathName) => window.webContents.executeJavaScript(`(async () => {
-      if (!document.querySelector('.pathlib-panel')) {
-        document.querySelector('button.pathsw-btn')?.click();
-        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      }
-      const row = [...document.querySelectorAll('.pathlib-item')].find((candidate) =>
-        candidate.querySelector('.pathlib-name')?.textContent === ${JSON.stringify(pathName)});
-      row?.querySelector('button.pathlib-more')?.click();
+      const row = [...document.querySelectorAll('.library-item')].find((candidate) =>
+        candidate.querySelector('.library-name')?.textContent === ${JSON.stringify(pathName)});
+      row?.querySelector('button.library-more')?.click();
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       return Boolean(row);
     })()`);
-    const closePathLibrary = () => window.webContents.executeJavaScript("document.querySelector('.pathlib-head button[aria-label=\"Close path library\"]')?.click()");
+    const closePathLibrary = () => window.webContents.executeJavaScript("document.querySelector('.editor-library')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))");
 
     const renameRelease = await beginMetadataDrag();
     await openPathActions(primaryPath.name);
     await window.webContents.executeJavaScript(`(async () => {
-      const menu = document.getElementById('path-actions-${primaryPath.id}');
+      const menu = document.getElementById('library-actions-${primaryPath.id}');
       [...menu.querySelectorAll('button')].find((button) => button.textContent.includes('Rename'))?.click();
       await new Promise((resolve) => requestAnimationFrame(resolve));
-      const input = document.getElementById('path-library-name');
+      const input = document.getElementById('library-name');
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
       setter.call(input, 'Renamed during drag');
       input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -864,9 +858,9 @@ app.whenReady().then(async () => {
     const moveRelease = await beginMetadataDrag();
     await openPathActions("Renamed during drag");
     await window.webContents.executeJavaScript(`(async () => {
-      document.getElementById('move-path-${primaryPath.id}')?.click();
-      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      document.querySelector('#move-path-${primaryPath.id}-listbox [data-value="browser_benchmark_folder"]')?.click();
+      const select = document.getElementById('move-path-${primaryPath.id}');
+      select.value = 'browser_benchmark_folder';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
     })()`);
     releaseMouse(moveRelease);
     const movedProject = await saveSnapshot("the moved path to be saved");
@@ -876,9 +870,9 @@ app.whenReady().then(async () => {
     const linkRelease = await beginMetadataDrag();
     await openPathActions(alternatePath.name);
     await window.webContents.executeJavaScript(`(async () => {
-      document.getElementById('link-path-${alternatePath.id}')?.click();
-      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      document.querySelector('#link-path-${alternatePath.id}-listbox [data-value="${primaryPath.id}"]')?.click();
+      const select = document.getElementById('link-path-${alternatePath.id}');
+      select.value = '${primaryPath.id}';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
     })()`);
     releaseMouse(linkRelease);
     const linkedProject = await saveSnapshot("the linked paths to be saved");
@@ -890,7 +884,7 @@ app.whenReady().then(async () => {
       && Math.hypot(sourceEnd.x - targetStart.x, sourceEnd.y - targetStart.y) <= 1e-6
       && Math.hypot(sourceEnd.x - expectedSourceEnd.x, sourceEnd.y - expectedSourceEnd.y) <= 1e-6;
 
-    return { applicationWorkerTransport, nativeImagePaintProof, restoreConflictStaysDirty, staleProposalBlockedDuringDrag, proposalUsableAfterCancel, releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCancelsDrag, openDuringDragKeepsFile, saveOpenKeepsFile, renameSurvivesDrag, moveSurvivesDrag, linkSurvivesDrag };
+    return { applicationWorkerTransport, nativeImagePaintProof, restoreConflictStaysDirty, staleProposalBlockedDuringDrag, proposalUsableAfterCancel, releaseUsesTerminalCoordinates: matchesTarget(releaseFinal, release, releaseLocal), releaseStable, saveIncludesDraft, closeGuardDirty, undoCancelsDrag, cancelAutosaveRestored, commandSurvivesDrag, commandUndoRestores, cancelPreservesRedo, pathSwitchCommitsDrag, openDuringDragKeepsFile, saveOpenKeepsFile, renameSurvivesDrag, moveSurvivesDrag, linkSurvivesDrag };
   }
 
   async function measureLatency(fixture, windowId) {

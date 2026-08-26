@@ -1,3 +1,10 @@
+// Build first: npm run build:electron. Optionally pass a separate compiled tree.
+import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { performance } from "node:perf_hooks";
+import path from "node:path";
+
+const require = createRequire(import.meta.url);
 const compiled = path.resolve(process.argv[2] ?? "dist-electron");
 const { headingAt } = require(path.join(compiled, "shared/math/headingAnchors.js"));
 const { buildCanonicalPathState } = require(path.join(compiled, "shared/planners/pathState.js"));
