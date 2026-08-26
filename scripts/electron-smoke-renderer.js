@@ -1,3 +1,105 @@
+  const javaConnection = await window.bordeauxAPI.linkJavaProject();
+  const installedJavaConnection = await window.bordeauxAPI.installJavaSupport();
+  const builtJavaConnection = await window.bordeauxAPI.buildJavaCatalog();
+  const recentJavaProjects = await window.bordeauxAPI.listRecentJavaProjects();
+  const reopenedJavaConnection = await window.bordeauxAPI.openRecentJavaProject(recentJavaProjects[0].id);
+  const secondPath = structuredClone(project.paths[0]);
+  secondPath.id = 'path_smoke_second'; secondPath.name = 'Smoke second';
+  secondPath.markers = [];
+  const persistedProject = { ...project, paths: [...project.paths, secondPath], editor: { activePathId: secondPath.id, javaProjectBookmarkId: recentJavaProjects[0].id } };
+  [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === 'Editor')?.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  [...document.querySelectorAll('.library-tabs button')].find((button) => button.textContent.trim() === 'Paths')?.click();
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const planStage = document.querySelector('.stage-plan .fieldcol');
+    if (planStage && planStage.getAttribute('aria-disabled') !== 'true') break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  await addMarker(0.4);
+  for (let attempt = 0; attempt < 100 && !document.querySelector('button[aria-label="Choose Java project"], .cmd-primary-action'); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const linkButton = document.querySelector('button[aria-label="Choose Java project"]')
+    || [...document.querySelectorAll('.cmd-primary-action')].find((button) => button.textContent.trim() === 'Choose Java project');
+  linkButton?.click();
+  for (let attempt = 0; attempt < 50 && document.getElementById('event-marker-command')?.disabled; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const commandPicker = document.getElementById('event-marker-command');
+  const setInputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+  commandPicker?.click();
+  for (let attempt = 0; attempt < 50 && !document.querySelector('#event-marker-command-listbox [role="option"]'); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const commandOptions = [...document.querySelectorAll('#event-marker-command-listbox [role="option"]')];
+  const commandSearch = document.getElementById('event-marker-command-search');
+  const smokeCommandOption = commandOptions.find((option) => option.getAttribute('data-value') === 'frc.robot.SmokeCommand');
+  if (smokeCommandOption) {
+    smokeCommandOption.click();
+    for (let attempt = 0; attempt < 100 && !document.getElementById('event-command-param-tags'); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  const jsonParameter = document.getElementById('event-command-param-tags');
+  const exactIntegerParameter = document.getElementById('event-command-param-sequence');
+  const smokeParametersPresent = Boolean(document.getElementById('event-command-param-count') && jsonParameter && exactIntegerParameter);
+  const setTextAreaValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+  if (jsonParameter) {
+    setTextAreaValue.call(jsonParameter, '{}');
+    jsonParameter.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    jsonParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const jsonShapeRejected = jsonParameter?.getAttribute('aria-invalid') === 'true';
+  if (jsonParameter) {
+    setTextAreaValue.call(jsonParameter, '["auto"]');
+    jsonParameter.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    jsonParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  if (exactIntegerParameter) {
+    setInputValue.call(exactIntegerParameter, '9223372036854775808');
+    exactIntegerParameter.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    exactIntegerParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const longRangeRejected = exactIntegerParameter?.getAttribute('aria-invalid') === 'true';
+  if (exactIntegerParameter) {
+    setInputValue.call(exactIntegerParameter, '9007199254740993');
+    exactIntegerParameter.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    exactIntegerParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  document.getElementById('event-marker-command')?.click();
+  for (let attempt = 0; attempt < 50 && !document.querySelector('#event-marker-command-listbox [role="option"]'); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const largeEnumCommandOption = [...document.querySelectorAll('#event-marker-command-listbox [role="option"]')]
+    .find((option) => option.getAttribute('data-value') === 'frc.robot.LargeEnumCommand');
+  largeEnumCommandOption?.click();
+  for (let attempt = 0; attempt < 50 && !document.getElementById('event-command-param-mode'); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const largeEnumPicker = document.getElementById('event-command-param-mode');
+  largeEnumPicker?.click();
+  for (let attempt = 0; attempt < 50 && !document.querySelector('#event-command-param-mode-listbox [role="option"]'); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const largeEnumOptions = [...document.querySelectorAll('#event-command-param-mode-listbox [role="option"]')];
+  const largeEnumOverflowNotice = document.querySelector('#event-command-param-mode-listbox .cmd-picker-more')?.textContent || '';
+  const largeEnumSearch = document.getElementById('event-command-param-mode-search');
+  if (largeEnumSearch) {
+    setInputValue.call(largeEnumSearch, 'MODE_150');
+    largeEnumSearch.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  for (let attempt = 0; attempt < 50 && !document.querySelector('#event-command-param-mode-listbox [data-value="MODE_150"]'); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
   const largeEnumChoice = [...document.querySelectorAll('#event-command-param-mode-listbox [role="option"]')]
     .find((option) => option.getAttribute('data-value') === 'MODE_150');
   largeEnumChoice?.click();
