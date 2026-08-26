@@ -1,3 +1,33 @@
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const ffprobe = process.env.FFPROBE_BIN || "ffprobe";
+const manifestPath = join(here, "motion-manifest.json");
+let checks = 0;
+
+function assert(condition, message) {
+  checks += 1;
+  if (!condition) throw new Error(message);
+}
+
+function probe(path, countFrames = false) {
+  const args = ["-v", "error"];
+  if (countFrames) args.push("-count_frames");
+  args.push(
+    "-show_entries",
+    "stream=codec_name,codec_type,width,height,r_frame_rate,nb_read_frames:format=duration",
+    "-of", "json",
+    path
+  );
+  const result = spawnSync(ffprobe, args, { encoding: "utf8" });
+  assert(result.status === 0, `ffprobe failed for ${path}: ${result.stderr || "unknown error"}`);
+  return JSON.parse(result.stdout);
+}
+
 function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
