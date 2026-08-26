@@ -1,3 +1,105 @@
+    add_bevel(shell, 0.012, 3)
+
+    rim = add_torus(f"{name}Rim", 1.06, 0.026, (0, 0, 3.34), glass_material)
+    stem = add_cylinder(f"{name}Stem", 0.052, 1.18, (0, 0, 0.65), glass_material, 0.025)
+    foot = add_cylinder(f"{name}Foot", 0.72, 0.045, (0, 0, 0.035), glass_material, 0.035)
+    foot_rim = add_torus(f"{name}FootRim", 0.69, 0.018, (0, 0, 0.055), glass_material)
+
+    wine = create_wine_fill(f"{name}Wine", wine_material, meniscus_material)
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=128, ring_count=48, location=(0, 0, 2.39), scale=(0.89, 0.89, 0.035))
+    meniscus = bpy.context.object
+    meniscus.name = f"{name}Meniscus"
+    meniscus.data.materials.append(meniscus_material)
+    shade_smooth(meniscus)
+    set_visible(meniscus, False)
+
+    pour_origin = bpy.data.objects.new(f"{name}PourOrigin", None)
+    bpy.context.collection.objects.link(pour_origin)
+    pour_origin.location = (1.02, 0.0, 3.28)
+
+    for part in (shell, rim, stem, foot, foot_rim, pour_origin):
+        parent_keep_transform(part, root)
+    for part in (wine, meniscus):
+        parent_keep_transform(part, liquid_root)
+
+    return GlassRig(
+        root=root,
+        liquid_root=liquid_root,
+        shell=shell,
+        rim=rim,
+        stem=stem,
+        foot=foot,
+        foot_rim=foot_rim,
+        wine=wine,
+        meniscus=meniscus,
+        pour_origin=pour_origin,
+        parts=(shell, rim, stem, foot, foot_rim, wine),
+    )
+
+
+def make_curve(name: str, material, bevel_depth: float, points: int = 160) -> bpy.types.Object:
+    curve = bpy.data.curves.new(f"{name}Curve", "CURVE")
+    curve.dimensions = "3D"
+    curve.resolution_u = 12
+    curve.bevel_depth = bevel_depth
+    curve.bevel_resolution = 6
+    curve.use_fill_caps = True
+    curve.materials.append(material)
+    spline = curve.splines.new("POLY")
+    spline.points.add(points - 1)
+    for point in spline.points:
+        point.co = (0, 0, -100, 1)
+    obj = bpy.data.objects.new(name, curve)
+    bpy.context.collection.objects.link(obj)
+    return obj
+
+
+def set_curve_points(
+    obj: bpy.types.Object,
+    points: Sequence[Vector],
+    radii: Sequence[float] | None = None,
+) -> None:
+    spline = obj.data.splines[0]
+    count = len(spline.points)
+    for index in range(count):
+        source_index = min(index, len(points) - 1)
+        source = points[source_index] if points else Vector((0, 0, -100))
+        point = spline.points[index]
+        point.co = (*source, 1.0)
+        point.radius = radii[min(index, len(radii) - 1)] if radii else 1.0
+
+
+def make_liquid_sheet(name: str, material, points: int = 180) -> bpy.types.Object:
+    vertices = [(0.0, 0.0, -100.0)] * (points * 2)
+    faces = [
+        (index * 2, index * 2 + 1, (index + 1) * 2 + 1, (index + 1) * 2)
+        for index in range(points - 1)
+    ]
+    mesh = bpy.data.meshes.new(f"{name}Mesh")
+    mesh.from_pydata(vertices, [], faces)
+    mesh.materials.append(material)
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.collection.objects.link(obj)
+
+    solidify = obj.modifiers.new("Liquid depth", "SOLIDIFY")
+    solidify.thickness = 0.018
+    solidify.offset = 0.0
+    bevel = obj.modifiers.new("Liquid edge", "BEVEL")
+    bevel.width = 0.009
+    bevel.segments = 3
+    bevel.limit_method = "ANGLE"
+    for polygon in mesh.polygons:
+        polygon.use_smooth = True
+    return obj
+
+
+def set_liquid_sheet(
+    obj: bpy.types.Object,
+    points: Sequence[Vector],
+    half_widths: Sequence[float],
+    progress: float,
+    start_progress: float = 0.0,
+) -> None:
     mesh = obj.data
     if not points:
         return
