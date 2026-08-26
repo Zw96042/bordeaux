@@ -5,8 +5,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-const smokeDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-electron-smoke-"));
+      if (error?.code !== "EADDRINUSE" || Date.now() >= deadline) {
+        throw new Error("Could not acquire the Bordeaux Electron smoke lock.", { cause: error });
+      }
+      await delay(100);
+    }
+  }
+}
+
+const smokeLock = await acquireSmokeLock();
+let smokeDirectory;
 try {
+  smokeDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-electron-smoke-"));
+  await fs.copyFile(new URL("./electron-smoke-renderer.js", import.meta.url), path.join(smokeDirectory, "renderer.js"));
   const javaSourceDirectory = path.join(smokeDirectory, "java-project", "src", "main", "java", "frc", "robot");
   await fs.mkdir(javaSourceDirectory, { recursive: true });
   await fs.writeFile(path.join(smokeDirectory, "java-project", "build.gradle"), "plugins { id 'java'; id 'edu.wpi.first.GradleRIO' version '2026.2.2' }\n");
@@ -78,8 +89,9 @@ public final class IdleCommand extends CommandBase {}
     id: "bordeaux.wait", kind: "wait", label: "Wait", description: "Pause the routine before its next step.",
     parameters: [{ name: "durationS", label: "Duration", description: "Time to wait before continuing the routine.", unit: "s", defaultValue: 1, min: 0.02, max: 15, role: "argument", javaType: "double", schema: { kind: "number", javaType: "double" } }],
   }];
-  const catalogHash = `sha256:${createHash("sha256").update(canonicalJson({ builtIns, commands, conditions }), "utf8").digest("hex")}`;
-  const smokeCatalog = { schemaVersion: "1.2", catalogId: "SmokeRobot", supportVersion: "0.3.0", catalogHash, commands, conditions, builtIns };
+  const trajectoryGenerators = [];
+  const catalogHash = `sha256:${createHash("sha256").update(canonicalJson({ builtIns, commands, conditions, trajectoryGenerators }), "utf8").digest("hex")}`;
+  const smokeCatalog = { schemaVersion: "1.3", catalogId: "SmokeRobot", supportVersion: "0.4.0", catalogHash, commands, conditions, builtIns, trajectoryGenerators };
   const supportDirectory = path.join(smokeDirectory, "java-project", ".bordeaux");
   await fs.mkdir(supportDirectory, { recursive: true });
   await fs.writeFile(path.join(supportDirectory, "smoke-catalog.json"), `${JSON.stringify(smokeCatalog, null, 2)}\n`);
@@ -89,9 +101,11 @@ public final class IdleCommand extends CommandBase {}
   await fs.writeFile(path.join(smokeDirectory, "java-project", "gradlew.bat"), windowsWrapper);
 
   const packagedExecutable = process.env.BORDEAUX_SMOKE_EXECUTABLE;
-  const child = spawn(packagedExecutable || electron, packagedExecutable ? [] : ["dist-electron/electron/main.js"], {
+  const childEnvironment = { ...process.env, BORDEAUX_SMOKE_TEST: "1", BORDEAUX_SMOKE_DIRECTORY: smokeDirectory };
+  delete childEnvironment.ELECTRON_RUN_AS_NODE;
+  const child = spawn(packagedExecutable || electron, packagedExecutable ? ["--enable-mcp-access"] : ["dist-electron/electron/main.js", "--enable-mcp-access"], {
     cwd: process.cwd(),
-    env: { ...process.env, BORDEAUX_SMOKE_TEST: "1", BORDEAUX_SMOKE_DIRECTORY: smokeDirectory },
+    env: childEnvironment,
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -110,9 +124,30 @@ public final class IdleCommand extends CommandBase {}
     clearTimeout(timeout);
   }
 
-  if (code !== 0 || !output.includes("BORDEAUX_SMOKE_OK")) {
-    throw new Error(`Electron smoke test failed with exit code ${code}`);
-  }
+  assert.equal(code, 0, `Electron smoke process exited with code ${code}`);
+  const resultLine = output.split(/\r?\n/).find((line) => line.startsWith("BORDEAUX_SMOKE_RESULT "));
+  assert.ok(resultLine, "Electron smoke process did not return results");
+  const result = JSON.parse(resultLine.slice("BORDEAUX_SMOKE_RESULT ".length));
+  assert.deepEqual(result.unnamed, [], "All controls must have accessible names");
+  assert.ok(result.main > 0, "Main landmark must exist");
+  assert.ok(result.nav > 0, "Navigation landmark must exist");
+  for (const check of [
+    "api", "root", "validation", "motorPreset", "eventMarkerAutosave", "multiRoutineUi", "robotPushUi",
+    "javaDiscovery", "javaInstalled", "javaBuilt", "javaRecent", "staleJavaExportRejected", "javaExported",
+    "restored", "roundTrip", "editorRestored", "nodeGlobalsBlocked", "popupBlocked", "inlineScriptBlocked",
+    "filesWritten", "closeGuard",
+  ]) assert.equal(result[check], true, check);
+  for (const check of [
+    "markerInspector", "linkAction", "commandEnabled", "searchHiddenForSmallCatalog", "recentHiddenForSingleProject",
+    "cancelSwitch", "parameter", "jsonShapeRejected", "jsonShapeAccepted", "longRangeRejected", "exactInteger",
+    "largeEnumPicker", "accessible",
+  ]) assert.equal(result.javaUi[check], true, `javaUi.${check}`);
+  assert.equal(result.javaUi.commandOptions, 4, "javaUi.commandOptions");
+  console.log("BORDEAUX_SMOKE_OK");
 } finally {
-  await fs.rm(smokeDirectory, { recursive: true, force: true });
+  try {
+    if (smokeDirectory) await fs.rm(smokeDirectory, { recursive: true, force: true });
+  } finally {
+    await new Promise((resolve, reject) => smokeLock.close((error) => error ? reject(error) : resolve()));
+  }
 }

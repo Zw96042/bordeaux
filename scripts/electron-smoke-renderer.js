@@ -1,3 +1,52 @@
+(async () => {
+  const waitFor = async (predicate, label) => {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if (await predicate()) return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error('Smoke timed out waiting for ' + label);
+  };
+  await waitFor(() => document.querySelector('.pageswitch button'), 'initial editor');
+  const unnamedOnPage = () => {
+    const controls = [...document.querySelectorAll('button,input,select,textarea,[role="button"]')];
+    const name = (el) => el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.getAttribute('title') || el.labels?.[0]?.textContent || (el.matches('button,[role="button"]') ? el.textContent : '');
+    return controls.filter((el) => !String(name(el) || '').trim()).map((el) => el.className);
+  };
+  const addMarker = async (fraction) => {
+    document.activeElement?.blur();
+    const segment = document.querySelector('.fieldsvg path[data-role="seg"]');
+    if (!segment) throw new Error('Smoke marker placement requires a visible path');
+    const point = segment.getPointAtLength(segment.getTotalLength() * fraction).matrixTransform(segment.getScreenCTM());
+    window.__bordeauxSmokeInput = { x: Math.round(point.x), y: Math.round(point.y) };
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if (!window.__bordeauxSmokeInput) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error('Smoke marker pointer input was not delivered');
+  };
+  const unnamed = [...unnamedOnPage()];
+  for (const page of ['Routines', 'Settings']) {
+    [...document.querySelectorAll('.pageswitch button,.library-tabs button')].find((button) => button.textContent.trim() === page)?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    unnamed.push(...unnamedOnPage());
+  }
+  const project = { schemaVersion: '1.0', field: { id: '2026-rebuilt', revision: '2026-manual-tu19-welded-4', coordinateSchemaId: 'bordeaux-field/1.0' }, name: 'Smoke edited', robot: { drive: 'swerve', w: .8, l: .8, maxSpeed: 4 }, paths: [{ id: 'path_smoke', name: 'Smoke', waypoints: [{ x: 1, y: 1, theta: 0, thetaOn: true, linked: true, stop: false, prevC: { x: .8, y: 1 }, nextC: { x: 1.2, y: 1 } }, { x: 2, y: 1, theta: 0, thetaOn: true, linked: true, stop: false, prevC: { x: 1.8, y: 1 }, nextC: { x: 2.2, y: 1 } }], targets: [], markers: [{ id: 'event_smoke', f: .5, name: 'Smoke event', invocation: { commandId: 'frc.robot.SmokeCommand', arguments: { count: 2, sequence: '9007199254740993', tags: ['auto'] }, cancelOnPathEnd: true } }], ranges: [], constraints: { maxVel: 2, maxAccel: 2, maxDecel: 2, maxAngVel: 180, maxAngAccel: 360 }, startVel: 0, goalVel: 0 }], pathLinks: [], routines: [{ id: 'routine_smoke_active', name: 'Smoke routine', nodes: [{ id: 'routine_smoke', type: 'path', ref: 'path_smoke' }] }], activeRoutineId: 'routine_smoke_active', plannerId: 'profiledSpline' };
+  await window.bordeauxAPI.saveProject(project, true);
+  await waitFor(() => document.getElementById('robot-drive-motor'), 'robot settings');
+  document.getElementById('robot-drive-motor').click();
+  for (let attempt = 0; attempt < 50 && !document.querySelector('#robot-drive-motor-listbox [data-value="rev-neo"]'); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  document.querySelector('#robot-drive-motor-listbox [data-value="rev-neo"]')?.click();
+  let motorAutosave;
+  await waitFor(async () => {
+    motorAutosave = await window.bordeauxAPI.restoreLastProject();
+    return motorAutosave.project.robot.driveModel?.motorId === 'rev-neo';
+  }, 'motor preset autosave');
+  const motorPreset = motorAutosave.project.robot.driveModel?.motorId === 'rev-neo'
+    && motorAutosave.project.robot.driveModel?.motorFreeRpm === 5676
+    && motorAutosave.project.robot.maxSpeed > 4;
+  const validation = await window.bordeauxAPI.validateProject(project);
   const javaConnection = await window.bordeauxAPI.linkJavaProject();
   const installedJavaConnection = await window.bordeauxAPI.installJavaSupport();
   const builtJavaConnection = await window.bordeauxAPI.buildJavaCatalog();
