@@ -1,3 +1,105 @@
+    assert.equal(await evaluate(() => document.querySelectorAll('.toolbar .library-connection,.toolbar .document-settings-trigger,.toolbar .exportjava').length), 0);
+    await click('.pageswitch button', 'Settings');
+    assert.equal(await evaluate(() => !!document.querySelector('.settings-general .library-connection')), true);
+    await click('[aria-label="Display units"] button', 'Imperial');
+    assert.equal(await evaluate(() => [...document.querySelectorAll('[aria-label="Display units"] button')].find((button) => button.textContent === 'Imperial').getAttribute('aria-pressed')), 'true');
+    await click('.rp-shapes button', 'Custom');
+    const vertexValue = async (raw, cancel = false) => {
+      await evaluate(() => { const el = document.querySelector('[aria-label="Vertex 1 X"]'); el.focus(); el.select(); });
+      await win.webContents.insertText(raw);
+      if (cancel) { await key('Escape'); await evaluate(() => document.querySelector('[aria-label="Vertex 1 X"]').dispatchEvent(new FocusEvent('focusout', { bubbles: true }))); }
+      else await evaluate(() => { const el = document.querySelector('[aria-label="Vertex 1 X"]'); el.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); el.blur(); });
+      await click('[aria-label="Save project"]');
+      return saved.robot.footprint.verticesM[0].x;
+    };
+    assert.ok(Math.abs(await vertexValue('-10') + .254) < 1e-10, 'Imperial footprint edits store canonical meters');
+    for (const invalid of ['', 'NaN', '2oops']) assert.ok(Math.abs(await vertexValue(invalid) + .254) < 1e-10);
+    assert.ok(Math.abs(await vertexValue('-12', true) + .254) < 1e-10, 'Escape preserves footprint position');
+    assert.equal(await evaluate(() => document.querySelector('[aria-label="Vertex 1 X"]').nextElementSibling.textContent), 'in');
+    for (const [width, height] of [[1440, 900], [1100, 720]]) {
+      win.setContentSize(width, height); await delay(100);
+      await evaluate(() => document.querySelector('[aria-label="Vertex 1 X"]').scrollIntoView({ block: 'center' }));
+      assert.equal(await evaluate(() => { const row = document.querySelector('.rp-vertex'); return row.scrollWidth <= row.clientWidth; }), true);
+      await fs.writeFile(path.join(output, `custom-footprint-${width}.png`), (await win.webContents.capturePage()).toPNG());
+    }
+    win.setContentSize(1440, 900);
+    await click('[aria-label="Display units"] button', 'Metric');
+    assert.equal(await evaluate(() => document.querySelector('[aria-label="Vertex 1 X"]').value), '-0.254');
+    await click('.rp-shapes button', 'Rectangle');
+    check('custom footprint respects displayed units, invalid drafts, Escape, and narrow layout');
+    await click('.pageswitch button', 'Editor');
+    check('Settings contains connection and working display units; toolbar has no connection, units, or JSON export');
+    await wait(() => evaluate(() => document.querySelector('[data-role="wp"]') && !document.querySelector('.fieldcol[inert]')), 'editable field');
+    await pointerClick('.wpfeatrow:nth-child(2) .featselect', ['shift']);
+    await click('[aria-label="Save project"]');
+    assert.equal(saved.paths[0].waypoints.length, 3, 'Shift selection must never delete a waypoint');
+    assert.equal(await evaluate(() => document.querySelector('.wpfeatrow:nth-child(2) .featselect').getAttribute('aria-pressed')), 'true');
+    check('Shift-click selects a waypoint without deleting it');
+    await evaluate(() => document.querySelectorAll('.outline .featselect')[1].click());
+    const numericBefore = await evaluate(() => document.querySelector('.numinput').value);
+    await evaluate(() => { const field = document.querySelector('.numinput'); field.focus(); field.select(); });
+    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: '2' });
+    win.webContents.sendInputEvent({ type: 'char', keyCode: '2' });
+    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: '2' });
+    await delay(80);
+    assert.equal(await evaluate(() => document.activeElement === document.querySelector('.numinput')), true, 'Typing a number must keep numeric input focus');
+    assert.equal(await evaluate(() => document.querySelector('.numinput').value), '2');
+    assert.equal(await evaluate(() => document.querySelector('[title="Place waypoint  (2 or W)"]')?.getAttribute('aria-pressed')), 'false');
+    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
+    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
+    await delay(80);
+    await evaluate(() => document.querySelectorAll('.outline .featselect')[1].click());
+    assert.equal(await evaluate(() => document.querySelector('.numinput').value), numericBefore, 'Escape must discard the numeric draft');
+    check('numeric typing preserves focus and tool selection, and Escape discards the draft');
+    await wait(() => evaluate(() => document.querySelector('[data-heading-control]') && !document.querySelector('.fieldcol[inert]')), 'heading menu target');
+    await evaluate(() => document.querySelector('[data-heading-control]').focus());
+    await key('F10', ['shift']);
+    await wait(() => evaluate(() => document.querySelector('.ctxmenu [role="menuitem"]') === document.activeElement), 'heading menu focus');
+    await key('End');
+    assert.equal(await evaluate(() => document.activeElement.textContent), 'Type exact angle…');
+    await key('Home'); await key('Down');
+    assert.equal(await evaluate(() => document.activeElement.textContent), 'Face previous waypoint');
+    await key('Escape');
+    assert.equal(await evaluate(() => Boolean(document.querySelector('.ctxmenu'))), false);
+    assert.equal(await evaluate(() => document.activeElement.hasAttribute('data-heading-control')), true);
+    assert.equal(await evaluate(() => document.querySelector('.wpfeatrow:nth-child(2) .featselect').getAttribute('aria-pressed')), 'true');
+    check('heading menu opens by keyboard, navigates, and restores focus without clearing selection');
+    await click('[aria-label="Hide inspector"]');
+    const headingPoint = await evaluate(() => { const r = document.querySelector('[data-heading-control]').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; });
+    win.webContents.sendInputEvent({ type: 'mouseDown', ...headingPoint, button: 'right', clickCount: 1 });
+    win.webContents.sendInputEvent({ type: 'mouseUp', ...headingPoint, button: 'right', clickCount: 1 });
+    await wait(() => evaluate(() => !!document.querySelector('.ctxmenu')), 'pointer heading menu');
+    for (const code of ['Left', 'Right', 'Delete']) await key(code);
+    await key('End'); await key('Space');
+    await wait(() => evaluate(() => document.querySelector('.rail-r input') && !document.querySelector('.ctxmenu')), 'exact angle inspector opens from menu Space');
+    await click('[aria-label="Save project"]');
+    assert.deepEqual(saved.paths[0].waypoints, source.waypoints, 'Menu key navigation must not nudge or delete geometry');
+    check('pointer-opened heading menu isolates editor keys and Space opens the exact-angle inspector');
+
+
+
+    const beforeModal = structuredClone(saved.paths[0].waypoints);
+    for (const diagnostic of [false, true]) {
+      await click('.library-connection');
+      await wait(() => evaluate(() => document.querySelector('dialog.robot-manager').open), 'robot connection modal');
+      if (diagnostic) await click('[aria-label="Diagnostics"]');
+      const closeSelector = diagnostic ? '[aria-label="Close diagnostic bundle"]' : '[aria-label="Close robot connection"]';
+      if (diagnostic) {
+        await evaluate(() => [...document.querySelectorAll('[aria-labelledby="beta-diagnostic-title"] button')].at(-1).focus());
+        win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Tab' });
+        win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Tab' });
+        await delay(80);
+        assert.equal(await evaluate(() => document.querySelector('[aria-labelledby="beta-diagnostic-title"]').contains(document.activeElement)), true, 'Tab must stay inside the diagnostic modal');
+        await fs.writeFile(path.join(output, 'diagnostic-dialog.png'), (await win.webContents.capturePage()).toPNG());
+      }
+      await evaluate((selector) => document.querySelector(selector).focus(), closeSelector);
+      for (const keyCode of ['Delete', 'Right', '2']) {
+        win.webContents.sendInputEvent({ type: 'keyDown', keyCode });
+        win.webContents.sendInputEvent({ type: 'keyUp', keyCode });
+      }
+      win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'z', modifiers: ['control'] });
+      win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'z', modifiers: ['control'] });
+      await delay(80);
       assert.equal(await evaluate((selector) => document.activeElement === document.querySelector(selector), closeSelector), true, 'Editor shortcuts must not blur a modal control');
       await click(closeSelector);
       await click('[aria-label="Save project"]');
