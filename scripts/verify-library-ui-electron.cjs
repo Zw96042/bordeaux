@@ -1,3 +1,105 @@
+    await wait(() => evaluate(() => document.querySelector('.library-current-name')?.textContent === 'Opening move'), 'simple restored library');
+    assert.equal(await evaluate(() => document.querySelectorAll('.library-pick').length), 2);
+    await click('.pageswitch button', 'Settings');
+    await click('[aria-label="Display units"] button', 'Imperial');
+    await click('.pageswitch button', 'Editor');
+    await wait(() => evaluate(() => !!document.querySelector('.wpfeatrow .featmeta')), 'Imperial waypoint coordinates');
+    assert.equal(await evaluate(() => document.querySelector('.wpfeatrow .featmeta').textContent), `${(saved.paths[0].waypoints[0].x / .3048).toFixed(1)}, ${(saved.paths[0].waypoints[0].y / .3048).toFixed(1)} ft`);
+    await click('.pageswitch button', 'Settings');
+    await click('[aria-label="Display units"] button', 'Metric');
+    await click('.pageswitch button', 'Editor');
+    check('waypoint outline coordinates use the selected unit system');
+
+    assert.equal(await evaluate(() => document.querySelectorAll('.library-folder').length), 0, 'Root paths must not be wrapped in a synthetic Unfiled folder');
+    assert.equal(await evaluate(() => document.querySelectorAll('.library-row input[type="checkbox"]').length), 0);
+    assert.equal(await evaluate(() => document.querySelector('.editor-library').textContent.includes('Unfiled')), false);
+    await click('[aria-label="Actions for Opening move"]');
+    assert.equal(await evaluate(() => document.querySelector('.library-menu').matches(':popover-open')), true, 'Actions use a native popover above the list');
+    assert.equal(await evaluate(() => document.querySelector('.library-menu [role="menuitem"]').textContent), 'Rename');
+    await key('End');
+    assert.equal(await evaluate(() => document.activeElement.textContent), 'Delete');
+    await key('Escape');
+    assert.equal(await evaluate(() => document.querySelector('.library-menu')), null);
+    assert.equal(await evaluate(() => document.activeElement.getAttribute('aria-label')), 'Actions for Opening move');
+    await click('[aria-label="Actions for Opening move"]');
+    await pointerClick('.fieldcol');
+    assert.equal(await evaluate(() => document.querySelector('.library-menu')), null, 'Click outside in the field dismisses the menu');
+    await click('[aria-label="Actions for Opening move"]');
+    await click('.library-menu button', 'Folder and links…');
+    assert.equal(await evaluate(() => document.querySelector('.library-properties').open), true);
+    assert.equal(await evaluate(() => document.querySelector('.library-properties select option[value=""]').textContent), 'No folder');
+    await key('Escape');
+    assert.equal(await evaluate(() => document.querySelector('.library-properties')), null);
+    assert.equal(await evaluate(() => document.activeElement.dataset.libraryItem), 'library-path-0');
+    check('item popover supports keyboard, Escape focus restoration, outside dismissal, and separate native properties');
+    for (const [width, height] of [[1440, 900], [1280, 800], [1100, 720]]) {
+      win.setContentSize(width, height); await delay(150);
+      await pointerClick('[data-library-item="library-path-0"]');
+      const rows = await evaluate(() => [...document.querySelectorAll('.library-row')].map((el) => ({ height: el.getBoundingClientRect().height, borderRadius: getComputedStyle(el).borderRadius, shadow: getComputedStyle(el).boxShadow })));
+      assert.ok(rows.every((row) => row.height <= 34 && row.borderRadius === '0px' && row.shadow === 'none'), 'Paths must be flat compact rows: ' + JSON.stringify(rows));
+      await fs.writeFile(path.join(output, `simple-paths-${width}.png`), (await win.webContents.capturePage()).toPNG());
+      await pointerClick('[data-library-item="library-path-1"]', [process.platform === 'darwin' ? 'meta' : 'control']);
+      await fs.writeFile(path.join(output, `simple-multiselect-${width}.png`), (await win.webContents.capturePage()).toPNG());
+      await pointerClick('[data-library-item="library-path-0"]', [process.platform === 'darwin' ? 'meta' : 'control']);
+      assert.equal(await evaluate(() => document.querySelector('.library-current-name').textContent), 'Collect second', 'Single-item push label follows selected ID even when editor stays on another path');
+      await click('[aria-label="Actions for Opening move"]');
+      await fs.writeFile(path.join(output, `simple-menu-${width}.png`), (await win.webContents.capturePage()).toPNG());
+      await key('Escape');
+      await click('.library-tabs button', 'Routines'); await click('[data-library-item="routine-a"]');
+      if (await evaluate(() => Boolean(document.querySelector('[aria-label="Close step inspector"]')))) await click('[aria-label="Close step inspector"]');
+      await delay(500);
+      await fs.writeFile(path.join(output, `simple-routines-${width}.png`), (await win.webContents.capturePage()).toPNG());
+      await click('.library-tabs button', 'Paths');
+    }
+    check('two root paths use flat rows, direct modifier selection, accurate scoped push names, and uncluttered item popovers');
+    // Exercise simultaneous notices with the application's real CSS at narrow field widths.
+    for (const width of [320, 600]) {
+      const layout = await evaluate((width) => {
+        const field = document.querySelector('.stage-plan .fieldcol');
+        const original = field.querySelector('.field-notices');
+        const fixture = original.cloneNode(false);
+        fixture.innerHTML = '<div class="field-status"><details><summary><span class="field-status-label">Preparing trajectory…</span><span class="field-status-disclosure">Details (3)</span></summary><div class="field-status-details"><div class="field-status-item"><strong>Optimization out of date</strong><p>' + 'Long diagnostic text '.repeat(100) + '</p><button>Optimize</button></div></div></details><button class="field-status-action">Optimize</button></div>'
+          + '<div class="insert-preview"><div class="insert-preview-copy"><b>Preview waypoint</b><span>Insert the waypoint at the previewed location.</span></div><div class="insert-preview-actions"><button>Cancel</button><button>Insert waypoint</button></div></div>';
+        const previous = field.style.flex;
+        field.style.flex = '0 0 ' + width + 'px';
+        original.style.visibility = 'hidden';
+        field.append(fixture);
+        const rects = [...fixture.children].map((el) => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right }; });
+        const button = fixture.querySelector('.field-status-action'), r = button.getBoundingClientRect();
+        const statusHeight = fixture.firstElementChild.getBoundingClientRect().height;
+        const fonts = [fixture.querySelector('summary'), button].map((el) => getComputedStyle(el).fontSize);
+        fixture.querySelector('details').open = true;
+        const detail = fixture.querySelector('.field-status-details');
+        const detailHeight = detail.getBoundingClientRect().height;
+        const bounded = detail.scrollHeight > detail.clientHeight;
+        fixture.querySelector('details').open = false;
+        const result = { statusHeight, fonts, detailHeight, bounded, rects, bounds: field.getBoundingClientRect().toJSON(), clickable: document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === button };
+        fixture.remove(); original.style.visibility = ''; field.style.flex = previous;
+        return result;
+      }, width);
+      assert.ok(layout.statusHeight <= 40, 'Status remains one compact row');
+      assert.equal(layout.fonts[0], layout.fonts[1], 'Status and action use consistent font sizes');
+      assert.ok(layout.detailHeight <= 240 && layout.bounded, 'Long diagnostics scroll in a bounded disclosure');
+      layout.rects.forEach((rect, index) => {
+        if (index) assert.ok(rect.top >= layout.rects[index - 1].bottom + 5, 'Simultaneous field notices must have separate rows');
+        assert.ok(rect.left >= layout.bounds.left && rect.right <= layout.bounds.right, 'Field notices must wrap within the field');
+      });
+      assert.equal(layout.clickable, true, 'Review trajectory must remain clickable');
+    }
+    check('simultaneous passive statuses occupy one consistent-size row with bounded diagnostic details');
+    saved = { ...saved, name: 'Shared waypoint verification', paths: [...saved.paths, { ...structuredClone(saved.paths[0]), id: 'unlinked-path', name: 'Independent path' }].map((path, index) => ({ ...path, headingMode: 'tangent', startVel: .4, goalVel: .6, waypoints: path.waypoints.map((waypoint, at) => ({ ...waypoint, theta: index === 0 ? 15 : 130, thetaOn: true, stop: false })) })) };
+    await win.loadFile(path.resolve('dist-renderer/index.html'));
+    await wait(() => evaluate(() => document.querySelector('.library-current-name')?.textContent === 'Opening move' && !document.querySelector('.fieldcol[inert]')), 'shared waypoint fixture ready');
+    const saveCurrent = async () => { await click('[aria-label="Save project"]'); };
+    const editNumber = async (label, value) => {
+      await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'editable ' + label);
+      await evaluate((label) => {
+        const field = [...document.querySelectorAll('.numrow')].find((row) => row.querySelector('label')?.textContent === label)?.querySelector('input');
+        if (!field || field.matches(':disabled')) throw new Error('Numeric field unavailable: ' + label);
+        field.focus(); field.select();
+      }, label);
+      await win.webContents.insertText(String(value)); await delay(50);
+      await evaluate(() => { const field = document.activeElement; field.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); field.blur(); });
       await delay(80); await saveCurrent();
     };
     const numericState = (label) => evaluate((label) => { const field = [...document.querySelectorAll('.numrow')].find((row) => row.querySelector('label')?.textContent === label)?.querySelector('input'); return field ? { value: Number(field.value), disabled: field.matches(':disabled') } : null; }, label);
