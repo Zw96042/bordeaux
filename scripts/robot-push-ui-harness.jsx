@@ -1,0 +1,94 @@
+  const mismatched = checked(revision); mismatched.status.activePayloadSha256 = oldRevision;
+  await action(() => controller.refreshStatus()); await resolve(mock.inspections.at(-1), mismatched);
+  equal(controller.phase, 'staged', 'Matching revision text without matching payload is insufficient');
+});
+await test('Adoption checkbox gates the actual dialog confirmation button', async () => {
+  await action(() => controller.requestPush({ kind: 'paths', pathIds: ['A'] }));
+  await resolve(mock.prepares[0], { ...preview(), adoptionRequired: true });
+  const confirmButton = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Push path');
+  assert(confirmButton.disabled, 'Push must be disabled before baseline adoption');
+  await action(() => document.querySelector('.robot-baseline-confirm input').click());
+  assert(!confirmButton.disabled, 'Adoption should enable confirmation');
+  await action(() => confirmButton.click());
+  equal(mock.confirms[0].args, ['push-1', true], 'Dialog must send explicit adoption');
+  await resolve(mock.confirms[0], { state: 'staged', operationId: 'push-1' });
+});
+await test('Retention terminal progress stays locked until its confirmation settles', async () => {
+  await prepareRetention(); await action(() => controller.confirmRetention());
+  await action(() => mock.retentionListeners.forEach((listener) => listener({ operationId: 'retention-1', state: 'active' })));
+  assert(controller.busy, 'Rollback remains busy until RPC settles');
+  await action(() => controller.requestPush({ kind: 'paths', pathIds: ['B'] }));
+  equal(mock.prepares.length, 0, 'Cannot replace unresolved retention operation');
+  await resolve(mock.retentionConfirms[0], { state: 'active', operationId: 'retention-1' });
+  assert(!controller.busy, 'Settled rollback should release busy state');
+});
+await test('Discard deferred library comparison after project change', async () => {
+  await action(() => controller.refreshStatus());
+  await update({ projectKey: 'another-project' });
+  await resolve(mock.inspections[0], checked());
+  assert(!controller.inspection && !controller.status, 'Previous project inspection must not populate new project');
+});
+await test('Pin acknowledgement cannot be inferred merely from active revision', async () => {
+  await prepareRetention('pin'); await action(() => controller.confirmRetention());
+  await resolve(mock.retentionConfirms[0], { state: 'staged', operationId: 'retention-1' });
+  await action(() => controller.refreshStatus()); await resolve(mock.inspections.at(-1), checked(revision));
+  equal(controller.phase, 'staged', 'Active revision does not prove pinning');
+});
+await test('Rollback reconciles by exact revision and payload after acknowledgement loss', async () => {
+  await prepareRetention(); await action(() => controller.confirmRetention());
+  await resolve(mock.retentionConfirms[0], { state: 'staged', operationId: 'retention-1' });
+  await action(() => controller.refreshStatus()); await resolve(mock.inspections.at(-1), checked(revision));
+  equal(controller.phase, 'active', 'Exact rollback target should reconcile');
+  assert(controller.result.reconciled, 'Rollback must retain inspection evidence');
+});
+await test('Source edits invalidate prior compiled matches without choosing a new push target', async (source) => {
+  await action(() => controller.refreshStatus()); await resolve(mock.inspections[0], checked());
+  equal(controller.itemStatus('path', 'A').label, 'Matches robot', 'Fresh comparison should appear');
+  source.paths[0].name = 'Edited'; await update({ getProject: () => source });
+  equal(controller.itemStatus('path', 'A').label, 'Changed', 'Local edits invalidate old equality');
+  equal(controller.itemStatus('path', 'B').label, 'Matches robot', 'Unrelated match should survive');
+});
+await test('Pairing keeps reviewed identity visible through deferred confirmation and retry', async () => {
+  await action(() => { controller.openConnection(); controller.chooseAnotherRobot(); });
+  await action(() => controller.probeRobot());
+  const identity = { hostKeyFingerprint: 'SHA256:' + 'c'.repeat(43), status: { teamNumber: 2468, runtimeId: 'reviewed-robot-runtime' } };
+  await resolve(mock.probes[0], identity);
+  equal(controller.phase, 'pair-review', 'Probe must show identity review');
+  const trustButton = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Trust and pair');
+  trustButton.focus();
+  await act(async () => { await native({ key: 'Enter' }); });
+  equal(mock.pairings.length, 1, 'Keyboard confirmation should pair exactly once');
+  equal(controller.phase, 'pairing', 'Deferred confirmation should be pending');
+  const dialog = document.querySelector('dialog');
+  assert(dialog.textContent.includes(identity.hostKeyFingerprint), 'Reviewed host key must remain visible');
+  assert(dialog.textContent.includes(identity.status.runtimeId), 'Reviewed runtime must remain visible');
+  assert(dialog.querySelector('[aria-busy="true"]'), 'Pairing review should expose pending state');
+  assert(!dialog.querySelector('.robot-push-endpoint'), 'Pending pairing must not return to connection fields');
+  assert([...dialog.querySelectorAll('.robot-push-actions button')].every((button) => button.disabled), 'Pending pairing actions must remain disabled');
+  await native({ capture: 'pairing-pending' });
+  await reject(mock.pairings[0], 'Robot identity confirmation timed out');
+  equal(controller.phase, 'pair-review', 'Failure should retain identity for retry');
+  equal(dialog.querySelectorAll('[role="alert"]').length, 1, 'Pairing failure should have one alert');
+  assert(dialog.textContent.includes(identity.hostKeyFingerprint), 'Failure must retain reviewed identity');
+  await native({ capture: 'pairing-failure' });
+  const retry = [...dialog.querySelectorAll('button')].find((button) => button.textContent === 'Trust and pair');
+  retry.focus();
+  await act(async () => { await native({ key: 'Enter' }); });
+  await resolve(mock.pairings[1], pairing);
+  equal(controller.phase, 'ready', 'Successful retry should finish pairing');
+  assert(controller.pairing, 'Pairing should be retained');
+});
+await test('Failed upload shows one error and stable recovery actions', async () => {
+  await prepare();
+  await action(() => controller.confirmPush());
+  await reject(mock.confirms[0], 'Upload connection closed');
+  equal(controller.phase, 'failed', 'Upload rejection should enter failed phase');
+  const dialog = document.querySelector('dialog');
+  equal(dialog.querySelectorAll('[role="alert"]').length, 1, 'Update failure must use one alert');
+  equal(dialog.textContent.split('Upload connection closed').length - 1, 1, 'Failure text must appear once');
+  assert(dialog.textContent.includes('Review current edits'), 'Failed update must offer recovery');
+  assert(!dialog.querySelector('.robot-push-endpoint'), 'Failed update must not show an unrelated connection form');
+  await native({ capture: 'upload-failure' });
+});
+await act(async () => { root.render(null); });
+const report = document.createElement('pre'); report.id = 'verification-report'; report.textContent = JSON.stringify(results, null, 2); document.body.append(report);
