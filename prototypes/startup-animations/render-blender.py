@@ -1,3 +1,73 @@
+#!/usr/bin/env python3
+"""Author and render Bordeaux startup films in Blender.
+
+Run through Blender, not system Python:
+  blender --background --factory-startup --python render-blender.py -- \
+    --film spill-route --frame 73 --output review/blender-lookdev.png
+"""
+
+from __future__ import annotations
+
+import argparse
+import math
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable, Sequence
+
+import bpy
+from mathutils import Vector
+
+
+FPS = 60
+ASSET_DIR = Path(__file__).resolve().parent / "assets"
+SPACE_GROTESK = ASSET_DIR / "fonts" / "SpaceGrotesk-Variable.ttf"
+JETBRAINS_MONO = ASSET_DIR / "fonts" / "JetBrainsMono-Variable.ttf"
+WARM_WHITE = (0.93, 0.88, 0.80, 1.0)
+BURGUNDY = (0.38, 0.012, 0.055, 1.0)
+WINE_HIGHLIGHT = (0.72, 0.065, 0.16, 1.0)
+PERIWINKLE = (0.28, 0.46, 0.92, 1.0)
+NEAR_BLACK = (0.006, 0.004, 0.009, 1.0)
+WINE_FILL_SEGMENTS = 128
+WINE_FILL_RINGS = 10
+WINE_BOTTOM_Z = 1.30
+WINE_REST_Z = 2.39
+WINE_MAX_Z = 3.28
+WINE_BOWL_PROFILE = (
+    (0.10, 1.30),
+    (0.24, 1.39),
+    (0.45, 1.57),
+    (0.65, 1.84),
+    (0.81, 2.14),
+    (0.89, 2.39),
+    (0.99, 2.56),
+    (1.04, 2.91),
+    (1.01, 3.28),
+)
+
+
+def parse_args() -> argparse.Namespace:
+    argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--film", choices=("spill-route", "ribbon-flight", "precision-lock"), default="spill-route")
+    parser.add_argument("--frame", type=int, default=1)
+    parser.add_argument("--frame-start", type=int)
+    parser.add_argument("--frame-end", type=int)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--width", type=int, default=1_440)
+    parser.add_argument("--height", type=int, default=900)
+    parser.add_argument("--samples", type=int, default=64)
+    parser.add_argument("--save-blend")
+    parser.add_argument("--animation", action="store_true")
+    parser.add_argument("--preview", action="store_true")
+    parser.add_argument("--audit", action="store_true")
+    return parser.parse_args(argv)
+
+
+def clamp01(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
 def mix(start: float, end: float, progress: float) -> float:
     return start + (end - start) * progress
 
