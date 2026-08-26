@@ -1,10 +1,31 @@
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import electron from "electron";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
+// The GUI smoke owns machine-wide desktop focus, even across separate clones.
+const smokeLockPort = 24968;
+
+async function acquireSmokeLock() {
+  const deadline = Date.now() + 60000;
+  while (true) {
+    const server = net.createServer((socket) => socket.destroy());
+    try {
+      await new Promise((resolve, reject) => {
+        const onError = (error) => reject(error);
+        server.once("error", onError);
+        server.listen({ host: "127.0.0.1", port: smokeLockPort, exclusive: true }, () => {
+          server.off("error", onError);
+          resolve();
+        });
+      });
+      return server;
+    } catch (error) {
       if (error?.code !== "EADDRINUSE" || Date.now() >= deadline) {
         throw new Error("Could not acquire the Bordeaux Electron smoke lock.", { cause: error });
       }

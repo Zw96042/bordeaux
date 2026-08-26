@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
+import { gradleInvocation } from "./java-integration-launcher.mjs";
 
 const require = createRequire(import.meta.url);
 const { applyJavaSupportInstall, prepareJavaSupportInstall, runJavaCatalogBuild } = require("../dist-electron/electron/javaSupport.js");
@@ -13,6 +14,11 @@ const { buildJavaTrajectory, javaTrajectoryFileName } = require("../dist-electro
 const { createDemoProject } = require("../dist-electron/shared/project/defaults.js");
 const { decodeProjectFile } = require("../dist-electron/shared/project/fileFormat.js");
 const execFileAsync = promisify(execFile);
+
+async function runGradle(wrapper, args, options) {
+  const invocation = gradleInvocation(wrapper, args);
+  return execFileAsync(invocation.executable, invocation.arguments, { ...options, ...invocation.options });
+}
 
 const repositoryRoot = process.cwd();
 const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-java-integration-"));
@@ -70,14 +76,21 @@ public final class GeneratedPathIntegration {
   await applyJavaSupportInstall(preview);
   await runJavaCatalogBuild(fixtureRoot);
   const catalog = await discoverJavaProject(fixtureRoot);
-  const expectedIds = ["example.hold-output", "example.print-message", "example.set-output", "example.set-status"];
+  const expectedIds = [
+    "example.hold-output",
+    "example.print-message",
+    "example.pulse",
+    "example.set-output",
+    "example.set-status",
+    "example.stop",
+  ];
   const generatedIds = catalog.commands.filter((command) => command.runtimeReady).map((command) => command.id).sort();
   const generatedConditionIds = (catalog.conditions ?? []).map((condition) => condition.id).sort();
   const generatedTrajectoryIds = (catalog.trajectoryGenerators ?? []).map((generator) => generator.id).sort();
   if (!catalog.authoritative || catalog.catalogId !== "BordeauxTemplateRobot" || !catalog.catalogHash
       || JSON.stringify(generatedIds) !== JSON.stringify(expectedIds)
       || JSON.stringify(generatedConditionIds) !== JSON.stringify(["vision.targetVisible"])
-      || JSON.stringify(generatedTrajectoryIds) !== JSON.stringify(["integration.dynamic-path"])) {
+      || JSON.stringify(generatedTrajectoryIds) !== JSON.stringify(["integration.dynamic-path", "paths.forward"])) {
     throw new Error(`Template catalog did not contain the expected generated capabilities (commands: ${generatedIds.join(", ")}; conditions: ${generatedConditionIds.join(", ")}; trajectories: ${generatedTrajectoryIds.join(", ")})`);
   }
   const structured = catalog.commands.find((command) => command.id === "example.set-output")?.parameters[0]?.schema;
@@ -115,7 +128,7 @@ public final class GeneratedPathIntegration {
   await fs.mkdir(deployDirectory, { recursive: true });
   await fs.writeFile(path.join(deployDirectory, javaTrajectoryFileName(project.name)), trajectory.contents);
   const wrapper = path.join(fixtureRoot, process.platform === "win32" ? "gradlew.bat" : "gradlew");
-  await execFileAsync(wrapper, ["build", "--no-daemon", "--console=plain"], {
+  await runGradle(wrapper, ["build", "--no-daemon", "--console=plain"], {
     cwd: fixtureRoot,
     env: process.env,
     maxBuffer: 2 * 1024 * 1024,
@@ -171,7 +184,7 @@ public final class GeneratedPathIntegration {
   };
   const waitFixture = path.join(fixtureRoot, "desktop-wait-integration.bordeaux.json");
   await fs.writeFile(waitFixture, buildJavaTrajectory(waitProject, runtimeCatalog).contents);
-  await execFileAsync(path.join(repositoryRoot, "java", process.platform === "win32" ? "gradlew.bat" : "gradlew"), [
+  await runGradle(path.join(repositoryRoot, "java", process.platform === "win32" ? "gradlew.bat" : "gradlew"), [
     "-p", path.join(repositoryRoot, "java"),
     ":runtime:test",
     "--tests", "dev.bordeaux.runtime.BordeauxRuntimeTest.executesDesktopExportedWaitRoutine",
@@ -183,7 +196,9 @@ public final class GeneratedPathIntegration {
     maxBuffer: 2 * 1024 * 1024,
     timeout: 180_000,
   });
-  console.log(`Verified Bordeaux template robot (${catalog.catalogHash.slice(0, 19)}…, ${generatedIds.length} commands, ${generatedConditionIds.length} condition, ${generatedTrajectoryIds.length} trajectory generator).`);
+  const conditionLabel = generatedConditionIds.length === 1 ? "condition" : "conditions";
+  const generatorLabel = generatedTrajectoryIds.length === 1 ? "trajectory generator" : "trajectory generators";
+  console.log(`Verified Bordeaux template robot (${catalog.catalogHash.slice(0, 19)}…, ${generatedIds.length} commands, ${generatedConditionIds.length} ${conditionLabel}, ${generatedTrajectoryIds.length} ${generatorLabel}).`);
   console.log("Verified desktop-exported path → generated condition → Wait → generated command runtime flow.");
 } finally {
   await fs.rm(fixtureRoot, { recursive: true, force: true });
