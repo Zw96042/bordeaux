@@ -1,3 +1,105 @@
+def make_studio_glass_material() -> bpy.types.Material:
+    """Fast, reliable studio glass: transparent faces with Fresnel edge reflection."""
+    material = bpy.data.materials.new("Optical studio glass")
+    material.use_nodes = True
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    nodes.clear()
+
+    output = nodes.new("ShaderNodeOutputMaterial")
+    mix_shader = nodes.new("ShaderNodeMixShader")
+    transparent = nodes.new("ShaderNodeBsdfTransparent")
+    transparent.inputs["Color"].default_value = (0.62, 0.70, 0.82, 1.0)
+    reflective = nodes.new("ShaderNodeBsdfPrincipled")
+    reflective.inputs["Base Color"].default_value = (0.24, 0.30, 0.42, 1.0)
+    reflective.inputs["Roughness"].default_value = 0.055
+    reflective.inputs["Metallic"].default_value = 0.12
+    reflective.inputs["Coat Weight"].default_value = 0.34
+    reflective.inputs["Coat Roughness"].default_value = 0.04
+    fresnel = nodes.new("ShaderNodeFresnel")
+    fresnel.inputs["IOR"].default_value = 1.45
+
+    links.new(fresnel.outputs["Fac"], mix_shader.inputs[0])
+    links.new(transparent.outputs[0], mix_shader.inputs[1])
+    links.new(reflective.outputs[0], mix_shader.inputs[2])
+    links.new(mix_shader.outputs[0], output.inputs["Surface"])
+    material.surface_render_method = "BLENDED"
+    material.use_transparent_shadow = True
+    material.show_transparent_back = True
+    return material
+
+
+def add_bevel(obj: bpy.types.Object, width: float, segments: int = 3) -> None:
+    modifier = obj.modifiers.new("Optical edge", "BEVEL")
+    modifier.width = width
+    modifier.segments = segments
+
+
+def shade_smooth(obj: bpy.types.Object) -> None:
+    for polygon in obj.data.polygons:
+        polygon.use_smooth = True
+
+
+def create_revolved_surface(
+    name: str,
+    profile: Sequence[tuple[float, float]],
+    material: bpy.types.Material,
+    *,
+    segments: int = 128,
+    cap_top: bool = False,
+    cap_bottom: bool = False,
+) -> bpy.types.Object:
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, ...]] = []
+    for radius, z in profile:
+        for segment in range(segments):
+            angle = segment / segments * math.tau
+            vertices.append((radius * math.cos(angle), radius * math.sin(angle), z))
+    for ring in range(len(profile) - 1):
+        for segment in range(segments):
+            next_segment = (segment + 1) % segments
+            current = ring * segments + segment
+            next_ring = (ring + 1) * segments + segment
+            faces.append((current, current - segment + next_segment, next_ring - segment + next_segment, next_ring))
+    if cap_bottom:
+        center = len(vertices)
+        vertices.append((0.0, 0.0, profile[0][1]))
+        for segment in range(segments):
+            faces.append((center, (segment + 1) % segments, segment))
+    if cap_top:
+        center = len(vertices)
+        vertices.append((0.0, 0.0, profile[-1][1]))
+        offset = (len(profile) - 1) * segments
+        for segment in range(segments):
+            faces.append((center, offset + segment, offset + (segment + 1) % segments))
+    mesh = bpy.data.meshes.new(f"{name}Mesh")
+    mesh.from_pydata(vertices, [], faces)
+    mesh.materials.append(material)
+    mesh.update()
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.collection.objects.link(obj)
+    shade_smooth(obj)
+    return obj
+
+
+def wine_bowl_radius(z: float) -> float:
+    height = max(WINE_BOTTOM_Z, min(WINE_MAX_Z, z))
+    for (first_radius, first_z), (second_radius, second_z) in zip(
+        WINE_BOWL_PROFILE,
+        WINE_BOWL_PROFILE[1:],
+    ):
+        if height <= second_z:
+            progress = (height - first_z) / (second_z - first_z)
+            return mix(first_radius, second_radius, progress)
+    return WINE_BOWL_PROFILE[-1][0]
+
+
+def create_wine_fill(name: str, wine_material, meniscus_material) -> bpy.types.Object:
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, ...]] = []
+    for ring in range(WINE_FILL_RINGS):
+        progress = ring / (WINE_FILL_RINGS - 1)
+        z = mix(WINE_BOTTOM_Z, WINE_REST_Z, progress)
         radius = wine_bowl_radius(z)
         for segment in range(WINE_FILL_SEGMENTS):
             angle = segment / WINE_FILL_SEGMENTS * math.tau
