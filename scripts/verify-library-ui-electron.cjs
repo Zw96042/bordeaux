@@ -1,3 +1,105 @@
+    await dragRoutine('step-a', 'step-then', false);
+    assert.deepEqual(saved.routines.find((r) => r.id === 'routine-a'), routineBeforeDrag);
+    await dragRoutine('step-a', 'step-finish', true);
+    assert.equal(saved.routines.find((r) => r.id === 'routine-a').nodes.at(-1).id, 'step-a');
+    await click('[title^="Undo"]'); await click('[aria-label="Save project"]');
+    assert.deepEqual(saved.routines.find((r) => r.id === 'routine-a'), routineBeforeDrag);
+    await click('.library-tabs button', 'Paths');
+    check('native routine drag rejects cross-branch moves and commits supported sibling moves');
+    for (const [width, height] of [[1440, 900], [1280, 800], [1100, 720]]) {
+      win.setContentSize(width, height); await delay(150);
+      const geometry = await evaluate(() => {
+
+        const rail = document.querySelector('.library-rail');
+        return { sharedPositions: ['.pageswitch', '[aria-label=\"Save project\"]'].map((selector) => document.querySelector(selector).getBoundingClientRect().x), overflow: document.documentElement.scrollWidth > innerWidth, fieldWidth: document.querySelector('.fieldcol').getBoundingClientRect().width, railWidth: rail.getBoundingClientRect().width, pushVisible: document.querySelector('.library-push > button').checkVisibility() };
+      });
+      assert.equal(geometry.overflow, false); assert.ok(geometry.fieldWidth >= 350); assert.equal(geometry.pushVisible, true);
+      assert.equal(geometry.railWidth, 264, 'Library width remains fixed across supported sizes');
+
+      await evaluate(() => document.querySelector('.library-divider').focus()); await key('Home');
+      assert.equal(await evaluate(() => { const button = document.querySelector('.library-push > button').getBoundingClientRect(), section = document.querySelector('.library-top').getBoundingClientRect(); return button.bottom <= section.bottom; }), true, 'Push remains reachable at the minimum library height');
+      await pointerClick('[data-library-item="library-path-0"]');
+      await pointerClick('[data-library-item="library-path-1"]', [process.platform === 'darwin' ? 'meta' : 'control']);
+      assert.equal(await evaluate(() => document.querySelector('.library-push > button').checkVisibility()), true);
+      await evaluate(() => document.querySelector('.library-divider').focus()); await key('End');
+      for (let index = 0; index < 5; index++) await key('Up');
+      await fs.writeFile(path.join(output, `paths-${width}.png`), (await win.webContents.capturePage()).toPNG());
+      await click('.library-tabs button', 'Routines'); await click('[data-library-item="routine-a"]');
+      const flowGeometry = await evaluate(() => {
+        const flow = document.querySelector('.routine-workspace-flow'), stage = document.querySelector('.stage-auto');
+        return { sharedPositions: ['.pageswitch', '[aria-label=\"Save project\"]'].map((selector) => document.querySelector(selector).getBoundingClientRect().x), width: flow.getBoundingClientRect().width, height: flow.getBoundingClientRect().height, stageHeight: stage.getBoundingClientRect().height, railWidth: document.querySelector('.library-rail').getBoundingClientRect().width, inRail: Boolean(flow.closest('.library-rail')), flowInRail: Boolean(document.querySelector('.library-rail .rt-panel')), overflow: document.documentElement.scrollWidth > innerWidth, contentOverflow: flow.querySelector('.rt-scroll').scrollWidth > flow.querySelector('.rt-scroll').clientWidth };
+      });
+      assert.equal(flowGeometry.railWidth, geometry.railWidth);
+      assert.deepEqual(flowGeometry.sharedPositions, geometry.sharedPositions, 'Shared toolbar actions stay anchored when switching to routines at ' + width);
+      assert.equal(flowGeometry.inRail, false); assert.equal(flowGeometry.flowInRail, false);
+      assert.ok(flowGeometry.width > width * .6, 'Unselected routine flow gets most screen width at ' + width);
+      assert.ok(flowGeometry.height > flowGeometry.stageHeight * .7, 'Routine flow gets most workspace height');
+      assert.equal(flowGeometry.overflow, false); assert.equal(flowGeometry.contentOverflow, false);
+      await delay(500);
+      await fs.writeFile(path.join(output, `routines-${width}.png`), (await win.webContents.capturePage()).toPNG());
+      await click('.rt-step[data-id="step-then"] .rt-step-body');
+      assert.equal(await evaluate(() => document.querySelector('[aria-label="Routine step inspector"]').checkVisibility()), true);
+      assert.equal(await evaluate(() => { const el = document.querySelector('.rt-scroll'); return el.scrollWidth > el.clientWidth; }), false, 'Populated branch flow must not clip when the inspector opens');
+      await fs.writeFile(path.join(output, `routine-inspector-${width}.png`), (await win.webContents.capturePage()).toPNG());
+      await click('[aria-label="Routine view"] button', 'Field preview');
+      assert.equal(await evaluate(() => document.querySelector('.routine-workspace-field').checkVisibility()), true);
+      assert.equal(await evaluate(() => document.querySelector('.routine-workspace-flow').checkVisibility()), false);
+      await click('[aria-label="Routine view"] button', 'Flow');
+      assert.equal(await evaluate(() => document.querySelector('.rt-step[data-id="step-then"] .rt-step-body').getAttribute('aria-pressed')), 'true');
+      assert.equal(await evaluate(() => document.querySelector('.library-current-name').textContent), 'Routine A');
+      if (width === 1440) {
+        await click('.rail-r button', 'Open in path editor');
+        assert.equal(await evaluate(() => document.querySelector('.library-current-name').textContent), 'Collect second');
+        assert.deepEqual(await evaluate(() => [...document.querySelectorAll('.library-pick[aria-pressed="true"]')].map((item) => item.dataset.libraryItem)), ['library-path-1'], 'Opening a routine step path must replace the prior saved batch');
+        await click('.library-tabs button', 'Routines'); await click('[data-library-item="routine-a"]');
+        await click('.rt-step[data-id="step-then"] .rt-step-body');
+      }
+      await click('[aria-label="Close step inspector"]');
+      await click('.library-tabs button', 'Paths');
+    }
+    check('200-item library keeps fixed width; populated flow owns central workspace at three desktop sizes and preserves selection across preview');
+    await click('.library-tabs button', 'Routines'); await click('[data-library-item="routine-a"]');
+    await click('.rt-branches .rt-add');
+    const branchBefore = saved.routines.find((routine) => routine.id === 'routine-a').nodes.find((node) => node.id === 'decision-a').then.length;
+    await evaluate(() => [...document.querySelectorAll('.rt-branches .rt-ch-row')].find((button) => button.querySelector('.rt-ch-t').textContent === 'Path').click());
+    await delay(80); await click('[aria-label="Save project"]');
+    assert.equal(saved.routines.find((routine) => routine.id === 'routine-a').nodes.find((node) => node.id === 'decision-a').then.length, branchBefore + 1);
+    assert.ok(await evaluate(() => Boolean(document.querySelector('.rt-branches .rt-step.sel'))));
+    check('adding a path in a populated decision branch selects the new step in the main flow');
+    await click('.library-tabs button', 'Paths');
+    deferInspection = true;
+    await click('.library-connection');
+    await wait(() => Boolean(finishInspection), 'pending robot inspection');
+    await click('.robot-push-dialog button', 'Pair another robot');
+    await click('.robot-push-dialog button', 'Connect');
+    await click('.robot-push-dialog button', 'Trust and pair');
+    assert.equal(await evaluate(() => [...document.querySelectorAll('.robot-push-dialog button')].some((button) => button.textContent === 'Refresh robot' && !button.disabled)), true, 'A superseded inspection must not leave the replacement pairing stuck refreshing');
+    deferInspection = false;
+    finishInspection(inspection());
+    await click('.robot-push-dialog button', 'Refresh robot');
+    await wait(() => evaluate(() => [...document.querySelectorAll('.robot-push-dialog button')].some((button) => button.textContent === 'Refresh robot' && !button.disabled)), 'replacement robot inspection');
+    await click('[aria-label="Close robot connection"]');
+    check('pairing another robot during inspection leaves its refresh control usable');
+    await click('.library-connection');
+    await click('.robot-push-dialog button', 'Pair another robot');
+    await wait(() => evaluate(() => document.querySelector('.robot-push-endpoint')), 'unpaired connection surface');
+    assert.equal(await evaluate(() => document.querySelector('.library-connection').textContent.trim()), 'Connect robot');
+    assert.equal(await evaluate(() => { const button = document.querySelector('.library-connection'); return button.scrollWidth <= button.clientWidth; }), true);
+    assert.equal(await evaluate(() => document.querySelectorAll('.robot-connection-diagnostics').length), 1);
+    await wait(() => evaluate(() => document.querySelector('[aria-label="Diagnostics"]')?.checkVisibility()), 'unpaired diagnostics control');
+    await click('[aria-label="Diagnostics"]');
+    assert.equal(await evaluate(() => document.querySelector('dialog.robot-manager').open), false);
+    assert.equal(await evaluate(() => document.activeElement.getAttribute('aria-label')), 'Close diagnostic bundle');
+    await click('[aria-labelledby="beta-diagnostic-title"] button', 'Generate preview');
+    await wait(() => diagnosticPreviews.length === 2, 'unpaired diagnostic preview');
+    await click('[aria-labelledby="beta-diagnostic-title"] button', 'Save bundle');
+    await wait(() => diagnosticSaves.length === 2, 'unpaired local diagnostic save');
+    await click('[aria-label="Close diagnostic bundle"]');
+    assert.equal(prepared.length, 1, 'Diagnostics must not initiate another robot push');
+    check('unpaired connection keeps diagnostics reachable, focused, and locally saveable');
+
+    saved = { ...saved, name: 'Simple library', paths: saved.paths.slice(0, 2).map((item) => ({ ...item, folderId: undefined })), pathFolders: [], pathLinks: [], editor: { ...saved.editor, activePathId: 'library-path-0' }, activeRoutineId: 'routine-a' };
+    await win.loadFile(path.resolve('dist-renderer/index.html'));
     await wait(() => evaluate(() => document.querySelector('.library-current-name')?.textContent === 'Opening move'), 'simple restored library');
     assert.equal(await evaluate(() => document.querySelectorAll('.library-pick').length), 2);
     await click('.pageswitch button', 'Settings');
