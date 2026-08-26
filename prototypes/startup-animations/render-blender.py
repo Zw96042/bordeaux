@@ -1,3 +1,105 @@
+def mix(start: float, end: float, progress: float) -> float:
+    return start + (end - start) * progress
+
+
+def cubic_coordinate(t: float, first: float, second: float) -> float:
+    inverse = 1.0 - t
+    return 3 * inverse * inverse * t * first + 3 * inverse * t * t * second + t * t * t
+
+
+def cubic_derivative(t: float, first: float, second: float) -> float:
+    return (
+        3 * (1 - t) * (1 - t) * first
+        + 6 * (1 - t) * t * (second - first)
+        + 3 * t * t * (1 - second)
+    )
+
+
+def bezier_ease(value: float, x1: float, y1: float, x2: float, y2: float) -> float:
+    target = clamp01(value)
+    parameter = target
+    for _ in range(7):
+        derivative = cubic_derivative(parameter, x1, x2)
+        if abs(derivative) < 0.00001:
+            break
+        parameter = clamp01(parameter - (cubic_coordinate(parameter, x1, x2) - target) / derivative)
+    return cubic_coordinate(parameter, y1, y2)
+
+
+def ease_out(value: float) -> float:
+    return bezier_ease(value, 0.23, 1.0, 0.32, 1.0)
+
+
+def ease_in_out(value: float) -> float:
+    return bezier_ease(value, 0.77, 0.0, 0.175, 1.0)
+
+
+def drawer_ease(value: float) -> float:
+    return bezier_ease(value, 0.32, 0.72, 0.0, 1.0)
+
+
+def gravity_ease(value: float) -> float:
+    return clamp01(value) ** 1.45
+
+
+def phase(time: float, start: float, end: float, easing=lambda value: value) -> float:
+    if end <= start:
+        return 1.0 if time >= end else 0.0
+    return easing(clamp01((time - start) / (end - start)))
+
+
+def cubic_point(a: Vector, b: Vector, c: Vector, d: Vector, progress: float) -> Vector:
+    inverse = 1.0 - progress
+    return (
+        a * (inverse**3)
+        + b * (3 * inverse * inverse * progress)
+        + c * (3 * inverse * progress * progress)
+        + d * (progress**3)
+    )
+
+
+def sample_cubic(a: Vector, b: Vector, c: Vector, d: Vector, count: int, drop_first: bool = False) -> list[Vector]:
+    start = 1 if drop_first else 0
+    return [cubic_point(a, b, c, d, index / (count - 1)) for index in range(start, count)]
+
+
+def set_principled_input(material: bpy.types.Material, names: str | Sequence[str], value) -> None:
+    principled = material.node_tree.nodes.get("Principled BSDF")
+    candidates = (names,) if isinstance(names, str) else names
+    for name in candidates:
+        if name in principled.inputs:
+            principled.inputs[name].default_value = value
+            return
+    raise RuntimeError(f"Blender Principled BSDF is missing {candidates}")
+
+
+def make_material(
+    name: str,
+    color,
+    *,
+    roughness: float,
+    metallic: float = 0.0,
+    transmission: float = 0.0,
+    ior: float = 1.45,
+    coat: float = 0.0,
+    emission=None,
+    emission_strength: float = 0.0,
+) -> bpy.types.Material:
+    material = bpy.data.materials.new(name)
+    material.use_nodes = True
+    set_principled_input(material, "Base Color", color)
+    set_principled_input(material, "Roughness", roughness)
+    set_principled_input(material, "Metallic", metallic)
+    set_principled_input(material, "IOR", ior)
+    set_principled_input(material, "Transmission Weight", transmission)
+    set_principled_input(material, "Coat Weight", coat)
+    if emission is not None:
+        set_principled_input(material, "Emission Color", emission)
+        set_principled_input(material, "Emission Strength", emission_strength)
+    material.diffuse_color = color
+    return material
+
+
 def make_studio_glass_material() -> bpy.types.Material:
     """Fast, reliable studio glass: transparent faces with Fresnel edge reflection."""
     material = bpy.data.materials.new("Optical studio glass")
