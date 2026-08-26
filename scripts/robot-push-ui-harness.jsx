@@ -1,3 +1,73 @@
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import '../src/renderer/styles/app.css';
+import '../src/renderer/styles/robot-push.css';
+import { RobotPushDialog, useRobotPushController } from '../src/renderer/components/RobotPushDialog';
+
+// This harness mounts the real controller and dialog. Only the desktop API is
+// substituted; its deferred responses model IPC/network scheduling precisely.
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+const results = [];
+const root = createRoot(document.getElementById('root'));
+const pairing = { teamNumber: 2468, runtimeId: 'robot', endpoint: { host: 'robot.local', port: 22 } };
+const revision = 'sha256:' + 'a'.repeat(64);
+const oldRevision = 'sha256:' + 'b'.repeat(64);
+let controller;
+let props;
+let mock;
+let serial = 0;
+const project = () => ({ name: 'Project', robot: { drive: 'swerve', w: 0.8, l: 0.8, maxSpeed: 4 }, field: { id: 'field' }, paths: [{ id: 'A', name: 'A', waypoints: [] }, { id: 'B', name: 'B', waypoints: [] }], routines: [{ id: 'R', name: 'R', nodes: [{ id: 'a', type: 'path', ref: 'A' }] }], activeRoutineId: 'R', editor: { activePathId: 'A' } });
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const equal = (actual, expected, message) => assert(JSON.stringify(actual) === JSON.stringify(expected), `${message}: ${JSON.stringify(actual)} !== ${JSON.stringify(expected)}`);
+const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
+const checked = (activeRevisionId = oldRevision) => ({ status: { activeRevisionId, activePayloadSha256: activeRevisionId, retention: { revisions: [] } }, comparison: { paths: { A: { state: 'matches' }, B: { state: 'matches' } }, routines: { R: { state: 'matches' } } }, verifiedAt: new Date().toISOString() });
+const preview = (operationId = 'push-1') => ({ operationId, revision, robot: 'Team 2468', project: 'Project', catalog: 'Catalog', payloadHash: revision, size: 100, summary: { kind: 'paths', selectedNames: ['A'], pathIds: ['A'], addedNames: [], updatedNames: ['A'], preservedPathCount: 1, routine: 'R' } });
+
+function Harness() {
+  controller = useRobotPushController(props);
+  return <RobotPushDialog controller={controller} />;
+}
+async function mount() {
+  await act(async () => { root.render(null); });
+  const source = project();
+  props = { getProject: () => source, projectKey: ++serial, catalogKey: 'catalog-1', bookmarkKey: 'java-1' };
+  mock = { probes: [], pairings: [], prepares: [], confirms: [], inspections: [], retentionPrepares: [], retentionConfirms: [], canceled: [], fallbackCalls: 0, pushListeners: new Set(), retentionListeners: new Set() };
+  const enqueue = (name, args) => { const request = { args: structuredClone(args), ...deferred() }; mock[name].push(request); return request.promise; };
+  window.bordeauxAPI = {
+    getRobotPairing: async () => pairing,
+    probeRobot: (...args) => enqueue('probes', args),
+    confirmRobotPairing: (...args) => enqueue('pairings', args),
+    prepareRobotPush: (...args) => enqueue('prepares', args),
+    confirmRobotPush: (...args) => enqueue('confirms', args),
+    cancelRobotPush: async (id) => { mock.canceled.push(id); return { canceled: true, boundary: 'review' }; },
+    inspectRobotLibrary: (...args) => enqueue('inspections', args),
+    inspectPairedRobot: async () => { mock.fallbackCalls += 1; return checked().status; },
+    prepareRobotRetention: (...args) => enqueue('retentionPrepares', args),
+    confirmRobotRetention: (...args) => enqueue('retentionConfirms', args),
+    cancelRobotRetention: async (id) => { mock.canceled.push(id); return { canceled: true, boundary: 'review' }; },
+    onRobotPushState: (callback) => { mock.pushListeners.add(callback); return () => mock.pushListeners.delete(callback); },
+    onRobotRetentionState: (callback) => { mock.retentionListeners.add(callback); return () => mock.retentionListeners.delete(callback); },
+  };
+  await act(async () => { root.render(<Harness />); });
+  assert(controller.pairing, 'Saved pairing should load');
+  return source;
+}
+async function native(request) {
+  await new Promise((resolve) => {
+    window.__pushUiRequest = request;
+    window.__finishPushUiRequest = () => { window.__pushUiRequest = null; resolve(); };
+  });
+}
+async function action(callback) { await act(async () => { callback(); }); }
+async function resolve(request, value) { await act(async () => { request.resolve(value); }); }
+async function reject(request, message) { await act(async () => { request.reject(new Error(message)); }); }
+async function update(change) { props = { ...props, ...change }; await act(async () => { root.render(<Harness />); }); }
+async function prepare() {
+  await action(() => controller.requestPush({ kind: 'paths', pathIds: ['A'] }));
+  await resolve(mock.prepares.at(-1), preview());
+  equal(controller.phase, 'review', 'Prepared selection should enter review');
+}
+async function prepareRetention(actionName = 'rollback') {
   await action(() => controller.prepareRetention(actionName, { revisionId: revision, payloadSha256: revision }));
   await resolve(mock.retentionPrepares.at(-1), { operationId: 'retention-1', action: actionName, targetRevision: revision, payloadHash: revision, activeRevision: oldRevision, robot: 'Team 2468' });
 }
