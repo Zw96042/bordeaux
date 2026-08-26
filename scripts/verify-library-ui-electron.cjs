@@ -1,3 +1,105 @@
+      await delay(80); await saveCurrent();
+    };
+    const numericState = (label) => evaluate((label) => { const field = [...document.querySelectorAll('.numrow')].find((row) => row.querySelector('label')?.textContent === label)?.querySelector('input'); return field ? { value: Number(field.value), disabled: field.matches(':disabled') } : null; }, label);
+    await click('.cbar');
+    assert.deepEqual(await numericState('Entry speed (vi)'), { value: .4, disabled: false });
+    assert.deepEqual(await numericState('Exit speed (vf)'), { value: .6, disabled: false });
+    const facingBaseline = structuredClone(saved.paths[0].waypoints[0]);
+    const headPoint = await evaluate(() => {
+      const handle = document.querySelector('circle[data-role="head"][data-idx="0"]');
+      if (!handle) throw new Error('Start facing handle missing in tangent mode');
+      const rect = handle.getBoundingClientRect(); return { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
+    });
+    win.webContents.sendInputEvent({ type: 'mouseMove', ...headPoint });
+    win.webContents.sendInputEvent({ type: 'mouseDown', ...headPoint, button: 'left', clickCount: 1 });
+    win.webContents.sendInputEvent({ type: 'mouseMove', x: headPoint.x + 20, y: headPoint.y + 25 });
+    win.webContents.sendInputEvent({ type: 'mouseUp', x: headPoint.x + 20, y: headPoint.y + 25, button: 'left', clickCount: 1 });
+    await delay(100); await saveCurrent();
+    assert.equal(saved.paths[0].waypoints[0].segmentHeadingMode, 'manual', 'Dragging start facing overrides tangent heading');
+    assert.deepEqual(saved.paths[0].waypoints[0].prevC, facingBaseline.prevC);
+    assert.deepEqual(saved.paths[0].waypoints[0].nextC, facingBaseline.nextC);
+    assert.equal(saved.paths[0].waypoints[0].x, facingBaseline.x);
+    assert.equal(saved.paths[0].waypoints[0].y, facingBaseline.y);
+    await click('.cbar');
+
+    await editNumber('Initial robot facing', 42);
+    assert.equal(saved.paths[0].waypoints[0].theta, 42);
+    assert.deepEqual(saved.paths[0].waypoints[0].prevC, facingBaseline.prevC);
+    assert.deepEqual(saved.paths[0].waypoints[0].nextC, facingBaseline.nextC);
+    await editNumber('Entry speed (vi)', .5); await editNumber('Exit speed (vf)', .7);
+    assert.equal(saved.paths[0].startVel, .5); assert.equal(saved.paths[0].goalVel, .7);
+    for (const [index, toggle, label, speed] of [[0, 'Stop at entry', 'Entry speed (vi)', .5], [saved.paths[0].waypoints.length - 1, 'Stop at exit', 'Exit speed (vf)', .7]]) {
+      await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'endpoint ready');
+      await evaluate((index) => document.querySelectorAll('.outline .featselect')[index].click(), index);
+      await click('[aria-label="' + toggle + '"]'); await saveCurrent();
+      assert.equal(saved.paths[0].waypoints[index].stop, true);
+      await click('.cbar');
+      assert.deepEqual(await numericState(label), { value: 0, disabled: true }, 'Stopped endpoints display effective zero speed');
+      await evaluate((index) => document.querySelectorAll('.outline .featselect')[index].click(), index);
+      await click('[aria-label="' + toggle + '"]'); await saveCurrent();
+      await click('.cbar');
+      assert.deepEqual(await numericState(label), { value: speed, disabled: false }, 'Removing the stop restores the stored endpoint speed');
+    }
+    check('summary facing changes preserve tangents; vi/vf edit independently and endpoint stops show effective zero');
+    await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'waypoint link inspector ready');
+    await evaluate(() => document.querySelector('.outline .featselect').click());
+    const independentBefore = structuredClone(saved.paths[2]);
+    const linkBaseline = saved.paths.slice(0, 2).map((path) => structuredClone(path.waypoints[0]));
+    assert.equal(await evaluate(() => document.querySelector('#waypoint-position-link').disabled), true, 'Ordinary waypoints are absent from the picker');
+    await evaluate((id) => document.querySelector('[data-library-item="' + id + '"]').click(), saved.paths[1].id);
+    await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'target point ready');
+    await evaluate(() => document.querySelector('.outline .featselect').click());
+    await click('[aria-label="Linkable waypoint"]');
+    await wait(() => evaluate(() => document.querySelector('[aria-label="Linkable point name"]') && !document.querySelector('.rail-r[inert]')), 'named point editable');
+    await evaluate(() => { const input = document.querySelector('[aria-label="Linkable point name"]'); input.focus(); input.select(); });
+    assert.equal(await evaluate(() => document.activeElement.getAttribute('aria-label')), 'Linkable point name');
+    await win.webContents.insertText('Scoring position'); await delay(80);
+    await evaluate(() => { const input = document.querySelector('[aria-label="Linkable point name"]'); input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); input.blur(); });
+    await delay(80);
+    await saveCurrent();
+    assert.equal(saved.paths[1].waypoints[0].positionName, 'Scoring position', 'Named point saved from actual typing');
+    linkBaseline[1] = structuredClone(saved.paths[1].waypoints[0]);
+    await evaluate((id) => document.querySelector('[data-library-item="' + id + '"]').click(), saved.paths[0].id);
+    await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'source point ready');
+    await evaluate(() => document.querySelector('.outline .featselect').click());
+    await click('#waypoint-position-link');
+    assert.equal(await evaluate(() => document.querySelectorAll('.cmd-picker-option').length), 1, 'Only the opted-in named point is offered');
+    await evaluate(() => [...document.querySelectorAll('.cmd-picker-option')].find((el) => el.querySelector('strong')?.textContent === 'Scoring position').click());
+    await saveCurrent();
+    const linkId = saved.paths[0].waypoints[0].positionLink;
+    assert.ok(linkId); assert.equal(saved.paths[1].waypoints[0].positionLink, linkId);
+    assert.equal(saved.paths[0].waypoints[0].x, saved.paths[1].waypoints[0].x);
+    assert.equal(saved.paths[0].waypoints[0].y, saved.paths[1].waypoints[0].y);
+    assert.equal(saved.paths[0].waypoints[0].theta, 42); assert.equal(saved.paths[1].waypoints[0].theta, 130);
+    const linkedBeforeEdit = saved.paths.slice(0, 2).map((path) => structuredClone(path.waypoints[0]));
+    const newX = Math.round((saved.paths[0].waypoints[0].x + .25) * 100) / 100;
+    await editNumber('X', newX);
+    for (const [index, path] of saved.paths.slice(0, 2).entries()) {
+      const point = path.waypoints[0], before = linkedBeforeEdit[index];
+      assert.equal(point.x, newX); assert.equal(point.theta, before.theta);
+      for (const handle of ['prevC', 'nextC']) {
+        assert.ok(Math.abs((point[handle].x - point.x) - (before[handle].x - before.x)) < 1e-8, 'Shared movement preserves each local tangent vector');
+        assert.ok(Math.abs((point[handle].y - point.y) - (before[handle].y - before.y)) < 1e-8);
+      }
+    }
+    await click('[title^="Undo"]'); await saveCurrent();
+    assert.deepEqual(saved.paths.slice(0, 2).map((path) => path.waypoints[0]), linkedBeforeEdit, 'Undo coordinates restores both linked members');
+    await click('[title^="Undo"]'); await saveCurrent();
+    assert.deepEqual(saved.paths.slice(0, 2).map((path) => path.waypoints[0]), linkBaseline, 'Undo link restores the full project before joining');
+    await click('[title^="Redo"]'); await saveCurrent();
+    assert.deepEqual(saved.paths.slice(0, 2).map((path) => path.waypoints[0]), linkedBeforeEdit, 'Redo link restores both members');
+    await click('[title^="Redo"]'); await saveCurrent();
+    assert.ok(saved.paths.slice(0, 2).every((path) => path.waypoints[0].x === newX && path.waypoints[0].positionLink === linkId));
+    await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'unlink ready');
+    await fs.writeFile(path.join(output, 'linked-position-inspector.png'), (await win.webContents.capturePage()).toPNG());
+    await click('.shared-waypoint-position button', 'Unlink'); await saveCurrent();
+    assert.equal(saved.paths[0].waypoints[0].positionLink, undefined);
+    const independentX = Math.round((newX + .2) * 100) / 100;
+    await editNumber('X', independentX);
+    assert.equal(saved.paths[0].waypoints[0].x, independentX); assert.equal(saved.paths[1].waypoints[0].x, newX);
+    assert.equal(saved.paths[1].waypoints[0].theta, 130);
+    assert.deepEqual(saved.paths[2], independentBefore, 'Unrelated path remains unchanged');
+    await fs.writeFile(path.join(output, 'shared-position-inspector.png'), (await win.webContents.capturePage()).toPNG());
     check('searchable shared position links propagate coordinates only, support project undo/redo, and unlink cleanly');
     await evaluate(() => {
       window.__routinePendingCheck = { samples: 0, violations: [] };
