@@ -1,0 +1,12 @@
+shot_id,timecode,duration,workspace,action,framing,on_screen_copy,notes
+01,00:00,4.0,Brand,Title card,1920x1080 full frame,Draw the path. Know the run.,Use supplied title card
+02,00:04,2.5,Brand,Plan chapter,1920x1080 full frame,Shape the motion.,Use supplied chapter card
+03,00:06.5,2.5,Plan,Open representative project,Full app with field dominant,,No private team strategy or paths
+04,00:09,4.0,Plan,Drag a waypoint handle and settle the curve,Pointer hidden after drag,,Capture at 60 fps
+05,00:13,4.0,Plan,Start timeline playback,Full field plus timeline,,Keep numeric readout visible
+06,00:17,3.0,Plan,Switch Profiled to Optimized,Header plus field,,Do not claim global optimality
+07,00:20,2.5,Plan,Open constraint range,Field and inspector,,Show local limit clearly
+08,00:22.5,2.0,Plan,Return to full route,Full app,,End with final pose visible
+09,00:24.5,4.0,Aquitaine,Preview Path Command Decision sequence,Routine canvas dominant,Compose the complete run.,Use real routine data safe to publish
+10,00:28.5,4.0,Java,Show annotated command and validated catalog,Split code/catalog view,Typed Java events.,Do not show deployment
+11,00:32.5,5.0,Brand,End card,1920x1080 full frame,Make the run understandable.,Hold URL at least 2 seconds
