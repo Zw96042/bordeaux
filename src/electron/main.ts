@@ -1209,13 +1209,15 @@ handle("robot:preparePush", async (_event, rawProject) => {
     nonce: operationId,
     projectName: project.name,
     pairing: robotPairing,
-    status,
-    trajectory,
   });
-  pendingRobotOperation = { kind: "push", operation, pairing: robotPairing };
+  operation.preview.summary = built.summary;
+  operation.preview.adoptionRequired = adoptionRequired;
+  operation.preview.baselineRevision = baseline.status.activeRevisionId;
+  operation.preview.receiptWarning = receiptWarning;
+  pendingRobotOperation = { kind: "push", operation, pairing: robotPairing, projectGeneration, javaGeneration: connectionGeneration, receiptProject };
   return operation.preview;
 });
-handle("robot:confirmPush", async (event, rawOperationId) => {
+handle("robot:confirmPush", async (event, rawOperationId, adoptBaseline) => {
   if (typeof rawOperationId !== "string" || !pendingRobotOperation || pendingRobotOperation.kind !== "push"
     || pendingRobotOperation.operation.preview.operationId !== rawOperationId) {
     throw new Error("The reviewed robot push is no longer current; prepare it again");
@@ -1223,6 +1225,10 @@ handle("robot:confirmPush", async (event, rawOperationId) => {
   if (activeRobotPush) throw new Error("A robot push is already in progress");
   const operation = pendingRobotOperation.operation;
   const pairing = pendingRobotOperation.pairing;
+  const receiptProject = pendingRobotOperation.receiptProject;
+  if (pendingRobotOperation.projectGeneration !== projectTargetGeneration || pendingRobotOperation.javaGeneration !== javaConnectionGeneration
+    || pairing !== robotPairings.current()) throw new Error("The push context changed; review it again");
+  if (operation.preview.adoptionRequired && adoptBaseline !== true) throw new Error("Confirm the reviewed robot baseline before pushing");
   pendingRobotOperation = null;
   const controller = new AbortController();
   activeRobotPush = { operationId: rawOperationId, controller, kind: "push" };
@@ -1255,6 +1261,20 @@ handle("robot:confirmPush", async (event, rawOperationId) => {
     if (activeRobotPush?.operationId === rawOperationId) activeRobotPush = null;
   }
   const revision = operation.revision.document.revision;
+  if (result && typeof result === "object" && "state" in result && result.state === "staged") {
+    unconfirmedDeployment = { project: receiptProject, runtimeId: pairing.runtimeId, catalogHash: revision.catalog.catalogHash,
+      revisionId: revision.revisionId, payloadSha256: revision.payloadSha256 };
+  }
+  if (result && typeof result === "object" && "state" in result && result.state === "active") {
+    try {
+      await saveDeploymentReceipt(deploymentReceiptFile(), {
+        project: receiptProject, runtimeId: pairing.runtimeId, catalogHash: revision.catalog.catalogHash,
+        revisionId: revision.revisionId, verifiedAt: new Date().toISOString(),
+      });
+    } catch {
+      result = { ...result, receiptWarning: "The robot accepted this update, but local deployment history could not be saved." };
+    }
+  }
   lastDiagnosticRobotAcknowledgement = reduceRobotAcknowledgement(result, {
     teamNumber: pairing.teamNumber,
     revisionId: revision.revisionId,
@@ -1285,6 +1305,8 @@ handle("robot:confirmRetention", async (event, rawOperationId) => {
   }
   if (activeRobotPush) throw new Error("A robot operation is already in progress");
   const operation = pendingRobotOperation.operation;
+  if (pendingRobotOperation.projectGeneration !== projectTargetGeneration || pendingRobotOperation.javaGeneration !== javaConnectionGeneration
+    || pendingRobotOperation.pairing !== robotPairings.current()) throw new Error("The retention context changed; review it again");
   pendingRobotOperation = null;
   const controller = new AbortController();
   activeRobotPush = { operationId: rawOperationId, controller, kind: "retention" };
@@ -1353,10 +1375,20 @@ ipcMain.on("agent:proposalReceipt", (event, rawId, rawSessionId, rawRevision, ra
   receipt.resolve();
 });
 
-app.whenReady().then(async () => {
+if (!mcpStdioMode && ownsDesktopInstance) app.on("second-instance", () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+});
+
+if (ownsDesktopInstance) app.whenReady().then(async () => {
   if (mcpStdioMode) {
     app.dock?.hide();
-    serveBordeauxMcp(new AgentBridgeClient(app.getPath("userData")));
+    const server = serveBordeauxMcp(new AgentBridgeClient(app.getPath("userData")));
+    quitAfterMcpInputEnds(process.stdin, () => server.close(), () => app.quit(), (error) => {
+      console.warn("Could not close the Bordeaux MCP stdio server cleanly:", error);
+    });
     return;
   }
   try {
@@ -1389,7 +1421,18 @@ app.whenReady().then(async () => {
 app.on("before-quit", () => {
   if (updateCheckTimer) clearTimeout(updateCheckTimer);
   updateCheckTimer = null;
-  void stopBackgroundServices().catch((error) => console.warn("Could not stop Bordeaux background services cleanly:", error));
+});
+app.on("will-quit", (event) => {
+  if (backgroundServicesReadyForExit) return;
+  event.preventDefault();
+  if (finalQuitInProgress) return;
+  finalQuitInProgress = true;
+  void stopBackgroundServices().catch((error) => {
+    console.warn("Could not stop Bordeaux background services cleanly:", error);
+  }).finally(() => {
+    backgroundServicesReadyForExit = true;
+    app.quit();
+  });
 });
 app.on("web-contents-created", (_event, contents) => contents.on("will-attach-webview", (event) => event.preventDefault()));
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
