@@ -25,6 +25,7 @@ export interface RobotRuntimeStatus {
   activePayloadSha256: string | null;
   health: string[];
   retention?: RobotRevisionRetention;
+  activeRevisionRead?: string;
 }
 
 export interface RobotRevisionRetentionEntry {
@@ -137,6 +138,7 @@ export type RobotRetentionResult =
 
 export type RobotRemoteFile =
   | { kind: "status" }
+  | { kind: "activeTrajectory" }
   | { kind: "incomingTemporary"; nonce: string; token: string }
   | { kind: "incomingRevision"; nonce: string }
   | { kind: "incomingRetentionTemporary"; nonce: string; token: string }
@@ -265,6 +267,8 @@ function parseRobotStatus(contents: Buffer): RobotRuntimeStatus {
     throw new Error("Robot status health is invalid");
   }
   const retention = parseRetention(raw.retention);
+  const activeRevisionRead = raw.activeRevisionRead === undefined ? undefined
+    : requiredText(raw.activeRevisionRead, "activeRevisionRead", 64);
   if (retention && activeRevisionId !== null && !retention.revisions.some((entry) =>
     entry.revisionId === activeRevisionId && entry.payloadSha256 === activePayloadSha256)) {
     throw new Error("Robot status retention does not include the active revision identity");
@@ -285,6 +289,7 @@ function parseRobotStatus(contents: Buffer): RobotRuntimeStatus {
     activePayloadSha256,
     health: [...raw.health] as string[],
     retention,
+    activeRevisionRead,
   };
 }
 
@@ -433,6 +438,21 @@ function validateEndpoint(endpoint: RobotEndpoint): void {
   }
 }
 
+async function readPairedRobotStatus(
+  session: RobotSftpSession,
+  pairing: RobotPairing,
+  signal: AbortSignal,
+): Promise<RobotRuntimeStatus> {
+  if (session.hostKeyFingerprint !== pairing.hostKeyFingerprint) {
+    throw new RobotTransportError("re_pair_required", "The robot SSH host key changed; explicitly re-pair this robot before transferring data");
+  }
+  const status = parseRobotStatus(await session.read({ kind: "status" }, MAX_STATUS_BYTES, signal));
+  if (status.runtimeId !== pairing.runtimeId || status.teamNumber !== pairing.teamNumber) {
+    throw new RobotTransportError("re_pair_required", "The paired Bordeaux runtime identity changed; explicitly re-pair this robot before transferring data");
+  }
+  return status;
+}
+
 export class BordeauxRobotTransport {
   constructor(
     private readonly connect: RobotSftpSessionFactory,
@@ -476,14 +496,65 @@ export class BordeauxRobotTransport {
       timeoutMs: options.timeoutMs ?? 8_000,
     });
     try {
-      if (session.hostKeyFingerprint !== pairing.hostKeyFingerprint) {
-        throw new RobotTransportError("re_pair_required", "The robot SSH host key changed; explicitly re-pair this robot before transferring data");
+      return await readPairedRobotStatus(session, pairing, signal);
+    } finally {
+      await session.close();
+    }
+  }
+
+  /** Reads the fixed mailbox export; private runtime storage paths never cross this boundary. */
+  async readActiveRevision(
+    pairing: RobotPairing,
+    credentials: RobotCredentials,
+    options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  ): Promise<{ status: RobotRuntimeStatus; contents: string | null }> {
+    validateEndpoint(pairing.endpoint);
+    const signal = options.signal ?? new AbortController().signal;
+    const session = await this.connect({
+      endpoint: pairing.endpoint,
+      credentials,
+      expectedHostKeyFingerprint: pairing.hostKeyFingerprint,
+      signal,
+      timeoutMs: options.timeoutMs ?? 15_000,
+    });
+    try {
+      const before = await readPairedRobotStatus(session, pairing, signal);
+      if (before.activeRevisionRead !== ROBOT_ACTIVE_REVISION_READ_VERSION) {
+        throw new RobotTransportError("transfer_failed", "This robot runtime does not support verified active-revision reads; update its Bordeaux runtime before selective push");
       }
-      const status = parseRobotStatus(await session.read({ kind: "status" }, MAX_STATUS_BYTES, signal));
-      if (status.runtimeId !== pairing.runtimeId || status.teamNumber !== pairing.teamNumber) {
-        throw new RobotTransportError("re_pair_required", "The paired Bordeaux runtime identity changed; explicitly re-pair this robot before transferring data");
+      let contents: string | null = null;
+      if (before.activeRevisionId !== null) {
+        const payload = await session.read({ kind: "activeTrajectory" }, 16 * 1024 * 1024, signal);
+        if (payload.length === 0 || payload.length > 16 * 1024 * 1024) {
+          throw new RobotTransportError("transfer_failed", "Robot active trajectory exceeds its bounded payload size");
+        }
+        const sha256 = createHash("sha256").update(payload).digest("hex");
+        if (`sha256:${sha256}` !== before.activePayloadSha256) {
+          throw new RobotTransportError("transfer_failed", "Robot active trajectory hash does not match the inspected revision; refresh before pushing");
+        }
+        contents = payload.toString("utf8");
+        // Reuse the export identity contract, including schema and catalog/field validation.
+        const revision = buildJavaRevision({ contents, sha256 }, {
+          nonce: "baseline-read", expectedActiveRevisionId: before.activeRevisionId,
+        });
+        const { catalog, field } = revision.document.revision;
+        if (revision.revisionId !== before.activeRevisionId
+          || catalog.catalogId !== before.catalogId || catalog.catalogHash !== before.catalogHash
+          || catalog.supportVersion !== before.supportVersion || field.id !== before.fieldId
+          || field.revision !== before.fieldRevision || field.coordinateSchemaId !== before.fieldCoordinateSchemaId) {
+          throw new RobotTransportError("transfer_failed", "Robot active trajectory identity or context does not match the inspected runtime");
+        }
       }
-      return status;
+      const after = await readPairedRobotStatus(session, pairing, signal);
+      const context = (status: RobotRuntimeStatus) => JSON.stringify([
+        status.activeRevisionRead, status.activeRevisionId, status.activePayloadSha256,
+        status.catalogId, status.catalogHash, status.supportVersion,
+        status.fieldId, status.fieldRevision, status.fieldCoordinateSchemaId,
+      ]);
+      if (context(before) !== context(after)) {
+        throw new RobotTransportError("transfer_failed", "Robot active revision changed while reading; refresh before pushing");
+      }
+      return { status: after, contents };
     } finally {
       await session.close();
     }
@@ -561,13 +632,7 @@ export class BordeauxRobotTransport {
     let uploadAttempted = false;
     let staged = false;
     try {
-      if (session.hostKeyFingerprint !== pairing.hostKeyFingerprint) {
-        throw new RobotTransportError("re_pair_required", "The robot SSH host key changed; explicitly re-pair this robot before transferring data");
-      }
-      const status = parseRobotStatus(await session.read({ kind: "status" }, MAX_STATUS_BYTES, signal));
-      if (status.runtimeId !== pairing.runtimeId || status.teamNumber !== pairing.teamNumber) {
-        throw new RobotTransportError("re_pair_required", "The paired Bordeaux runtime identity changed; explicitly re-pair this robot before transferring data");
-      }
+      await readPairedRobotStatus(session, pairing, signal);
       uploadAttempted = true;
       await session.write(temporary, envelope.contents, signal);
       const readBack = await session.read(temporary, envelope.contents.length, signal);
@@ -623,13 +688,7 @@ export class BordeauxRobotTransport {
     const acknowledgement: RobotRemoteFile = { kind: "acknowledgement", nonce: expected.nonce };
     const deadline = Date.now() + timeoutMs;
     try {
-      if (session.hostKeyFingerprint !== pairing.hostKeyFingerprint) {
-        throw new RobotTransportError("re_pair_required", "The robot SSH host key changed; explicitly re-pair this robot before transferring data");
-      }
-      const status = parseRobotStatus(await session.read({ kind: "status" }, MAX_STATUS_BYTES, signal));
-      if (status.runtimeId !== pairing.runtimeId || status.teamNumber !== pairing.teamNumber) {
-        throw new RobotTransportError("re_pair_required", "The paired Bordeaux runtime identity changed; explicitly re-pair this robot before transferring data");
-      }
+      await readPairedRobotStatus(session, pairing, signal);
       while (true) {
         if (signal.aborted) throw new RobotTransportError("cancelled", "Waiting for robot activation was cancelled");
         if (await session.exists(acknowledgement, signal)) {
@@ -682,8 +741,7 @@ export class BordeauxRobotTransport {
     const acknowledgement: RobotRemoteFile = { kind: "acknowledgement", nonce: expected.nonce };
     const deadline = Date.now() + timeoutMs;
     try {
-      if (session.hostKeyFingerprint !== pairing.hostKeyFingerprint) {
-        throw new RobotTransportError("re_pair_required", "The robot SSH host key changed; explicitly re-pair this robot before transferring data");
+      await readPairedRobotStatus(session, pairing, signal);
       while (true) {
         if (signal.aborted) throw new RobotTransportError("cancelled", "Waiting for robot retention acknowledgment was cancelled");
         if (await session.exists(acknowledgement, signal)) {
