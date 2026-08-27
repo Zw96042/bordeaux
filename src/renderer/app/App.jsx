@@ -1388,7 +1388,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       });
       if (!agentProposal || agentProposal.status !== 'ready' || !contextMatches
         || !proposalContext || proposalContext.published !== publishedContext || proposalContext.id !== agentProposal.id
-        || javaProjectState.operation || (agentProposal.blockingIssues && agentProposal.blockingIssues.length)) return;
+        || (agentProposal.blockingIssues && agentProposal.blockingIssues.length)) return;
       const before = { project: clone(project), activeIdx };
       let nextIndex = activeIdx;
       let nextProject;
@@ -1412,19 +1412,31 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       const applied = { ...agentProposal, status: 'applied', appliedRevision: agentRevision.current + 1 };
       agentProposalRef.current = applied;
       setAgentProposal(applied);
-    }, [agentProposal, agentCandidate, project, activeIdx, agentSessionId, editStore, javaProjectState.operation, updateDirty]);
+    }, [agentProposal, agentCandidate, agentProposalCanApplyCandidate, project, activeIdx, agentSessionId, editStore, javaProjectState.operation, updateDirty]);
 
     const total = derived.prof.totalTime || 0;
     useEffect(() => playbackStore.setTotal(total), [playbackStore, total]);
 
-    // ---- routine run engine ----
+    const routinePlanningPaths = useMemo(() => {
+      const referenced = new Map();
+      AUTO.walk(routine.nodes, (node) => {
+        if (node.type === 'path') {
+          const path = project.paths.find((candidate) => candidate.id === node.ref);
+          if (path) referenced.set(path.id, path);
+        } else if (node.type === 'function' && node.cat === 'generate' && node.preview) {
+          referenced.set(node.preview.id, node.preview);
+        }
+      });
+      return [...referenced.values()];
+    }, [routine, project.paths]);
+    const routinePlans = useRoutinePlanning(page === 'auto', routinePlanningPaths, robot, plannerId);
     const lastRun = useRef({ steps: [], total: 0 });
     const run = useMemo(() => {
       if (page !== 'auto') return lastRun.current;
-      const nextRun = AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId, javaProjectState.catalog);
+      const nextRun = AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId, javaProjectState.catalog, routinePlans);
       lastRun.current = nextRun;
       return nextRun;
-    }, [page, routine, project.paths, robot, routineOutcomes, plannerId, javaProjectState.catalog]);
+    }, [page, routine, project.paths, robot, routineOutcomes, plannerId, javaProjectState.catalog, routinePlans]);
     useEffect(() => routinePlaybackStore.setTotal(run.total), [routinePlaybackStore, run.total]);
     useEffect(() => { if (page !== 'plan') playbackStore.pause(); if (page !== 'auto') routinePlaybackStore.pause(); }, [page, playbackStore, routinePlaybackStore]);
 
@@ -1449,7 +1461,6 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     }), [routineOutcomes, routine, project.paths, javaProjectState.catalog]);
     const autoFieldActions = useMemo(() => ({ selectNode: (id) => setRoutineSel((s) => s === id ? null : id), select: () => setRoutineSel(null) }), []);
 
-    // ---- view ----
     const onFit = useCallback(() => setView(FIT), []);
     const zoomBy = useCallback((factor) => setView((v) => {
       const cx = v.x + v.w / 2, cy = v.y + v.h / 2;
@@ -1458,21 +1469,73 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       return { x: cx - nw / 2, y: cy - nh / 2, w: nw, h: nh };
     }), []);
     const zoomPct = Math.round(FIT.w / view.w * 100);
-    const setPlannerFamily = useCallback((nextPlannerId) => {
-      setProject((current) => ({ ...current, plannerId: nextPlannerId === 'optimizedTrajectory' ? 'optimizedTrajectory' : 'profiledSpline' }));
-    }, []);
+    const compareTrajectory = (mode) => {
+      if (mode === 'normal' && !normalReady) return;
+      playbackStore.reset();
+      setComparison({ id: doc.id, key: optimizationKey, mode });
+    };
+    const toggleOptimization = () => {
+      if (optimizationOpen) {
+        compareTrajectory('selected');
+        setOptimizationOpen(false);
+        return;
+      }
+      setOptimizationOpen(true);
+      if (normalReady && !accepted && !candidate && !optimizationState.running) {
+        setComparison(null);
+        void optimizer.start(doc.id, 'common');
+      }
+    };
+    const startOptimization = (deadline) => {
+      setComparison(null);
+      void optimizer.start(doc.id, deadline);
+    };
+    const setCorridor = (value) => {
+      if (!Number.isFinite(value)) return;
+      const corridorM = Math.max(0.03, Math.min(1.5, value));
+      if (Math.abs(corridorM - (doc.optimization?.corridorM ?? 0.15)) < 1e-9) return;
+      beginHistory();
+      playbackStore.reset();
+      writeDoc({ ...doc, optimization: { ...doc.optimization, corridorM } });
+    };
+    const applyOptimization = () => {
+      if (!candidate?.finalTrajectory || editStore.getSnapshot()) return;
+      const current = projectRef.current;
+      const currentPath = current.paths.find((path) => path.id === doc.id);
+      if (!currentPath || optimizationInputKey(currentPath, current.robot, current.field) !== optimizationKey) return;
+      try {
+        const result = { version: 1, inputKey: optimizationKey, samplesPerSegment: PERSEG, result: clone(candidate.finalTrajectory) };
+        appliedPreview.current = { artifact: result, key: optimizationKey, value: candidate };
+        beginHistory();
+        playbackStore.reset();
+        setComparison(null);
+        writeDoc({ ...currentPath, optimization: { corridorM: currentPath.optimization?.corridorM ?? 0.15, accepted: result } });
+      } catch (error) { setExportError(error.message || 'The candidate could not be applied.'); }
+    };
+    const useNormalTrajectory = () => {
+      beginHistory();
+      playbackStore.reset();
+      setComparison(null);
+      writeDoc({ ...doc, optimization: { corridorM: doc.optimization?.corridorM ?? 0.15 } });
+    };
 
     // ---- desktop project workflow ----
-    const canReplaceProject = useCallback(() => !dirtyRef.current || confirm('Discard unsaved changes to this project?'), []);
+    const canReplaceProject = useCallback(() => flushProjectDraft()
+      && (!dirtyRef.current || confirm('Discard unsaved changes to this project?')), [flushProjectDraft]);
     const loadProject = useCallback((incoming) => {
       invalidateScheduledAutosave();
       cancelEdit();
+      optimizer.cancel();
+      setComparison(null);
       const next = normalizeProject(incoming);
+      setProjectKey((key) => key + 1);
+      setLibraryPreferenceKey(next.name + ':' + next.paths[0].id);
       const javaGeneration = ++javaRestoreGeneration.current;
       const requestedPathId = next.editor && next.editor.activePathId;
       const requestedPathIndex = requestedPathId ? next.paths.findIndex((path) => path.id === requestedPathId) : -1;
       skipDirty.current = true;
       projectRef.current = next;
+      setPlanningInputRevision(0);
       setProject(next);
       setActiveIdx(requestedPathIndex >= 0 ? requestedPathIndex : 0); setSel({ kind: null, idx: -1 }); setRoutineSel(null);
       playbackStore.reset();
@@ -1507,17 +1570,16 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       cancelEdit();
     }, [cancelEdit, invalidateScheduledAutosave]);
     const newProject = useCallback(() => {
-      if (!canReplaceProject()) return;
-      prepareProjectReplacement();
-      return enqueuePersistence(async () => {
+      return enqueuePersistenceAfterPreflight(enqueuePersistence, canReplaceProject, async () => {
+        prepareProjectReplacement();
         if (window.bordeauxAPI) await window.bordeauxAPI.newProject();
         loadProject(freshProject());
       });
     }, [canReplaceProject, enqueuePersistence, loadProject, prepareProjectReplacement]);
     const openProject = useCallback((recentIndex) => {
-      if (!window.bordeauxAPI || !canReplaceProject()) return;
-      prepareProjectReplacement();
-      return enqueuePersistence(async () => {
+      if (!window.bordeauxAPI) return;
+      return enqueuePersistenceAfterPreflight(enqueuePersistence, canReplaceProject, async () => {
+        prepareProjectReplacement();
         try {
           const result = typeof recentIndex === 'number'
             ? await window.bordeauxAPI.openRecentProject(recentIndex)
@@ -1530,12 +1592,14 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     }, [canReplaceProject, enqueuePersistence, loadProject, prepareProjectReplacement]);
     const saveProject = useCallback((saveAs) => {
       if (!window.bordeauxAPI) return;
-      return enqueuePersistence(async () => {
+      return enqueuePersistenceAfterPreflight(enqueuePersistence, flushProjectDraft, async () => {
+        const requestedDraftGeneration = draftInputGeneration.current;
         try {
-          const sourceProject = projectRef.current;
-          const editRevision = editStore.getRevision();
+          const source = { project: projectRef.current, editRevision: editStore.getRevision(), draftGeneration: requestedDraftGeneration };
           const result = await window.bordeauxAPI.saveProject(materializeProject(), saveAs === true);
           if (result && result.canceled) return;
+          if (projectPersistenceStayedCurrent(source, {
+            project: projectRef.current,
             editRevision: editStore.getRevision(),
             draftGeneration: draftInputGeneration.current,
           })) updateDirty(false);
