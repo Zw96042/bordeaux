@@ -1,3 +1,6 @@
+const { contextBridge, ipcRenderer } = require('electron');
+const noop = () => () => undefined;
+contextBridge.exposeInMainWorld('bordeauxAPI', {
   platform: 'linux', restoreLastProject: () => ipcRenderer.invoke('library:restore'),
   saveProject: (project) => ipcRenderer.invoke('library:save', project), autosaveProject: async () => ({ saved: false }),
   setDirty: () => undefined, listRecentJavaProjects: async () => [], getMcpStatus: async () => ({ enabled: false }), getActiveAgentProposal: async () => null,
