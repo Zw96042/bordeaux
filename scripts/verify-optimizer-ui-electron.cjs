@@ -1,3 +1,95 @@
+const { app, BrowserWindow, ipcMain } = require('electron');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+
+const output = process.env.BORDEAUX_OPTIMIZER_UI_OUTPUT;
+const html = process.env.BORDEAUX_OPTIMIZER_UI_HTML;
+const fixture = JSON.parse(Buffer.from(process.env.BORDEAUX_OPTIMIZER_UI_PROJECT, 'base64').toString('utf8'));
+let saved = structuredClone(fixture);
+let saveCount = 0;
+const checks = [];
+const errors = [];
+const knownConsoleWarnings = [];
+app.setPath('userData', path.join(output, 'user-data'));
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+ipcMain.handle('optimizer-ui:restore', () => ({ project: structuredClone(saved) }));
+ipcMain.handle('optimizer-ui:save', (_event, project) => { saved = structuredClone(project); saveCount += 1; return { saved: true }; });
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+let window;
+async function evaluate(fn, ...args) {
+  return window.webContents.executeJavaScript(`(${fn.toString()})(...${JSON.stringify(args)})`, true);
+}
+async function waitFor(fn, description, timeoutMs = 20_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = await fn();
+    if (value) return value;
+    await delay(100);
+  }
+  throw new Error(`Timed out waiting for ${description}`);
+}
+async function click(selector, text) {
+  await waitFor(() => evaluate((selector, text) => {
+    const button = [...document.querySelectorAll(selector)].find((item) => text == null || item.textContent.trim() === text);
+    return Boolean(button && !button.disabled && !button.closest('[inert]') && button.checkVisibility());
+  }, selector, text), `an available ${text || selector} control`);
+  await evaluate((selector, text) => {
+    const button = [...document.querySelectorAll(selector)].find((item) => text == null || item.textContent.trim() === text);
+    if (!button || button.disabled || button.closest('[inert]') || !button.checkVisibility()) throw new Error(`Cannot activate ${selector}: ${text || ''}`);
+    button.click();
+  }, selector, text);
+}
+async function snapshot() {
+  return evaluate(() => ({
+    time: document.querySelector('input[aria-label="Trajectory playback position"]')?.getAttribute('max'),
+    geometry: document.querySelector('svg path[stroke="#05060a"][stroke-opacity="0.75"]')?.getAttribute('d'),
+    path: document.querySelector('.library-current-name')?.textContent,
+    status: document.querySelector('.optimizer-outcome[role="status"]')?.textContent,
+    pending: Boolean(document.querySelector('.stage-plan .fieldcol[inert]')),
+  }));
+}
+async function ready() {
+  await waitFor(async () => {
+    const state = await snapshot();
+    return state.time && state.geometry && !state.pending && await evaluate(() =>
+      !document.querySelector('.library-structure [inert]') && !document.body.textContent.includes('Preparing trajectory'));
+  }, 'the authoritative normal trajectory');
+}
+async function save() {
+  const before = saveCount;
+  await click('button[aria-label="Save project"]');
+  await waitFor(() => saveCount > before, 'the mocked save to complete');
+  return structuredClone(saved);
+}
+async function stable(expected, milliseconds, label) {
+  const deadline = Date.now() + milliseconds;
+  while (Date.now() < deadline) {
+    const state = await snapshot();
+    assert.equal(state.time, expected.time, `${label}: displayed time changed while idle`);
+    assert.equal(state.geometry, expected.geometry, `${label}: geometry changed while idle`);
+    await delay(150);
+  }
+}
+async function switchPath(name) {
+  await evaluate((name) => {
+    const row = [...document.querySelectorAll('.library-pick')].find((item) => item.querySelector('.library-name')?.textContent === name);
+    if (!row) throw new Error(`Path missing: ${name}`);
+    row.click();
+  }, name);
+  await waitFor(async () => (await snapshot()).path === name, 'the selected path');
+  await ready();
+}
+async function finishSearch() {
+  await waitFor(() => evaluate(() => [...document.querySelectorAll('.optimizer-panel button')]
+    .some((item) => item.textContent === 'Cancel')), 'the explicit search to start');
+  await waitFor(() => evaluate(() => ![...document.querySelectorAll('.optimizer-panel button')]
+    .some((item) => item.textContent === 'Cancel')), 'the explicit search to finish', 12_000);
+  await waitFor(() => evaluate(() => [...document.querySelectorAll('.optimizer-panel button')]
+    .some((item) => item.textContent === 'Apply optimized')), 'an improved candidate', 2000);
+}
 async function openSettings() {
   if (!await evaluate(() => document.querySelector('.optimizer-settings')?.open)) {
     await click('.optimizer-settings summary');

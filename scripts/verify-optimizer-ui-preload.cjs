@@ -1,0 +1,10 @@
+  platform: 'linux',
+  restoreLastProject: () => ipcRenderer.invoke('optimizer-ui:restore'),
+  saveProject: (project) => ipcRenderer.invoke('optimizer-ui:save', project),
+  autosaveProject: async () => ({ saved: false }),
+  setDirty: () => undefined,
+  listRecentJavaProjects: async () => [],
+  getMcpStatus: async () => ({ enabled: true }),
+  getActiveAgentProposal: async () => null,
+  onMcpStatus: noop, onAgentProposal: noop, onMenuCommand: noop,
+});
