@@ -1658,29 +1658,14 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
               selNode && h(StepInspector, { node: selNode, paths: project.paths, acq, run, javaProject: { ...javaProjectState, link: linkJavaProject }, conditionOptions: AUTO.authoritativeConditions(javaProjectState.catalog) })))
         : h('main', { className: 'stage stage-plan', inert: derivationCurrent ? undefined : '', 'aria-disabled': derivationCurrent ? undefined : true },
             h('nav', { className: 'rail rail-l' + (outlineOpen ? '' : ' collapsed'), 'aria-label': 'Path outline' },
-              h(Panels.Outline, { open: outlineOpen, setOpen: setOutlineOpen, doc: derivationDoc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot })),
-            h('div', { className: 'fieldcol' },
-              h(Panels.ToolRail, { tool, setTool }),
-              exportError && h('div', { className: 'insert-preview export-error-banner', role: 'alert' },
-                h('div', { className: 'insert-preview-copy' }, h('b', null, 'Export failed'), h('span', null, exportError)),
-                h('button', { type: 'button', 'aria-label': 'Dismiss export error', onClick: () => setExportError('') }, '\u00d7')),
-              plannerId === 'optimizedTrajectory' && derivation.pending && h('div', { className: 'stage-hint', role: 'status' }, 'Optimizing the final trajectory…'),
-              plannerId === 'optimizedTrajectory' && !derivation.pending && derivation.optimization && h('div', { className: 'stage-hint', role: 'status' },
-                derivation.optimization.status === 'equivalent'
-                  ? 'Final optimizer kept the interactive trajectory; no valid time improvement was found.'
-                  : `Final trajectory ${derivation.optimization.totalTimeS.toFixed(2)} s · solved in ${derivation.optimization.solveTimeMs.toFixed(1)} ms${derivation.optimization.optimizationClass === 'corridor' ? ` · ${derivation.optimization.budgetTier} budget ${(derivation.optimization.budgetMs / 1000).toFixed(0)} s · max shift ${(derivation.optimization.maxDeviationM || 0).toFixed(2)} m` : ''}`),
-              derivation.error && h('div', { className: 'insert-preview derivation-error', role: 'alert' },
-                h('div', { className: 'insert-preview-copy' }, h('b', null, 'Path preview unavailable'), h('span', null, derivation.error.message || String(derivation.error))),
-                h('span', null, 'Showing the last valid preview. Undo or edit the selected geometry.')),
-              h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, derivedPath: derivation.path, robot, plannerId, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, showHandles: true }),
               tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
               waypointPreview && h('div', { className: 'insert-preview', role: 'region', 'aria-label': 'Preview waypoint insertion' },
                 h('div', { className: 'insert-preview-copy' },
-                  h('b', null, 'Preview waypoint'),
-                  h('span', null, waypointPreview.message)),
+                  h('b', null, waypointPreview.pending ? 'Preparing waypoint preview' : waypointPreview.error ? 'Waypoint preview unavailable' : 'Preview waypoint'),
+                  h('span', null, waypointPreview.error ? (waypointPreview.error.message || String(waypointPreview.error)) : waypointPreview.message)),
                 h('div', { className: 'insert-preview-actions' },
-                  h('button', { type: 'button', onClick: () => setWaypointPreview(null) }, 'Cancel'),
-                  h('button', { className: 'primary', type: 'button', onClick: applyWaypointPreview }, waypointPreview.actionLabel || 'Insert waypoint'))),
+                  h('button', { type: 'button', onClick: () => setWaypointPreviewRequest(null) }, 'Cancel'),
+                  h('button', { className: 'primary', type: 'button', disabled: !waypointPreview.derived, onClick: applyWaypointPreview }, waypointPreview.actionLabel || 'Insert waypoint'))),
               agentProposal && h('div', { className: 'insert-preview agent-proposal', role: 'region', 'aria-label': 'Agent path proposal' },
                 h('div', { className: 'insert-preview-copy' },
                   h('b', null, agentProposal.operation === 'replace' ? 'Agent repair proposal' : 'Agent path proposal'),
@@ -1689,20 +1674,34 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
                   agentProposal.status === 'ready' && h('div', { className: 'agent-candidates', role: 'radiogroup', 'aria-label': 'Agent proposal candidates' }, agentCandidates.map((candidate) => h('button', { key: candidate.id, type: 'button', role: 'radio', 'aria-checked': agentCandidate && candidate.id === agentCandidate.id, className: agentCandidate && candidate.id === agentCandidate.id ? 'selected' : '', onClick: () => setAgentCandidateId(candidate.id) }, candidate.label + (candidate.valid === false ? ' · invalid' : candidate.metrics ? ' · ' + candidate.metrics.totalTimeS.toFixed(2) + ' s' : '')))),
                   agentCandidate && agentCandidate.metrics && h('span', null, UnitPrefs.format(agentCandidate.metrics.totalDistanceM, 'm', 2) + ' · ' + UnitPrefs.format(agentCandidate.metrics.minimumClearanceM, 'm', 2) + ' modeled clearance'),
                   agentCandidate && agentCandidate.valid === false && agentCandidate.rejectionReason && h('span', { className: 'agent-proposal-status' }, 'Blocked: ' + agentCandidate.rejectionReason),
+                  agentProposal.status === 'ready' && agentProposal.operation !== 'configureRobot' && agentProposalPreview.pending && h('span', { className: 'agent-proposal-status', role: 'status', 'aria-live': 'polite' }, 'Preparing the selected path preview…'),
+                  agentProposal.status === 'ready' && agentProposal.operation !== 'configureRobot' && agentProposalPreview.error && h('span', { className: 'agent-proposal-status', role: 'alert' }, 'Selected path preview unavailable: ' + (agentProposalPreview.error.message || String(agentProposalPreview.error))),
                   agentProposal.recommendationReason && h('span', null, agentProposal.recommendationReason),
                   agentProposal.advisories && agentProposal.advisories.map((notice, index) => h('span', { key: 'advisory-' + index, className: 'agent-proposal-status' }, notice)),
                   agentProposal.blockingIssues && agentProposal.blockingIssues.map((issue, index) => h('span', { key: 'block-' + index, className: 'agent-proposal-status' }, 'Blocked: ' + issue))),
                 h('div', { className: 'insert-preview-actions' },
                   agentProposal.status === 'ready' && h('button', { type: 'button', onClick: rejectAgentProposal }, 'Reject'),
-                  agentProposal.status === 'ready' && h('button', { className: 'primary', type: 'button', disabled: !agentCandidate || agentCandidate.valid === false || (agentProposal.blockingIssues && agentProposal.blockingIssues.length > 0), onClick: applyAgentProposal }, agentProposal.operation === 'replace' ? 'Apply repair' : 'Add path'))),
-              h(Panels.ConstraintBar, { c: derivationDoc.constraints, robot, onOpen: () => select(null, -1) }),
+                  agentProposal.status === 'ready' && h('button', { className: 'primary', type: 'button', disabled: !agentProposalCanApplyCandidate || (agentProposal.blockingIssues && agentProposal.blockingIssues.length > 0), onClick: applyAgentProposal }, agentProposal.operation === 'replace' ? 'Apply repair' : 'Add path'))),
+              ),
+              h(Panels.ConstraintBar, { c: derivationDoc.constraints, robot, onOpen: () => { setOptimizationOpen(false); setComparison(null); select(null, -1); } }),
               h(PlaybackTransport, { store: playbackStore, derived, doc: derivationDoc, metric, setMetric, graphOpen, setGraphOpen }),
               h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen })),
-            h('aside', { className: 'rail rail-r' + (inspectorOpen ? '' : ' collapsed'), 'aria-label': 'Path inspector' },
-              inspectorOpen
-                ? h(ContextInspector, { doc: derivationDoc, sel, derived, actions: inspActions, drive: robot.drive, robot, javaProject: { ...javaProjectState, link: linkJavaProject, openRecent: openRecentJavaProject, refresh: refreshJavaProject, install: installJavaSupport, build: buildJavaCatalog, cancelBuild: cancelJavaCatalogBuild, export: () => onExportJava('linked') }, onClose: () => setInspectorOpen(false) })
+            h('aside', { inert: derivationCurrent || (optimizationOpen && normalError) ? undefined : '', className: 'rail rail-r' + (inspectorOpen || optimizationOpen ? '' : ' collapsed'), 'aria-label': optimizationOpen ? 'Path optimization' : 'Path inspector' },
+              optimizationOpen ? h(OptimizationPanel, {
+                path: doc, paths: project.paths, state: optimizationState, candidate, accepted, stale: staleOptimization,
+                baselineTime, pending: !normalReady && !normalError, error: normalError, mode: comparisonMode, unitSystem,
+                recovery: !derivationCurrent ? (hist.current.past.length || routineHist.current.past.length || projectHist.current.past.length
+                  ? { label: 'Undo last edit', onClick: undo }
+                  : { label: 'Open project', onClick: openProject }) : undefined,
+                onCorridor: setCorridor, onStart: startOptimization,
+                onStartAll: () => { setComparison(null); void optimizer.startAll(); }, onCancel: optimizer.cancel,
+                onCompare: compareTrajectory, onApply: applyOptimization, onNormal: useNormalTrajectory,
+                onSelectPath: (id) => { const index = project.paths.findIndex((path) => path.id === id); if (index >= 0) setActive(index); },
+                onClose: () => { compareTrajectory('selected'); setOptimizationOpen(false); setInspectorOpen(true); },
+              }) : inspectorOpen
+                ? h(ContextInspector, { project, setWaypointPositionLink, doc: derivationDoc, sel, derived, actions: inspActions, drive: robot.drive, robot, javaProject: { ...javaProjectState, link: linkJavaProject, openRecent: openRecentJavaProject, refresh: refreshJavaProject, install: installJavaSupport, build: buildJavaCatalog, cancelBuild: cancelJavaCatalogBuild, export: () => onExportJava('linked') }, onClose: () => setInspectorOpen(false) })
                 : h('button', { className: 'inspector-tab', type: 'button', title: 'Show inspector', onClick: () => setInspectorOpen(true) }, h(UI.Icon, { name: 'sliders', size: 16 }), h('span', null, 'Inspector'))),
-            headMenu && h(UI.ContextMenu, { x: headMenu.x, y: headMenu.y, items: headMenu.items, onClose: () => setHeadMenu(null) })));
+            headMenu && h(UI.ContextMenu, { x: headMenu.x, y: headMenu.y, items: headMenu.items, returnFocus: headMenu.returnFocus, onClose: () => setHeadMenu(null) })));
   }
 
   function toolHint(tool) {
@@ -1710,6 +1709,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     if (tool === 'rotation') return 'Click the path to set a <b>rotation target</b>';
     if (tool === 'marker') return 'Click the path to place an <b>event marker</b>';
     if (tool === 'range') return 'Drag along the path to define a <b>constraint range</b> \u00b7 then edit its limits';
+    if (tool === 'brush') return 'Drag to <b>sculpt the path</b> \u00b7 [ and ] adjust the radius';
     return '';
   }
 
@@ -1725,4 +1725,4 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     }
   }
 
-export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, freshProject };
+export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, agentProposalPreviewResult, applyBrushDraft, canApplyAgentProposalCandidate, currentPathLength, duplicatePathForLibrary, pathPreviewResult, remapBrushSelection, requestRoutinePreview, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, syncBrushSelection, waypointPreviewResult };

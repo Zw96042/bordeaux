@@ -1,7 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
+import { buildJavaRevision } from "../shared/export/javaRevision";
 
 export const ROBOT_PUSH_PROTOCOL_VERSION = "bordeaux-robot-push/1.0" as const;
 export const ROBOT_RETENTION_PROTOCOL_VERSION = "bordeaux-retention/1.0" as const;
+export const ROBOT_ACTIVE_REVISION_READ_VERSION = "bordeaux-active-revision/1.0" as const;
 export const ROBOT_DEPLOYMENT_NAMESPACE = "/home/lvuser/deploy/bordeaux/push-v1" as const;
 
 export interface RobotEndpoint {
