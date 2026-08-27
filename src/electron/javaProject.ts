@@ -592,19 +592,18 @@ async function collectJavaSources(projectRoot: string, sourceRoots: string[], wa
   files.sort();
   const sources: JavaSourceUnit[] = [];
   let totalBytes = 0;
-  for (const absolutePath of files) {
-    const stat = await fs.lstat(absolutePath);
-    if (!stat.isFile() || stat.isSymbolicLink()) continue;
-    if (stat.size > MAX_SOURCE_FILE_BYTES) {
-      warnings.push(`${path.relative(projectRoot, absolutePath)} was skipped because it exceeds ${MAX_SOURCE_FILE_BYTES} bytes`);
-      continue;
+      totalBytes += stat.size;
+      if (totalBytes > MAX_TOTAL_SOURCE_BYTES) throw new Error(`Java project source exceeds the ${MAX_TOTAL_SOURCE_BYTES}-byte scan limit`);
+      readable.push(absolutePath);
     }
-    totalBytes += stat.size;
-    if (totalBytes > MAX_TOTAL_SOURCE_BYTES) throw new Error(`Java project source exceeds the ${MAX_TOTAL_SOURCE_BYTES}-byte scan limit`);
-    const text = await fs.readFile(absolutePath, "utf8");
-    const sanitized = sanitizeJava(text);
-    const packageName = sanitized.match(/\bpackage\s+([$\w.]+)\s*;/)?.[1] ?? "";
-    sources.push({ relativePath: path.relative(projectRoot, absolutePath), text, sanitized, packageName });
+    // Check the aggregate budget before reading; batches bound open files and memory.
+    const texts = await Promise.all(readable.map((absolutePath) => fs.readFile(absolutePath, "utf8")));
+    for (let index = 0; index < readable.length; index += 1) {
+      const text = texts[index];
+      const sanitized = sanitizeJava(text);
+      const packageName = sanitized.match(/\bpackage\s+([$\w.]+)\s*;/)?.[1] ?? "";
+      sources.push({ relativePath: path.relative(projectRoot, readable[index]), text, sanitized, packageName });
+    }
   }
   return sources;
 }
