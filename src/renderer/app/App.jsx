@@ -1044,9 +1044,8 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
 
     const setConstraint = useCallback((patch) => commit((d) => { Object.assign(d.constraints, patch); return d; }), [commit]);
     const setDoc = useCallback((patch) => commit((d) => Object.assign(d, patch)), [commit]);
-    const setRobot = useCallback((patch) => setProject((pr) => ({ ...pr, robot: { ...pr.robot, ...patch } })), []);
+    }, []);
 
-    // ---- modeless “add” actions: create + select, then edit on canvas / inspector ----
     const addTargetMid = useCallback(() => commit((d) => {
       const pts = derived.sample.pts;
       const deg = pts.length > 1 ? PM.pointAtFraction(0.5, pts).heading * 180 / Math.PI : 0;
@@ -1058,7 +1057,6 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     const addMarkerMid = useCallback(() => commit((d) => { d.markers.push({ id: markerId(), f: 0.5, name: 'event' + (d.markers.length + 1), cmd: 'none', group: 'sequential' }); d._selM = d.markers.length - 1; return d; }), [commit]);
     const addRangeMid = useCallback(() => addRange(0.35, 0.6), [addRange]);
 
-    // ---- segment + waypoint structural ops (memo §3 / §4 / §7 / §8) ----
     const setSegMeta = useCallback((i, patch) => commit((d) => { Object.assign(d.waypoints[i], patch); return d; }), [commit]);
     const setSegmentHeadingMode = useCallback((i, mode) => commit((d) => {
       const w = d.waypoints[i], next = d.waypoints[i + 1];
@@ -1067,19 +1065,6 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       if (mode === 'lookAt' && !w.segmentLookAt && next) {
         const dx = next.x - w.x, dy = next.y - w.y, length = Math.hypot(dx, dy) || 1;
         w.segmentLookAt = clampWorld({ x: (w.x + next.x) / 2 - dy / length * 1.25, y: (w.y + next.y) / 2 + dx / length * 1.25 });
-      }
-      return d;
-    }), [commit]);
-    const setHeadingTransition = useCallback((i, patch) => commit((d) => {
-      const w = d.waypoints[i]; if (!w || i <= 0 || i >= d.waypoints.length - 1) return d;
-      w.headingTransition = Object.assign({ placement: 'after', rotationPriority: 'heading', distanceM: 0.75 }, w.headingTransition || {}, patch);
-      if (patch.placement && patch.placement !== 'after') {
-        const defaultMode = d.headingMode || 'targets';
-        const incomingMode = d.waypoints[i - 1].segmentHeadingMode || defaultMode;
-        const outgoingMode = w.segmentHeadingMode || defaultMode;
-        if ((incomingMode === 'tangent' || incomingMode === 'lookAt') && (outgoingMode === 'manual' || outgoingMode === 'targets')) {
-          w.thetaOn = true;
-        }
       }
       return d;
     }), [commit]);
@@ -1114,97 +1099,36 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     }), [commit]);
     const setHeadingMode = useCallback((m) => commit((d) => { d.headingMode = m; return d; }), [commit]);
     const toggleDriveBackward = useCallback(() => commit((d) => { d.driveBackward = !d.driveBackward; return d; }), [commit]);
-    const nudgeWp = useCallback((i, dx, dy) => commit((d) => { const w = d.waypoints[i]; if (!w) return d; const nx = Math.max(0, Math.min(FIELD_W, w.x + dx)), ny = Math.max(0, Math.min(FIELD_H, w.y + dy)); const ddx = nx - w.x, ddy = ny - w.y; w.x = nx; w.y = ny; if (w.prevC) { w.prevC.x += ddx; w.prevC.y += ddy; } if (w.nextC) { w.nextC.x += ddx; w.nextC.y += ddy; } return d; }), [commit]);
+    const nudgeWp = useCallback((i, dx, dy) => commit((path) => {
+      const waypoint = path.waypoints[i];
+      return waypoint ? moveWaypointTo(path, i, { x: waypoint.x + dx, y: waypoint.y + dy }) : path;
+    }), [commit]);
     const nudgeFrac = useCallback((kind, i, df) => commit((d) => {
       const arr = kind === 'rt' ? d.targets : d.markers; const item = arr[i]; if (!item) return d;
       const f = Math.max(0, Math.min(1, PM.featureFraction(item, derived.sample) + df));
       item.f = f; if (item.anchor === 'dist') item.d = +(f * (derived.sample.length || 0)).toFixed(3);
       return d;
     }), [commit, derived]);
-    const setWaypointHeading = useCallback((i, deg) => mutate((d) => { const w = d.waypoints[i]; w.theta = deg; w.thetaOn = true; return d; }), [mutate]);
+    const setWaypointHeading = useCallback((i, deg) => mutate((d) => setWaypointFacing(d, i, deg)), [mutate]);
     const faceWaypoint = useCallback((i, mode) => commit((d) => {
       const w = d.waypoints[i]; let deg = w.theta || 0;
       if (mode === 'next' && d.waypoints[i + 1]) { const t = d.waypoints[i + 1]; deg = Math.atan2(t.y - w.y, t.x - w.x) * 180 / Math.PI; }
       else if (mode === 'prev' && d.waypoints[i - 1]) { const t = d.waypoints[i - 1]; deg = Math.atan2(t.y - w.y, t.x - w.x) * 180 / Math.PI; }
       else if (mode === 'tangent') { const idx = (derived.wpIdx && derived.wpIdx[i]) || 0; const p = derived.sample.pts[idx]; if (p) deg = (p.heading || 0) * 180 / Math.PI; }
-      w.theta = deg; w.thetaOn = true; return d;
+      return setWaypointFacing(d, i, deg - (i === 0 && d.driveBackward ? 180 : 0));
     }), [commit, derived]);
-    const headingMenu = useCallback((i, x, y) => {
-      setHeadMenu({ x, y, items: [
+    const headingMenu = useCallback((i, x, y, returnFocus) => {
+      setHeadMenu({ x, y, returnFocus, items: [
         { label: 'Face next waypoint', icon: 'compass', onClick: () => faceWaypoint(i, 'next') },
         { label: 'Face previous waypoint', icon: 'compass', onClick: () => faceWaypoint(i, 'prev') },
         { label: 'Align to path tangent', icon: 'route', onClick: () => faceWaypoint(i, 'tangent') },
         { sep: true },
-        { label: 'Type exact angle\u2026', icon: 'compass', onClick: () => select('wp', i) },
+        { label: 'Type exact angle\u2026', icon: 'compass', onClick: () => { setOptimizationOpen(false); setComparison(null); setInspectorOpen(true); select('wp', i); } },
       ] });
     }, [faceWaypoint, select]);
-    const duplicateWp = useCallback((i) => commit((d) => {
-      const oldCount = d.waypoints.length;
-      const src = JSON.parse(JSON.stringify(d.waypoints[i]));
-      delete src.headingTransition;
-      if (i === oldCount - 1) delete d.waypoints[i].jiggle;
-      else delete src.jiggle;
-      const next = clampWorld({ x: src.x + 0.4, y: src.y + 0.4 }); src.x = next.x; src.y = next.y;
-      d.waypoints.splice(i + 1, 0, src);
-      remapWaypointRanges(d, Array.from({ length: oldCount }, (_, index) => index <= i ? index : index + 1));
-      const hd = PM.autoHandles(d.waypoints, i + 1); src.prevC = hd.prevC; src.nextC = hd.nextC;
-      d.waypoints[0].thetaOn = true; d.waypoints[d.waypoints.length - 1].thetaOn = true;
-      d._selAfter = i + 1; return d;
-    }), [commit]);
-    const reversePath = useCallback(() => commit((d) => {
-      const endpointJiggle = d.waypoints[d.waypoints.length - 1].jiggle ? { ...d.waypoints[d.waypoints.length - 1].jiggle } : null;
-      const oldSeg = d.waypoints.map((w) => w.segType);
-      const oldHeading = d.waypoints.map((w) => w.segmentHeadingMode);
-      const oldFollow = d.waypoints.map((w) => w.segmentFollowMode);
-      const oldLookAt = d.waypoints.map((w) => w.segmentLookAt && { ...w.segmentLookAt });
-      const oldLaws = d.waypoints.slice(0, -1).map((waypoint) => {
-        const mode = waypoint.segmentHeadingMode || d.headingMode || 'targets';
-        return mode === 'lookAt' ? 'lookAt:' + (waypoint.segmentLookAt ? waypoint.segmentLookAt.x + ':' + waypoint.segmentLookAt.y : '') : mode;
-      });
-      const oldTransitions = d.waypoints.map((waypoint, index) => index > 0 && index < d.waypoints.length - 1
-        && oldLaws[index] !== oldLaws[index - 1] && !waypoint.turnInPlace
-        ? { placement: 'after', rotationPriority: 'heading', distanceM: 0.75, ...(waypoint.headingTransition || {}) }
-        : null);
-      const w = d.waypoints.slice().reverse(); const n = w.length;
-      w.forEach((x) => {
-        const p = x.prevC; x.prevC = x.nextC; x.nextC = p;
-        if (x.turnInPlace && x.turnInPlace.direction === 'clockwise') x.turnInPlace.direction = 'counterclockwise';
-        else if (x.turnInPlace && x.turnInPlace.direction === 'counterclockwise') x.turnInPlace.direction = 'clockwise';
-      });
-      for (let j = 0; j < n; j++) {
-        if (j < n - 1) {
-          w[j].segType = oldSeg[n - 2 - j];
-          if (oldHeading[n - 2 - j]) w[j].segmentHeadingMode = oldHeading[n - 2 - j];
-          else delete w[j].segmentHeadingMode;
-          if (oldFollow[n - 2 - j]) w[j].segmentFollowMode = oldFollow[n - 2 - j];
-          else delete w[j].segmentFollowMode;
-          if (oldLookAt[n - 2 - j]) w[j].segmentLookAt = { ...oldLookAt[n - 2 - j] };
-          else delete w[j].segmentLookAt;
-        } else {
-          delete w[j].segType;
-          delete w[j].segmentHeadingMode;
-          delete w[j].segmentFollowMode;
-          delete w[j].segmentLookAt;
-        }
-        delete w[j].headingTransition;
-      }
-      for (let oldIndex = 1; oldIndex < n - 1; oldIndex++) {
-        const transition = oldTransitions[oldIndex]; if (!transition) continue;
-        const newIndex = n - 1 - oldIndex;
-        w[newIndex].headingTransition = { ...transition,
-          placement: transition.placement === 'before' ? 'after' : transition.placement === 'split' ? 'split' : 'before' };
-      }
-      d.waypoints = w; remapWaypointRanges(d, Array.from({ length: n }, (_, index) => n - 1 - index));
-      w.forEach((waypoint) => delete waypoint.jiggle);
-      if (endpointJiggle) w[n - 1].jiggle = endpointJiggle;
-      const sv = d.startVel, gv = d.goalVel; d.startVel = gv; d.goalVel = sv;
-      if (endpointJiggle) d.goalVel = 0;
-      w[0].thetaOn = true; w[n - 1].thetaOn = true; return d;
-    }), [commit]);
-    const reorderWp = useCallback((from, to) => commit((d) => {
-      const w = d.waypoints; if (to < 0 || to >= w.length || from === to) return d;
-      const endpointJiggle = w[w.length - 1].jiggle ? { ...w[w.length - 1].jiggle } : null;
-      const order = Array.from({ length: w.length }, (_, index) => index);
+    const duplicateWp = useCallback((i) => commit((d) => duplicateWaypoint(d, i)), [commit]);
+    const reversePath = useCallback(() => reverseDistance == null ? undefined : commit((path) => { reversePathDraft(path); return PM.reversePathAnchors(path, reverseDistance); }), [commit, reverseDistance]);
+    const reorderWp = useCallback((from, to) => commit((d) => reorderWaypoint(d, from, to)), [commit]);
     const insertWp = useCallback((i) => {
       const pts = derived.sample.pts;
       if (!pts || pts.length < 2) return;
