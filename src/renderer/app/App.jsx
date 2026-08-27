@@ -713,10 +713,19 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       editStore.update(fn(clone(draft)));
     }, [editStore, writeDoc]);
 
+    });
+
     const undo = useCallback(() => {
       if (cancelEdit()) return;
       const H = hist.current;
-      if (H.past.length) { H.future.push(clone(docRef.current)); writeDoc(H.past.pop()); force((x) => x + 1); return; }
+      if (H.past.length) {
+        const previous = H.past.pop();
+        if (previous.waypointSnapshot) {
+          H.future.push({ waypointSnapshot: waypointSnapshot(project) });
+          setProject((current) => restoreWaypointSnapshot(current, previous.waypointSnapshot)); setPlanningInputRevision((value) => value + 1);
+        } else { H.future.push(clone(docRef.current)); writeDoc(previous); }
+        force((x) => x + 1); return;
+      }
       const R = routineHist.current;
       if (R.past.length) {
         R.future.push(clone(routineState(project)));
@@ -731,7 +740,14 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     const redo = useCallback(() => {
       if (cancelEdit()) return;
       const H = hist.current;
-      if (H.future.length) { H.past.push(clone(docRef.current)); writeDoc(H.future.pop()); force((x) => x + 1); return; }
+      if (H.future.length) {
+        const next = H.future.pop();
+        if (next.waypointSnapshot) {
+          H.past.push({ waypointSnapshot: waypointSnapshot(project) });
+          setProject((current) => restoreWaypointSnapshot(current, next.waypointSnapshot)); setPlanningInputRevision((value) => value + 1);
+        } else { H.past.push(clone(docRef.current)); writeDoc(next); }
+        force((x) => x + 1); return;
+      }
       const R = routineHist.current;
       if (R.future.length) {
         R.past.push(clone(routineState(project)));
@@ -745,12 +761,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     }, [cancelEdit, writeDoc, project, activeIdx]);
 
     const select = useCallback((kind, idx) => setSel(kind ? { kind, idx } : { kind: null, idx: -1 }), []);
-    // ---- field actions ----
-    const moveWaypoint = useCallback((i, p) => mutate((d) => {
-      p = clampWorld(p);
-      const w = d.waypoints[i]; const dx = p.x - w.x, dy = p.y - w.y;
-      w.x = p.x; w.y = p.y; w.prevC.x += dx; w.prevC.y += dy; w.nextC.x += dx; w.nextC.y += dy; return d;
-    }), [mutate]);
+    const moveWaypoint = useCallback((i, point) => mutate((path) => moveWaypointTo(path, i, point)), [mutate]);
     const moveHandle = useCallback((i, which, p) => mutate((d) => {
       const w = d.waypoints[i]; const key = which ? 'nextC' : 'prevC'; const other = which ? 'prevC' : 'nextC';
       w[key] = { x: p.x, y: p.y };
@@ -762,6 +773,12 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       }
       return d;
     }), [mutate]);
+    const applyBrush = useCallback((stroke) => {
+      const result = applyBrushDraft(editStore, docRef.current, stroke);
+      if (!result.changed) return false;
+      syncBrushSelection(selRef, result.beforeWaypoints, result.path.waypoints, select);
+      return true;
+    }, [editStore, select]);
     const prepareWaypointInsertion = useCallback((rawPoint, segmentHint, onPath, selectedVisit) => {
       const p = clampWorld(rawPoint);
       const candidate = clone(docRef.current);
@@ -827,17 +844,12 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     const addWaypoint = useCallback((p, segmentHint, onPath, selectedVisit) => {
       const prepared = prepareWaypointInsertion(p, segmentHint, onPath, selectedVisit);
       if (prepared.previewRequired) {
-        try {
-          const previewDerived = PM.derivePath(prepared.doc, robot, PERSEG, plannerId);
-          const message = 'Splitting this ' + prepared.segmentType + ' may rebuild its geometry. Review the dashed path first.';
-          setWaypointPreview({ ...prepared, derived: previewDerived, plannerId, message });
-        } catch (error) {
-          console.error('Could not preview waypoint insertion:', error);
-        }
+        const message = 'Splitting this ' + prepared.segmentType + ' may rebuild its geometry. Review the dashed path first.';
+        setWaypointPreviewRequest({ ...prepared, plannerId, message });
         return;
       }
       commit(() => prepared.doc);
-    }, [commit, plannerId, prepareWaypointInsertion, robot]);
+    }, [commit, plannerId, prepareWaypointInsertion]);
     const appendWaypoint = useCallback((rawPoint) => {
       const point = clampWorld(rawPoint);
       const candidate = clone(docRef.current);
@@ -878,17 +890,12 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       candidate._selAfter = oldCount;
 
       if (segmentType === 'clothoid') {
-        try {
-          const previewDerived = PM.derivePath(candidate, robot, PERSEG, plannerId);
-          const message = 'The new clothoid join may rebuild the previous turn. Review the dashed path first.';
-          setWaypointPreview({ doc: candidate, index: oldCount, derived: previewDerived, plannerId, message, actionLabel: 'Place endpoint' });
-        } catch (error) {
-          console.error('Could not preview waypoint placement:', error);
-        }
+        const message = 'The new clothoid join may rebuild the previous turn. Review the dashed path first.';
+        setWaypointPreviewRequest({ doc: candidate, index: oldCount, plannerId, message, actionLabel: 'Place endpoint' });
         return;
       }
       commit(() => candidate);
-    }, [commit, plannerId, robot]);
+    }, [commit, plannerId]);
     const setJiggle = useCallback((options) => {
       if (!options) {
         commit((d) => { delete d.waypoints[d.waypoints.length - 1].jiggle; return d; });
@@ -917,39 +924,43 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       return true;
     }, [commit, derived]);
     const applyWaypointPreview = useCallback(() => {
-      if (!waypointPreview) return;
+      if (!waypointPreview?.derived) return;
       commit(() => waypointPreview.doc);
-      setWaypointPreview(null);
+      setWaypointPreviewRequest(null);
     }, [commit, waypointPreview]);
-    useEffect(() => { setWaypointPreview(null); }, [doc, plannerId]);
+    useEffect(() => { setWaypointPreviewRequest(null); }, [doc, robot, plannerId]);
     useEffect(() => { if (doc._selAfter != null) { select('wp', doc._selAfter); mutate((d) => { delete d._selAfter; return d; }); } }, [doc._selAfter]);
 
     const setWp = useCallback((i, patch) => commit((d) => {
       const w = d.waypoints[i];
       if (patch.x != null || patch.y != null) {
         const next = clampWorld({ x: patch.x != null ? patch.x : w.x, y: patch.y != null ? patch.y : w.y });
+        moveWaypointTo(d, i, next);
         patch = { ...patch, x: next.x, y: next.y };
       }
-      Object.assign(w, patch); return d;
+      Object.assign(w, patch);
+      if (patch.theta != null && i === 0) setWaypointFacing(d, i, patch.theta);
+      return d;
     }), [commit]);
+    const setWaypointPositionLink = (index, target) => {
+      const before = materializeProject();
+      finishEdit();
+      const next = target
+        ? PathLinks.linkPosition(before, doc.id, index, target.pathId, target.index, pathLinkId())
+        : PathLinks.unlinkPosition(before, doc.id, index);
+      commitWaypointProject(before, next);
+    };
+    const commitWaypointProject = (before, next) => {
+      if (next === before) return;
+      hist.current.past.push({ waypointSnapshot: waypointSnapshot(before) });
+      if (hist.current.past.length > 80) hist.current.past.shift();
+      hist.current.future = []; projectHist.current.future = [];
+      setProject(next); setPlanningInputRevision((value) => value + 1);
+      force((value) => value + 1);
+    };
     const toggleTheta = useCallback((i, on) => commit((d) => { d.waypoints[i].thetaOn = on; return d; }), [commit]);
     const setHandleLen = useCallback((i, key, len) => commit((d) => { const w = d.waypoints[i]; const a = Math.atan2(w[key].y - w.y, w[key].x - w.x); w[key] = { x: w.x + Math.cos(a) * len, y: w.y + Math.sin(a) * len }; return d; }), [commit]);
-    const delWp = useCallback((i) => { commit((d) => {
-      if (d.waypoints.length <= 2 || i < 0 || i >= d.waypoints.length) return d;
-      const oldCount = d.waypoints.length;
-      const endpointJiggle = i === oldCount - 1 && d.waypoints[i].jiggle ? { ...d.waypoints[i].jiggle } : null;
-      const indexMap = Array.from({ length: oldCount }, (_, index) => index === i ? null : index < i ? index : index - 1);
-      d.waypoints.splice(i, 1);
-      const last = d.waypoints.length - 1;
-      remapWaypointRanges(d, indexMap, i);
-      delete d.waypoints[last].segmentHeadingMode;
-      delete d.waypoints[last].segmentLookAt;
-      delete d.waypoints[0].headingTransition;
-      delete d.waypoints[last].headingTransition;
-      if (endpointJiggle) d.waypoints[last].jiggle = endpointJiggle;
-      d.waypoints[0].thetaOn = true; d.waypoints[last].thetaOn = true;
-      return d;
-    }); select(null, -1); }, [commit, select]);
+    const delWp = useCallback((i) => { commit((d) => removeWaypoint(d, i)); select(null, -1); }, [commit, select]);
 
     const enableTargetsAtFraction = (d, f) => {
       const fractions = derived.wpFrac || PM.waypointFracs(d, derived.sample);
@@ -1044,6 +1055,9 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
 
     const setConstraint = useCallback((patch) => commit((d) => { Object.assign(d.constraints, patch); return d; }), [commit]);
     const setDoc = useCallback((patch) => commit((d) => Object.assign(d, patch)), [commit]);
+    const setRobot = useCallback((patch) => {
+      setPlanningInputRevision((revision) => revision + 1);
+      setProject((pr) => ({ ...pr, robot: { ...pr.robot, ...patch } }));
     }, []);
 
     const addTargetMid = useCallback(() => commit((d) => {
