@@ -1,3 +1,91 @@
+const { app, BrowserWindow, ipcMain } = require('electron');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const output = process.env.BORDEAUX_LIBRARY_UI_OUTPUT;
+app.setPath('userData', path.join(output, 'user-data'));
+const errors = [], checks = [], prepared = [], diagnosticPreviews = [], diagnosticSaves = [];
+let win, saved, finishPush;
+let connectionFromSettings = false;
+let deferInspection = false, finishInspection;
+const inspection = () => ({ verifiedAt: new Date().toISOString(), comparison: { paths: {}, routines: {} }, status: { activeRevision: 'fixture-revision', retainedRevisions: [] } });
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const evaluate = (fn, ...args) => win.webContents.executeJavaScript(`(${fn.toString()})(...${JSON.stringify(args)})`, true);
+async function wait(fn, label) { for (let i = 0; i < 200; i++) { if (await fn()) return; await delay(50); } throw new Error('Timed out: ' + label); }
+async function click(selector, text) {
+  if (selector === '.library-connection' && !(await evaluate(() => document.querySelector('.settings-general')))) {
+    await click('.pageswitch button', 'Settings'); connectionFromSettings = true;
+  }
+  await wait(() => evaluate((selector, text) => {
+    const el = [...document.querySelectorAll(selector)].find((item) => text == null || item.textContent.trim() === text);
+    return Boolean(el && !el.disabled && !el.closest('[inert]'));
+  }, selector, text), 'ready control: ' + selector + ' ' + text);
+  await evaluate((selector, text) => {
+    const el = [...document.querySelectorAll(selector)].find((item) => text == null || item.textContent.trim() === text);
+    if (!el || el.disabled || el.closest('[inert]')) throw new Error('Unavailable: ' + selector + ' ' + text);
+    el.click();
+  }, selector, text); await delay(50);
+  if (connectionFromSettings && (selector === '[aria-label="Close robot connection"]' || selector === '[aria-label="Close diagnostic bundle"]')) {
+    connectionFromSettings = false; await click('.pageswitch button', 'Editor');
+  }
+}
+async function pointerClick(selector, modifiers = []) {
+  const point = await evaluate((selector) => {
+    const el = document.querySelector(selector);
+    if (!el || el.disabled || el.closest('[inert]')) throw new Error('Unavailable pointer target: ' + selector);
+    el.scrollIntoView({ block: 'nearest' });
+    const r = el.getBoundingClientRect();
+    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+  }, selector);
+  win.webContents.sendInputEvent({ type: 'mouseMove', ...point });
+  win.webContents.sendInputEvent({ type: 'mouseDown', ...point, button: 'left', clickCount: 1, modifiers });
+  win.webContents.sendInputEvent({ type: 'mouseUp', ...point, button: 'left', clickCount: 1, modifiers });
+  await delay(80);
+}
+async function key(keyCode, modifiers = []) {
+  win.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
+  win.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
+  await delay(60);
+}
+async function input(selector, value) {
+  await evaluate((selector, value) => {
+    const el = document.querySelector(selector);
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }, selector, value); await delay(50);
+}
+const check = (name) => { checks.push(name); console.log('PASS ' + name); };
+ipcMain.handle('library:restore', () => ({ project: saved }));
+ipcMain.handle('library:save', (_event, project) => { saved = project; return { saved: true }; });
+ipcMain.handle('library:diagnostic-preview', (_event, project) => {
+  diagnosticPreviews.push(project);
+  return { previewId: 'fixture-preview-capability', contents: JSON.stringify({ version: 'fixture', project: project.name }) };
+});
+ipcMain.handle('library:diagnostic-save', (_event, previewId) => {
+  assert.equal(previewId, 'fixture-preview-capability'); diagnosticSaves.push(previewId);
+  return { saved: true };
+});
+ipcMain.handle('library:prepare', (_event, project, scope) => {
+  prepared.push({ project, scope });
+  const selected = scope.kind === 'paths' ? project.paths.filter((item) => scope.pathIds.includes(item.id)) : project.routines.filter((item) => item.id === scope.routineId);
+  return { operationId: 'fixture-operation', robot: 'Team 2468', project: project.name, catalog: 'Fixture catalog', revision: 'fixture-revision', payloadHash: 'fixture-hash', size: 100,
+    summary: { kind: scope.kind, pathIds: scope.pathIds || [], selectedNames: selected.map((item) => item.name), addedNames: [], updatedNames: selected.map((item) => item.name), preservedPathCount: project.paths.length - (scope.pathIds?.length || 0), routine: 'Routine A' } };
+});
+ipcMain.handle('library:confirm', () => new Promise((resolve) => { finishPush = resolve; }));
+ipcMain.handle('library:inspect', () => deferInspection ? new Promise((resolve) => { finishInspection = resolve; }) : inspection());
+app.whenReady().then(async () => {
+  try {
+    const corpus = JSON.parse(await fs.readFile(path.resolve('benchmarks/planner-corpus/v1/corpus.bordeaux.json'), 'utf8'));
+    const source = corpus.paths.find((item) => item.id === 'corpus-neutral-stop');
+    saved = { ...corpus, name: 'Library verification', paths: Array.from({ length: 200 }, (_, index) => ({ ...structuredClone(source), id: 'library-path-' + index, name: index === 0 ? 'Opening move' : index === 1 ? 'Collect second' : 'Practice path ' + index, folderId: 'center' })),
+      pathFolders: [{ id: 'center', name: 'Center' }, { id: 'side', name: 'Side' }], pathLinks: [],
+      routines: [{ id: 'routine-a', name: 'Routine A', nodes: [{ id: 'step-a', type: 'path', ref: 'library-path-0' }, { id: 'decision-a', type: 'decision', cond: '', thenLabel: 'Piece collected', elseLabel: 'Try again', then: [{ id: 'step-then', type: 'path', ref: 'library-path-1' }], else: [{ id: 'step-else', type: 'path', ref: 'library-path-0' }] }, { id: 'step-finish', type: 'path', ref: 'library-path-1' }] }, { id: 'routine-b', name: 'Routine B', nodes: [] }], activeRoutineId: 'routine-a', editor: { activePathId: 'library-path-0' } };
+    win = new BrowserWindow({ show: false, width: 1440, height: 900, useContentSize: true, webPreferences: { contextIsolation: true, sandbox: false, backgroundThrottling: false, preload: path.join(__dirname, 'verify-library-ui-preload.cjs') } });
+    win.webContents.on('console-message', (details) => { if (details.level === 'error' && !details.message.startsWith("Loading the font 'data:font/woff2")) errors.push(details.message); });
+    await win.loadFile(path.resolve('dist-renderer/index.html'));
+    await wait(() => evaluate(() => document.querySelector('.library-current-name')?.textContent === 'Opening move'), 'restored library');
+    assert.equal(await evaluate(() => document.querySelectorAll('.library-pick').length), 200);
+    assert.equal(await evaluate(() => document.querySelectorAll('.library-row input[type="checkbox"]').length), 0, 'Normal browsing must not show batch-selection controls');
     assert.equal(await evaluate(() => document.querySelectorAll('.toolbar .library-connection,.toolbar .document-settings-trigger,.toolbar .exportjava').length), 0);
     await click('.pageswitch button', 'Settings');
     assert.equal(await evaluate(() => !!document.querySelector('.settings-general .library-connection')), true);
