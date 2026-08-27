@@ -1205,19 +1205,6 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       const w = d.waypoints; if (to < 0 || to >= w.length || from === to) return d;
       const endpointJiggle = w[w.length - 1].jiggle ? { ...w[w.length - 1].jiggle } : null;
       const order = Array.from({ length: w.length }, (_, index) => index);
-      const [oldIndex] = order.splice(from, 1); order.splice(to, 0, oldIndex);
-      const indexMap = []; order.forEach((value, index) => { indexMap[value] = index; });
-      const [m] = w.splice(from, 1); w.splice(to, 0, m);
-      w.forEach((waypoint) => delete waypoint.jiggle);
-      if (endpointJiggle) w[w.length - 1].jiggle = endpointJiggle;
-      delete w[w.length - 1].segmentHeadingMode;
-      delete w[w.length - 1].segmentFollowMode;
-      delete w[w.length - 1].segmentLookAt;
-      delete w[0].headingTransition;
-      delete w[w.length - 1].headingTransition;
-      remapWaypointRanges(d, indexMap);
-      w[0].thetaOn = true; w[w.length - 1].thetaOn = true; d._selAfter = to; return d;
-    }), [commit]);
     const insertWp = useCallback((i) => {
       const pts = derived.sample.pts;
       if (!pts || pts.length < 2) return;
@@ -1227,40 +1214,38 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     }, [addWaypoint, derived, doc.waypoints.length]);
     const inspActions = { setWp, toggleTheta, setHandleLen, delWp, setTarget, delTarget, setMarker, delMarker, setRange, setRangeAnchor, delRange, setConstraint, setDoc, select, setTool,
       addTargetMid, addMarkerMid, addRangeMid,
-      setSegMeta, setSegmentHeadingMode, setHeadingTransition, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, reorderWp, insertWp,
+      setSegMeta, setSegmentHeadingMode, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, canReversePath: reverseDistance != null, reorderWp, insertWp,
       setStop, setWait, setTurnInPlace, setTurnInPlaceMeta, setHeadingMode, toggleDriveBackward,
       openInspector: () => setInspectorOpen(true) };
-    const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginEdit, finishEdit, cancelEdit,
+    const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, applyBrush, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginEdit, finishEdit, cancelEdit,
       setWaypointHeading, moveSegmentLookAt, headingMenu, faceWaypoint, delWp, delTarget, delMarker, delRange,
       openInspector: () => setInspectorOpen(true),
       select };
 
-    // ---- project ops ----
-    const uniquePathName = (base) => {
-      const used = new Set(project.paths.map((path) => path.name.toLowerCase()));
-      if (!used.has(base.toLowerCase())) return base;
-      let suffix = 2;
-      while (used.has((base + ' ' + suffix).toLowerCase())) suffix++;
-      return base + ' ' + suffix;
-    };
+    const uniquePathName = (base) => uniqueItemName(project.paths, base);
     const resetForPath = (i) => {
-      cancelEdit();
+      finishEdit();
+      routinePlaybackStore.reset();
+      if (i !== activeIdx) setPlanningInputRevision(0);
       setActiveIdx(i); setSel({ kind: null, idx: -1 }); playbackStore.reset();
       hist.current = { past: [], future: [] }; setPage('plan');
     };
     const updatePathLibrary = (update) => {
-      cancelEdit();
+      finishEdit();
       setProject(update);
     };
     const addPath = (folderId) => {
+      finishEdit();
       const name = uniquePathName('New path'), index = project.paths.length;
-      const path = blankPath(name); if (folderId) path.folderId = folderId;
+      const path = blankPath(name, robot); if (folderId) path.folderId = folderId;
       setProject((pr) => ({ ...pr, paths: [...pr.paths, path] })); resetForPath(index);
-      return { index, name, id: path.id };
+      return { index, name, id: path.id, folderId: path.folderId };
     };
-    const appendPath = () => {
-      const source = project.paths[activeIdx]; if (!source) return null;
-      const name = uniquePathName('New path'), index = project.paths.length, path = blankPath(name);
+    const appendPath = (sourceId) => {
+      const paths = materializeProject().paths;
+      const source = sourceId ? paths.find((path) => path.id === sourceId) : paths[activeIdx]; if (!source) return null;
+      finishEdit();
+      const name = uniquePathName('New path'), index = project.paths.length, path = blankPath(name, robot);
       const start = source.waypoints[source.waypoints.length - 1], angle = (start.theta || 0) * Math.PI / 180;
       let end = clampWorld({ x: start.x + Math.cos(angle) * 2.8, y: start.y + Math.sin(angle) * 2.8 });
       if (Math.hypot(end.x - start.x, end.y - start.y) < 0.75) {
@@ -1271,29 +1256,33 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       if (source.folderId) path.folderId = source.folderId;
       const link = { id: pathLinkId(), fromPathId: source.id, toPathId: path.id };
       setProject((pr) => ({ ...pr, paths: [...pr.paths, path], pathLinks: [...(pr.pathLinks || []).filter((item) => item.fromPathId !== source.id), link] }));
-      resetForPath(index); return { index, name, id: path.id };
+      resetForPath(index); return { index, name, id: path.id, folderId: path.folderId };
     };
-    const setPathLink = (fromPathId, toPathId) => updatePathLibrary((pr) => {
+    const setPathLink = (fromPathId, toPathId) => {
+      const pr = materializeProject(); finishEdit();
       let pathLinks = (pr.pathLinks || []).filter((link) => link.fromPathId !== fromPathId);
-      if (!toPathId || fromPathId === toPathId) return { ...pr, pathLinks };
+      if (!toPathId || fromPathId === toPathId) { commitWaypointProject(pr, { ...pr, pathLinks }); return; }
       pathLinks = pathLinks.filter((link) => link.toPathId !== toPathId);
       const paths = pr.paths.slice(), source = paths.find((path) => path.id === fromPathId), targetIndex = paths.findIndex((path) => path.id === toPathId);
-      if (!source || targetIndex < 0) return pr;
+      if (!source || targetIndex < 0) return;
       const target = clone(paths[targetIndex]), end = source.waypoints[source.waypoints.length - 1];
       target.waypoints[0] = PathLinks.copyPose(target.waypoints[0], end); paths[targetIndex] = target;
-      return { ...pr, paths, pathLinks: [...pathLinks, { id: pathLinkId(), fromPathId, toPathId }] };
-    });
+      const next = { ...pr, paths, pathLinks: [...pathLinks, { id: pathLinkId(), fromPathId, toPathId }] };
+      commitWaypointProject(pr, PathLinks.sync(next, target.id, pr.paths[targetIndex]));
+    };
     const dupPath = (i) => {
-      const source = project.paths[i]; if (!source) return null;
+      const source = materializeProject().paths[i]; if (!source) return null;
+      finishEdit();
       const name = uniquePathName(source.name + ' copy'), index = i + 1;
-      setProject((pr) => { const cp = clone(pr.paths[i]); cp.id = pathId(); cp.name = name; const paths = pr.paths.slice(); paths.splice(index, 0, cp); return { ...pr, paths }; });
-      resetForPath(index); return { index, name, id: null };
+      const cp = duplicatePathForLibrary(source, name);
+      setProject((pr) => { const paths = pr.paths.slice(); paths.splice(index, 0, cp); return { ...pr, paths }; });
+      resetForPath(index); return { index, name, id: cp.id, folderId: cp.folderId };
     };
     const delPath = (i) => {
       if (project.paths.length <= 1) return false;
-      const target = project.paths[i]; let referenced = false;
-      routines.forEach((candidate) => AUTO.walk(candidate.nodes, (node) => { if (node.type === 'path' && node.ref === target.id) referenced = true; }));
-      if (referenced) { alert('“' + target.name + '” is used by an autonomous routine. Remove those routine steps before deleting the path.'); return false; }
+      const target = project.paths[i]; if (!target) return false;
+      const references = referencingRoutines(routines, target.id);
+      if (references.length) { alert('“' + target.name + '” is used by ' + references.map((candidate) => candidate.name).join(', ') + '. Remove those steps before deleting the path.'); return false; }
       if (!confirm('Delete path “' + target.name + '”? This cannot be undone.')) return false;
       updatePathLibrary((pr) => { const paths = pr.paths.filter((_, k) => k !== i); return { ...pr, paths, pathLinks: (pr.pathLinks || []).filter((link) => link.fromPathId !== target.id && link.toPathId !== target.id) }; });
       setActiveIdx((a) => Math.max(0, a > i ? a - 1 : a === i ? Math.min(a, project.paths.length - 2) : a));
@@ -1302,8 +1291,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     };
     const renamePath = (i, name) => { const clean = (name || '').trim(); if (!clean) return false; updatePathLibrary((pr) => { const paths = pr.paths.slice(); paths[i] = { ...paths[i], name: clean }; return { ...pr, paths }; }); return true; };
     const addPathFolder = () => {
-      const folders = project.pathFolders || [], used = new Set(folders.map((folder) => folder.name.toLowerCase()));
-      let name = 'New folder', suffix = 2; while (used.has(name.toLowerCase())) name = 'New folder ' + suffix++;
+      const folders = project.pathFolders || [], name = uniqueItemName(folders, 'New folder');
       const folder = { id: 'folder_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)), name };
       setProject((pr) => ({ ...pr, pathFolders: [...(pr.pathFolders || []), folder] }));
       return folder;
@@ -1322,22 +1310,20 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     const movePathToFolder = (i, folderId) => updatePathLibrary((pr) => ({ ...pr, paths: pr.paths.map((path, index) => {
       if (index !== i) return path; const next = { ...path }; if (folderId) next.folderId = folderId; else delete next.folderId; return next;
     }) }));
-    const setActive = (i) => resetForPath(i);
+    const setActive = (i) => { if (i === activeIdx && page === 'plan') return; setComparison(null); resetForPath(i); };
     const resetForRoutine = () => {
       setRoutineSel(null); routinePlaybackStore.reset(); setRoutineOutcomes({});
     };
-    const uniqueRoutineName = (base) => {
-      const used = new Set(routines.map((candidate) => candidate.name.toLowerCase()));
-      if (!used.has(base.toLowerCase())) return base;
-      let suffix = 2; while (used.has((base + ' ' + suffix).toLowerCase())) suffix++;
-      return base + ' ' + suffix;
-    };
+    const uniqueRoutineName = (base) => uniqueItemName(routines, base);
     const setActiveRoutine = (id) => {
+      if (id === routine.id && page === 'auto') return;
+      finishEdit(); playbackStore.reset();
       if (!routines.some((candidate) => candidate.id === id)) return;
       setProject((current) => withRoutineState(current, { ...routineState(current), activeRoutineId: id }));
       routineHist.current = { past: [], future: [] }; resetForRoutine(); setPage('auto');
     };
     const addRoutine = () => {
+      finishEdit(); playbackStore.reset();
       const created = blankRoutine(uniqueRoutineName('New routine'));
       commitRoutineState((state) => ({ routines: [...state.routines, created], activeRoutineId: created.id }));
       resetForRoutine(); setPage('auto'); return created;
@@ -1361,13 +1347,14 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     };
     const agentCandidates = agentProposal && Array.isArray(agentProposal.candidates) ? agentProposal.candidates : [];
     const agentCandidate = agentCandidates.find((candidate) => candidate.id === agentCandidateId) || agentCandidates[0] || null;
-    const agentProposalPreviews = useMemo(() => agentCandidates.flatMap((candidate) => {
-      if (!candidate.path) return [];
-      try {
-        return [{ id: candidate.id, label: candidate.label, selected: candidate.id === (agentCandidate && agentCandidate.id), valid: candidate.valid !== false, derived: PM.derivePath(candidate.path, robot, PERSEG, plannerId) }];
+    const agentPreviewRequest = useMemo(() => agentCandidate?.path ? { candidate: agentCandidate, robot, plannerId } : null, [agentCandidate, robot, plannerId]);
+    useEffect(() => {
+      if (agentProposal?.status === 'ready' && agentPreviewRequest) {
+        agentPreviewer.request({ key: agentPreviewRequest, path: agentPreviewRequest.candidate.path, robot, plannerId, quality: 'final' });
       }
-      catch (_) { return []; }
-    }), [agentProposal, agentCandidateId, robot, plannerId]);
+    }, [agentPreviewer, agentProposal, agentPreviewRequest, robot, plannerId]);
+    const agentProposalPreview = agentProposalPreviewResult(agentPreview, agentCandidate, agentPreviewRequest, plannerId);
+    const agentProposalCanApplyCandidate = canApplyAgentProposalCandidate(agentProposal, agentCandidate, agentProposalPreview);
     const rejectAgentProposal = useCallback(() => {
       if (!agentProposal) return;
       if (window.bordeauxAPI && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(agentProposal.id, 'rejected');
@@ -1388,6 +1375,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       });
       if (!agentProposal || agentProposal.status !== 'ready' || !contextMatches
         || !proposalContext || proposalContext.published !== publishedContext || proposalContext.id !== agentProposal.id
+        || javaProjectState.operation || !agentProposalCanApplyCandidate
         || (agentProposal.blockingIssues && agentProposal.blockingIssues.length)) return;
       const before = { project: clone(project), activeIdx };
       let nextIndex = activeIdx;
