@@ -1536,14 +1536,17 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
           const editRevision = editStore.getRevision();
           const result = await window.bordeauxAPI.saveProject(materializeProject(), saveAs === true);
           if (result && result.canceled) return;
-          if (sourceProject === projectRef.current && editRevision === editStore.getRevision()) updateDirty(false);
+            editRevision: editStore.getRevision(),
+            draftGeneration: draftInputGeneration.current,
+          })) updateDirty(false);
         } catch (error) {
           alert('Could not save project: ' + (error && error.message ? error.message : error));
         }
       });
-    }, [editStore, enqueuePersistence, materializeProject, updateDirty]);
+    }, [editStore, enqueuePersistence, flushProjectDraft, materializeProject, updateDirty]);
 
     const onExportJava = useCallback(async (destination) => {
+      if (!flushProjectDraft()) return;
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.exportJava !== 'function') {
         setExportError('Java trajectory export is available in the Bordeaux desktop app.');
         return;
@@ -1567,7 +1570,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
         setJavaProjectState((current) => ({ ...current, operation: null }));
         setExportError(message);
       }
-    }, [javaProjectState.catalog, materializeProject]);
+    }, [flushProjectDraft, javaProjectState.catalog, materializeProject]);
 
     useEffect(() => {
       if (!window.bordeauxAPI) return undefined;
@@ -1586,13 +1589,14 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       });
     }, [newProject, openProject, saveProject, onExportJava, linkJavaProject, installJavaSupport, buildJavaCatalog, cancelJavaCatalogBuild]);
 
-    // ---- keyboard ----
     useEffect(() => {
       const onKey = (e) => {
+        if (e.defaultPrevented || document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')) return;
+        if (e.target.closest && e.target.closest('.editor-library,.library-divider,[role="menu"]')) return;
         const matches = e.target.matches && e.target.matches.bind(e.target);
         if (e.key === 'Tab') { keyboardNavigation.current = true; return; }
         const nativeKeyboardControl = keyboardNavigation.current && matches && matches('button,select,input[type="range"]');
-        const textEditing = nativeKeyboardControl || (matches && (matches('textarea,[contenteditable="true"]') || (matches('input:not([type="range"])') && !matches('.numinput'))));
+        const textEditing = nativeKeyboardControl || e.target.isContentEditable || (matches && matches('textarea,input:not([type="range"])'));
         const k = e.key.toLowerCase();
         if (page === 'plan' && e.key === ' ' && !textEditing) {
           e.preventDefault();
@@ -1601,7 +1605,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
           playbackStore.toggle();
           return;
         }
-        const toolShortcut = !e.metaKey && !e.ctrlKey && !e.altKey && !textEditing && ({ '1': 'select', '2': 'waypoint', '3': 'rotation', '4': 'marker', '5': 'range', v: 'select', w: 'waypoint', r: 'rotation', m: 'marker', c: 'range' })[k];
+        const toolShortcut = !e.metaKey && !e.ctrlKey && !e.altKey && !textEditing && ({ '1': 'select', '2': 'waypoint', '3': 'rotation', '4': 'marker', '5': 'range', '6': 'brush', v: 'select', w: 'waypoint', r: 'rotation', m: 'marker', c: 'range', b: 'brush' })[k];
         if (page === 'plan' && toolShortcut) {
           e.preventDefault();
           if (typeof e.target.blur === 'function') e.target.blur();
@@ -1610,6 +1614,16 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
         }
         const formControl = matches && matches('input,select,textarea,[contenteditable="true"]');
         if (formControl) return;
+        // Bracket radius nudges sit below the form-control guard so a focused field
+        // (including .numinput, which tool shortcuts deliberately pass through) keeps its
+        // keystrokes. FieldView's visit cycling binds the same keys in the capture phase,
+        // so defer to it when it claimed the event.
+        if (page === 'plan' && tool === 'brush' && !e.defaultPrevented && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === '[' || e.key === ']')) {
+          e.preventDefault();
+          const direction = e.key === ']' ? 1 : -1;
+          setBrush((current) => ({ ...current, radius: Math.max(0.3, Math.min(2.4, +(current.radius + direction * 0.1).toFixed(1))) }));
+          return;
+        }
         if ((e.metaKey || e.ctrlKey) && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
         if ((e.metaKey || e.ctrlKey) && k === 'y') { e.preventDefault(); redo(); return; }
         if (page !== 'plan') return;
@@ -1628,36 +1642,82 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
         }
         if (k === 'g') setShowGrid((s) => !s);
         else if (k === 'f') setView(FIT);
-        else if (e.key === 'Escape') { setTool('select'); setHeadMenu(null); setWaypointPreview(null); select(null, -1); }
+        else if (e.key === 'Escape') { setTool('select'); setHeadMenu(null); setWaypointPreviewRequest(null); select(null, -1); }
         else if ((e.key === 'Backspace' || e.key === 'Delete') && sel.kind) {
           if (sel.kind === 'wp') delWp(sel.idx); else if (sel.kind === 'rt') delTarget(sel.idx); else if (sel.kind === 'em') delMarker(sel.idx); else if (sel.kind === 'cr') delRange(sel.idx);
         }
       };
       window.addEventListener('keydown', onKey);
       return () => window.removeEventListener('keydown', onKey);
-    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, derivationCurrent, nudgeWp, nudgeFrac, playbackStore]);
+    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, tool, derivationCurrent, nudgeWp, nudgeFrac, playbackStore]);
+
+    const pathIndex = (id) => project.paths.findIndex((path) => path.id === id);
+    const renderLibrary = (mode, structure) => h(LibraryRail, {
+      key: projectKey + ':' + mode, preferenceKey: libraryPreferenceKey, mode, project, routines,
+      activePathId: doc.id, activeRoutineId: routine.id, times,
+      onMode: (next) => next === 'paths' ? setActive(activeIdx) : setActiveRoutine(routine.id),
+      onPath: (id) => { const index = pathIndex(id); if (index >= 0) setActive(index); }, onRoutine: setActiveRoutine,
+      controller: { ...pushController, requestPush: (scope) => { flushSync(() => finishEdit()); pushController.requestPush(scope); } },
+      actions: { addPath, appendPath, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine,
+        duplicatePath: (id) => dupPath(pathIndex(id)), deletePath: (id) => delPath(pathIndex(id)), renamePath: (id, name) => renamePath(pathIndex(id), name),
+        addFolder: addPathFolder, renameFolder: renamePathFolder, deleteFolder: deletePathFolder,
+        movePath: (id, folderId) => movePathToFolder(pathIndex(id), folderId), linkPath: setPathLink },
+    }, structure);
 
     const selNode = (page === 'auto' && routineSel) ? AUTO.findNode(routine, routineSel) : null;
+    const fieldNotices = [
+      exportError && { id: 'export', error: true, label: 'Export failed', detail: exportError,
+        action: { label: 'Dismiss', onClick: () => setExportError('') } },
+      planningNotice && !(optimizationOpen && normalError) && { id: 'planning', error: planningNotice.kind === 'interactive',
+        label: planningNotice.kind === 'interactive' ? 'Trajectory unavailable' : 'Interactive preview',
+        detail: planningNotice.message + (planningNotice.kind === 'interactive' ? ' Undo or adjust the geometry to try again.' : ''),
+        action: !optimizationOpen ? { label: 'Optimize', onClick: () => setOptimizationOpen(true) } : undefined },
+      !selectedPreview && !normalReady && !normal.error && { id: 'loading', label: 'Preparing trajectory…', detail: 'Preview timing is provisional until planning finishes.' },
+      !optimizationOpen && currentOptimization && selectedReady && !accepted && { id: 'optimization', error: true, label: 'Optimization unavailable', detail: 'The saved optimization could not be validated. Review it before using this path.',
+        action: { label: 'Optimize', onClick: () => setOptimizationOpen(true) } },
+    ].filter(Boolean);
+
+
+    if (!derivation.value) {
+      if (derivation.error) throw derivation.error;
+      return h('main', { className: 'fatal-error', role: 'status', 'aria-live': 'polite' },
+        h('h1', null, 'Preparing path preview'),
+        h('p', null, 'Calculating this path off the UI thread…'));
+    }
 
     return h('div', { className: 'app' },
-      h(Panels.Toolbar, { project, page, setPage, alliance, setAlliance, exportError, unitSystem, setUnitSystem, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
-        routines, activeRoutineId: routine.id, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine }),
-      h(RobotPushDialog, { getProject: materializeProject }),
-      h(DiagnosticBundleDialog, { getProject: materializeProject }),
+      h(Panels.Toolbar, { page, setPage: (next) => { finishEdit(); playbackStore.reset(); routinePlaybackStore.reset(); setPage(next); }, editorPage,
+        alliance, setAlliance,
+        onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo,
+        optimizationOpen, toggleOptimization, optimizationApplied: Boolean(accepted) }),
+      h(RobotPushDialog, { controller: pushController }),
+      h(DiagnosticBundleDialog, { getProject: materializeProject, targetSelector: '.robot-connection-diagnostics', onOpen: pushController.close, renderKey: pushController.open + ':' + pushController.phase }),
       page === 'robot'
-        ? h('main', { className: 'page-main' }, h(RobotPage, { robot, setRobot, mcpEnabled, agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
+        ? h('main', { className: 'page-main' }, h(RobotPage, { robot, setRobot, unitSystem, setUnitSystem, pushController, mcpEnabled, agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
         : page === 'auto'
         ? h('main', { className: 'stage stage-auto' },
-            h('nav', { className: 'rail rail-l', 'aria-label': 'Autonomous routine steps' },
-              h(RoutinePanelPlayback, { store: routinePlaybackStore, routine, run, paths: project.paths, selId: routineSel, onSelect: setRoutineSel, acq, catalog: javaProjectState.catalog })),
-            h('div', { className: 'fieldcol' },
-              h(RoutineFieldPlayback, { store: routinePlaybackStore, run, selectedId: routineSel, doc, derived, sel: { kind: null, idx: -1 }, tool: 'select', view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: autoFieldActions }),
-              h(RoutineTransportPlayback, { store: routinePlaybackStore, run }),
-              h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
+            renderLibrary('routines', null),
+            h(RoutineWorkspace, {
+              routine,
+              flow: h(RoutinePanelPlayback, { key: routine.id, embedded: true, collapsedIds: routineCollapsed[projectKey + ':' + routine.id] || [], onCollapsedIdsChange: (ids) => setRoutineCollapsed((current) => ({ ...current, [projectKey + ':' + routine.id]: ids })), store: routinePlaybackStore, routine, run, paths: project.paths, selId: routineSel, onSelect: setRoutineSel, acq, catalog: javaProjectState.catalog }),
+              field: h(React.Fragment, null,
+                h(RoutineFieldPlayback, { store: routinePlaybackStore, run, selectedId: routineSel, doc, derived, sel: { kind: null, idx: -1 }, tool: 'select', view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: autoFieldActions }),
+                h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
+              status: run.blocked && h('div', { className: 'routine-status ' + (run.planningStatus === 'error' ? 'error' : 'planning'), role: run.planningStatus === 'error' ? 'alert' : 'status' },
+                h('span', { className: 'routine-status-icon' }, h(UI.Icon, { name: run.planningStatus === 'error' ? 'info' : 'route', size: 14 })),
+                h('div', { className: 'routine-status-copy' },
+                  h('b', null, run.planningStatus === 'error' ? 'Routine planning failed' : 'Planning routine trajectories…'),
+                  run.planningError && h('span', null, run.planningError))),
+              transport: h(RoutineTransportPlayback, { store: routinePlaybackStore, run }) }),
             h('aside', { className: 'rail rail-r' + (selNode ? '' : ' collapsed'), 'aria-label': 'Routine step inspector' },
               selNode && h(StepInspector, { node: selNode, paths: project.paths, acq, run, javaProject: { ...javaProjectState, link: linkJavaProject }, conditionOptions: AUTO.authoritativeConditions(javaProjectState.catalog) })))
-        : h('main', { className: 'stage stage-plan', inert: derivationCurrent ? undefined : '', 'aria-disabled': derivationCurrent ? undefined : true },
-            h('nav', { className: 'rail rail-l' + (outlineOpen ? '' : ' collapsed'), 'aria-label': 'Path outline' },
+        : h('main', { className: 'stage stage-plan' },
+            renderLibrary('paths', (secOpen, setSecOpen) => h('div', { style: { height: '100%' }, inert: derivationCurrent ? undefined : '' }, h(Panels.Outline, { open: true, setOpen: () => {}, doc: derivationDoc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot, ready: derivationCurrent }))),
+            h('div', { className: 'fieldcol', inert: derivationCurrent ? undefined : '', 'aria-disabled': derivationCurrent ? undefined : true },
+              h(Panels.ToolRail, { tool, setTool, brush, setBrush, waypointCount: derivationDoc.waypoints.length }),
+              h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, derivedPath: derivation.path, robot, plannerId, optimizationCorridor: optimizationOpen && normalReady ? { points: normal.value?.sample.pts, widthM: doc.optimization?.corridorM ?? 0.15 } : null, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreview.previews : [], sel, tool, brush, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, showHandles: true }),
+              h('div', { className: 'field-notices' },
+              h(FieldStatus, { key: doc.id, notices: fieldNotices }),
               tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
               waypointPreview && h('div', { className: 'insert-preview', role: 'region', 'aria-label': 'Preview waypoint insertion' },
                 h('div', { className: 'insert-preview-copy' },
