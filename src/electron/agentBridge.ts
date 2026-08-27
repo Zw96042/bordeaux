@@ -6,7 +6,10 @@ import path from "node:path";
 import type { AgentRequest, AgentSessionService } from "./agentSession";
 
 const MAX_MESSAGE_BYTES = 1024 * 1024;
+const MAX_CHUNKED_MESSAGE_BYTES = 256 * 1024 * 1024;
+const CHUNK_BYTES = 512 * 1024;
 const REQUEST_TIMEOUT_MS = 30_000;
+let bridgeLifecycle: Promise<void> = Promise.resolve();
 
 export interface AgentRuntimeDescriptor {
   schemaVersion: 1;
@@ -24,38 +27,90 @@ interface BridgeEnvelope {
   request: AgentRequest;
 }
 
+interface BridgeChunk {
+  bordeauxBridgeChunk: { index: number; count: number; data: string };
+}
+
 function descriptorPath(userData: string): string {
   return path.join(userData, "mcp", "runtime-v1.json");
 }
 
-function encode(value: unknown): Buffer {
-  const payload = Buffer.from(JSON.stringify(value), "utf8");
+async function removeOwnedDescriptor(userData: string, owner: AgentRuntimeDescriptor): Promise<void> {
+  const target = descriptorPath(userData);
+  let current: AgentRuntimeDescriptor;
+  try { current = JSON.parse(await fs.promises.readFile(target, "utf8")) as AgentRuntimeDescriptor; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof SyntaxError) return;
+    throw error;
+  }
+  if (current.instanceId !== owner.instanceId || current.endpoint !== owner.endpoint || current.token !== owner.token) return;
+  await fs.promises.rm(target, { force: true });
+}
+
+function encodeFrame(payload: Buffer): Buffer {
   if (payload.length > MAX_MESSAGE_BYTES) throw new Error("Agent bridge message exceeds 1 MiB");
   const header = Buffer.alloc(4);
   header.writeUInt32BE(payload.length);
   return Buffer.concat([header, payload]);
 }
 
+async function writeOne(socket: net.Socket, value: unknown): Promise<void> {
+  const payload = Buffer.from(JSON.stringify(value), "utf8");
+  if (payload.length > MAX_CHUNKED_MESSAGE_BYTES) throw new Error("Agent bridge message exceeds 256 MiB");
+  const write = async (frame: Buffer) => {
+    await new Promise<void>((resolve, reject) => {
+      socket.write(frame, (error) => error ? reject(error) : resolve());
+    });
+  };
+  if (payload.length <= MAX_MESSAGE_BYTES) return write(encodeFrame(payload));
+  const count = Math.ceil(payload.length / CHUNK_BYTES);
+  for (let index = 0; index < count; index += 1) {
+    const data = payload.subarray(index * CHUNK_BYTES, Math.min(payload.length, (index + 1) * CHUNK_BYTES)).toString("base64");
+    await write(encodeFrame(Buffer.from(JSON.stringify({ bordeauxBridgeChunk: { index, count, data } } satisfies BridgeChunk), "utf8")));
+  }
+}
+
 function readOne(socket: net.Socket, timeoutMs: number): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    let chunks: Buffer[] = [];
-    let received = 0;
-    let frameSize: number | null = null;
+    let pending: Buffer = Buffer.alloc(0);
+    const messageChunks: Buffer[] = [];
+    let expectedChunk = 0;
+    let expectedCount: number | null = null;
+    let messageBytes = 0;
     const timer = setTimeout(() => finish(new Error("Agent bridge request timed out")), timeoutMs);
     const finish = (error?: Error, value?: unknown) => {
       clearTimeout(timer);
       socket.off("data", onData);
       socket.off("error", onError);
+      socket.off("end", onEnd);
       error ? reject(error) : resolve(value);
     };
     const onError = (error: Error) => finish(error);
+    const onEnd = () => finish(new Error("Agent bridge connection ended before a complete message"));
     const onData = (chunk: Buffer) => {
-      chunks.push(chunk);
-      received += chunk.length;
-      if (frameSize === null && received >= 4) {
-        const header = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, received);
-        frameSize = header.readUInt32BE(0);
+      pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
+      while (pending.length >= 4) {
+        const frameSize = pending.readUInt32BE(0);
         if (frameSize < 2 || frameSize > MAX_MESSAGE_BYTES) return finish(new Error("Agent bridge frame size is invalid"));
+        if (pending.length < frameSize + 4) return;
+        const frame = pending.subarray(4, frameSize + 4);
+        pending = pending.subarray(frameSize + 4);
+        let value: unknown;
+        try { value = JSON.parse(frame.toString("utf8")); }
+        catch { return finish(new Error("Agent bridge returned invalid JSON")); }
+        const chunkValue = (value as Partial<BridgeChunk> | null)?.bordeauxBridgeChunk;
+        if (!chunkValue) {
+          if (expectedCount !== null) return finish(new Error("Agent bridge chunk stream is incomplete"));
+          return finish(undefined, value);
+        }
+        if (!Number.isSafeInteger(chunkValue.index) || !Number.isSafeInteger(chunkValue.count)
+          || chunkValue.index !== expectedChunk || chunkValue.count < 2
+          || chunkValue.count > Math.ceil(MAX_CHUNKED_MESSAGE_BYTES / CHUNK_BYTES)
+          || (expectedCount !== null && chunkValue.count !== expectedCount) || typeof chunkValue.data !== "string") {
+          return finish(new Error("Agent bridge chunk stream is invalid"));
+        }
+        const decoded = Buffer.from(chunkValue.data, "base64");
+        if (decoded.length === 0 || decoded.toString("base64") !== chunkValue.data) return finish(new Error("Agent bridge chunk data is invalid"));
         expectedCount = chunkValue.count;
         expectedChunk += 1;
         messageBytes += decoded.length;
