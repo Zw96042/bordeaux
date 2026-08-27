@@ -1,0 +1,31 @@
+1
+00:00:00,000 --> 00:00:04,000
+Drawing a path is easy. Knowing the run is harder.
+
+2
+00:00:04,000 --> 00:00:06,500
+Bordeaux keeps the constraints in view.
+
+3
+00:00:06,500 --> 00:00:13,000
+Shape the spline. Set headings, events, and local limits right where the field demands them.
+
+4
+00:00:13,000 --> 00:00:19,000
+Play the move back before the robot does. Time, distance, and direction remain visible together.
+
+5
+00:00:19,000 --> 00:00:24,500
+Then review that path as one part of the complete autonomous run before export.
+
+6
+00:00:24,500 --> 00:00:28,500
+In Aquitaine, connect paths, commands, waits, and sensor decisions together.
+
+7
+00:00:28,500 --> 00:00:32,500
+Validate typed Java events through a versioned handoff, without deploying.
+
+8
+00:00:32,500 --> 00:00:35,500
+Bordeaux. Draw the path. Know the run.
