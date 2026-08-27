@@ -686,21 +686,7 @@ function createWindow() {
         const editorRestored = opened.project.editor?.activePathId === secondPath.id && opened.project.editor?.javaProjectBookmarkId === recentJavaProjects[0].id;
         return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), fatalError: document.querySelector('.fatal-error')?.textContent || '', unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, validation: validation.ok, motorPreset, eventMarkerAutosave, multiRoutineUi, robotPushUi, javaDiscovery: javaConnection.catalog.projectName === 'SmokeRobot' && javaConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), javaInstalled: installedJavaConnection.integration.installed, javaBuilt: builtJavaConnection.catalog.authoritative === true && builtJavaConnection.catalog.catalogHash === reopenedJavaConnection.catalog.catalogHash, javaRecent: recentJavaProjects.length === 1 && reopenedJavaConnection.catalog.projectName === 'SmokeRobot', javaUi, staleJavaExportRejected, javaExported: javaExported.exported && javaExported.eventCount === 1, restored: restored.project.name === persistedProject.name, roundTrip: saved.saved && opened.project.name === persistedProject.name && opened.project.routines.find((routine) => routine.id === opened.project.activeRoutineId)?.nodes[0]?.ref === 'path_smoke' && !('routine' in opened.project), editorRestored, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
       })()`);
-      if (process.env.BORDEAUX_SMOKE_CAPTURE_PATH) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        const capture = await window.webContents.capturePage();
-        await fs.promises.writeFile(process.env.BORDEAUX_SMOKE_CAPTURE_PATH, capture.toPNG());
       }
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      window.close();
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      const filesWritten = smokeDirectory ? fs.existsSync(path.join(smokeDirectory, "project.bordeaux.json")) && fs.existsSync(path.join(smokeDirectory, "java-project", "src", "main", "deploy", "bordeaux", "Smoke-edited.bordeaux.json")) : false;
-      result.filesWritten = filesWritten;
-      result.closeGuard = smokeCloseGuardTriggered && !window.isDestroyed();
-      console.log(`BORDEAUX_SMOKE_OK ${JSON.stringify(result)}`);
-      const passed = result.api && result.root && result.unnamed.length === 0 && result.main > 0 && result.nav > 0 && result.validation && result.motorPreset && result.eventMarkerAutosave && result.multiRoutineUi && result.robotPushUi && result.javaDiscovery && result.javaInstalled && result.javaBuilt && result.javaRecent && result.javaUi.markerInspector && result.javaUi.linkAction && result.javaUi.commandEnabled && result.javaUi.commandOptions === 4 && result.javaUi.searchHiddenForSmallCatalog && result.javaUi.recentHiddenForSingleProject && result.javaUi.cancelSwitch && result.javaUi.parameter && result.javaUi.jsonShapeRejected && result.javaUi.jsonShapeAccepted && result.javaUi.longRangeRejected && result.javaUi.exactInteger && result.javaUi.largeEnumPicker && result.javaUi.accessible && result.staleJavaExportRejected && result.javaExported && result.restored && result.roundTrip && result.editorRestored && result.nodeGlobalsBlocked && result.popupBlocked && result.inlineScriptBlocked && result.filesWritten && result.closeGuard;
-      allowClose = true;
-      app.exit(passed ? 0 : 1);
     });
   }
 }
@@ -1144,6 +1130,7 @@ handle("robot:prepareRetention", async (_event, rawProject, rawAction, rawTarget
     throw new Error("Link a Java robot project before preparing revision retention");
   }
   const preparationGeneration = ++robotPushPreparationGeneration;
+  const projectGeneration = projectTargetGeneration;
   pendingRobotOperation = null;
   if (rawAction !== "rollback" && rawAction !== "pin") throw new Error("Choose a valid revision retention action");
   if (!rawTarget || typeof rawTarget !== "object" || typeof (rawTarget as { revisionId?: unknown }).revisionId !== "string"
@@ -1160,7 +1147,7 @@ handle("robot:prepareRetention", async (_event, rawProject, rawAction, rawTarget
   const catalog = linkedJavaCatalog;
   const connectionGeneration = javaConnectionGeneration;
   const status = await robotTransport.inspect(robotPairing, { password: "" });
-  if (preparationGeneration !== robotPushPreparationGeneration || connectionGeneration !== javaConnectionGeneration
+  if (projectGeneration !== projectTargetGeneration || preparationGeneration !== robotPushPreparationGeneration || connectionGeneration !== javaConnectionGeneration
     || catalog !== linkedJavaCatalog || robotPairings.current() !== robotPairing) {
     throw new Error("The paired robot or linked Java project changed while preparing retention; review it again");
   }
@@ -1176,10 +1163,57 @@ handle("robot:prepareRetention", async (_event, rawProject, rawAction, rawTarget
     status,
     target: rawTarget as { revisionId: string; payloadSha256: string },
   });
-  pendingRobotOperation = { kind: "retention", operation };
+  pendingRobotOperation = { kind: "retention", operation, pairing: robotPairing, projectGeneration, javaGeneration: connectionGeneration };
   return operation.preview;
 });
-handle("robot:preparePush", async (_event, rawProject) => {
+const deploymentSessionId = randomBytes(16).toString("hex");
+let unconfirmedDeployment: { project: string; runtimeId: string; catalogHash: string; revisionId: string; payloadSha256: string } | null = null;
+
+function deploymentReceiptProject(): string {
+  return currentProjectPath || `unsaved:${deploymentSessionId}:${projectTargetGeneration}`;
+}
+
+function deploymentReceiptFile(): string {
+  return path.join(app.getPath("userData"), "deployment-receipts.json");
+}
+
+handle("robot:inspectLibrary", async (_event, rawProject) => {
+  const pairing = robotPairings.current();
+  if (!pairing) throw new Error("Pair a robot before refreshing its library");
+  const project = rawProject as BordeauxProject;
+  const generation = projectTargetGeneration;
+  const javaGeneration = javaConnectionGeneration;
+  const catalog = linkedJavaCatalog;
+  const receiptProject = deploymentReceiptProject();
+  const baseline = await robotTransport.readActiveRevision(pairing, { password: "" });
+  const verifiedAt = new Date().toISOString();
+  if (generation !== projectTargetGeneration || javaGeneration !== javaConnectionGeneration || pairing !== robotPairings.current()) {
+    throw new Error("The project or robot changed while refreshing its library; refresh again");
+  }
+  if (!catalog || project.editor?.javaProjectBookmarkId !== linkedJavaProjectBookmarkId) {
+    return { status: baseline.status, comparison: null, verifiedAt, message: "Link the matching Java project to compare items" };
+  }
+  const pending = unconfirmedDeployment;
+  if (pending && pending.project === receiptProject && pending.runtimeId === pairing.runtimeId && pending.catalogHash === catalog.catalogHash
+    && pending.revisionId === baseline.status.activeRevisionId && pending.payloadSha256 === baseline.status.activePayloadSha256) {
+    await saveDeploymentReceipt(deploymentReceiptFile(), { ...pending, verifiedAt });
+    unconfirmedDeployment = null;
+  }
+  if (baseline.status.activeRevisionId && !hasDeploymentReceipt(await readDeploymentReceipts(deploymentReceiptFile()), {
+    project: receiptProject, runtimeId: pairing.runtimeId, catalogHash: catalog.catalogHash!, revisionId: baseline.status.activeRevisionId,
+  })) {
+    return { status: baseline.status, comparison: null, verifiedAt, message: "This robot revision is not associated with this project. Review a push to adopt its baseline or explicitly replace its contents." };
+  }
+  const comparison = await compareJavaDeploymentOffThread(project, catalog, baseline.contents);
+  const latest = await robotTransport.inspect(pairing, { password: "" });
+  if (generation !== projectTargetGeneration || javaGeneration !== javaConnectionGeneration || pairing !== robotPairings.current()
+    || !sameDeploymentRevision(baseline.status, latest)) {
+    throw new Error("The project or robot revision changed while comparing items; refresh again");
+  }
+  return { status: latest, comparison, verifiedAt: new Date().toISOString() };
+});
+
+handle("robot:preparePush", async (_event, rawProject, rawScope) => {
   if (activeRobotPush) throw new Error("Wait for the current robot push to finish before preparing another one");
   const robotPairing = robotPairings.current();
   if (!robotPairing) throw new Error("Pair a robot before preparing a push");
@@ -1187,6 +1221,8 @@ handle("robot:preparePush", async (_event, rawProject) => {
     throw new Error("Link a Java robot project before preparing a push");
   }
   const preparationGeneration = ++robotPushPreparationGeneration;
+  const projectGeneration = projectTargetGeneration;
+  const receiptProject = deploymentReceiptProject();
   pendingRobotOperation = null;
   if (!linkedJavaIntegration.installed || linkedJavaIntegration.supportVersion !== linkedJavaCatalog.supportVersion) {
     throw new Error("Install matching Bordeaux Java support and rebuild the command catalog before pushing");
@@ -1195,20 +1231,34 @@ handle("robot:preparePush", async (_event, rawProject) => {
   if (project.editor?.javaProjectBookmarkId !== linkedJavaProjectBookmarkId) {
     throw new Error("The linked Java project does not match this Bordeaux project; relink it before pushing");
   }
+  const scope = (rawScope === undefined ? { kind: "project" } : rawScope) as RobotPushScope;
   const connectionGeneration = javaConnectionGeneration;
   const catalog = linkedJavaCatalog;
-  const status = await robotTransport.inspect(robotPairing, { password: "" });
-  const trajectory = await buildJavaTrajectoryOffThread(project, catalog);
-  if (preparationGeneration !== robotPushPreparationGeneration
-    || connectionGeneration !== javaConnectionGeneration || catalog !== linkedJavaCatalog) {
-    throw new Error("The linked Java project changed while preparing the push; review it again");
+  // Full replacement remains an explicit recovery path for older runtimes.
+  const baseline = scope?.kind === "project"
+    ? { status: await robotTransport.inspect(robotPairing, { password: "" }), contents: null }
+    : await robotTransport.readActiveRevision(robotPairing, { password: "" });
+  const built = await buildJavaDeploymentOffThread(project, catalog, scope, baseline.contents);
+  let adoptionRequired = false;
+  let receiptWarning: string | undefined;
+  if (scope.kind !== "project" && baseline.status.activeRevisionId) {
+    try {
+      adoptionRequired = !hasDeploymentReceipt(await readDeploymentReceipts(deploymentReceiptFile()), {
+        project: receiptProject, runtimeId: robotPairing.runtimeId, catalogHash: catalog.catalogHash!, revisionId: baseline.status.activeRevisionId,
+      });
+    } catch {
+      adoptionRequired = true;
+      receiptWarning = "Local deployment history could not be read. Review the robot baseline before continuing.";
+    }
+  }
+  if (preparationGeneration !== robotPushPreparationGeneration || projectGeneration !== projectTargetGeneration
+    || connectionGeneration !== javaConnectionGeneration || catalog !== linkedJavaCatalog || robotPairings.current() !== robotPairing) {
+    throw new Error("The project, robot, or Java catalog changed while preparing the push; review it again");
   }
   const operationId = `push-${randomBytes(12).toString("hex")}`;
   const operation = createRobotPushOperation({
-    operationId,
-    nonce: operationId,
-    projectName: project.name,
-    pairing: robotPairing,
+    operationId, nonce: operationId, projectName: project.name, pairing: robotPairing,
+    status: baseline.status, trajectory: built.trajectory,
   });
   operation.preview.summary = built.summary;
   operation.preview.adoptionRequired = adoptionRequired;
