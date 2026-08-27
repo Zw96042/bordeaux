@@ -4,13 +4,10 @@ import type { BordeauxProject, JavaCommandCatalog } from "../shared/types";
 
 if (!parentPort) throw new Error("Java trajectory worker requires a parent port");
 
-parentPort.once("message", (value: { project: BordeauxProject; catalog: JavaCommandCatalog }) => {
+port.once("message", (job: JavaTrajectoryJob) => {
   try {
-    parentPort!.postMessage({ ok: true, built: buildJavaTrajectory(value.project, value.catalog) });
+    port.postMessage({ ok: true, result: execute(job) } satisfies WorkerResult<JavaTrajectoryResult>);
   } catch (error) {
-    parentPort!.postMessage({
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    port.postMessage({ ok: false, error: error instanceof Error ? error.message : String(error) } satisfies WorkerResult<JavaTrajectoryResult>);
   }
 });

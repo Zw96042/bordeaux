@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { JavaCommandCatalog, JavaIntegrationStatus } from "../shared/types";
@@ -7,6 +8,7 @@ import { writeBufferAtomically, writeJsonAtomically } from "./projectFiles";
 
 export const JAVA_SUPPORT_VERSION = "0.4.0";
 const MAX_BUILD_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_INSTALL_MANIFEST_BYTES = 64 * 1024;
 const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
 const MAX_BUILD_OUTPUT_BYTES = 1024 * 1024;
 const BUILD_TIMEOUT_MS = 150_000;
@@ -27,6 +29,7 @@ interface InstallPreview {
 }
 
 let activeBuild: { child: ChildProcessWithoutNullStreams; canceled: boolean; killGraceMs: number } | null = null;
+let buildAdmission: { canceled: boolean } | null = null;
 const killEscalations = new WeakMap<ChildProcessWithoutNullStreams, NodeJS.Timeout>();
 
 function sha256(value: Uint8Array | string): string {
@@ -42,11 +45,34 @@ async function regularFile(filePath: string): Promise<boolean> {
   }
 }
 
+async function readBoundedRegularFile(filePath: string, maximumBytes: number, label: string): Promise<Buffer> {
+  const initial = await fs.lstat(filePath);
+  if (!initial.isFile() || initial.isSymbolicLink()) throw new Error(`${label} must be a regular file`);
+  const noFollow = process.platform === "win32" ? 0 : fsConstants.O_NOFOLLOW;
+  const handle = await fs.open(filePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | noFollow);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw new Error(`${label} must be a regular file`);
+    if (stat.size > maximumBytes) throw new Error(`${label} exceeds the ${maximumBytes}-byte limit`);
+    const chunks: Buffer[] = [];
+    let total = 0;
+    while (true) {
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, maximumBytes + 1 - total));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      if (total > maximumBytes) throw new Error(`${label} exceeds the ${maximumBytes}-byte limit`);
+      chunks.push(buffer.subarray(0, bytesRead));
+    }
+    return Buffer.concat(chunks, total);
+  } finally {
+    await handle.close();
+  }
+}
+
 async function boundedFileHash(filePath: string): Promise<string | undefined> {
   try {
-    const stat = await fs.lstat(filePath);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_ARTIFACT_BYTES) return undefined;
-    return sha256(await fs.readFile(filePath));
+    return sha256(await readBoundedRegularFile(filePath, MAX_ARTIFACT_BYTES, "Java support artifact"));
   } catch {
     return undefined;
   }
@@ -98,7 +124,7 @@ function gradleSupportScript(): string {
 `  outputs.file(catalogOutput)\n` +
 `  doLast {\n` +
 `    def inputFile = catalogInput.get().asFile\n` +
-`    if (!inputFile.isFile()) throw new GradleException('No Bordeaux command catalog was generated. Annotate at least one provider method with @BordeauxCommand.')\n` +
+`    if (!inputFile.isFile()) throw new GradleException('No Bordeaux capability catalog was generated. Annotate at least one public command factory/field, condition, or trajectory generator.')\n` +
 `    def outputFile = catalogOutput.get().asFile\n` +
 `    outputFile.parentFile.mkdirs()\n` +
 `    outputFile.bytes = inputFile.bytes\n` +
@@ -109,35 +135,40 @@ function gradleSupportScript(): string {
 function integrationGuide(): string {
   return `# Bordeaux Java integration\n\n` +
 `Bordeaux owns the JSON contract and generated bindings, but your robot project keeps ownership of subsystems and autonomous lifecycle.\n\n` +
-`1. Put \`@BordeauxCommand\` on public command factory methods and \`@BordeauxCondition\` on public boolean predicates. Add \`@BordeauxParam\` metadata to authored parameters.\n` +
-`2. In Bordeaux, run **Java > Build Command Catalog**, then select generated commands and conditions.\n` +
+`1. Put \`@BordeauxCommand\` on public command factories/fields, \`@BordeauxCondition\` on public boolean predicates, and \`@BordeauxTrajectoryGenerator\` on bounded robot-side generators. Add \`@BordeauxParam\` metadata to authored parameters.\n` +
+`2. In Bordeaux, run **Java > Build Command Catalog**, then select generated capabilities.\n` +
 `3. Call \`dev.bordeaux.runtime.BordeauxBindings.generatedCapabilities(...)\` with instances of each non-static provider.\n` +
-`4. Open the exported JSON below WPILib's deploy directory and call \`BordeauxTrajectoryReader.read(input, pathId)\`.\n` +
-`5. Create \`BordeauxEventRunner\`, call \`periodic(elapsedSeconds)\` beside the path follower, and call \`endPath()\` when the path ends.\n\n` +
+`4. Open the exported JSON below WPILib's deploy directory and call the bounded, validated \`BordeauxTrajectoryReader.read(input, pathId, compatibility)\` overload.\n` +
+`5. Create \`BordeauxEventRunner\`, call \`periodic(elapsedSeconds, measuredFraction)\` beside the path follower, and call \`endPath()\` when that follower actually ends. Use the one-argument overload only for paths with time-triggered events.\n\n` +
 `A minimal team-owned integration looks like this (replace \`actions\`, file name, and path ID with your code):\n\n` +
 "```java\n" +
-`import dev.bordeaux.runtime.BordeauxBindings;\n` +
 `import dev.bordeaux.runtime.*;\n` +
 `import edu.wpi.first.wpilibj.Filesystem;\n` +
 `import java.nio.file.Files;\n\n` +
 `private final BordeauxCapabilities bordeauxCapabilities =\n` +
 `    BordeauxBindings.generatedCapabilities(actions);\n` +
+`private final BordeauxRuntimeCompatibility bordeauxCompatibility =\n` +
+`    new BordeauxRuntimeCompatibility(\n` +
+`        bordeauxCapabilities.catalogId(), bordeauxCapabilities.catalogHash(), "0.4.0",\n` +
+`        "2026-rebuilt", "2026-manual-tu19-welded-4", "bordeaux-field/1.0");\n` +
 `private BordeauxEventRunner bordeauxEvents;\n\n` +
 `void startBordeauxPath(String fileName, String pathId) throws Exception {\n` +
+`  endBordeauxPath();\n` +
 `  var file = Filesystem.getDeployDirectory().toPath().resolve("bordeaux").resolve(fileName);\n` +
 `  try (var input = Files.newInputStream(file)) {\n` +
-`    bordeauxEvents = new BordeauxEventRunner(BordeauxTrajectoryReader.read(input, pathId), bordeauxCapabilities);\n` +
+`    var path = BordeauxTrajectoryReader.read(input, pathId, bordeauxCompatibility);\n` +
+`    bordeauxEvents = new BordeauxEventRunner(path, bordeauxCapabilities);\n` +
 `  }\n` +
 `}\n\n` +
-`void autonomousPeriodic(double elapsedSeconds) {\n` +
-`  if (bordeauxEvents != null) bordeauxEvents.periodic(elapsedSeconds);\n` +
+`void autonomousPeriodic(double elapsedSeconds, double measuredFraction) {\n` +
+`  if (bordeauxEvents != null) bordeauxEvents.periodic(elapsedSeconds, measuredFraction);\n` +
 `}\n\n` +
 `void endBordeauxPath() {\n` +
 `  if (bordeauxEvents != null) bordeauxEvents.endPath();\n` +
 `  bordeauxEvents = null;\n` +
 `}\n` +
 "```\n\n" +
-`Pass every non-static command and condition provider to \`BordeauxBindings.generatedCapabilities(...)\`; provider order does not matter. Bordeaux intentionally does not edit \`RobotContainer\` or deploy robot code.\n`;
+`Pass every non-static command, condition, and trajectory-generator provider compiled into the catalog to \`BordeauxBindings.generatedCapabilities(...)\`; provider order does not matter. Replace the field constants above with the exact certified field pack compiled into the robot. Bordeaux intentionally does not edit \`RobotContainer\` or deploy robot code.\n`;
 }
 
 async function assertSafeSupportDirectory(projectRoot: string): Promise<void> {
@@ -156,7 +187,7 @@ async function assertSafeSupportDirectory(projectRoot: string): Promise<void> {
 export async function inspectJavaSupport(projectRoot: string, catalog: JavaCommandCatalog, artifactsDirectory: string): Promise<JavaIntegrationStatus> {
   const build = await buildFileFor(projectRoot);
   const [contents, wrapperAvailable] = await Promise.all([
-    fs.readFile(build.path, "utf8"),
+    readBoundedRegularFile(build.path, MAX_BUILD_FILE_BYTES, "Robot build file").then((value) => value.toString("utf8")),
     regularFile(path.join(projectRoot, process.platform === "win32" ? "gradlew.bat" : "gradlew")),
   ]);
   let supportVersion: string | undefined;
@@ -164,7 +195,8 @@ export async function inspectJavaSupport(projectRoot: string, catalog: JavaComma
   let manifestProcessorHash: string | undefined;
   let manifestScriptHash: string | undefined;
   try {
-    const manifest = JSON.parse(await fs.readFile(path.join(projectRoot, ".bordeaux/install.json"), "utf8")) as Record<string, unknown>;
+    const manifestContents = await readBoundedRegularFile(path.join(projectRoot, ".bordeaux/install.json"), MAX_INSTALL_MANIFEST_BYTES, "Java support manifest");
+    const manifest = JSON.parse(manifestContents.toString("utf8")) as Record<string, unknown>;
     if (typeof manifest.supportVersion === "string" && manifest.supportVersion.length <= 64) supportVersion = manifest.supportVersion;
     if (typeof manifest.runtimeSha256 === "string") manifestRuntimeHash = manifest.runtimeSha256;
     if (typeof manifest.processorSha256 === "string") manifestProcessorHash = manifest.processorSha256;
@@ -197,23 +229,24 @@ export async function inspectJavaSupport(projectRoot: string, catalog: JavaComma
 export async function prepareJavaSupportInstall(projectRoot: string, artifactsDirectory: string): Promise<InstallPreview> {
   const canonicalRoot = await fs.realpath(projectRoot);
   const build = await buildFileFor(canonicalRoot);
-  const stat = await fs.stat(build.path);
-  if (stat.size > MAX_BUILD_FILE_BYTES) throw new Error(`Robot build file exceeds the ${MAX_BUILD_FILE_BYTES}-byte installation limit`);
-  const buildContents = await fs.readFile(build.path, "utf8");
+  const buildContents = (await readBoundedRegularFile(build.path, MAX_BUILD_FILE_BYTES, "Robot build file")).toString("utf8");
   if (!/edu\.wpi\.first\.GradleRIO/.test(buildContents)) throw new Error("Automatic Java support installation requires a GradleRIO Java project");
   const wrapperName = process.platform === "win32" ? "gradlew.bat" : "gradlew";
   if (!(await regularFile(path.join(canonicalRoot, wrapperName)))) throw new Error(`Automatic Java support installation requires a regular ${wrapperName} wrapper`);
   await assertSafeSupportDirectory(canonicalRoot);
   const runtimePath = path.join(artifactsDirectory, "bordeaux-runtime.jar");
   const processorPath = path.join(artifactsDirectory, "bordeaux-processor.jar");
-  let runtimeStat: Awaited<ReturnType<typeof fs.stat>>;
-  let processorStat: Awaited<ReturnType<typeof fs.stat>>;
+  let runtimeJar: Buffer;
+  let processorJar: Buffer;
   try {
-    [runtimeStat, processorStat] = await Promise.all([fs.stat(runtimePath), fs.stat(processorPath)]);
+    [runtimeJar, processorJar] = await Promise.all([
+      readBoundedRegularFile(runtimePath, MAX_ARTIFACT_BYTES, "Bordeaux runtime artifact"),
+      readBoundedRegularFile(processorPath, MAX_ARTIFACT_BYTES, "Bordeaux processor artifact"),
+    ]);
   } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     throw new Error("Bundled Bordeaux Java support artifacts are missing; rebuild or reinstall the desktop app", { cause: error });
   }
-  if (!runtimeStat.isFile() || !processorStat.isFile() || runtimeStat.size > MAX_ARTIFACT_BYTES || processorStat.size > MAX_ARTIFACT_BYTES) {
   const next = withManagedBlock(buildContents, managedBlock(build.name));
   return {
     projectRoot: canonicalRoot,
