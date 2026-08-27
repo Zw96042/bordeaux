@@ -1,3 +1,6 @@
+const { contextBridge, ipcRenderer } = require('electron');
+const noop = () => () => undefined;
+contextBridge.exposeInMainWorld('bordeauxAPI', {
   platform: 'linux',
   restoreLastProject: () => ipcRenderer.invoke('optimizer-ui:restore'),
   saveProject: (project) => ipcRenderer.invoke('optimizer-ui:save', project),
