@@ -56,15 +56,20 @@ function readOne(socket: net.Socket, timeoutMs: number): Promise<unknown> {
         const header = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, received);
         frameSize = header.readUInt32BE(0);
         if (frameSize < 2 || frameSize > MAX_MESSAGE_BYTES) return finish(new Error("Agent bridge frame size is invalid"));
-        if (chunks.length > 1) chunks = [header];
+        expectedCount = chunkValue.count;
+        expectedChunk += 1;
+        messageBytes += decoded.length;
+        if (messageBytes > MAX_CHUNKED_MESSAGE_BYTES) return finish(new Error("Agent bridge message exceeds 256 MiB"));
+        messageChunks.push(decoded);
+        if (expectedChunk === expectedCount) {
+          try { return finish(undefined, JSON.parse(Buffer.concat(messageChunks, messageBytes).toString("utf8"))); }
+          catch { return finish(new Error("Agent bridge returned invalid chunked JSON")); }
+        }
       }
-      if (frameSize === null || received < frameSize + 4) return;
-      const buffer = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, received);
-      try { finish(undefined, JSON.parse(buffer.subarray(4, frameSize + 4).toString("utf8"))); }
-      catch { finish(new Error("Agent bridge returned invalid JSON")); }
     };
     socket.on("data", onData);
     socket.on("error", onError);
+    socket.on("end", onEnd);
   });
 }
 
@@ -82,7 +87,19 @@ export class AgentBridgeServer {
 
   get enabled(): boolean { return this.server !== null; }
 
-  async start(): Promise<AgentRuntimeDescriptor> {
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+    // The desktop lock guarantees one process; the shared queue also prevents
+    // stale server objects in that process from racing descriptor publication.
+    const result = bridgeLifecycle.then(operation, operation);
+    bridgeLifecycle = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  start(): Promise<AgentRuntimeDescriptor> {
+    return this.serialize(() => this.startNow());
+  }
+
+  private async startNow(): Promise<AgentRuntimeDescriptor> {
     if (this.descriptor) return this.descriptor;
     const endpoint = endpointForLaunch();
     const descriptor: AgentRuntimeDescriptor = {
@@ -104,28 +121,42 @@ export class AgentBridgeServer {
         const controller = new AbortController();
         socket.once("close", () => controller.abort());
         const result = await this.sessions.request(envelope.request, controller.signal);
-        socket.end(encode({ id: envelope.id, result }));
+        await writeOne(socket, { id: envelope.id, result });
+        socket.end();
       }).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
-        if (!socket.destroyed) socket.end(encode({ error: message }));
+        if (!socket.destroyed) void writeOne(socket, { error: message }).then(() => socket.end(), () => socket.destroy());
       });
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(endpoint, () => { server.off("error", reject); resolve(); });
-    });
-    if (process.platform !== "win32") await fs.promises.chmod(endpoint, 0o600);
     const target = descriptorPath(this.userData);
-    await fs.promises.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-    const temporary = `${target}.${process.pid}.tmp`;
-    await fs.promises.writeFile(temporary, JSON.stringify(descriptor), { encoding: "utf8", mode: 0o600, flag: "wx" });
-    await fs.promises.rename(temporary, target);
-    this.server = server;
-    this.descriptor = descriptor;
-    return descriptor;
+    const temporary = `${target}.${descriptor.instanceId}.tmp`;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(endpoint, () => { server.off("error", reject); resolve(); });
+      });
+      if (process.platform !== "win32") await fs.promises.chmod(endpoint, 0o600);
+      await fs.promises.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+      await fs.promises.writeFile(temporary, JSON.stringify(descriptor), { encoding: "utf8", mode: 0o600, flag: "wx" });
+      await fs.promises.rename(temporary, target);
+      this.server = server;
+      this.descriptor = descriptor;
+      return descriptor;
+    } catch (error) {
+      for (const socket of this.sockets) socket.destroy();
+      this.sockets.clear();
+      if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+      await fs.promises.rm(temporary, { force: true });
+      if (process.platform !== "win32") await fs.promises.rm(endpoint, { force: true });
+      throw error;
+    }
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    return this.serialize(() => this.stopNow());
+  }
+
+  private async stopNow(): Promise<void> {
     const server = this.server;
     const descriptor = this.descriptor;
     this.server = null;
@@ -133,7 +164,7 @@ export class AgentBridgeServer {
     for (const socket of this.sockets) socket.destroy();
     this.sockets.clear();
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
-    await fs.promises.rm(descriptorPath(this.userData), { force: true });
+    if (descriptor) await removeOwnedDescriptor(this.userData, descriptor);
     if (descriptor && process.platform !== "win32") await fs.promises.rm(descriptor.endpoint, { force: true });
   }
 }
@@ -177,11 +208,14 @@ export class AgentBridgeClient {
         socket.once("error", (error) => { clearTimeout(timer); reject(error); });
       });
       const id = randomUUID();
-      socket.write(encode({ id, token: descriptor.token, request } satisfies BridgeEnvelope));
-      const response = await readOne(socket, REQUEST_TIMEOUT_MS) as { id?: string; result?: unknown; error?: string };
-      if (response.error) throw new Error(response.error);
-      if (response.id !== id) throw new Error("The Bordeaux MCP response did not match its request.");
-      return response.result;
+      const response = readOne(socket, REQUEST_TIMEOUT_MS) as Promise<{ id?: string; result?: unknown; error?: string }>;
+      const [value] = await Promise.all([
+        response,
+        writeOne(socket, { id, token: descriptor.token, request } satisfies BridgeEnvelope),
+      ]);
+      if (value.error) throw new Error(value.error);
+      if (value.id !== id) throw new Error("The Bordeaux MCP response did not match its request.");
+      return value.result;
     } finally {
       signal?.removeEventListener("abort", onAbort);
       socket.destroy();

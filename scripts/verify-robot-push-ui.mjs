@@ -1,3 +1,17 @@
+import { spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { build } from 'vite';
+import electron from 'electron';
+
+const root = fileURLToPath(new URL('..', import.meta.url));
+const output = process.env.BORDEAUX_PUSH_UI_OUTPUT
+  ? path.resolve(process.env.BORDEAUX_PUSH_UI_OUTPUT)
+  : await fs.mkdtemp(path.join(os.tmpdir(), 'bordeaux-push-ui-'));
+await fs.mkdir(output, { recursive: true });
+const html = path.join(output, 'index.html');
 await fs.writeFile(html, `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root"></div><script type="module" src="${path.join(root, 'scripts/robot-push-ui-harness.jsx')}"></script></body></html>`);
 await build({
   configFile: false, root: output, base: './', publicDir: false, logLevel: 'error',
