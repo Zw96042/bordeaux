@@ -11,6 +11,7 @@ import { readGeneratedJavaCatalog } from "./javaGeneratedCatalog";
 
 const MAX_DIRECTORY_COUNT = 2_000;
 const MAX_SOURCE_FILE_COUNT = 2_000;
+const SOURCE_READ_CONCURRENCY = 8;
 const MAX_SOURCE_FILE_BYTES = 512 * 1024;
 const MAX_TOTAL_SOURCE_BYTES = 12 * 1024 * 1024;
 const MAX_SCAN_DEPTH = 8;
@@ -80,10 +81,21 @@ interface MemberSignature {
   offset: number;
 }
 
-function countLinesBefore(value: string, offset: number): number {
-  let lines = 1;
-  for (let index = 0; index < offset; index += 1) if (value.charCodeAt(index) === 10) lines += 1;
-  return lines;
+function sourceLineLookup(value: string): (offset: number) => number {
+  const starts = [0];
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) === 10) starts.push(index + 1);
+  }
+  return (offset) => {
+    let low = 0;
+    let high = starts.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (starts[middle] <= offset) low = middle + 1;
+      else high = middle;
+    }
+    return low;
+  };
 }
 
 function sanitizeJava(source: string): string {
@@ -307,6 +319,7 @@ function enumValues(body: string): string[] {
 }
 
 function parseTypes(unit: JavaSourceUnit): ParsedJavaType[] {
+  const lineAt = sourceLineLookup(unit.sanitized);
   const types: ParsedJavaType[] = [];
   const pattern = /\b((?:public\s+|protected\s+|private\s+|static\s+|final\s+|abstract\s+|sealed\s+|non-sealed\s+)*)((class|record|enum))\s+([$A-Za-z_][$\w]*)/g;
   let match: RegExpExecArray | null;
@@ -328,7 +341,7 @@ function parseTypes(unit: JavaSourceUnit): ParsedJavaType[] {
       hasDeclaredConstructor ||= declaresConstructor(member.text, name);
       const callable = parseCallable(member.text, name);
       if (!callable) continue;
-      const line = countLinesBefore(unit.sanitized, bodyOffset + member.offset);
+      const line = lineAt(bodyOffset + member.offset);
       if (callable.constructorParameters) constructors.push({ parameters: callable.constructorParameters, line });
       if (callable.method) methods.push({ ...callable.method, line });
     }
@@ -348,7 +361,7 @@ function parseTypes(unit: JavaSourceUnit): ParsedJavaType[] {
       constructors,
       methods,
       source: unit,
-      line: countLinesBefore(unit.sanitized, match.index),
+      line: lineAt(match.index),
     });
     pattern.lastIndex = closeIndex + 1;
   }
@@ -384,22 +397,30 @@ function humanize(value: string): string {
   return spaced ? spaced[0].toUpperCase() + spaced.slice(1) : value;
 }
 
-function resolveKnownType(javaType: string, packageName: string, types: ParsedJavaType[]): ParsedJavaType | undefined {
-  const normalized = normalizeJavaType(javaType).replace(/^\?extends/, "").replace(/^\?super/, "");
-  const raw = normalized.split("<")[0].replace(/\[\]$/g, "");
-  if (raw.includes(".")) return types.find((type) => type.qualifiedName === raw);
-  const samePackage = types.find((type) => type.packageName === packageName && type.name === raw);
-  if (samePackage) return samePackage;
-  let simpleNameMatch: ParsedJavaType | undefined;
-  for (const type of types) {
-    if (type.name !== raw) continue;
-    if (simpleNameMatch) return undefined;
-    simpleNameMatch = type;
-  }
-  return simpleNameMatch;
+interface JavaTypeIndex {
+  qualified: Map<string, ParsedJavaType>;
+  simple: Map<string, ParsedJavaType | undefined>;
 }
 
-function schemaFor(javaType: string, packageName: string, types: ParsedJavaType[], resolving = new Set<string>(), depth = 0): JavaValueSchema {
+function indexTypes(types: ParsedJavaType[]): JavaTypeIndex {
+  const qualified = new Map<string, ParsedJavaType>();
+  const simple = new Map<string, ParsedJavaType | undefined>();
+  for (const type of types) {
+    // Preserve the first same-package declaration and reject ambiguous global names.
+    if (!qualified.has(type.qualifiedName)) qualified.set(type.qualifiedName, type);
+    simple.set(type.name, simple.has(type.name) ? undefined : type);
+  }
+  return { qualified, simple };
+}
+
+function resolveKnownType(javaType: string, packageName: string, types: JavaTypeIndex): ParsedJavaType | undefined {
+  const normalized = normalizeJavaType(javaType).replace(/^\?extends/, "").replace(/^\?super/, "");
+  const raw = normalized.split("<")[0].replace(/\[\]$/g, "");
+  if (raw.includes(".")) return types.qualified.get(raw);
+  return types.qualified.get(packageName ? `${packageName}.${raw}` : raw) ?? types.simple.get(raw);
+}
+
+function schemaFor(javaType: string, packageName: string, types: JavaTypeIndex, resolving = new Set<string>(), depth = 0): JavaValueSchema {
   const normalized = normalizeJavaType(javaType).replace(/^\?extends/, "").replace(/^\?super/, "");
   if (depth > MAX_SCHEMA_DEPTH) return { kind: "opaque", javaType: normalized };
   const simple = simpleTypeName(normalized);
@@ -441,7 +462,7 @@ function schemaFor(javaType: string, packageName: string, types: ParsedJavaType[
   return { kind: "object", javaType: known.qualifiedName, fields };
 }
 
-function commandParameters(parameters: RawParameter[], packageName: string, types: ParsedJavaType[]): JavaCommandParameter[] {
+function commandParameters(parameters: RawParameter[], packageName: string, types: JavaTypeIndex): JavaCommandParameter[] {
   return parameters.map((parameter) => ({
     name: parameter.name,
     javaType: parameter.javaType,
@@ -450,7 +471,7 @@ function commandParameters(parameters: RawParameter[], packageName: string, type
   }));
 }
 
-function commandReturnType(returnType: string, packageName: string, types: ParsedJavaType[]): "confirmed" | "inferred" | null {
+function commandReturnType(returnType: string, packageName: string, types: JavaTypeIndex): "confirmed" | "inferred" | null {
   const simple = simpleTypeName(returnType);
   if (simple === "Command" || simple === "CommandBase") return "confirmed";
   const known = resolveKnownType(returnType, packageName, types);
@@ -462,6 +483,7 @@ function parameterSignature(parameters: RawParameter[]): string {
 }
 
 function buildCommands(types: ParsedJavaType[]): JavaCommandDescriptor[] {
+  const typeIndex = indexTypes(types);
   const candidates: Array<JavaCommandDescriptor & { baseId: string; signature: string }> = [];
   const addCandidate = (candidate: JavaCommandDescriptor & { baseId: string; signature: string }) => {
     if (candidates.length >= MAX_DISCOVERED_COMMAND_COUNT) {
@@ -486,13 +508,13 @@ function buildCommands(types: ParsedJavaType[]): JavaCommandDescriptor[] {
           member: owner.name,
           kind: "constructor",
           confidence: "confirmed",
-          parameters: commandParameters(constructor.parameters, owner.packageName, types),
+          parameters: commandParameters(constructor.parameters, owner.packageName, typeIndex),
           source: { file: owner.source.relativePath, line: constructor.line },
         });
       }
     }
     for (const method of owner.methods) {
-      const confidence = method.annotated ? "confirmed" : commandReturnType(method.returnType, owner.packageName, types);
+      const confidence = method.annotated ? "confirmed" : commandReturnType(method.returnType, owner.packageName, typeIndex);
       if (!confidence) continue;
       const baseId = `${owner.qualifiedName}#${method.name}`;
       addCandidate({
@@ -504,7 +526,7 @@ function buildCommands(types: ParsedJavaType[]): JavaCommandDescriptor[] {
         member: method.name,
         kind: "factory",
         confidence,
-        parameters: commandParameters(method.parameters, owner.packageName, types),
+        parameters: commandParameters(method.parameters, owner.packageName, typeIndex),
         source: { file: owner.source.relativePath, line: method.line },
       });
     }
@@ -592,6 +614,18 @@ async function collectJavaSources(projectRoot: string, sourceRoots: string[], wa
   files.sort();
   const sources: JavaSourceUnit[] = [];
   let totalBytes = 0;
+  for (let start = 0; start < files.length; start += SOURCE_READ_CONCURRENCY) {
+    const batch = files.slice(start, start + SOURCE_READ_CONCURRENCY);
+    const stats = await Promise.all(batch.map((absolutePath) => fs.lstat(absolutePath)));
+    const readable: string[] = [];
+    for (let index = 0; index < batch.length; index += 1) {
+      const absolutePath = batch[index];
+      const stat = stats[index];
+      if (!stat.isFile() || stat.isSymbolicLink()) continue;
+      if (stat.size > MAX_SOURCE_FILE_BYTES) {
+        warnings.push(`${path.relative(projectRoot, absolutePath)} was skipped because it exceeds ${MAX_SOURCE_FILE_BYTES} bytes`);
+        continue;
+      }
       totalBytes += stat.size;
       if (totalBytes > MAX_TOTAL_SOURCE_BYTES) throw new Error(`Java project source exceeds the ${MAX_TOTAL_SOURCE_BYTES}-byte scan limit`);
       readable.push(absolutePath);

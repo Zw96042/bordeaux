@@ -214,9 +214,6 @@ export async function prepareJavaSupportInstall(projectRoot: string, artifactsDi
     throw new Error("Bundled Bordeaux Java support artifacts are missing; rebuild or reinstall the desktop app", { cause: error });
   }
   if (!runtimeStat.isFile() || !processorStat.isFile() || runtimeStat.size > MAX_ARTIFACT_BYTES || processorStat.size > MAX_ARTIFACT_BYTES) {
-    throw new Error("Bundled Bordeaux Java support artifacts are missing or invalid");
-  }
-  const [runtimeJar, processorJar] = await Promise.all([fs.readFile(runtimePath), fs.readFile(processorPath)]);
   const next = withManagedBlock(buildContents, managedBlock(build.name));
   return {
     projectRoot: canonicalRoot,
@@ -234,7 +231,7 @@ export async function prepareJavaSupportInstall(projectRoot: string, artifactsDi
 
 export async function applyJavaSupportInstall(preview: InstallPreview): Promise<void> {
   if (await fs.realpath(preview.projectRoot) !== preview.projectRoot) throw new Error("Linked Java project changed while support installation was open");
-  const currentBuild = await fs.readFile(preview.buildFile, "utf8");
+  const currentBuild = (await readBoundedRegularFile(preview.buildFile, MAX_BUILD_FILE_BYTES, "Robot build file")).toString("utf8");
   if (sha256(currentBuild) !== preview.buildHash) throw new Error("Robot build file changed before installation; review and try again");
   await assertSafeSupportDirectory(preview.projectRoot);
   const supportDirectory = path.join(preview.projectRoot, ".bordeaux");
@@ -296,7 +293,9 @@ function forceStopBuild(child: ChildProcessWithoutNullStreams): void {
 }
 
 export function cancelJavaCatalogBuild(force = false): boolean {
-  if (!activeBuild) return false;
+  if (!buildAdmission) return false;
+  buildAdmission.canceled = true;
+  if (!activeBuild) return true;
   activeBuild.canceled = true;
   if (force) forceStopBuild(activeBuild.child);
   else stopBuild(activeBuild.child, activeBuild.killGraceMs);
@@ -309,12 +308,13 @@ export function windowsGradleCommand(wrapper: string, args: readonly string[]): 
   return `"${wrapper}" ${args.join(" ")}`;
 }
 
-export async function runJavaCatalogBuild(projectRoot: string, limits: { timeoutMs?: number; outputBytes?: number; killGraceMs?: number } = {}): Promise<{ output: string }> {
-  if (activeBuild) throw new Error("A Java catalog build is already running");
+async function runAdmittedJavaCatalogBuild(projectRoot: string, limits: { timeoutMs?: number; outputBytes?: number; killGraceMs?: number }, admission: { canceled: boolean }): Promise<{ output: string }> {
   const canonicalRoot = await fs.realpath(projectRoot);
+  if (admission.canceled) throw new Error("Java catalog build was canceled");
   const wrapperName = process.platform === "win32" ? "gradlew.bat" : "gradlew";
   const wrapper = path.join(canonicalRoot, wrapperName);
   if (!(await regularFile(wrapper))) throw new Error(`Linked project does not have a regular ${wrapperName} wrapper`);
+  if (admission.canceled) throw new Error("Java catalog build was canceled");
   const fixedArgs = ["bordeauxCatalog", "--no-daemon", "--console=plain"];
   const child = process.platform === "win32"
     ? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", windowsGradleCommand(wrapper, fixedArgs)], {
@@ -371,6 +371,14 @@ export async function runJavaCatalogBuild(projectRoot: string, limits: { timeout
   if (overflow) throw new Error(`Java catalog build exceeded the ${limits.outputBytes ?? MAX_BUILD_OUTPUT_BYTES}-byte output limit`);
   if (exitCode !== 0) throw new Error(`Java catalog build failed with exit code ${exitCode ?? "unknown"}${redacted ? `\n${redacted.slice(-8_192)}` : ""}`);
   return { output: redacted.slice(-8_192) };
+}
+
+export async function runJavaCatalogBuild(projectRoot: string, limits: { timeoutMs?: number; outputBytes?: number; killGraceMs?: number } = {}): Promise<{ output: string }> {
+  if (buildAdmission) throw new Error("A Java catalog build is already running");
+  const admission = { canceled: false };
+  buildAdmission = admission;
+  try { return await runAdmittedJavaCatalogBuild(projectRoot, limits, admission); }
+  finally { if (buildAdmission === admission) buildAdmission = null; }
 }
 
 export function installPreviewSummary(preview: InstallPreview): { buildFile: string; files: string[]; replacing: boolean } {
