@@ -1,3 +1,105 @@
+async function openSettings() {
+  if (!await evaluate(() => document.querySelector('.optimizer-settings')?.open)) {
+    await click('.optimizer-settings summary');
+  }
+}
+async function assertCompactResult() {
+  // The result replaces Cancel; wait until its Apply action is available.
+  await waitFor(() => evaluate(() => {
+    const primary = document.querySelector('.optimizer-main.primary');
+    return primary && primary.textContent === 'Apply optimized' && !primary.disabled && primary.checkVisibility();
+  }), 'the enabled Apply action', 2000);
+  const state = await evaluate(() => {
+    const panel = document.querySelector('.optimizer-panel');
+    return {
+      text: panel.innerText,
+      settingsOpen: panel.querySelector('.optimizer-settings').open,
+      detailsOpen: panel.querySelector('.optimizer-details')?.open,
+      freedomVisible: panel.querySelector('.optimizer-corridor input').checkVisibility(),
+      rows: [...panel.querySelectorAll('.optimizer-choice')].map((row) => row.getAttribute('aria-label')),
+      width: panel.getBoundingClientRect().width,
+    };
+  });
+  assert.equal(state.settingsOpen, false, 'Search settings must start collapsed');
+  assert.equal(state.detailsOpen, false, 'Solver diagnostics must start collapsed');
+  assert.equal(state.freedomVisible, false, 'Settings inputs must not crowd the result');
+  assert.ok(state.text.trim().split(/\s+/).length <= 45, `Result panel must stay concise: ${state.text}`);
+  assert.ok(!state.text.includes('Limited by'), 'Detailed physics must be hidden by default');
+  assert.deepEqual(state.rows, ['Preview normal trajectory', 'Preview optimized trajectory']);
+  assert.equal(state.width, 300, 'The result inspector must remain compact');
+}
+
+function check(name) { checks.push(name); console.log(`PASS ${name}`); }
+
+app.whenReady().then(async () => {
+  window = new BrowserWindow({ show: false, width: 1440, height: 1000, useContentSize: true,
+    webPreferences: { contextIsolation: true, sandbox: false, backgroundThrottling: false,
+      preload: path.join(__dirname, 'verify-optimizer-ui-preload.cjs') } });
+  window.webContents.on('console-message', (details) => {
+    if (details.level !== 'error') return;
+    if (details.message.startsWith("Loading the font 'data:font/woff2")) knownConsoleWarnings.push(details.message);
+    else errors.push(details.message);
+  });
+  window.webContents.on('render-process-gone', (_event, details) => errors.push(`Renderer process gone: ${details.reason}`));
+  try {
+    await window.loadFile(html);
+    await ready();
+    assert.equal((await snapshot()).path, fixture.paths[0].name);
+    check('normal trajectory is ready');
+    assert.ok(await evaluate(() => document.querySelector('.library-rail').checkVisibility()));
+    assert.equal(await evaluate(() => document.querySelectorAll('.featmove').length), 0);
+    await evaluate(() => document.querySelectorAll('.featgrip')[1].focus());
+    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Down' });
+    window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Down' });
+    await waitFor(() => evaluate(() => document.activeElement === document.querySelectorAll('.featgrip')[2]), 'keyboard reorder focus');
+    const reordered = await save();
+    assert.deepEqual(reordered.paths[0].waypoints[2], fixture.paths[0].waypoints[1]);
+    await evaluate(() => document.querySelectorAll('.featgrip')[2].focus());
+    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Up' });
+    window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Up' });
+    await waitFor(() => evaluate(() => document.activeElement === document.querySelectorAll('.featgrip')[1]), 'restored waypoint focus');
+    assert.deepEqual((await save()).paths[0].waypoints, fixture.paths[0].waypoints);
+    check('waypoints reorder from the keyboard without visible arrow buttons');
+    await click('.library-tabs button', 'Routines');
+    assert.ok(await evaluate(() => document.querySelector('.library-rail').checkVisibility() && !document.querySelector('.pathlib-panel')));
+    check('routine and path libraries remain docked beside the field');
+    await click('button', 'Settings');
+    await click('.settings-general .seg-i', 'Imperial');
+    await delay(250);
+    await fs.writeFile(path.join(output, 'document-settings.png'), (await window.webContents.capturePage()).toPNG());
+    await click('button', 'Editor');
+    assert.equal(await evaluate(() => document.documentElement.dataset.units), 'imperial');
+    await waitFor(() => evaluate(() => !document.querySelector('.routine-status')), 'routine preview');
+    await delay(250);
+    await fs.writeFile(path.join(output, 'routine-toolbar.png'), (await window.webContents.capturePage()).toPNG());
+    await click('.library-tabs button', 'Paths');
+    const imperialProject = await save();
+    assert.equal(imperialProject.editor.unitSystem, 'imperial');
+    assert.deepEqual(imperialProject.paths[0].waypoints, fixture.paths[0].waypoints);
+    await evaluate(() => localStorage.setItem('bordeaux.unitSystem', 'metric'));
+    await window.loadFile(html);
+    await ready();
+    assert.equal(await evaluate(() => document.documentElement.dataset.units), 'imperial');
+    check('document units save and reopen over a different machine preference without changing geometry');
+    await click('button', 'Settings');
+    await click('.settings-general .seg-i', 'Metric');
+    await click('button', 'Editor');
+    await ready();
+    const normal = await snapshot();
+    await click('.optimizer-toggle');
+    await finishSearch();
+    check('one toolbar click opens the optimizer and runs a quick search');
+    await assertCompactResult();
+    check('result-first inspector keeps settings and solver details collapsed');
+    await fs.writeFile(path.join(output, 'optimizer-result.png'), (await window.webContents.capturePage()).toPNG());
+    await stable(normal, 1800, 'Unapplied candidate');
+    let project = await save();
+    assert.equal(project.paths[0].optimization?.accepted, undefined);
+    check('search completion leaves selected timing and geometry unchanged');
+    await click('button[aria-label="Preview optimized trajectory"]');
+    const candidate = await snapshot();
+    assert.ok(Number(candidate.time) < Number(normal.time), 'Candidate comparison must display faster timing');
+    assert.notEqual(candidate.geometry, normal.geometry, 'Candidate comparison must show improved geometry');
     await click('.optimizer-toggle');
     await stable(normal, 250, 'Closing the comparison');
     await click('.optimizer-toggle');
