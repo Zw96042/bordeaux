@@ -1,3 +1,4 @@
+import type { RobotPushScope, JavaDeploymentComparison } from "../shared/export/javaDeployment";
 import { contextBridge, ipcRenderer } from "electron";
 import type { BordeauxProject } from "../shared/types";
 import type { AgentProposal, AgentSessionSnapshot } from "../shared/agent/types";
@@ -29,13 +30,14 @@ const bordeauxAPI = {
   confirmRobotPairing: (hostKeyFingerprint: string, runtimeId: string): Promise<RobotPairing> => ipcRenderer.invoke("robot:confirmPairing", hostKeyFingerprint, runtimeId),
   inspectPairedRobot: (): Promise<RobotRuntimeStatus> => ipcRenderer.invoke("robot:inspect"),
   inspectRobotRetention: (project: BordeauxProject): Promise<{ status: RobotRuntimeStatus; localRevisionId: string }> => ipcRenderer.invoke("robot:inspectRetention", project),
-  prepareRobotPush: (project: BordeauxProject): Promise<RobotPushPreview> => ipcRenderer.invoke("robot:preparePush", project),
-  confirmRobotPush: (operationId: string): Promise<RobotPushResult | {
+  inspectRobotLibrary: (project: BordeauxProject): Promise<{ status: RobotRuntimeStatus; comparison: JavaDeploymentComparison | null; verifiedAt: string; message?: string }> => ipcRenderer.invoke("robot:inspectLibrary", project),
+  prepareRobotPush: (project: BordeauxProject, scope?: RobotPushScope): Promise<RobotPushPreview> => ipcRenderer.invoke("robot:preparePush", project, scope),
+  confirmRobotPush: (operationId: string, adoptBaseline = false): Promise<RobotPushResult | {
     operationId: string;
     state: "failed" | "cancelled";
     boundary: "upload" | "staging";
     message: string;
-  }> => ipcRenderer.invoke("robot:confirmPush", operationId),
+  }> => ipcRenderer.invoke("robot:confirmPush", operationId, adoptBaseline),
   cancelRobotPush: (operationId: string): Promise<{ canceled: boolean; boundary?: "review" | "upload" }> => ipcRenderer.invoke("robot:cancelPush", operationId),
   onRobotPushState: (handler: (progress: RobotPushProgress) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, progress: RobotPushProgress) => handler(progress);

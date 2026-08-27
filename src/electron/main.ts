@@ -4,9 +4,10 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
-import { javaTrajectoryFileName, type BuiltJavaTrajectory } from "../shared/export/javaTrajectory";
+import { javaTrajectoryFileName } from "../shared/export/javaTrajectory";
 import { buildJavaRevision } from "../shared/export/javaRevision";
+import type { RobotPushScope } from "../shared/export/javaDeployment";
+import { hasDeploymentReceipt, readDeploymentReceipts, saveDeploymentReceipt, sameDeploymentRevision } from "./deploymentReceipts";
 import { javaCatalogSemanticSignature } from "../shared/agent/catalogSignature";
 import type { BordeauxProject, JavaCommandCatalog, JavaIntegrationStatus } from "../shared/types";
 import type { AgentSessionSnapshot } from "../shared/agent/types";
@@ -41,7 +42,9 @@ import {
   type DiagnosticRobotAcknowledgement,
 } from "./diagnosticBundle";
 import { AgentSessionService } from "./agentSession";
+import { buildJavaTrajectoryOffThread, compareJavaDeploymentOffThread, buildJavaDeploymentOffThread } from "./javaTrajectoryWorkerClient";
 import { runAgentPlanningInWorker } from "./agentPlanningWorkerClient";
+import { quitAfterMcpInputEnds } from "./mcpStdioLifecycle";
 import { serveBordeauxMcp } from "../mcp/server";
 import { RobotPairingController, readRobotPairing, writeRobotPairing } from "./robotPairings";
 import { createRobotPushOperation, type RobotPushOperation, type RobotPushProgress } from "./robotPush";
@@ -69,28 +72,9 @@ let allowClose = false;
 let appUpdates: AppUpdateController | null = null;
 let updateCheckTimer: NodeJS.Timeout | null = null;
 let backgroundShutdownPromise: Promise<void> | null = null;
+let backgroundServicesReadyForExit = false;
+let finalQuitInProgress = false;
 
-function buildJavaTrajectoryOffThread(project: BordeauxProject, catalog: JavaCommandCatalog): Promise<BuiltJavaTrajectory> {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(path.join(__dirname, "javaTrajectoryWorker.js"));
-    let settled = false;
-    const finish = (action: () => void) => {
-      if (settled) return;
-      settled = true;
-      void worker.terminate();
-      action();
-    };
-    worker.once("message", (message: { ok: true; built: BuiltJavaTrajectory } | { ok: false; error: string }) => {
-      if (message.ok) finish(() => resolve(message.built));
-      else finish(() => reject(new Error(message.error)));
-    });
-    worker.once("error", (error) => finish(() => reject(error)));
-    worker.once("exit", (code) => {
-      if (!settled && code !== 0) finish(() => reject(new Error(`Java trajectory worker stopped with exit code ${code}`)));
-    });
-    worker.postMessage({ project, catalog });
-  });
-}
 let smokeCloseGuardTriggered = false;
 let linkedJavaProjectPath: string | null = null;
 let linkedJavaProjectBookmarkId: string | null = null;
@@ -101,8 +85,8 @@ let javaProjectBookmarks: JavaProjectBookmark[] = [];
 let robotPairings = new RobotPairingController();
 const robotTransport = new BordeauxRobotTransport(connectRobotSftp);
 type PendingRobotOperation =
-  | { kind: "push"; operation: RobotPushOperation; pairing: RobotPairing }
-  | { kind: "retention"; operation: RobotRetentionOperation };
+  | { kind: "push"; operation: RobotPushOperation; pairing: RobotPairing; projectGeneration: number; javaGeneration: number; receiptProject: string }
+  | { kind: "retention"; operation: RobotRetentionOperation; pairing: RobotPairing; projectGeneration: number; javaGeneration: number };
 type ActiveRobotOperation = { operationId: string; controller: AbortController; kind: PendingRobotOperation["kind"] };
 let pendingRobotOperation: PendingRobotOperation | null = null;
 let activeRobotPush: ActiveRobotOperation | null = null;
@@ -156,7 +140,10 @@ const agentSessions = new AgentSessionService(
 );
 
 app.setName("Bordeaux");
+if (smokeDirectory) app.setPath("userData", smokeDirectory);
 app.setAppUserModelId("org.frc2468.bordeaux");
+const ownsDesktopInstance = mcpStdioMode || app.requestSingleInstanceLock();
+if (!ownsDesktopInstance) app.quit();
 
 function showUpdateMessage(options: Electron.MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> {
   const window = mainWindow;
@@ -243,6 +230,7 @@ function createAppUpdateController(): AppUpdateController {
     prepareToInstall: async () => {
       await stopBackgroundServices();
       if (dirty) throw new Error("The project changed while Bordeaux was preparing the update. Save or discard it, then try again.");
+      backgroundServicesReadyForExit = true;
       allowClose = true;
     },
     warn: (message, error) => console.warn(message, error),
@@ -252,6 +240,8 @@ function createAppUpdateController(): AppUpdateController {
 function activateProjectTarget(filePath: string | null): void {
   currentProjectPath = filePath;
   projectTargetGeneration += 1;
+  pendingRobotOperation = null;
+  robotPushPreparationGeneration += 1;
 }
 
 async function rememberFile(filePath: string) {
@@ -495,8 +485,33 @@ function createWindow() {
 
   if (process.env.BORDEAUX_SMOKE_TEST === "1") {
     window.webContents.once("did-finish-load", async () => {
-      const result: any = await window.webContents.executeJavaScript(`(async () => {
-        const unnamedOnPage = () => {
+      let inputRunning = false;
+      const inputTimer = setInterval(() => {
+        if (inputRunning || window.isDestroyed()) return;
+        inputRunning = true;
+        void window.webContents.executeJavaScript('window.__bordeauxSmokeInput || null').then(async (point) => {
+          if (!point) return;
+          window.focus();
+          window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'M' });
+          window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'M' });
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          window.webContents.sendInputEvent({ type: 'mouseMove', x: point.x, y: point.y });
+          window.webContents.sendInputEvent({ type: 'mouseDown', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+          window.webContents.sendInputEvent({ type: 'mouseUp', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+          await window.webContents.executeJavaScript('window.__bordeauxSmokeInput = null');
+        }).catch(() => undefined).finally(() => { inputRunning = false; });
+      }, 10);
+      try {
+        if (!smokeDirectory) throw new Error("Smoke test requires a fixture directory");
+        if (process.platform === "darwin") app.focus({ steal: true });
+        window.show();
+        window.focus();
+        const smokeScript = await fs.promises.readFile(path.join(smokeDirectory, "renderer.js"), "utf8");
+        const result: Record<string, unknown> = await window.webContents.executeJavaScript(smokeScript);
+        if (process.env.BORDEAUX_SMOKE_CAPTURE_PATH) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          const capture = await window.webContents.capturePage();
+          await fs.promises.writeFile(process.env.BORDEAUX_SMOKE_CAPTURE_PATH, capture.toPNG());
         }
         await new Promise((resolve) => setTimeout(resolve, 50));
         window.close();

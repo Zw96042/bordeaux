@@ -684,11 +684,6 @@ export class BordeauxRobotTransport {
     try {
       if (session.hostKeyFingerprint !== pairing.hostKeyFingerprint) {
         throw new RobotTransportError("re_pair_required", "The robot SSH host key changed; explicitly re-pair this robot before transferring data");
-      }
-      const status = parseRobotStatus(await session.read({ kind: "status" }, MAX_STATUS_BYTES, signal));
-      if (status.runtimeId !== pairing.runtimeId || status.teamNumber !== pairing.teamNumber) {
-        throw new RobotTransportError("re_pair_required", "The paired Bordeaux runtime identity changed; explicitly re-pair this robot before transferring data");
-      }
       while (true) {
         if (signal.aborted) throw new RobotTransportError("cancelled", "Waiting for robot retention acknowledgment was cancelled");
         if (await session.exists(acknowledgement, signal)) {
