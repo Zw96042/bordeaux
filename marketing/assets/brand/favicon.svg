@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Bordeaux wine glass</title>
+  <rect width="64" height="64" rx="14" fill="#0f0b0b"/>
+  <path d="M17.5 12.5c.8 13.4 4.8 21.2 14.5 22.7 9.7-1.5 13.7-9.3 14.5-22.7z" fill="#f1ebeb" fill-opacity=".06" stroke="#f1ebeb" stroke-width="2.7" stroke-linejoin="round"/>
+  <path d="M20.8 22.3c6.2-1.8 16.2-1.8 22.4 0-1.5 7-5.3 11-11.2 12-5.9-1-9.7-5-11.2-12z" fill="#9b2d3b"/>
+  <ellipse cx="32" cy="12.5" rx="14.5" ry="2" fill="#0f0b0b" stroke="#f1ebeb" stroke-width="2.7"/>
+  <path d="M32 35.2v11M23.5 52c2.8-2.7 5.7-4.1 8.5-4.1s5.7 1.4 8.5 4.1z" fill="none" stroke="#f1ebeb" stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
