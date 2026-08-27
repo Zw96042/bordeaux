@@ -497,93 +497,23 @@ function createWindow() {
     window.webContents.once("did-finish-load", async () => {
       const result: any = await window.webContents.executeJavaScript(`(async () => {
         const unnamedOnPage = () => {
-          const controls = [...document.querySelectorAll('button,input,select,textarea,[role="button"]')];
-          const name = (el) => el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.getAttribute('title') || el.labels?.[0]?.textContent || (el.matches('button,[role="button"]') ? el.textContent : '');
-          return controls.filter((el) => !String(name(el) || '').trim()).map((el) => el.className);
-        };
-        const unnamed = [...unnamedOnPage()];
-        for (const page of ['Aquitaine', 'Robot']) {
-          [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === page)?.click();
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          unnamed.push(...unnamedOnPage());
         }
-        const project = { schemaVersion: '1.0', field: { id: '2026-rebuilt', revision: '2026-manual-tu19-welded-4', coordinateSchemaId: 'bordeaux-field/1.0' }, name: 'Smoke edited', robot: { drive: 'swerve', w: .8, l: .8, maxSpeed: 4 }, paths: [{ id: 'path_smoke', name: 'Smoke', waypoints: [{ x: 1, y: 1, theta: 0, thetaOn: true, linked: true, stop: false, prevC: { x: .8, y: 1 }, nextC: { x: 1.2, y: 1 } }, { x: 2, y: 1, theta: 0, thetaOn: true, linked: true, stop: false, prevC: { x: 1.8, y: 1 }, nextC: { x: 2.2, y: 1 } }], targets: [], markers: [{ id: 'event_smoke', f: .5, name: 'Smoke event', invocation: { commandId: 'frc.robot.SmokeCommand', arguments: { count: 2, sequence: '9007199254740993', tags: ['auto'] }, cancelOnPathEnd: true } }], ranges: [], constraints: { maxVel: 2, maxAccel: 2, maxDecel: 2, maxAngVel: 180, maxAngAccel: 360 }, startVel: 0, goalVel: 0 }], pathLinks: [], routines: [{ id: 'routine_smoke_active', name: 'Smoke routine', nodes: [{ id: 'routine_smoke', type: 'path', ref: 'path_smoke' }] }], activeRoutineId: 'routine_smoke_active', plannerId: 'profiledSpline' };
-        await window.bordeauxAPI.saveProject(project, true);
-        document.getElementById('robot-drive-motor')?.click();
-        for (let attempt = 0; attempt < 50 && !document.querySelector('#robot-drive-motor-listbox [data-value="rev-neo"]'); attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        document.querySelector('#robot-drive-motor-listbox [data-value="rev-neo"]')?.click();
-        await new Promise((resolve) => setTimeout(resolve, 1_050));
-        const motorAutosave = await window.bordeauxAPI.restoreLastProject();
-        const motorPreset = motorAutosave.project.robot.driveModel?.motorId === 'rev-neo'
-          && motorAutosave.project.robot.driveModel?.motorFreeRpm === 5676
-          && motorAutosave.project.robot.maxSpeed > 4;
-        const validation = await window.bordeauxAPI.validateProject(project);
-        const javaConnection = await window.bordeauxAPI.linkJavaProject();
-        const installedJavaConnection = await window.bordeauxAPI.installJavaSupport();
-        const builtJavaConnection = await window.bordeauxAPI.buildJavaCatalog();
-        const recentJavaProjects = await window.bordeauxAPI.listRecentJavaProjects();
-        const reopenedJavaConnection = await window.bordeauxAPI.openRecentJavaProject(recentJavaProjects[0].id);
-        const secondPath = structuredClone(project.paths[0]);
-        secondPath.id = 'path_smoke_second'; secondPath.name = 'Smoke second';
-        secondPath.markers = [];
-        const persistedProject = { ...project, paths: [...project.paths, secondPath], editor: { activePathId: secondPath.id, javaProjectBookmarkId: recentJavaProjects[0].id } };
-        [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === 'Plan')?.click();
-        for (let attempt = 0; attempt < 100; attempt++) {
-          const planStage = document.querySelector('.stage-plan');
-          if (planStage && planStage.getAttribute('aria-disabled') !== 'true') break;
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        document.querySelector('button[aria-label="Add event marker"]')?.click();
-        for (let attempt = 0; attempt < 100 && !document.querySelector('button[aria-label="Choose Java project"], .cmd-primary-action'); attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        const linkButton = document.querySelector('button[aria-label="Choose Java project"]')
-          || [...document.querySelectorAll('.cmd-primary-action')].find((button) => button.textContent.trim() === 'Choose Java project');
-        linkButton?.click();
-        for (let attempt = 0; attempt < 50 && document.getElementById('event-marker-command')?.disabled; attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        const commandPicker = document.getElementById('event-marker-command');
-        const setInputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-        commandPicker?.click();
-        for (let attempt = 0; attempt < 50 && !document.querySelector('#event-marker-command-listbox [role="option"]'); attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        const commandOptions = [...document.querySelectorAll('#event-marker-command-listbox [role="option"]')];
-        const commandSearch = document.getElementById('event-marker-command-search');
-        const smokeCommandOption = commandOptions.find((option) => option.getAttribute('data-value') === 'frc.robot.SmokeCommand');
-        if (smokeCommandOption) {
-          smokeCommandOption.click();
-          for (let attempt = 0; attempt < 100 && !document.getElementById('event-command-param-tags'); attempt++) {
-            await new Promise((resolve) => setTimeout(resolve, 10));
-          }
-        }
-        const jsonParameter = document.getElementById('event-command-param-tags');
-        const exactIntegerParameter = document.getElementById('event-command-param-sequence');
-        const smokeParametersPresent = Boolean(document.getElementById('event-command-param-count') && jsonParameter && exactIntegerParameter);
-        const setTextAreaValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
-        if (jsonParameter) {
-          setTextAreaValue.call(jsonParameter, '{}');
-          jsonParameter.dispatchEvent(new Event('input', { bubbles: true }));
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          jsonParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        }
-        const jsonShapeRejected = jsonParameter?.getAttribute('aria-invalid') === 'true';
-        if (jsonParameter) {
-          setTextAreaValue.call(jsonParameter, '["auto"]');
-          jsonParameter.dispatchEvent(new Event('input', { bubbles: true }));
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          jsonParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        }
-        if (exactIntegerParameter) {
-          setInputValue.call(exactIntegerParameter, '9223372036854775808');
-          exactIntegerParameter.dispatchEvent(new Event('input', { bubbles: true }));
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          exactIntegerParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        window.close();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const filesWritten = fs.existsSync(path.join(smokeDirectory, "project.bordeaux.json")) && fs.existsSync(path.join(smokeDirectory, "java-project", "src", "main", "deploy", "bordeaux", "Smoke-edited.bordeaux.json"));
+        result.filesWritten = filesWritten;
+        result.closeGuard = smokeCloseGuardTriggered && !window.isDestroyed();
+        clearInterval(inputTimer);
+        console.log(`BORDEAUX_SMOKE_RESULT ${JSON.stringify(result)}`);
+        allowClose = true;
+        await stopBackgroundServices();
+        backgroundServicesReadyForExit = true;
+        app.exit(0);
+      } catch (error) {
+        clearInterval(inputTimer);
+        console.error("BORDEAUX_SMOKE_FAILED", error);
+        app.exit(1);
       }
     });
   }
