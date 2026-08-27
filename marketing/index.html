@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; media-src 'self'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="theme-color" content="#0f0b0b">
+  <meta name="color-scheme" content="dark">
+  <title>Bordeaux — Cultivated engineering for FRC autonomous</title>
+  <meta name="description" content="Bordeaux is a focused desktop tool for authoring FRC robot paths, autonomous routines, physical constraints, and typed Java command events.">
+  <link rel="canonical" href="https://bordeaux.wilsonzach.com/">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Bordeaux">
+  <meta property="og:title" content="Bordeaux — Cultivated engineering">
+  <meta property="og:description" content="Shape the path, compose the autonomous run, and carry an inspectable contract into robot code.">
+  <meta property="og:url" content="https://bordeaux.wilsonzach.com/">
+  <meta property="og:image" content="https://bordeaux.wilsonzach.com/assets/social/bordeaux-og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Bordeaux, a focused FRC autonomous authoring tool">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Bordeaux — Cultivated engineering">
+  <meta name="twitter:description" content="A focused desktop editor for FRC paths, routines, constraints, and typed Java command events.">
+  <meta name="twitter:image" content="https://bordeaux.wilsonzach.com/assets/social/bordeaux-og.png">
+  <meta name="twitter:image:alt" content="Bordeaux, a focused FRC autonomous authoring tool">
+
+  <link rel="icon" href="assets/brand/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="assets/brand/apple-touch-icon.png" sizes="180x180">
+  <link rel="manifest" href="site.webmanifest">
+  <link rel="preload" href="assets/fonts/space-grotesk-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="assets/fonts/jetbrains-mono-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="styles.css">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Bordeaux",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "macOS, Windows, Linux",
+    "softwareVersion": "0.2.0-beta.3",
+    "description": "A focused desktop editor for authoring FRC robot paths, autonomous routines, event markers, and typed Java command integration.",
+    "url": "https://bordeaux.wilsonzach.com/",
+    "downloadUrl": "https://github.com/Zw96042/bordeaux/releases",
+    "codeRepository": "https://github.com/Zw96042/bordeaux",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "isAccessibleForFree": true
+  }
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+
+  <header class="site-header" data-header>
+    <a class="brand" href="#top" aria-label="Bordeaux home">
+      <img src="assets/brand/wine-glass.svg" width="27" height="27" alt="">
+      <span>Bordeaux</span>
+    </a>
+    <button class="menu-button" type="button" aria-expanded="false" aria-controls="site-navigation" data-menu-button>
+      <span class="sr-only">Open navigation</span>
+      <span class="menu-lines" aria-hidden="true"></span>
+    </button>
+    <nav class="site-nav" id="site-navigation" aria-label="Primary navigation" data-navigation>
+      <a href="#craft">The craft</a>
+      <a href="#workflow">Workflow</a>
+      <a href="#java">Java</a>
+      <a href="#control">Control</a>
+      <a class="nav-download" href="https://github.com/Zw96042/bordeaux/releases">Download beta</a>
+    </nav>
+  </header>
+
+  <main id="main-content">
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="shell hero-grid">
+        <div class="hero-copy">
+          <h1 id="hero-title">Cultivated engineering.</h1>
+          <p>Precision for robot constraints. Enough humanity to stay memorable through build season. Bordeaux brings the field, the routine, and the Java boundary into one considered tool.</p>
+          <div class="hero-actions">
+            <a class="action action-primary" href="https://github.com/Zw96042/bordeaux/releases">Download Bordeaux</a>
+            <a class="action action-secondary" href="#craft">Discover the craft</a>
+          </div>
+        </div>
+        <div class="chap-stage">
+          <div class="chap-figure">
+            <div class="chap-canvas" data-wrlp-chap-frame></div>
+            <button class="chap-motion-toggle" type="button" aria-label="Pause Chap animation" data-chap-toggle>
+              <span class="chap-motion-icon" aria-hidden="true"></span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="principle" aria-labelledby="principle-title">
+      <div class="shell"><h2 id="principle-title">Make the difficult parts visible without making the tool feel difficult.</h2></div>
+    </section>
+
+    <section class="craft light-section" id="craft" aria-labelledby="craft-title">
+      <div class="shell craft-grid">
+        <div class="section-heading">
+          <h2 id="craft-title">One autonomous system, held together.</h2>
+          <p>Bordeaux is not a decorative path sketcher. It keeps geometry, timing, routine structure, the robot model, and the code contract readable as one project.</p>
+        </div>
+        <div class="boundary-index">
+          <div><h3>Robot</h3><p>Mass, footprint, drivetrain, gearing, limits.</p></div>
+          <div><h3>Plan</h3><p>Waypoints, headings, handles, timing, constraints.</p></div>
+          <div><h3>Aquitaine</h3><p>Paths, commands, waits, decisions, complete routines.</p></div>
+          <div><h3>Contract</h3><p>Catalog identity, schema, revision, acknowledgment.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="workspaces" aria-labelledby="workspaces-title">
+      <div class="shell">
+        <h2 class="sr-only" id="workspaces-title">Bordeaux workspaces</h2>
+        <div class="workspace-grid">
+          <article><h3>Plan</h3><p>Shape motion with field structures, robot footprint clearance, rotation targets, event markers, and local constraints in view.</p></article>
+          <article><h3>Aquitaine</h3><p>Compose paths, commands, waits, stationary actions, and sensor decisions into the complete autonomous run.</p></article>
+          <article><h3>Robot</h3><p>Give the planner the real machine: drivetrain, dimensions, mass, gearing, limits, and team strategy vocabulary.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="workflow light-section" id="workflow" aria-labelledby="workflow-title">
+      <div class="shell workflow-grid">
+        <div class="section-heading workflow-heading">
+          <h2 id="workflow-title">From intent<br>to runtime.</h2>
+          <p>Every phase adds information without discarding what came before.</p>
+        </div>
+        <ul class="workflow-list">
+          <li>Model the robot and the physical limits that bound motion.</li>
+          <li>Author the route with field structures and footprint clearance in view.</li>
+          <li>Compose the routine with typed events, waits, and decisions.</li>
+          <li>Preview, analyze, review, and export the versioned contract.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="java-section" id="java" aria-labelledby="java-title">
+      <div class="shell java-grid">
+        <div class="section-heading">
+          <h2 id="java-title">Typed Java.<br>Robot code<br>stays yours.</h2>
+          <p>Bordeaux installs managed support only after a preview, discovers team-owned annotated factories through a deterministic catalog, and validates arguments before export.</p>
+          <p>It never edits <code>RobotContainer</code> and never deploys robot code.</p>
+        </div>
+        <div class="code-sample">
+          <div class="code-heading"><span>ExampleCommands.java</span><button type="button" data-copy-code aria-label="Copy Java example"><span>Copy</span></button></div>
+          <pre><code data-code>public final class ExampleCommands {
+  @BordeauxCommand(
+      id = "intake.hold",
+      label = "Hold intake")
+  public Command hold(
+      @BordeauxParam(
+          label = "Output",
+          min = "-1",
+          max = "1")
+      double output) {
+    return Commands.startEnd(
+        () -&gt; intake.set(output),
+        intake::stop,
+        intake);
+  }
+}</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="control" id="control" aria-labelledby="control-title">
+      <div class="shell control-grid">
+        <h2 id="control-title">Technology that asks before it acts.</h2>
+        <div class="control-copy">
+          <p>Optional agent access is local and off by default. It can inspect, analyze, repair, and propose. The authoring boundary remains deliberate: every ready candidate stays a preview until a person chooses Apply.</p>
+          <dl>
+            <div><dt>Inspect project context</dt><dd>Allowed</dd></div>
+            <div><dt>Stage bounded candidates</dt><dd>Allowed</dd></div>
+            <div><dt>Apply a proposal</dt><dd>Team only</dd></div>
+            <div><dt>Save or export</dt><dd>Team only</dd></div>
+            <div><dt>Deploy robot code</dt><dd>Never</dd></div>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <section class="faq light-section" aria-labelledby="faq-title">
+      <div class="shell faq-grid">
+        <div class="section-heading"><h2 id="faq-title">Questions, answered plainly.</h2></div>
+        <div class="faq-list">
+          <details><summary>Is Bordeaux ready for competition use?</summary><p>Bordeaux is beta software. Validate exported trajectories in simulation and on a safely controlled robot, and keep a known-good autonomous fallback.</p></details>
+          <details><summary>Which robots and languages does it support?</summary><p>The maintained application is focused on FRC and Java 17, with swerve and tank robot models.</p></details>
+          <details><summary>Does Bordeaux change or deploy robot code?</summary><p>No. It previews managed support changes, does not edit <code>RobotContainer</code>, and never performs robot deployment.</p></details>
+          <details><summary>Which platforms are packaged?</summary><p>The repository includes packaging targets for macOS, Windows, and Linux. Check each beta release for the exact available artifacts.</p></details>
+          <details><summary>Is Bordeaux open source?</summary><p>Yes. The source, releases, issue tracker, and current license are available in the public GitHub repository.</p></details>
+        </div>
+      </div>
+    </section>
+
+    <section class="closing" aria-labelledby="closing-title">
+      <div class="shell">
+        <h2 id="closing-title"><span>Draw the path.</span><span>Know the run.</span></h2>
+        <div class="hero-actions">
+          <a class="action action-primary" href="https://github.com/Zw96042/bordeaux/releases">Download the beta</a>
+          <a class="action action-secondary" href="https://github.com/Zw96042/bordeaux">View the source</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="shell footer-grid">
+      <p>Bordeaux · Cultivated engineering for FRC autonomous</p>
+      <nav aria-label="Footer navigation">
+        <a href="https://github.com/Zw96042/bordeaux">Source</a>
+        <a href="https://github.com/Zw96042/bordeaux/releases">Releases</a>
+        <a href="https://github.com/Zw96042/bordeaux/issues">Issues</a>
+        <a href="privacy.html">Privacy</a>
+      </nav>
+      <p class="footer-meta">Built for FRC teams · <span data-year>2026</span></p>
+    </div>
+  </footer>
+
+  <script src="assets/figures/wrlp-chap-markup.js"></script>
+  <script src="site.js" defer></script>
+</body>
+</html>
