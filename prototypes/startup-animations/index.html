@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Bordeaux startup film prototypes</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-synthesis: none;
+      --canvas: #08070a;
+      --text: #f5efe6;
+    }
+
+    * { box-sizing: border-box; }
+
+    html,
+    body {
+      width: 100%;
+      min-width: 320px;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: var(--canvas);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    button,
+    input,
+    select { font: inherit; }
+
+    button,
+    input[type="range"],
+    select { touch-action: manipulation; }
+
+    .skip-link {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 2147483647;
+      padding: 10px 12px;
+      border-radius: 6px;
+      color: #111;
+      background: #fff;
+      transform: translateY(-160%);
+    }
+
+    .skip-link:focus { transform: translateY(0); }
+
+    #stage {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: var(--canvas);
+    }
+
+    .motion-preview {
+      position: relative;
+      isolation: isolate;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: var(--canvas);
+    }
+
+    .motion-preview video {
+      position: relative;
+      z-index: 1;
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: var(--canvas);
+    }
+
+    .motion-preview[data-loading]::after {
+      content: "Loading film…";
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      z-index: 0;
+      color: rgba(255, 255, 255, 0.42);
+      background: var(--canvas);
+      font: 600 10px/1.4 ui-monospace, "SFMono-Regular", Menlo, monospace;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    .render-note {
+      position: absolute;
+      left: 24px;
+      bottom: 24px;
+      z-index: 2;
+      margin: 0;
+      color: rgba(255, 255, 255, 0.38);
+      font: 600 10px/1.4 ui-monospace, "SFMono-Regular", Menlo, monospace;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      pointer-events: none;
+      user-select: none;
+    }
+
+    .stage-play {
+      position: absolute;
+      left: 50%;
+      bottom: 88px;
+      z-index: 3;
+      min-width: 116px;
+      min-height: 44px;
+      padding: 0 16px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 999px;
+      color: #fff;
+      background: rgba(10, 10, 10, 0.82);
+      -webkit-backdrop-filter: blur(12px) saturate(1.4);
+      backdrop-filter: blur(12px) saturate(1.4);
+      transform: translateX(-50%);
+      cursor: pointer;
+    }
+
+    .stage-play[hidden] { display: none; }
+
+    .stage-error {
+      display: grid;
+      width: 100%;
+      height: 100%;
+      place-items: center;
+      padding: 32px;
+      color: rgba(255, 255, 255, 0.68);
+      text-align: center;
+    }
+
+    .proto-controls {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 2147483646;
+      width: 252px;
+      padding: 14px;
+      border-radius: 10px;
+      background: rgba(10, 10, 10, 0.84);
+      -webkit-backdrop-filter: blur(12px) saturate(1.4);
+      backdrop-filter: blur(12px) saturate(1.4);
+      box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.08) inset,
+        0 8px 24px rgba(0, 0, 0, 0.24),
+        0 2px 6px rgba(0, 0, 0, 0.12);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .proto-controls h2 {
+      margin: 0;
+      color: rgba(255, 255, 255, 0.92);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .motion-meta {
+      min-height: 30px;
+      margin: 4px 0 12px;
+      color: rgba(255, 255, 255, 0.48);
+      font-size: 11px;
+    }
+
+    .control-stack { display: grid; gap: 10px; }
+
+    .control-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 4px 10px;
+      align-items: center;
+      color: rgba(255, 255, 255, 0.62);
+    }
+
+    .control-row output {
+      color: rgba(255, 255, 255, 0.88);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .control-row input[type="range"] {
+      grid-column: 1 / -1;
+      width: 100%;
+      min-height: 44px;
+      margin: 0;
+      accent-color: #d8d8d8;
+    }
+
+    .control-row select {
+      grid-column: 1 / -1;
+      width: 100%;
+      min-height: 44px;
+      padding: 0 9px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 6px;
+      color: #fff;
+      background: #1b1b1b;
+      font-size: 16px;
+    }
+
+    .control-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .control-button {
+      min-height: 44px;
+      padding: 0 10px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 6px;
+      color: rgba(255, 255, 255, 0.82);
+      background: rgba(255, 255, 255, 0.06);
+      cursor: pointer;
+    }
+
+    .control-button:focus-visible,
+    .stage-play:focus-visible {
+      outline: 2px solid rgba(255, 255, 255, 0.5);
+      outline-offset: 2px;
+    }
+
+    .copy-status {
+      min-height: 14px;
+      margin: 0;
+      color: rgba(255, 255, 255, 0.46);
+      font-size: 10px;
+      text-align: right;
+    }
+
+    @media (hover: hover) and (pointer: fine) {
+      .control-button:hover,
+      .stage-play:hover { background: rgba(255, 255, 255, 0.11); }
+    }
+
+    .proto-picker {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 2147483647;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 4px;
+      border-radius: 999px;
+      background: rgba(10, 10, 10, 0.82);
+      -webkit-backdrop-filter: blur(12px) saturate(1.4);
+      backdrop-filter: blur(12px) saturate(1.4);
+      box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.08) inset,
+        0 8px 24px rgba(0, 0, 0, 0.24),
+        0 2px 6px rgba(0, 0, 0, 0.12);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 13px;
+      line-height: 1;
+      -webkit-font-smoothing: antialiased;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    .proto-picker-highlight {
+      position: absolute;
+      top: 4px;
+      left: 0;
+      width: 76px;
+      height: 44px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12);
+      will-change: transform;
+    }
+
+    .proto-picker[data-ready] .proto-picker-highlight {
+      transition: transform 250ms cubic-bezier(0.23, 1, 0.32, 1);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .proto-picker[data-ready] .proto-picker-highlight { transition: none; }
+    }
+
+    .proto-picker-item {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 76px;
+      width: 76px;
+      height: 44px;
+      padding: 0 8px;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: rgba(255, 255, 255, 0.55);
+      font: inherit;
+      cursor: pointer;
+      transition: color 150ms ease-out;
+    }
+
+    .proto-picker-item:hover { color: rgba(255, 255, 255, 0.85); }
+
+    .proto-picker-item:active { transform: scale(0.97); }
+
+    .proto-picker-item:focus-visible {
+      outline: 2px solid rgba(255, 255, 255, 0.4);
+      outline-offset: 2px;
+    }
+
+    .proto-picker-item[data-active] { color: #fff; }
+
+    .proto-picker-divider {
+      width: 1px;
+      height: 16px;
+      margin: 0 4px;
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    .proto-picker-replay {
+      flex-basis: 44px;
+      width: 44px;
+      padding: 0;
+      font-size: 14px;
+    }
+
+    .proto-picker[data-position="top"] {
+      bottom: auto;
+      top: 24px;
+    }
+
+    @media (max-width: 640px) {
+      .proto-controls {
+        top: 12px;
+        right: 12px;
+      }
+
+      .render-note {
+        left: 12px;
+        bottom: 72px;
+      }
+
+      .proto-picker { bottom: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#stage">Skip prototype controls</a>
+
+  <main id="stage" tabindex="-1" aria-live="polite"></main>
+
+  <aside class="proto-controls" aria-label="Motion inspector">
+    <h2>Motion inspector</h2>
+    <p class="motion-meta" id="motion-meta">Loading motion manifest…</p>
+    <div class="control-stack">
+      <label class="control-row" for="frame-scrubber">
+        <span>Frame</span>
+        <output id="frame-output" for="frame-scrubber">—</output>
+        <input id="frame-scrubber" type="range" min="0" max="1" value="0" step="1" disabled>
+      </label>
+      <label class="control-row" for="speed-select">
+        <span>Playback speed</span>
+        <output id="speed-output" for="speed-select">1×</output>
+        <select id="speed-select" disabled>
+          <option value="1">1×</option>
+          <option value="0.5">0.5×</option>
+          <option value="0.25">0.25×</option>
+        </select>
+      </label>
+      <div class="control-actions">
+        <button class="control-button" id="play-pause" type="button" disabled>Pause</button>
+        <button class="control-button" id="copy-config" type="button" disabled>Copy config</button>
+      </div>
+      <p class="copy-status" id="copy-status" role="status"></p>
+    </div>
+  </aside>
+
+  <nav class="proto-picker" aria-label="Prototype variants">
+    <span class="proto-picker-highlight" aria-hidden="true"></span>
+    <button class="proto-picker-item" data-active aria-current="true">Spill</button>
+    <button class="proto-picker-item">Ribbon</button>
+    <button class="proto-picker-item">Precision</button>
+    <span class="proto-picker-divider" aria-hidden="true"></span>
+    <button class="proto-picker-item proto-picker-replay" aria-label="Replay animation (R)">↻</button>
+  </nav>
+
+  <script>
+    const stage = document.getElementById('stage');
+    const picker = document.querySelector('.proto-picker');
+    const highlight = picker.querySelector('.proto-picker-highlight');
+    const items = [...picker.querySelectorAll('.proto-picker-item:not(.proto-picker-replay)')];
+    const replay = picker.querySelector('.proto-picker-replay');
+    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+    const meta = document.getElementById('motion-meta');
+    const scrubber = document.getElementById('frame-scrubber');
+    const frameOutput = document.getElementById('frame-output');
+    const speedSelect = document.getElementById('speed-select');
+    const speedOutput = document.getElementById('speed-output');
+    const playPause = document.getElementById('play-pause');
+    const copyConfig = document.getElementById('copy-config');
+    const copyStatus = document.getElementById('copy-status');
+
+    let manifest;
+    let variants = [];
+    let current = 0;
+    let video = null;
+    let frameCallback = null;
+    let mediaObjectUrl = null;
+    let userWantsPlayback = true;
+
+    function moveHighlight() {
+      const el = items[current];
+      highlight.style.transform = `translateX(${el.offsetLeft}px)`;
+    }
+
+    function variantMarkup(motion) {
+      const playHidden = reducedMotion.matches ? '' : ' hidden';
+      return `
+        <section class="motion-preview" data-loading aria-label="${motion.title} startup film">
+          <video muted playsinline preload="metadata" poster="${motion.poster}"
+            aria-label="${motion.title}: ${motion.purpose}">
+            <source src="${motion.webm}" type="video/webm">
+            <source src="${motion.mp4}" type="video/mp4">
+          </video>
+          <button class="stage-play" type="button"${playHidden}>Play film</button>
+          <p class="render-note">Blender · Eevee · ${manifest.width}×${manifest.height} / ${manifest.fps} fps</p>
+        </section>`;
+    }
+
+    function updateFrameReadout(frame) {
+      const motion = manifest.animations[current];
+      const clamped = Math.max(0, Math.min(motion.frameCount - 1, frame));
+      scrubber.value = String(clamped);
+      frameOutput.value = `${String(clamped + 1).padStart(3, '0')} / ${motion.frameCount}`;
+    }
+
+    function watchFrames() {
+      if (!video) return;
+      frameCallback = null;
+      updateFrameReadout(Math.round(video.currentTime * manifest.fps));
+      if (!video.paused && !video.ended && 'requestVideoFrameCallback' in video) {
+        frameCallback = video.requestVideoFrameCallback(watchFrames);
+      }
+    }
+
+    function setPlayState() {
+      if (!video) return;
+      playPause.textContent = video.paused || video.ended ? 'Play' : 'Pause';
+      if (!video.paused && frameCallback === null && 'requestVideoFrameCallback' in video) {
+        frameCallback = video.requestVideoFrameCallback(watchFrames);
+      }
+    }
+
+    function playActive() {
+      if (!video) return;
+      if (video.ended) video.currentTime = 0;
+      userWantsPlayback = true;
+      video.playbackRate = Number(speedSelect.value);
+      video.play().then(setPlayState).catch(() => {
+        const button = stage.querySelector('.stage-play');
+        if (button) button.hidden = false;
+        setPlayState();
+      });
+    }
+
+    async function loadSeekableMaster(boundVideo, motion, preview) {
+      const preferredSource = boundVideo.canPlayType('video/webm; codecs="vp9"')
+        ? motion.webm
+        : motion.mp4;
+      try {
+        const response = await fetch(preferredSource);
+        if (!response.ok) throw new Error(`Master request failed: ${response.status}`);
+        const blob = await response.blob();
+        if (video !== boundVideo) return;
+        if (mediaObjectUrl) URL.revokeObjectURL(mediaObjectUrl);
+        mediaObjectUrl = URL.createObjectURL(blob);
+        await new Promise((resolve, reject) => {
+          boundVideo.addEventListener('loadeddata', resolve, { once: true });
+          boundVideo.addEventListener('error', reject, { once: true });
+          boundVideo.src = mediaObjectUrl;
+          boundVideo.load();
+        });
+      } catch {
+        if (video !== boundVideo) return;
+        boundVideo.load();
+        if (boundVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+          await new Promise((resolve) => boundVideo.addEventListener('loadeddata', resolve, { once: true }));
+        }
+      }
+      if (video !== boundVideo) return;
+      preview.removeAttribute('data-loading');
+      if (!reducedMotion.matches && userWantsPlayback) playActive();
+      else setPlayState();
+    }
+
+    function bindStage() {
+      const motion = manifest.animations[current];
+      const preview = stage.querySelector('.motion-preview');
+      video = preview.querySelector('video');
+      const stagePlay = preview.querySelector('.stage-play');
+      meta.textContent = `${motion.title} · ${motion.axis} · ${motion.durationSeconds.toFixed(2)} s`;
+      scrubber.max = String(motion.frameCount - 1);
+      scrubber.disabled = false;
+      speedSelect.disabled = false;
+      playPause.disabled = false;
+      copyConfig.disabled = false;
+      copyStatus.textContent = '';
+      userWantsPlayback = !reducedMotion.matches;
+      updateFrameReadout(0);
+
+      video.playbackRate = Number(speedSelect.value);
+      video.addEventListener('error', () => {
+        preview.removeAttribute('data-loading');
+        preview.innerHTML = '<p class="stage-error">The rendered master could not be loaded. Run the Blender export pipeline, then reload.</p>';
+        meta.textContent = `${motion.title} · rendered master unavailable`;
+        scrubber.disabled = true;
+        speedSelect.disabled = true;
+        playPause.disabled = true;
+        video = null;
+      }, { once: true });
+      video.addEventListener('play', setPlayState);
+      video.addEventListener('pause', setPlayState);
+      video.addEventListener('ended', setPlayState);
+      video.addEventListener('timeupdate', () => {
+        if (!('requestVideoFrameCallback' in video)) {
+          updateFrameReadout(Math.round(video.currentTime * manifest.fps));
+        }
+      });
+      stagePlay.addEventListener('click', () => {
+        stagePlay.hidden = true;
+        playActive();
+      });
+      loadSeekableMaster(video, motion, preview);
+    }
+
+    function mount(i) {
+      if (!variants.length) return;
+      if (video && frameCallback !== null && 'cancelVideoFrameCallback' in video) {
+        video.cancelVideoFrameCallback(frameCallback);
+      }
+      frameCallback = null;
+      if (video) video.pause();
+      video = null;
+      if (mediaObjectUrl) {
+        URL.revokeObjectURL(mediaObjectUrl);
+        mediaObjectUrl = null;
+      }
+      stage.innerHTML = variants[i]();
+      bindStage();
+    }
+
+    function setActive(i) {
+      if (i < 0 || i >= variants.length) return;
+      current = i;
+      items.forEach((el, j) => {
+        el.toggleAttribute('data-active', j === i);
+        if (j === i) el.setAttribute('aria-current', 'true');
+        else el.removeAttribute('aria-current');
+      });
+      moveHighlight();
+      const url = new URL(location);
+      url.searchParams.set('v', i + 1);
+      history.replaceState(null, '', url);
+      mount(i);
+    }
+
+    items.forEach((el, i) => el.addEventListener('click', () => setActive(i)));
+    replay.addEventListener('click', () => mount(current));
+    window.addEventListener('resize', moveHighlight);
+
+    playPause.addEventListener('click', () => {
+      if (!video) return;
+      if (video.paused || video.ended) playActive();
+      else {
+        userWantsPlayback = false;
+        video.pause();
+      }
+    });
+
+    scrubber.addEventListener('input', () => {
+      if (!video) return;
+      userWantsPlayback = false;
+      video.pause();
+      const frame = Number(scrubber.value);
+      video.currentTime = frame / manifest.fps;
+      updateFrameReadout(frame);
+    });
+
+    speedSelect.addEventListener('change', () => {
+      const rate = Number(speedSelect.value);
+      speedOutput.value = `${rate}×`;
+      if (video) video.playbackRate = rate;
+    });
+
+    copyConfig.addEventListener('click', async () => {
+      const motion = manifest.animations[current];
+      const config = [
+        `variant: ${motion.id}`,
+        `playback-speed: ${speedSelect.value}x`,
+        `frame: ${scrubber.value}/${motion.frameCount - 1}`,
+        `duration: ${Math.round(motion.durationSeconds * 1000)}ms`,
+        `ease: ${motion.primaryEasing}`,
+        `master: ${manifest.width}x${manifest.height}@${manifest.fps}fps`
+      ].join(' · ');
+      try {
+        await navigator.clipboard.writeText(config);
+        copyStatus.textContent = 'Copied exact config';
+      } catch {
+        copyStatus.textContent = 'Clipboard unavailable';
+      }
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (!video) return;
+      if (document.hidden) video.pause();
+      else if (userWantsPlayback && !reducedMotion.matches && !video.ended) playActive();
+    });
+
+    reducedMotion.addEventListener('change', () => mount(current));
+
+    document.addEventListener('keydown', (event) => {
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName) || event.target.isContentEditable) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const number = parseInt(event.key, 10);
+      if (number >= 1 && number <= variants.length) setActive(number - 1);
+      else if (event.key === 'ArrowRight') setActive((current + 1) % variants.length);
+      else if (event.key === 'ArrowLeft') setActive((current - 1 + variants.length) % variants.length);
+      else if (event.key === 'r' || event.key === 'R') mount(current);
+    });
+
+    fetch('motion-manifest.json')
+      .then((response) => {
+        if (!response.ok) throw new Error(`Manifest request failed: ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        manifest = data;
+        variants = manifest.animations.map((motion) => () => variantMarkup(motion));
+        const requested = (parseInt(new URLSearchParams(location.search).get('v'), 10) || 1) - 1;
+        setActive(Math.max(0, Math.min(variants.length - 1, requested)));
+        setTimeout(() => picker.setAttribute('data-ready', ''), 0);
+      })
+      .catch((error) => {
+        stage.innerHTML = `<p class="stage-error">${error.message}</p>`;
+        meta.textContent = 'Motion manifest unavailable';
+      });
+  </script>
+</body>
+</html>
