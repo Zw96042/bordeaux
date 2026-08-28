@@ -1,10 +1,13 @@
 import { PM } from "../lib/pathMath";
+import { directPreviewWork, directWorkIsSafe } from "./direct-preview-work";
 
   const SAMPLES_BY_QUALITY = Object.freeze({ interactive: 14, final: 56 });
 
   function samplesForQuality(quality) {
     return SAMPLES_BY_QUALITY[quality] || SAMPLES_BY_QUALITY.final;
   }
+
+  const directPreviewIsSafe = (path, perSegment) => directWorkIsSafe(directPreviewWork(path, perSegment));
 
   function browserBenchmarkTransport() {
     if (typeof location === 'undefined' || typeof URLSearchParams === 'undefined'
@@ -87,6 +90,16 @@ import { PM } from "../lib/pathMath";
     const config = options || {};
     const listeners = new Set();
     const derive = config.derive || ((job) => PM.derivePath(job.path, job.robot, job.perSegment, job.plannerId));
+    const directIsSafe = config.directIsSafe || ((job) => directPreviewIsSafe(job.path, job.perSegment));
+    const workerPayload = config.workerPayload || ((job) => ({
+      id: job.revision,
+      path: job.quality === 'interactive' && job.path?.optimization
+        ? (({ optimization, ...authored }) => authored)(job.path) : job.path,
+      robot: job.robot,
+      plannerId: job.plannerId,
+      perSegment: job.perSegment,
+      quality: job.quality,
+    }));
     const benchmarkTransport = config.transportObserver
       ? { forceDirect: Boolean(config.forceDirect), observe: config.transportObserver }
       : browserBenchmarkTransport();
@@ -174,6 +187,19 @@ import { PM } from "../lib/pathMath";
       });
     };
 
+    const runDirectOrFail = (job, reason) => {
+      if (job.plannerId === 'optimizedTrajectory') {
+        publish(job, { error: { message: `${reason} Optimized previews require the planning worker.` } }, 'direct');
+        return;
+      }
+      if (directIsSafe(job)) {
+        directJob = job;
+        runDirect();
+      } else {
+        publish(job, { error: { message: `${reason} This path is too large to derive safely on the UI thread.` } }, 'direct');
+      }
+    };
+
     const clearInFlightTimer = () => {
       if (inFlightTimer) clearTimeout(inFlightTimer);
       inFlightTimer = 0;
@@ -190,22 +216,14 @@ import { PM } from "../lib/pathMath";
     const send = (job) => {
       const targetWorker = worker;
       if (!targetWorker) {
-        directJob = job;
-        runDirect();
+        runDirectOrFail(job, 'Path preview worker is unavailable.');
         return;
       }
       inFlight = job;
       clearInFlightTimer();
       inFlightTimer = setTimeout(() => recoverWorker(targetWorker, 'Path preview worker timed out.'), timeoutMs);
       try {
-        targetWorker.postMessage({
-          id: job.revision,
-          path: job.path,
-          robot: job.robot,
-          plannerId: job.plannerId,
-          perSegment: job.perSegment,
-          quality: job.quality,
-        });
+        targetWorker.postMessage(workerPayload(job));
         observeTransport('request', 'worker', job);
       } catch (error) {
         recoverWorker(targetWorker, error instanceof Error ? error.message : String(error));
@@ -221,6 +239,9 @@ import { PM } from "../lib/pathMath";
       listeners.clear();
       if (worker) worker.terminate();
       worker = null;
+    };
+
+    const cancel = () => {
       if (destroyed) return;
       latestRevision += 1;
       queued = null;
