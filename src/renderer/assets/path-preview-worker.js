@@ -122,6 +122,16 @@ export function processPathPreviewJob(job, derive = PM.derivePath, optimize = op
   }
 }
 
+        name: error && error.name ? error.name : 'Error',
+        message: error && error.message ? error.message : String(error),
+      },
+      durationMs: performance.now() - startedAt,
+    };
+  }
+}
+
 if (typeof self !== 'undefined') {
-  self.onmessage = (event) => self.postMessage(processPathPreviewJob(event.data));
+  self.onmessage = (event) => self.postMessage(event.data?.kind === 'routine'
+    ? processRoutinePreviewJob(event.data)
+    : processPathPreviewJob(event.data, PM.derivePath, optimizeCorridorFinal, interactiveTrajectory, (progress) => self.postMessage(progress)));
 }
