@@ -1,3 +1,4 @@
+import { SharedWaypointPosition } from "./SharedWaypointPosition";
 import * as React from "react";
 import { AUTO } from "../lib/routineModel";
 import { PM } from "../lib/pathMath";
@@ -5,9 +6,6 @@ import { UnitPrefs } from "../lib/unitPreferences";
 import { FIELD_DIMS } from "./FieldView";
 import { UI } from "./ui";
 
-// Bordeaux — docked right inspector. ALWAYS visible; content swaps with the
-// selection (none / waypoint / segment / range / marker). Smart defaults: paths are
-// smooth & tangent-following unless you intervene.
   const h = React.createElement;
   const { Num, Toggle, Seg, Icon, Dropdown, constraintRangeSummary } = UI;
   const { FIELD_W, FIELD_H } = FIELD_DIMS;
@@ -19,29 +17,19 @@ import { UI } from "./ui";
   const wpName = (i, n) => i === 0 ? 'Start' : i === n - 1 ? 'End' : 'Waypoint ' + i;
 
   function ConstraintsBody({ c, robot, setC, moreLimits, setMoreLimits }) {
-    const hardLimits = PM.robotHardLimits(robot);
     const rotation = moreLimits ? h('div', { className: 'grid2 compact-fields' },
       h(Num, { label: 'Max \u03c9', value: c.maxAngVel, unit: '\u00b0/s', step: 1, precision: 0, onChange: (v) => setC({ maxAngVel: v }) }),
       h(Num, { label: 'Max \u03b1', value: c.maxAngAccel, unit: '\u00b0/s\u00b2', step: 1, precision: 0, onChange: (v) => setC({ maxAngAccel: v }) })) : null;
     return h(React.Fragment, null,
-      hardLimits
-        ? h(React.Fragment, null,
-            h('div', { className: 'cgroup-h' }, 'Robot limits'),
-            Stat3([
-              { v: hardLimits.maxSpeed.toFixed(1), k: 'M/S' },
-              { v: hardLimits.maxAccel.toFixed(1), k: 'M/S² ACCEL' },
-              { v: hardLimits.maxCornerAccel.toFixed(1), k: 'M/S² CORNER' },
-            ]))
-        : h(React.Fragment, null,
-            h('div', { className: 'cgroup-h' }, 'Translation'),
-            h('div', { className: 'grid2' },
-              h(Num, { label: 'Max vel', value: c.maxVel, unit: 'm/s', min: 0.1, max: robot.maxSpeed, onChange: (v) => setC({ maxVel: v }) }),
-              h(Num, { label: 'Max accel', value: c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxAccel: v }) })),
-            h('div', { className: 'grid2' },
-              h(Num, { label: 'Max decel', value: c.maxDecel != null ? c.maxDecel : c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxDecel: v }) }),
-              h(Num, { label: 'Corner accel', value: c.maxCentripetalAccel != null ? c.maxCentripetalAccel : c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxCentripetalAccel: v }) })),
-            h('button', { className: 'morebtn' + (moreLimits ? ' on' : ''), type: 'button', 'aria-expanded': moreLimits, onClick: () => setMoreLimits(!moreLimits) }, h('span', null, moreLimits ? 'Fewer limits' : 'Rotation limits'), h(Icon, { name: 'chevron', size: 13 })),
-            rotation));
+      h('div', { className: 'cgroup-h' }, 'Translation'),
+      h('div', { className: 'grid2' },
+        h(Num, { label: 'Max vel', value: c.maxVel, unit: 'm/s', min: 0.1, max: robot.maxSpeed, onChange: (v) => setC({ maxVel: v }) }),
+        h(Num, { label: 'Max accel', value: c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxAccel: v }) })),
+      h('div', { className: 'grid2' },
+        h(Num, { label: 'Max decel', value: c.maxDecel != null ? c.maxDecel : c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxDecel: v }) }),
+        h(Num, { label: 'Corner accel', value: c.maxCentripetalAccel != null ? c.maxCentripetalAccel : c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxCentripetalAccel: v }) })),
+      h('button', { className: 'morebtn' + (moreLimits ? ' on' : ''), type: 'button', 'aria-expanded': moreLimits, onClick: () => setMoreLimits(!moreLimits) }, h('span', null, moreLimits ? 'Fewer limits' : 'Rotation limits'), h(Icon, { name: 'chevron', size: 13 })),
+      rotation);
   }
 
   function Stat3(items) {
@@ -245,11 +233,12 @@ import { UI } from "./ui";
         min: parameter && parameter.min != null ? parameter.min : undefined,
         max: parameter && parameter.max != null ? parameter.max : undefined,
         value: draft,
+        'data-project-draft': true,
         'aria-invalid': !!error,
         'aria-describedby': error ? id + '-error' : id + '-type',
         onChange: (event) => { setDraft(event.target.value); if (error) validate(event.target.value, false); },
-        onBlur: () => validate(draft, true),
-        onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(draft, true); event.currentTarget.blur(); } },
+        onBlur: (event) => validate(event.currentTarget.value, true),
+        onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(event.currentTarget.value, true); event.currentTarget.blur(); } },
       }),
       h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, javaType)),
       error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
@@ -278,6 +267,7 @@ import { UI } from "./ui";
         inputMode: 'numeric',
         pattern: '[+-]?[0-9]+',
         value: draft,
+        'data-project-draft': true,
         autoComplete: 'off',
         spellCheck: false,
         'data-lpignore': 'true',
@@ -285,8 +275,8 @@ import { UI } from "./ui";
         'aria-invalid': !!error,
         'aria-describedby': error ? id + '-error' : id + '-type',
         onChange: (event) => { setDraft(event.target.value); if (error) validate(event.target.value, false); },
-        onBlur: () => validate(draft, true),
-        onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(draft, true); event.currentTarget.blur(); } },
+        onBlur: (event) => validate(event.currentTarget.value, true),
+        onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(event.currentTarget.value, true); event.currentTarget.blur(); } },
       }),
       h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, javaType + ' · exact integer')),
       error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
@@ -315,6 +305,7 @@ import { UI } from "./ui";
         type: 'text',
         inputMode: 'decimal',
         value: draft,
+        'data-project-draft': true,
         autoComplete: 'off',
         spellCheck: false,
         'data-lpignore': 'true',
@@ -322,8 +313,8 @@ import { UI } from "./ui";
         'aria-invalid': !!error,
         'aria-describedby': error ? id + '-error' : id + '-type',
         onChange: (event) => { setDraft(event.target.value); if (error) validate(event.target.value, false); },
-        onBlur: () => validate(draft, true),
-        onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(draft, true); event.currentTarget.blur(); } },
+        onBlur: (event) => validate(event.currentTarget.value, true),
+        onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(event.currentTarget.value, true); event.currentTarget.blur(); } },
       }),
       h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, javaType + ' · exact decimal')),
       error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
@@ -357,6 +348,7 @@ import { UI } from "./ui";
         id,
         className: 'textinput cmd-json-input',
         value: draft,
+        'data-project-draft': true,
         rows: 4,
         spellCheck: false,
         autoComplete: 'off',
@@ -365,8 +357,8 @@ import { UI } from "./ui";
         'aria-invalid': !!error,
         'aria-describedby': error ? id + '-error' : id + '-type',
         onChange: (event) => { setDraft(event.target.value); if (error) validate(event.target.value, false); },
-        onBlur: () => validate(draft, true),
-        onKeyDown: (event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); validate(draft, true); } },
+        onBlur: (event) => validate(event.currentTarget.value, true),
+        onKeyDown: (event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); validate(event.currentTarget.value, true); } },
       }),
       h('span', { id: id + '-type', className: 'cmd-param-type' }, javaType + ' · JSON' + (schema && schema.kind === 'opaque' ? ' · opaque custom values remain editable as JSON' : '')),
       error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
