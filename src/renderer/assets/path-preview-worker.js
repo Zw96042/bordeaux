@@ -43,6 +43,7 @@ export function applyFinalTrajectoryToPreview(derived, finalTrajectory) {
     samples,
     point,
     Math.max(0, Math.min(1, point.s / distance)),
+    ordered,
   ));
   const times = projected.map((sample) => sample.t);
   const velocities = projected.map((sample) => sample.velocityMps);
@@ -50,16 +51,29 @@ export function applyFinalTrajectoryToPreview(derived, finalTrajectory) {
   const angularVelocities = projected.map((sample) => sample.angularVelocityRadps);
   const headings = projected.map((sample) => sample.headingRad - (derived.rev ? Math.PI : 0));
   const curvatures = projected.map((sample) => sample.curvatureInvM);
+  const maximumMagnitude = (values, floor) => values.reduce(
+    (maximum, value) => Math.max(maximum, Math.abs(value)),
+    floor,
+  );
+  const authoredTurns = authoritativeActions(
+    rendererTurns(derived, finalTrajectory),
+    'turn',
+    points,
+    finalTrajectory,
+    derived.rev,
+  );
+  const headingCatchup = authoritativeHeadingCatchup(points, distance, finalTrajectory, derived.rev);
   return {
     ...derived,
     prof: {
       ...derived.prof,
       t: times,
       v: velocities,
+      head: headings,
       totalTime: finalTrajectory.totalTimeS,
-      holds: authoritativeActions(derived.prof.holds, 'wait', points, distance, finalTrajectory),
-      turns: authoritativeActions(derived.prof.turns, 'turn', points, distance, finalTrajectory),
-      jiggles: authoritativeActions(derived.prof.jiggles, 'jiggle', points, distance, finalTrajectory),
+      holds: authoritativeActions(derived.prof.holds, 'wait', points, finalTrajectory, derived.rev),
+      turns: headingCatchup ? [...authoredTurns, headingCatchup] : authoredTurns,
+      jiggles: authoritativeActions(derived.prof.jiggles, 'jiggle', points, finalTrajectory, derived.rev),
     },
     metrics: {
       ...derived.metrics,
@@ -68,20 +82,64 @@ export function applyFinalTrajectoryToPreview(derived, finalTrajectory) {
       accel: accelerations,
       omega: angularVelocities,
       curv: curvatures,
+      vMax: maximumMagnitude(velocities, 0.1),
+      aMax: maximumMagnitude(accelerations, 0.1),
+      wMax: maximumMagnitude(angularVelocities, 0.01),
+      kMax: maximumMagnitude(curvatures, 0),
     },
     finalTrajectory,
     finalOptimization: finalTrajectory.optimization,
   };
 }
 
-export function processPathPreviewJob(job, derive = PM.derivePath, optimize = optimizeCorridorFinal) {
+function interactiveTrajectory(input) {
+  return getPlanner('profiledSpline').generate(input);
+}
+
+/** Projects the exact selected result without rerunning the optimizer. */
+export function previewForTrajectory(path, robot, trajectory, derive = PM.derivePath, perSegment = 56) {
+  return applyFinalTrajectoryToPreview(
+    derive(trajectory.optimizedPath || authoredPath(path), robot, perSegment, trajectory.planner),
+    trajectory,
+  );
+}
+
+export function processPathPreviewJob(
+  job,
+  derive = PM.derivePath,
+  optimize = optimizeCorridorFinal,
+  profile = interactiveTrajectory,
+  emitProgress = () => {},
+) {
   const startedAt = performance.now();
   try {
-    const value = derive(job.path, job.robot, job.perSegment, job.plannerId);
-    if (job.quality === 'final' && job.plannerId === 'optimizedTrajectory') {
+    const path = authoredPath(job.path);
+    // Keep pointer editing on the low-latency geometry pass. Final planning
+    // replaces it with the authoritative physics result after the edit settles.
+    if (job.quality !== 'final') {
+      return {
+        id: job.id,
+        quality: job.quality,
+        value: derive(path, job.robot, job.perSegment, 'profiledSpline'),
+        durationMs: performance.now() - startedAt,
+      };
+    }
+    if (job.optimize === true) {
+      const toPreview = (trajectory) => previewForTrajectory(path, job.robot, trajectory, derive, job.perSegment);
       const finalTrajectory = optimize(
-        { path: job.path, robot: job.robot, samplesPerSegment: job.perSegment },
-        { budgetTier: job.deadline, budgetMs: job.deadlineMs },
+        { path, robot: job.robot, field: job.field, samplesPerSegment: job.perSegment },
+        {
+          budgetTier: job.deadline,
+          budgetMs: job.deadlineMs,
+          corridorM: job.path.optimization?.corridorM ?? 0.15,
+          onProgress: (trajectory) => emitProgress({
+            id: job.id,
+            type: 'progress',
+            quality: job.quality,
+            value: toPreview(trajectory),
+            durationMs: performance.now() - startedAt,
+          }),
+        },
       );
       if (finalTrajectory.optimization?.fallback) {
         return {
@@ -94,19 +152,19 @@ export function processPathPreviewJob(job, derive = PM.derivePath, optimize = op
       return {
         id: job.id,
         quality: job.quality,
-        value: applyFinalTrajectoryToPreview(
-          finalTrajectory.optimizedPath
-            ? derive(finalTrajectory.optimizedPath, job.robot, job.perSegment, job.plannerId)
-            : value,
-          finalTrajectory,
-        ),
+        value: toPreview(finalTrajectory),
         durationMs: performance.now() - startedAt,
       };
     }
+    const accepted = getAcceptedTrajectory(job.path, job.robot, job.field);
+    const trajectory = accepted || profile({ path, robot: job.robot, field: job.field, samplesPerSegment: job.perSegment });
+    const blockingDiagnostic = trajectory.diagnostics.find((issue) => issue.severity === 'error');
+    if (blockingDiagnostic) throw new Error(blockingDiagnostic.message);
+    const authoritative = previewForTrajectory(path, job.robot, trajectory, derive, job.perSegment);
     return {
       id: job.id,
       quality: job.quality,
-      value,
+      value: { ...authoritative, acceptedTrajectory: Boolean(accepted) },
       durationMs: performance.now() - startedAt,
     };
   } catch (error) {
@@ -122,6 +180,20 @@ export function processPathPreviewJob(job, derive = PM.derivePath, optimize = op
   }
 }
 
+export function processRoutinePreviewJob(job, buildRun = buildRoutineRun) {
+  const startedAt = performance.now();
+  try {
+    const admission = RoutinePreview.workerRoutineAdmission(job.routine, job.paths, job.robot, job.outcomes);
+    if (!admission.allowed) throw new RangeError(admission.error.message);
+    return {
+      id: job.id,
+      value: buildRun(job.routine, job.paths, job.robot, job.outcomes, job.plannerId, derivePathPreview),
+      durationMs: performance.now() - startedAt,
+    };
+  } catch (error) {
+    return {
+      id: job.id,
+      error: {
         name: error && error.name ? error.name : 'Error',
         message: error && error.message ? error.message : String(error),
       },
