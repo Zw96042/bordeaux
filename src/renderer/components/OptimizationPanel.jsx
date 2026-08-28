@@ -1,0 +1,15 @@
+      (details || entry?.error) && h('details', { className: 'optimizer-details', key: `details-${path.id}` },
+        h('summary', null, 'Details'),
+        h('dl', null,
+          result && h(React.Fragment, null, h('dt', null, 'Path shift'), h('dd', null, distance(details?.maxDeviationM || 0))),
+          terminationLabel && h(React.Fragment, null, h('dt', null, 'Search'), h('dd', null, terminationLabel)),
+          details && h(React.Fragment, null, h('dt', null, 'Candidates'), h('dd', null, `${details.evaluations || 0} checked`))),
+        details?.activeConstraints?.length > 0 && h('p', null, 'Limited by ', [...new Set(details.activeConstraints)].map((name) => name.replaceAll('-', ' ')).join(', ')),
+        details?.fallbackReason && h('p', null, details.fallbackReason),
+        entry?.error && h('p', { className: 'optimizer-error' }, entry.error),
+        details?.rejectionReasons?.length > 0 && h('ul', null, details.rejectionReasons.map((item) => h('li', { key: item.reason }, `${item.reason}: ${item.count}`)))),
+      state.batch && h('details', { className: 'optimizer-batch', open: true },
+        h('summary', null, `${state.batch.completed} of ${state.batch.total} paths searched`),
+        h('div', null, paths.map((item) => h('button', { key: item.id, type: 'button', onClick: () => onSelectPath(item.id) },
+          h('span', null, item.name), h('small', null, state.paths[item.id]?.status === 'success' ? 'Ready' : state.paths[item.id]?.status || 'Queued'))))))));
+}

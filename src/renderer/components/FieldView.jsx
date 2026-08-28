@@ -6,7 +6,6 @@ import { PM } from "../lib/pathMath";
 import { wheelZoomFactor } from "../lib/zoom";
 import { UI } from "./ui";
 
-// Bordeaux interactive field view (CAD-style).
   const { useRef, useState, useEffect, useMemo, useCallback } = React;
   const h = React.createElement;
 
@@ -19,6 +18,18 @@ import { UI } from "./ui";
 
   // muted semantic colors (reserved for meaning, low saturation)
   const C_START = '#4bbf86', C_END = '#d2655f', C_NODE = '#8b94a2', C_NEUTRAL = '#9aa3b0';
+  function rangeLabelIndexes(rangeCount, selectedIndex, maximum = 80) {
+    const limit = Math.max(0, Math.floor(maximum));
+    const indexes = new Set();
+    if (!limit) return indexes;
+    const step = Math.max(1, Math.ceil(rangeCount / limit));
+    for (let index = 0; index < rangeCount && indexes.size < limit; index += step) indexes.add(index);
+    if (Number.isInteger(selectedIndex) && selectedIndex >= 0 && selectedIndex < rangeCount && !indexes.has(selectedIndex)) {
+      if (indexes.size >= limit) indexes.delete(Array.from(indexes).at(-1));
+      indexes.add(selectedIndex);
+    }
+    return indexes;
+  }
 
   const localFootprint = (robot) => robot.footprint && robot.footprint.kind === 'polygon' && Array.isArray(robot.footprint.verticesM)
     ? robot.footprint.verticesM
@@ -27,13 +38,14 @@ import { UI } from "./ui";
   const forwardExtent = (robot) => Math.max(...localFootprint(robot).map((point) => point.x)) * SX;
 
   function FieldView(props) {
-    const { doc, derived, editStore, insertionPreview, proposalPreviews, sel, tool, view, setView, alliance, showGrid, robot, drive, accent, metric, playTime, actions, routine, routinePose } = props;
+    const { doc, derived, editStore, insertionPreview, proposalPreviews, sel, tool, brush, view, setView, alliance, showGrid, robot, drive, accent, metric, playTime, actions, routine, routinePose } = props;
     const interactionReady = props.interactionReady !== false;
     const showHandles = props.showHandles !== false;
     const svgRef = useRef(null);
     const [cw, setCw] = useState(1200);
     const [preview, setPreview] = useState(null);
     const [snap, setSnap] = useState(null);
+    const [brushCursor, setBrushCursor] = useState(null);
     const [visitFocus, setVisitFocus] = useState(null);
     const visitFocusRef = useRef(null);
     const actionsRef = useRef(actions);
@@ -77,6 +89,7 @@ import { UI } from "./ui";
     }, []);
 
     useEffect(() => updateVisitFocus(null), [doc.id, updateVisitFocus]);
+    useEffect(() => { if (tool !== 'brush') setBrushCursor(null); }, [tool]);
     useEffect(() => {
       if (!editStore || typeof editStore.getCancelRevision !== 'function') return undefined;
       let revision = editStore.getCancelRevision();
@@ -183,6 +196,7 @@ import { UI } from "./ui";
 
     useEffect(() => {
       const onVisitKey = (event) => {
+        if (event.defaultPrevented || document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')) return;
         const target = event.target;
         if (target && ((target.matches && target.matches('input, textarea, select')) || target.isContentEditable)) return;
         if (event.key === 'Escape' && visitFocusRef.current) { updateVisitFocus(null); return; }
@@ -202,7 +216,6 @@ import { UI } from "./ui";
       return () => window.removeEventListener('keydown', onVisitKey, true);
     }, [updateVisitFocus]);
 
-    // ---- pointer handling ----
     const startRangeDrag = (world, initialVisit) => {
       const visit = initialVisit || resolveVisit(world);
       const f0 = visit ? visit.f : PM.nearestFraction(world.x, world.y, pts);
@@ -255,6 +268,11 @@ import { UI } from "./ui";
         return;
       }
       const world = clientToWorld(e.clientX, e.clientY);
+      if (e.button === 0 && tool === 'brush' && brush && actions.applyBrush) {
+        setBrushCursor(world);
+        drag.current = { role: 'brush', origin: world, lastWorld: world, moved: false, historyStarted: false };
+        return;
+      }
       if (e.button === 0 && e.shiftKey) {
         const idx = parseInt(t.getAttribute && t.getAttribute('data-idx'), 10);
         let removed = false;
@@ -329,6 +347,16 @@ import { UI } from "./ui";
     const applyMove = (e) => {
       const d = drag.current; if (!d) return;
       const world = clientToWorld(e.clientX, e.clientY, d.role !== 'ct');
+      if (d.role === 'brush') {
+        const travel = Math.hypot(world.x - d.lastWorld.x, world.y - d.lastWorld.y);
+        setBrushCursor(world);
+        if (travel > 0.002) {
+          const changed = actions.applyBrush({ ...brush, center: world, previous: d.lastWorld, origin: d.origin });
+          if (changed) { d.historyStarted = true; d.moved = true; }
+          d.lastWorld = world;
+        }
+        return;
+      }
       if (d.role === 'inspect') {
         const dx = e.clientX - d.start.cx, dy = e.clientY - d.start.cy;
         if (Math.hypot(dx, dy) > 4) d.moved = true;
@@ -359,7 +387,7 @@ import { UI } from "./ui";
             if (best) { deg = best.deg; label = best.label; } else deg = Math.round(deg);
           }
           setSnap(label ? { idx: d.idx, label } : null);
-          actions.setWaypointHeading(d.idx, deg);
+          actions.setWaypointHeading(d.idx, deg - (d.idx === 0 && derived.rev ? 180 : 0));
         }
         d.moved = true; return;
       }
@@ -453,14 +481,29 @@ import { UI } from "./ui";
       if (!inspectTarget(e.target)) return;
       e.preventDefault(); e.stopPropagation();
     };
-    const onCtx = (e) => {
-      e.preventDefault();
-      if (routine) return;
-      const t = e.target; const role = t.getAttribute && t.getAttribute('data-role');
-      if (role === 'head' && actions.headingMenu) actions.headingMenu(parseInt(t.getAttribute('data-idx'), 10), e.clientX, e.clientY);
+    const openHeadingMenu = (target, x, y) => {
+      if (routine || !target || !actions.headingMenu) return;
+      const idx = Number(target.getAttribute('data-idx'));
+      if (!Number.isInteger(idx)) return;
+      target.focus();
+      actions.headingMenu(idx, x, y, target);
+    };
+    const onCtx = (event) => {
+      event.preventDefault();
+      const target = event.target.closest?.('[data-heading-control]');
+      if (target) openHeadingMenu(target, event.clientX, event.clientY);
+    };
+    const onFieldKeyDown = (event) => {
+      const direct = event.target.closest?.('[data-heading-control]');
+      const menuKey = event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10');
+      if (!menuKey && !(direct && (event.key === 'Enter' || event.key === ' '))) return;
+      const target = direct || (sel.kind === 'wp' && svgRef.current?.querySelector('[data-heading-control][data-idx="' + sel.idx + '"]'));
+      if (!target || routine) return;
+      event.preventDefault(); event.stopPropagation();
+      const bounds = target.getBoundingClientRect();
+      openHeadingMenu(target, bounds.left + bounds.width / 2, bounds.bottom);
     };
 
-    // ---------- STATIC LAYERS ----------
     const staticLayers = useMemo(() => {
       const els = [];
       const M = derived.metrics;
@@ -474,12 +517,25 @@ import { UI } from "./ui";
         const incomingMode = segmentMode(index - 1), outgoingMode = segmentMode(index);
         const continuityOwned = (incomingMode === 'tangent' || incomingMode === 'lookAt')
           && (outgoingMode === 'manual' || outgoingMode === 'targets');
-        return continuityOwned && ((((doc.waypoints[index].headingTransition || {}).placement) || 'after') === 'after');
+        return continuityOwned;
       };
       const targetActive = (target) => {
         const f = PM.featureFraction(target, derived.sample); let segment = 0;
         if (derived.wpFrac) for (let i = 0; i < derived.wpFrac.length - 1; i++) if (f >= derived.wpFrac[i] - 1e-6) segment = i;
         return segmentMode(segment) === 'targets';
+      };
+      const plannedHeadingAt = (fraction) => {
+        if (!Array.isArray(M.head) || M.head.length !== pts.length || pts.length === 0) {
+          return PM.headingAt(fraction, derived.anchors);
+        }
+        const distance = Math.max(0, Math.min(1, fraction)) * (derived.sample.length || 0);
+        let after = 1;
+        while (after < pts.length && pts[after].s < distance) after++;
+        if (after >= pts.length) return M.head[M.head.length - 1];
+        const before = Math.max(0, after - 1);
+        const span = pts[after].s - pts[before].s;
+        const progress = span > 1e-9 ? (distance - pts[before].s) / span : 1;
+        return M.head[before] + PM.angWrap(M.head[after] - M.head[before]) * progress;
       };
       const tanDeg = (i) => { const idx = derived.wpIdx ? derived.wpIdx[i] : 0; const p = pts[idx]; return p ? p.heading * 180 / Math.PI : 0; };
       const waypointHeadingDeg = (index) => {
@@ -530,7 +586,6 @@ import { UI } from "./ui";
           segEls.push(h('line', { key: 's' + i, x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: colAt(i), strokeWidth: P(2.6), strokeLinecap: 'butt' }));
         }
         els.push(h('g', { key: 'pathbody' }, segEls));
-        // selected-segment highlight (memo §3)
         if (sel.kind === 'seg' && derived.wpFrac && derived.wpFrac.length > sel.idx + 1) {
           const sd = FieldScene.pathData(pts, FieldScene.segmentRange(derived, sel.idx), W2P, 1);
           if (sd) els.push(h('path', { key: 'segsel', d: sd, fill: 'none', stroke: accent, strokeWidth: P(5.5), strokeOpacity: 0.92, strokeLinecap: 'round', strokeLinejoin: 'round', style: { pointerEvents: 'none' } }));
@@ -539,7 +594,7 @@ import { UI } from "./ui";
         if (derived.wpFrac) {
           for (let si = 0; si < doc.waypoints.length - 1; si++) {
             const sd = FieldScene.pathData(pts, FieldScene.segmentRange(derived, si), W2P, 1);
-            if (sd) els.push(h('path', { key: 'seghit' + si, d: sd, fill: 'none', stroke: 'transparent', strokeWidth: P(18), strokeLinecap: 'round', 'data-role': 'seg', 'data-idx': si, style: { cursor: tool === 'range' ? 'crosshair' : tool === 'waypoint' ? 'copy' : 'pointer' } }));
+            if (sd) els.push(h('path', { key: 'seghit' + si, d: sd, fill: 'none', stroke: 'transparent', strokeWidth: P(18), strokeLinecap: 'round', 'data-role': 'seg', 'data-idx': si, style: { cursor: tool === 'range' || tool === 'brush' ? 'crosshair' : tool === 'waypoint' ? 'copy' : 'pointer' } }));
           }
         }
         // Range labels share the canvas with handles, waypoints, targets, and warnings.
@@ -559,7 +614,7 @@ import { UI } from "./ui";
           const isStart = i === 0, isEnd = i === doc.waypoints.length - 1;
           const wpTangent = waypointTangent(i);
           if (!isTank && !waypointHeadingIgnored(i) && (wpTangent || isStart || isEnd || wp.thetaOn || (sel.kind === 'wp' && sel.idx === i))) {
-            const heading = waypointHeadingDeg(i);
+            const heading = waypointHeadingDeg(i) + (isStart && derived.rev ? 180 : 0);
             const deg = heading * Math.PI / 180;
             const end = { x: c.x + Math.cos(-deg) * P(35), y: c.y + Math.sin(-deg) * P(35) };
             reserveSegmentSpace(c, end, P(8));
@@ -594,7 +649,9 @@ import { UI } from "./ui";
           const c = W2P(PM.pointAtFraction(check.f, pts));
           reserveLabelSpace(c.x, c.y - P(28), P(28), P(28));
         });
-        ranges.forEach((range) => {
+        const labeledRangeIndexes = rangeLabelIndexes(ranges.length, sel.kind === 'cr' ? sel.idx : -1);
+        ranges.forEach((range, index) => {
+          if (!labeledRangeIndexes.has(index)) return;
           ['f0', 'f1'].forEach((key) => {
             const c = W2P(PM.pointAtFraction(range[key], pts));
             reserveLabelSpace(c.x, c.y, P(24), P(24));
