@@ -1,0 +1,67 @@
+{
+  "generator": "render-animations.mjs",
+  "source": "render-blender.py",
+  "renderer": {
+    "application": "Blender",
+    "version": "5.2 LTS",
+    "engine": "Eevee",
+    "samples": 64,
+    "motionBlur": {
+      "shutter": 0.46,
+      "steps": 8
+    }
+  },
+  "width": 1440,
+  "height": 900,
+  "fps": 60,
+  "animations": [
+    {
+      "id": "spill-route",
+      "title": "Spill / Route",
+      "durationSeconds": 3.4,
+      "frameCount": 204,
+      "axis": "Physical and narrative",
+      "purpose": "A weighted glass tip turns impact, splash, and wine flow into the path Bordeaux is built to shape.",
+      "primaryEasing": "cubic-bezier(0.77, 0, 0.175, 1)",
+      "cost": "The longest direction; reserve it for first launch, major releases, and the launch film.",
+      "publicDistribution": true,
+      "mp4": "exports/spill-route.mp4",
+      "webm": "exports/spill-route.webm",
+      "poster": "exports/spill-route-poster.png",
+      "contactSheet": "review/spill-route-contact-sheet.png",
+      "reviewFrameIndices": [0, 29, 58, 87, 116, 145, 174, 203]
+    },
+    {
+      "id": "ribbon-flight",
+      "title": "Ribbon Flight",
+      "durationSeconds": 2.9,
+      "frameCount": 174,
+      "axis": "Sculptural and editorial",
+      "purpose": "The pour hangs in space as one continuous liquid ribbon before it becomes the Bordeaux lockup.",
+      "primaryEasing": "cubic-bezier(0.32, 0.72, 0, 1)",
+      "cost": "More abstract than a literal spill; strongest in launch media and presentation moments.",
+      "publicDistribution": true,
+      "mp4": "exports/ribbon-flight.mp4",
+      "webm": "exports/ribbon-flight.webm",
+      "poster": "exports/ribbon-flight-poster.png",
+      "contactSheet": "review/ribbon-flight-contact-sheet.png",
+      "reviewFrameIndices": [0, 25, 49, 74, 99, 124, 148, 173]
+    },
+    {
+      "id": "precision-lock",
+      "title": "Precision Lock",
+      "durationSeconds": 1.95,
+      "frameCount": 117,
+      "axis": "Precise and repeatable",
+      "purpose": "A trajectory signal constructs the glass from foot to fill, then resolves the wordmark without spectacle fatigue.",
+      "primaryEasing": "cubic-bezier(0.23, 1, 0.32, 1)",
+      "cost": "Least theatrical and most suitable for a repeat-session boot.",
+      "publicDistribution": true,
+      "mp4": "exports/precision-lock.mp4",
+      "webm": "exports/precision-lock.webm",
+      "poster": "exports/precision-lock-poster.png",
+      "contactSheet": "review/precision-lock-contact-sheet.png",
+      "reviewFrameIndices": [0, 17, 33, 50, 66, 83, 99, 116]
+    }
+  ]
+}
