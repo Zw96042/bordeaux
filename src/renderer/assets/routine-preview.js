@@ -1,3 +1,105 @@
+
+function minimumConstraint(constraints, ranges, key, fallbackKey = key, allowZero = false) {
+  const initial = Number(constraints[key] ?? constraints[fallbackKey]);
+  if (!Number.isFinite(initial) || (allowZero ? initial < 0 : initial <= 0)) {
+    throw new TypeError('Generated path preview constraints are incomplete.');
+  }
+  return (ranges || []).reduce((value, range) => {
+    const candidate = Number(range?.[key] ?? range?.[fallbackKey] ?? value);
+    if (!Number.isFinite(candidate) || (allowZero ? candidate < 0 : candidate <= 0)) {
+      throw new TypeError('Generated path preview constraints are incomplete.');
+    }
+    return Math.min(value, candidate);
+  }, initial);
+}
+
+function conservativeLimits(path, robot) {
+  const constraints = robot ? effectivePathConstraints(path.constraints, robot) : path.constraints;
+  const ranges = path.ranges || [];
+  return {
+    maxVel: minimumConstraint(constraints, ranges, 'maxVel'),
+    maxAccel: minimumConstraint(constraints, ranges, 'maxAccel'),
+    maxDecel: minimumConstraint(constraints, ranges, 'maxDecel', 'maxAccel'),
+    maxAngVel: minimumConstraint(constraints, ranges, 'maxAngVel'),
+    maxAngAccel: minimumConstraint(constraints, ranges, 'maxAngAccel'),
+    maxAngDecel: minimumConstraint(constraints, ranges, 'maxAngDecel', 'maxAngAccel', true),
+    maxAngJerk: Number(constraints.maxAngJerk ?? 0),
+  };
+}
+
+function ticks(seconds) {
+  return Math.ceil(seconds / MIN_SAMPLE_PERIOD - EPSILON);
+}
+
+function expandedSampleUpperBound(path, robot, perSegment) {
+  if (!path || !path.constraints || !Array.isArray(path.waypoints)) {
+    throw new TypeError('Generated path preview is incomplete.');
+  }
+  const limits = conservativeLimits(path, robot);
+  const angularSafe = limits.maxAngVel >= MIN_SAFE_ANGULAR_VELOCITY
+    && Math.min(limits.maxAngAccel, limits.maxAngDecel) >= MIN_SAFE_ANGULAR_ACCELERATION;
+  let samples = 0;
+  for (const waypoint of path.waypoints || []) {
+    if (!Number.isFinite(waypoint.wait ?? 0) || (waypoint.wait ?? 0) < 0) {
+      throw new TypeError('Generated path preview wait is invalid.');
+    }
+    if (waypoint.turnInPlace) {
+      const jerkSafe = limits.maxAngJerk === 0 || limits.maxAngJerk >= MIN_SAFE_ANGULAR_JERK;
+      if (!angularSafe || !jerkSafe) return Infinity;
+      // With these lower limits, a forced full revolution takes under ten
+      // seconds, including the shared planner's acceleration and jerk terms.
+      samples += ticks(SAFE_TURN_SECONDS);
+    }
+    if (waypoint.jiggle && robot?.drive !== 'tank') {
+      const { distanceM, strokes, strokeTimeS } = waypoint.jiggle;
+      if (![distanceM, strokes, strokeTimeS].every(Number.isFinite) || distanceM <= 0
+        || !Number.isInteger(strokes) || strokes <= 0 || strokeTimeS <= 0) {
+        throw new TypeError('Generated path preview jiggle is invalid.');
+      }
+      const linearSafe = Math.min(limits.maxVel, robot?.maxSpeed ?? limits.maxVel) >= MIN_SAFE_LINEAR_VELOCITY
+        && Math.min(limits.maxAccel, limits.maxDecel) >= MIN_SAFE_LINEAR_ACCELERATION;
+      if (!linearSafe || distanceM > MAX_SAFE_JIGGLE_DISTANCE || strokes > MAX_SAFE_JIGGLE_STROKES) return Infinity;
+      // At the admitted limits, eight seconds satisfies the shared planner's
+      // free-speed/torque feasibility solve for a 0.25 m round trip.
+      samples += ticks(Math.max(strokeTimeS, SAFE_JIGGLE_SECONDS)) * strokes;
+    }
+    samples += ticks(waypoint.wait ?? 0);
+  }
+  const translationPriority = path.ranges?.some((range) => range.rotationPriority === 'translation')
+    || path.waypoints?.some((waypoint) => waypoint.headingTransition?.rotationPriority === 'translation');
+  if (translationPriority && robot?.drive !== 'tank') {
+    const segments = Math.max(0, path.waypoints.length - 1);
+    if (!angularSafe || segments > MAX_SAFE_TRANSLATION_SEGMENTS) return Infinity;
+    // Every unwrapped sample can add at most a half-turn. Four seconds per
+    // sample bounds that turn from rest at the admitted angular floors; paths
+    // above the small structural limit are rejected instead of approximated.
+    samples += ticks(SAFE_TRANSLATION_SECONDS_PER_SAMPLE * perSegment) * segments;
+  }
+  return samples;
+}
+
+function workerRoutineEstimate(routine, paths, robot, outcomes = {}, perSegment = 56) {
+  const byId = new Map((paths || []).map((path) => [path.id, path]));
+  const sampleCounts = new Map();
+  let outputSamples = 0;
+  let outputItems = 0;
+  let renderedSamples = 0;
+  let stationarySamples = 0;
+  let outputSteps = 0;
+  walkSelected(routine?.nodes, outcomes, (node) => {
+    outputSteps += 1;
+    const path = node.type === 'path'
+      ? byId.get(node.ref)
+      : node.type === 'function' && node.cat === 'generate' ? node.preview : null;
+    if (!path) return;
+    let pathSamples = sampleCounts.get(path);
+    if (pathSamples !== undefined) {
+      renderedSamples += pathSamples;
+      return;
+    }
+    const segments = Math.max(0, (path.waypoints?.length || 0) - 1);
+    const geometrySamples = segments > 0 ? segments * perSegment + 1 : 0;
+    // Bound planner expansions at the shared 10ms minimum sample period before
     // either structured clone or trajectory allocation begins.
     const added = expandedSampleUpperBound(path, robot, perSegment);
     pathSamples = geometrySamples + added;
