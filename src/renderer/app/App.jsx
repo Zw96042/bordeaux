@@ -114,48 +114,8 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
   }
 
   function routineState(project) {
-    const routines = Array.isArray(project.routines) && project.routines.length
-      ? project.routines : [blankRoutine()];
-    const activeRoutineId = routines.some((routine) => routine.id === project.activeRoutineId)
-      ? project.activeRoutineId : routines[0].id;
-    return { routines, activeRoutineId };
-  }
-
-  function withRoutineState(project, state) {
-    const activeRoutine = state.routines.find((routine) => routine.id === state.activeRoutineId) || state.routines[0];
-    return { ...project, routines: state.routines, activeRoutineId: activeRoutine.id };
-  }
 
   const FIT = { x: 307, y: 7, w: 3285, h: 1569 };
-
-  function createPlaybackStore() {
-    let snapshot = { time: 0, playing: false, total: 0 };
-    let frame = 0, last = 0;
-    const listeners = new Set();
-    const emit = (patch) => { snapshot = { ...snapshot, ...patch }; listeners.forEach((listener) => listener()); };
-    const stopFrame = () => { if (frame) cancelAnimationFrame(frame); frame = 0; };
-    const tick = (now) => {
-      const time = Math.min(snapshot.total, snapshot.time + (now - last) / 1000); last = now;
-      const playing = time < snapshot.total - 1e-6;
-      emit({ time, playing });
-      frame = playing ? requestAnimationFrame(tick) : 0;
-    };
-    const startFrame = () => { if (frame || !snapshot.playing) return; last = performance.now(); frame = requestAnimationFrame(tick); };
-    return {
-      subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-      getSnapshot() { return snapshot; },
-      setTotal(total) { const next = Math.max(0, total || 0); emit({ total: next, time: Math.min(snapshot.time, next), playing: snapshot.playing && snapshot.time < next }); startFrame(); },
-      toggle() {
-        if (snapshot.playing) { stopFrame(); emit({ playing: false }); return; }
-        emit({ time: snapshot.time >= snapshot.total - 1e-3 ? 0 : snapshot.time, playing: snapshot.total > 0 }); startFrame();
-      },
-      restart() { stopFrame(); emit({ time: 0, playing: snapshot.total > 0 }); startFrame(); },
-      pause() { stopFrame(); if (snapshot.playing) emit({ playing: false }); },
-      seek(time) { stopFrame(); emit({ time: Math.max(0, Math.min(snapshot.total, time)), playing: false }); },
-      reset() { stopFrame(); emit({ time: 0, playing: false }); },
-      destroy() { stopFrame(); listeners.clear(); },
-    };
-  }
 
   const usePlayback = (store) => useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   function EditablePlaybackField({ store, editStore, doc, derived, derivedPath, robot, plannerId, ...props }) {
@@ -173,10 +133,10 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     const finished = !draft && editStore.getLastResolution() === 'finish';
     const bridgeFinishedEdit = finished && editBase.current && (editBase.current === doc || derivedPath !== doc);
     if (!draft && (!finished || (derivedPath === doc && editBase.current !== doc))) editBase.current = null;
-    const draftPreview = draft && preview.path && preview.path.id === draft.id && preview.value
+    const draftPreview = draft && preview.path && preview.path.id === draft.id && preview.value && preview.value.planner === plannerId
       ? { path: preview.path, value: preview.value }
       : null;
-    const committedPreview = !draft && preview.path && preview.path.id === doc.id && preview.value && bridgeFinishedEdit
+    const committedPreview = !draft && preview.path && preview.path.id === doc.id && preview.value && preview.value.planner === plannerId && bridgeFinishedEdit
       ? { path: preview.path, value: preview.value }
       : null;
     const displayed = draftPreview || committedPreview || { path: derivedPath || doc, value: derived };
@@ -204,18 +164,15 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
   }
 
   /** Keeps the last valid interactive result visible while final planning runs independently. */
-  function useFinalPlanning(doc, robot, plannerId) {
+  function useFinalPlanning(doc, robot, plannerId, enabled = true) {
     const previewer = useMemo(() => PathPreview.create(), []);
     const planner = useMemo(() => FinalPlanning.create(), []);
-    const [initial] = useState(() => {
-      try { return { path: doc, value: PM.derivePath(doc, robot, 14, plannerId), error: null }; }
-      catch (error) { return { path: doc, value: null, error }; }
-    });
+    const [initial] = useState(() => ({ path: doc, value: null, error: null }));
     const lastValid = useRef(initial.value ? { path: initial.path, value: initial.value } : null);
     const requestedRevision = useRef(0);
     const [interactive, setInteractive] = useState(() => previewer.getSnapshot());
     const [snapshot, setSnapshot] = useState(() => ({
-      status: initial.value ? 'ready' : 'error',
+      status: 'pending',
       key: doc.id,
       path: initial.path,
       value: initial.value,
@@ -227,18 +184,21 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     useEffect(() => previewer.retain(), [previewer]);
     useEffect(() => previewer.subscribe(() => setInteractive(previewer.getSnapshot())), [previewer]);
     useEffect(() => {
+      if (!enabled) return;
       requestedRevision.current = previewer.request({ key: doc.id, path: doc, robot, plannerId, quality: 'interactive' });
-    }, [previewer, doc, robot, plannerId]);
+    }, [previewer, doc, robot, plannerId, enabled]);
     useEffect(() => {
-      if (interactive.revision !== requestedRevision.current || interactive.path !== doc) return undefined;
-      if (interactive.status === 'error') {
+      if (!enabled || interactive.revision !== requestedRevision.current) return undefined;
+      // Failed previews retain the last valid display path; errorPath identifies
+      // the current request that failed. Do not gate that error on display identity.
+      if (interactive.status === 'error' && interactive.errorPath === doc) {
         setSnapshot({
           status: 'error', key: doc.id, path: lastValid.current?.path || doc, value: lastValid.current?.value || null,
           error: interactive.error, errorPath: doc, durationMs: 0,
         });
         return undefined;
       }
-      if (interactive.status !== 'ready' || !interactive.value) return undefined;
+      if (interactive.path !== doc || interactive.status !== 'ready' || !interactive.value) return undefined;
       let active = true;
       const interactiveResult = interactive.value;
       lastValid.current = { path: doc, value: interactiveResult };
@@ -264,7 +224,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
         });
       });
       return () => { active = false; request.cancel(); };
-    }, [planner, doc, robot, plannerId, interactive]);
+    }, [planner, doc, robot, plannerId, interactive, enabled]);
 
     const current = snapshot.path === doc && snapshot.value
       ? { path: doc, value: snapshot.value }
@@ -274,12 +234,48 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     return {
       value: displayed && displayed.value,
       path: displayed && displayed.path,
+      current: Boolean(current) && snapshot.status === 'ready',
       error: snapshot.errorPath === doc ? snapshot.error : null,
+      // This hook prepares the selected trajectory; failures are blocking even on initial load.
+      errorKind: snapshot.errorPath === doc && snapshot.error ? 'interactive' : null,
       pending: interactive.status === 'pending' || snapshot.status === 'pending',
       durationMs: snapshot.durationMs || 0,
       optimization: snapshot.value?.finalOptimization || null,
     };
   }
+
+  function usePlanningNotice(error, kind, planningInputRevision, pathId) {
+    const [notice, setNotice] = useState(null);
+    const lastFinalNoticeAt = useRef(new Map());
+
+    useEffect(() => {
+      let revealTimer = 0;
+      let dismissTimer = 0;
+      if (!shouldPresentPlanningError(error, kind, planningInputRevision)) {
+        setNotice(null);
+        return undefined;
+      }
+
+      const message = planningErrorMessage(error, kind);
+      const key = pathId + ':' + kind;
+      if (kind === 'interactive') {
+        setNotice({ key, kind, message });
+        return undefined;
+      }
+
+      const lastShown = lastFinalNoticeAt.current.get(key) || 0;
+      if (Date.now() - lastShown < FINAL_PLANNING_NOTICE_COOLDOWN_MS) {
+        setNotice(null);
+        return undefined;
+      }
+
+      revealTimer = window.setTimeout(() => {
+        lastFinalNoticeAt.current.set(key, Date.now());
+        setNotice({ key, kind, message });
+        dismissTimer = window.setTimeout(() => {
+          setNotice((current) => current?.key === key ? null : current);
+        }, FINAL_PLANNING_NOTICE_DURATION_MS);
+      }, FINAL_PLANNING_NOTICE_DELAY_MS);
 
       return () => {
         window.clearTimeout(revealTimer);
