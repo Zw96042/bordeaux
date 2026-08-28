@@ -12,24 +12,99 @@ function trajectoryAtGeometryPoint(samples, point, fraction) {
   return match;
 }
 
-function authoritativeActions(actions, kind, points, distance, finalTrajectory) {
+  }
+  return interpolated;
+}
+
+function authoritativeHeadingCatchup(points, distance, finalTrajectory, reverse) {
+  const point = points[points.length - 1];
+  if (!point) return null;
+  const fraction = Math.max(0, Math.min(1, point.s / distance));
+  const endpointSamples = trajectorySamplesAtGeometryPoint(finalTrajectory.samples || [], point, fraction);
+  const arrival = endpointSamples.reduce((earliest, sample) => !earliest || sample.t < earliest.t ? sample : earliest, null);
+  const firstAuthoredActionTime = Math.min(...(finalTrajectory.stationaryActions || [])
+    .filter((candidate) => Math.abs(candidate.fraction - fraction) <= FINAL_FRACTION_TOLERANCE)
+    .map((candidate) => candidate.startTimeS));
+  const catchupEndTime = Number.isFinite(firstAuthoredActionTime)
+    ? firstAuthoredActionTime
+    : Math.max(...endpointSamples.map((sample) => sample.t));
+  if (!arrival || !Number.isFinite(catchupEndTime) || catchupEndTime <= arrival.t + 1e-9) return null;
+  const settled = endpointSamples.reduce((nearest, sample) => (
+    !nearest || Math.abs(sample.t - catchupEndTime) < Math.abs(nearest.t - catchupEndTime) ? sample : nearest
+  ), null);
+  if (!settled) throw new Error('Final optimization omitted automatic heading catch-up timing metadata.');
+  const start = arrival.headingRad - (reverse ? Math.PI : 0);
+  const end = settled.headingRad - (reverse ? Math.PI : 0);
+  const headingSamples = endpointSamples
+    .filter((sample) => sample.t >= arrival.t - 1e-9 && sample.t <= catchupEndTime + 1e-9)
+    .sort((first, second) => first.t - second.t)
+    .map((sample) => ({
+      t: sample.t,
+      heading: sample.headingRad - (reverse ? Math.PI : 0),
+    }));
+  return {
+    idx: points.length - 1,
+    t0: arrival.t,
+    t1: catchupEndTime,
+    start,
+    delta: Math.atan2(Math.sin(end - start), Math.cos(end - start)),
+    catchup: true,
+    headingSamples,
+  };
+}
+
+function authoritativeActions(actions, kind, points, finalTrajectory, reverse) {
   const available = (finalTrajectory.stationaryActions || []).filter((action) => action.kind === kind);
-  const used = new Set();
-  return (actions || []).map((action) => {
+  const authored = actions || [];
+  if (available.length !== authored.length) throw new Error(`Final optimization omitted ${kind} timing metadata.`);
+  return authored.map((action, actionIndex) => {
     const point = points[action.idx];
-    const fraction = point ? Math.max(0, Math.min(1, point.s / distance)) : NaN;
-    const index = available.findIndex((candidate, candidateIndex) => (
-      !used.has(candidateIndex) && Math.abs(candidate.fraction - fraction) <= 1e-5
-    ));
-    if (index < 0) throw new Error(`Final optimization omitted ${kind} timing metadata.`);
-    used.add(index);
-    const timing = available[index];
+    const timing = available[actionIndex];
+    const pointSamples = point
+      ? (finalTrajectory.samples || []).filter((sample) => (
+          Math.hypot(sample.x - point.x, sample.y - point.y) <= FINAL_INTERPOLATION_POSITION_TOLERANCE_M
+        ))
+      : [];
+    const actionStart = pointSamples.reduce((nearest, sample) => (
+      !nearest || Math.abs(sample.t - timing.startTimeS) < Math.abs(nearest.t - timing.startTimeS) ? sample : nearest
+    ), null);
     return {
       ...action,
       t0: timing.startTimeS,
       t1: timing.endTimeS,
+      ...(kind === 'wait' && actionStart
+        ? { heading: actionStart.headingRad - (reverse ? Math.PI : 0) }
+        : {}),
       ...(kind === 'jiggle' ? { strokeDuration: timing.strokeDurationS } : {}),
     };
+  });
+}
+
+function rendererTurns(derived, finalTrajectory) {
+  const authored = (derived.prof.turns || []).filter((turn) => !turn.catchup);
+  const points = derived.sample.pts;
+  const distance = derived.sample.length || 1;
+  const available = (finalTrajectory.stationaryActions || []).filter((action) => action.kind === 'turn');
+  const indices = available.map((action) => derived.wpIdx?.[action.waypointIndex]
+    ?? points.findIndex((point) => Math.abs(point.s / distance - action.fraction) <= FINAL_FRACTION_TOLERANCE));
+  if (authored.some((turn) => !indices.includes(turn.idx))) {
+    throw new Error('Final optimization omitted turn timing metadata.');
+  }
+  return available.map((timing, index) => {
+    const idx = indices[index];
+    const turn = authored.find((candidate) => candidate.idx === idx);
+    if (turn) return turn;
+    const point = points[idx];
+    if (!point) throw new Error('Final optimization omitted stationary turn geometry.');
+    // The shared planner can rotate at a required stop even without an explicit
+    // turn-in-place action. Replay that validated heading trace before its wait.
+    const headingSamples = finalTrajectory.samples.filter((sample) => (
+      sample.t >= timing.startTimeS - 1e-9 && sample.t <= timing.endTimeS + 1e-9
+      && Math.hypot(sample.x - point.x, sample.y - point.y) <= FINAL_INTERPOLATION_POSITION_TOLERANCE_M
+    )).map((sample) => ({ t: sample.t, heading: sample.headingRad - (derived.rev ? Math.PI : 0) }));
+    if (headingSamples.length < 2) throw new Error('Final optimization omitted stationary turn heading samples.');
+    const start = headingSamples[0].heading;
+    return { idx, start, delta: headingSamples.at(-1).heading - start, headingSamples };
   });
 }
 
@@ -39,8 +114,13 @@ export function applyFinalTrajectoryToPreview(derived, finalTrajectory) {
   const samples = finalTrajectory?.samples || [];
   if (points.length < 2 || samples.length < 2) throw new Error('Final optimization returned an incomplete trajectory.');
   const distance = derived.sample.length || points[points.length - 1].s || 1;
+  const fixedPathSamples = fixedPathTrajectorySamples(finalTrajectory);
+  // Stationary actions may move back along the path. Only index the remaining
+  // monotonic geometry samples; preserve the scan for nonmonotonic inputs.
+  const ordered = fixedPathSamples.every((sample, index) => Number.isFinite(sample.f)
+    && (index === 0 || sample.f >= fixedPathSamples[index - 1].f));
   const projected = points.map((point) => trajectoryAtGeometryPoint(
-    samples,
+    fixedPathSamples,
     point,
     Math.max(0, Math.min(1, point.s / distance)),
     ordered,
