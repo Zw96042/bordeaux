@@ -1,3 +1,105 @@
+    const next = { ...latest.current, ...patch };
+    latest.current = next; memory.set(storageKey, next); setPrefs(next);
+  };
+  useEffect(() => {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => { try { localStorage.setItem(storageKey, JSON.stringify(latest.current)); } catch (_) { /* Preferences can remain session-only. */ } }, 200);
+    return () => clearTimeout(timer.current);
+  }, [prefs, storageKey]);
+  useEffect(() => () => { try { localStorage.setItem(storageKey, JSON.stringify(latest.current)); } catch (_) { /* Preferences can remain session-only. */ } }, [storageKey]);
+  useEffect(() => {
+    const scroller = structureBody.current?.querySelector('.outline-scroll,.rt-scroll');
+    if (scroller) scroller.scrollTop = prefs.structureScroll;
+  }, []);
+  const resize = (event) => {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    const bounds = rail.current.getBoundingClientRect();
+    update({ ratio: Math.max(25, Math.min(75, (event.clientY - bounds.top) / bounds.height * 100)) });
+  };
+  return h('nav', { ref: rail, className: 'rail rail-l library-rail' + (children ? '' : ' library-only'), 'aria-label': mode === 'paths' ? 'Paths and outline' : 'Routines',
+    style: { '--library-ratio': prefs.ratio + '%' },
+    onKeyDown: (event) => { if (event.target.closest('.editor-library,.library-divider')) event.stopPropagation(); } },
+    h('section', { className: 'library-top' },
+      h(EditorLibrary, { ...props, mode, prefs, update })),
+    children && h('div', { className: 'library-divider', role: 'separator', tabIndex: 0, 'aria-label': 'Resize library and structure', 'aria-orientation': 'horizontal', 'aria-valuemin': 25, 'aria-valuemax': 75, 'aria-valuenow': Math.round(prefs.ratio),
+      onPointerDown: (event) => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); }, onPointerMove: resize,
+      onPointerUp: (event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); },
+      onKeyDown: (event) => { const change = { ArrowUp: -5, ArrowDown: 5, Home: 25 - prefs.ratio, End: 75 - prefs.ratio }[event.key]; if (change !== undefined) { event.preventDefault(); update({ ratio: Math.max(25, Math.min(75, prefs.ratio + change)) }); } } }),
+    children && h('section', { className: 'library-structure' },
+      h('div', { className: 'library-section-title' }, mode === 'paths' ? 'Path outline' : 'Routine steps'),
+      h('div', { ref: structureBody, className: 'library-structure-body', onScrollCapture: (event) => { if (event.target.matches('.outline-scroll,.rt-scroll')) update({ structureScroll: event.target.scrollTop }); } }, children(prefs.sections, (sections) => update({ sections: typeof sections === 'function' ? sections(latest.current.sections) : sections })))));
+}
+
+function LibraryMenu({ menu, close, children }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const element = ref.current;
+    const onToggle = (event) => { if (event.newState === 'closed') close(false); };
+    element.addEventListener('toggle', onToggle);
+    element.showPopover();
+    element.querySelector('button:not(:disabled)')?.focus();
+    return () => element.removeEventListener('toggle', onToggle);
+  }, []);
+  return h('div', { ref, popover: 'auto', className: 'library-menu', role: 'menu', 'aria-label': menu.name + ' actions',
+    style: { left: Math.min(menu.left, window.innerWidth - 216), top: Math.max(8, Math.min(menu.top, window.innerHeight - 250)) },
+    onKeyDown: (event) => {
+      event.stopPropagation();
+      if (event.key === 'Escape') { event.preventDefault(); close(true); }
+      if (event.key === 'Tab') close(false);
+      if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+        event.preventDefault(); const buttons = [...ref.current.querySelectorAll('button:not(:disabled)')]; const index = buttons.indexOf(document.activeElement);
+        buttons[event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : buttons.length - 1)) % buttons.length]?.focus();
+      }
+    } }, children);
+}
+
+function PathProperties({ item, project, actions, close }) {
+  const ref = useRef(null);
+  useEffect(() => { ref.current.showModal(); }, []);
+  const outgoing = project.pathLinks?.find((link) => link.fromPathId === item.id);
+  const incoming = project.pathLinks?.find((link) => link.toPathId === item.id);
+  return h('dialog', { ref, className: 'library-properties', 'aria-labelledby': 'path-properties-title', onClose: close, onKeyDown: (event) => event.stopPropagation() },
+    h('header', null, h('strong', { id: 'path-properties-title' }, item.name), h('button', { type: 'button', 'aria-label': 'Close path properties', onClick: close }, h(Icon, { name: 'x', size: 16 }))),
+    h('label', null, 'Folder', h('select', { 'aria-label': 'Move ' + item.name + ' to folder', value: item.folderId || '', onChange: (event) => actions.movePath(item.id, event.target.value) },
+      h('option', { value: '' }, 'No folder'), (project.pathFolders || []).map((folder) => h('option', { key: folder.id, value: folder.id }, folder.name)))),
+    h('label', null, 'Link end to path', h('select', { 'aria-label': 'Link end of ' + item.name, value: outgoing?.toPathId || '', onChange: (event) => actions.linkPath(item.id, event.target.value) },
+      h('option', { value: '' }, 'Not linked'), project.paths.filter((path) => path.id !== item.id).map((path) => h('option', { key: path.id, value: path.id }, path.name)))),
+    incoming && h('div', { className: 'library-link' }, 'Start linked from ' + (project.paths.find((path) => path.id === incoming.fromPathId)?.name || 'another path'), h('button', { type: 'button', onClick: () => actions.linkPath(incoming.fromPathId, '') }, 'Unlink')),
+    h('footer', null, h('button', { type: 'button', onClick: close }, 'Done')));
+}
+
+function EditorLibrary({ mode, prefs, update, project, routines, activePathId, activeRoutineId, onMode, onPath, onRoutine, actions, times, controller }) {
+  const pathsMode = mode === 'paths';
+  const items = pathsMode ? project.paths : routines;
+  const activeId = pathsMode ? activePathId : activeRoutineId;
+  const active = items.find((item) => item.id === activeId);
+  const folders = project.pathFolders || [];
+  const [menu, setMenu] = useState(null), [editing, setEditing] = useState(null), [propertiesId, setPropertiesId] = useState(null);
+  const [draft, setDraft] = useState(''), [error, setError] = useState(''), [blocked, setBlocked] = useState(null);
+  const search = useRef(null), edit = useRef(null), scroll = useRef(null), root = useRef(null), anchor = useRef(activeId);
+  const previousActiveId = useRef(activeId);
+  useEffect(() => {
+    if (previousActiveId.current !== activeId) { update({ checked: [activeId], selectionActiveId: activeId }); previousActiveId.current = activeId; anchor.current = activeId; }
+  }, [activeId]);
+  const checked = prefs.selectionActiveId === activeId ? selectedPathIds(project.paths, prefs.checked) : [];
+  const selected = pathsMode && checked.length ? checked : active ? [active.id] : [];
+  const folderName = (id) => folders.find((folder) => folder.id === id)?.name || '';
+  const query = prefs.query.trim().toLowerCase();
+  const visible = items.filter((item) => (item.name + (pathsMode ? ' ' + folderName(item.folderId) : '')).toLowerCase().includes(query));
+  const displayed = pathsMode && !query ? [...folders.flatMap((folder) => prefs.collapsed[folder.id] ? [] : visible.filter((item) => item.folderId === folder.id)), ...visible.filter((item) => !item.folderId)] : visible;
+  const focusRow = (id) => requestAnimationFrame(() => {
+    const target = [...(root.current?.querySelectorAll('[data-library-item]') || [])].find((item) => item.dataset.libraryItem === id);
+    (target || search.current)?.focus();
+  });
+  useEffect(() => { if (scroll.current) scroll.current.scrollTop = prefs.scroll; }, []);
+  useEffect(() => { if (editing) { edit.current?.focus(); edit.current?.select(); } }, [editing]);
+  useEffect(() => { if (checked.length !== prefs.checked.length) update({ checked, selectionActiveId: activeId }); }, [project.paths]);
+  const closeMenu = (restore) => { if (restore) menu?.trigger?.focus(); setMenu(null); };
+  const openMenu = (event, kind, item) => {
+    event.preventDefault(); event.stopPropagation();
+    const bounds = event.currentTarget.getBoundingClientRect();
+    setMenu({ id: item.id, name: item.name, kind, trigger: event.currentTarget, left: event.type === 'contextmenu' ? event.clientX : bounds.left, top: event.type === 'contextmenu' ? event.clientY : bounds.bottom + 3 });
+  };
   const choose = (item, event = {}) => {
     setMenu(null); setBlocked(null);
     if (!pathsMode) { onRoutine(item.id); return; }
