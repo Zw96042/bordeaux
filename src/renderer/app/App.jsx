@@ -36,84 +36,38 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     return PathLinks.reconcile(normalizeProjectData(raw));
   }
 
-  function agentProposalMatchesPublishedContext(proposal, sessionId, publishedContext, currentContext) {
-    return Boolean(proposal && publishedContext
-      && proposal.baseSessionId === sessionId
-      && proposal.baseRevision === publishedContext.revision
-      && proposal.baseActivePathId === publishedContext.activePathId
-      && publishedContext.project === currentContext.project
-      && publishedContext.activePathId === currentContext.activePathId
-      && publishedContext.editRevision === currentContext.editRevision
-      && (!proposal.baseJavaCatalogFingerprint || proposal.baseJavaCatalogFingerprint === currentContext.javaCatalogFingerprint)
-      && !currentContext.hasDraft);
+  function requestWaypointPreview(previewer, request, robot, plannerId) {
+    return previewer.request({ key: request, path: request.doc, robot, plannerId, quality: 'final' });
+  }
+
+  function waypointPreviewResult(snapshot, request) {
+    if (!request) return null;
+    const value = snapshot.status === 'ready' && snapshot.key === request && snapshot.path === request.doc ? snapshot.value : null;
+    const failed = snapshot.errorKey === request && snapshot.errorPath === request.doc;
+    return { ...request, derived: value || null, error: failed ? snapshot.error : null, pending: !value && !failed };
+  }
+
+  function pathPreviewResult(snapshot, request) {
+    const value = snapshot.status === 'ready' && snapshot.key === request
+      && snapshot.path === request.doc && snapshot.value?.planner === request.plannerId ? snapshot.value : null;
+    const failed = snapshot.status === 'error' && snapshot.errorKey === request && snapshot.errorPath === request.doc;
+    return { value, error: failed ? snapshot.error : null, pending: !value && !failed };
   }
 
   const ACCENT = '#3f6fd0';
 
-  const DEF_CONS = { maxVel: 4.2, maxAccel: 6.5, maxDecel: 6.5, maxAngVel: 540, maxAngAccel: 720, maxAngDecel: 720, maxJerk: 0, maxAngJerk: 0 };
-  function alignWaypointHandles(w) {
-    if (!w || !w.prevC || !w.nextC) return;
-    const inLen = Math.hypot(w.x - w.prevC.x, w.y - w.prevC.y);
-    const outLen = Math.hypot(w.nextC.x - w.x, w.nextC.y - w.y);
-    const inX = inLen > 1e-6 ? (w.x - w.prevC.x) / inLen : 0;
-    const inY = inLen > 1e-6 ? (w.y - w.prevC.y) / inLen : 0;
-    const outX = outLen > 1e-6 ? (w.nextC.x - w.x) / outLen : 0;
-    const outY = outLen > 1e-6 ? (w.nextC.y - w.y) / outLen : 0;
-    let dx = inX + outX, dy = inY + outY;
-    let mag = Math.hypot(dx, dy);
-    if (mag < 1e-6) { dx = outLen > 1e-6 ? outX : inX; dy = outLen > 1e-6 ? outY : inY; mag = Math.hypot(dx, dy); }
-    if (mag < 1e-6) { dx = 1; dy = 0; mag = 1; }
-    dx /= mag; dy /= mag;
-    w.prevC = { x: w.x - dx * inLen, y: w.y - dy * inLen };
-    w.nextC = { x: w.x + dx * outLen, y: w.y + dy * outLen };
-    w.linked = true;
-    w.corner = false;
-  }
-
-  function buildWps(raw) {
-    const out = raw.map((w) => ({ linked: true, thetaOn: false, theta: 0, stop: false, ...w }));
-    out.forEach((w, i) => { const hd = PM.autoHandles(out, i); if (!w.prevC) w.prevC = hd.prevC; if (!w.nextC) w.nextC = hd.nextC; });
-    out.forEach((w, i) => { if (!w.stop && i > 0 && i < out.length - 1) alignWaypointHandles(w); });
-    if (out.length) { out[0].thetaOn = true; out[out.length - 1].thetaOn = true; }
-    return out;
-  }
-
-  function remapWaypointRanges(doc, oldToNew, removedIndex) {
-    doc.ranges = (doc.ranges || []).map((range) => PM.remapWaypointRange(range, oldToNew, removedIndex, doc.waypoints.length));
-  }
-
-  // ---- blank startup path ----
-  function blankPath(name) {
-    return {
-      id: pathId(),
-      name,
-      waypoints: buildWps([{ x: 2.2, y: 4.0, theta: 0 }, { x: 5.0, y: 4.0, theta: 0 }]),
-      targets: [], markers: [],
-      ranges: [],
-      constraints: { ...DEF_CONS },
-      headingMode: 'targets',
-      startVel: 0, goalVel: 0,
-    };
-  }
-
-  function freshProject() {
-    const routine = blankRoutine();
-    const path = blankPath('NewPath');
-    return {
-      schemaVersion: '1.0',
-      field: { ...ACTIVE_FIELD_REFERENCE },
-      name: 'Untitled',
-      robot: { drive: 'swerve', w: 0.84, l: 0.84, heightM: 0.5, maxSpeed: 5.0 },
-      paths: [path],
-      pathLinks: [],
-      routines: [routine],
-      activeRoutineId: routine.id,
-      plannerId: 'profiledSpline',
-      editor: { activePathId: path.id },
-    };
-  }
-
-  function routineState(project) {
+  const PENDING_PATH_PREVIEW = {
+    sample: { pts: [], length: 0 },
+    prof: { totalTime: 0 },
+    metrics: { head: [] },
+    anchors: [],
+    checks: [],
+    wpFrac: [],
+    wpIdx: [],
+    effRanges: [],
+    mode: 'swerve',
+    rev: false,
+  };
 
   const FIT = { x: 307, y: 7, w: 3285, h: 1569 };
 
