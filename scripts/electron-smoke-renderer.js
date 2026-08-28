@@ -1,0 +1,199 @@
+(async () => {
+  const unnamedOnPage = () => {
+    const controls = [...document.querySelectorAll('button,input,select,textarea,[role="button"]')];
+    const name = (el) => el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.getAttribute('title') || el.labels?.[0]?.textContent || (el.matches('button,[role="button"]') ? el.textContent : '');
+    return controls.filter((el) => !String(name(el) || '').trim()).map((el) => el.className);
+  };
+  const unnamed = [...unnamedOnPage()];
+  for (const page of ['Routines', 'Robot']) {
+    [...document.querySelectorAll('.pageswitch button,.library-tabs button')].find((button) => button.textContent.trim() === page)?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    unnamed.push(...unnamedOnPage());
+  }
+  const project = { schemaVersion: '1.0', field: { id: '2026-rebuilt', revision: '2026-manual-tu19-welded-4', coordinateSchemaId: 'bordeaux-field/1.0' }, name: 'Smoke edited', robot: { drive: 'swerve', w: .8, l: .8, maxSpeed: 4 }, paths: [{ id: 'path_smoke', name: 'Smoke', waypoints: [{ x: 1, y: 1, theta: 0, thetaOn: true, linked: true, stop: false, prevC: { x: .8, y: 1 }, nextC: { x: 1.2, y: 1 } }, { x: 2, y: 1, theta: 0, thetaOn: true, linked: true, stop: false, prevC: { x: 1.8, y: 1 }, nextC: { x: 2.2, y: 1 } }], targets: [], markers: [{ id: 'event_smoke', f: .5, name: 'Smoke event', invocation: { commandId: 'frc.robot.SmokeCommand', arguments: { count: 2, sequence: '9007199254740993', tags: ['auto'] }, cancelOnPathEnd: true } }], ranges: [], constraints: { maxVel: 2, maxAccel: 2, maxDecel: 2, maxAngVel: 180, maxAngAccel: 360 }, startVel: 0, goalVel: 0 }], pathLinks: [], routines: [{ id: 'routine_smoke_active', name: 'Smoke routine', nodes: [{ id: 'routine_smoke', type: 'path', ref: 'path_smoke' }] }], activeRoutineId: 'routine_smoke_active', plannerId: 'profiledSpline' };
+  await window.bordeauxAPI.saveProject(project, true);
+  document.getElementById('robot-drive-motor')?.click();
+  for (let attempt = 0; attempt < 50 && !document.querySelector('#robot-drive-motor-listbox [data-value="rev-neo"]'); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  document.querySelector('#robot-drive-motor-listbox [data-value="rev-neo"]')?.click();
+  await new Promise((resolve) => setTimeout(resolve, 1_050));
+  const motorAutosave = await window.bordeauxAPI.restoreLastProject();
+  const motorPreset = motorAutosave.project.robot.driveModel?.motorId === 'rev-neo'
+    && motorAutosave.project.robot.driveModel?.motorFreeRpm === 5676
+    && motorAutosave.project.robot.maxSpeed > 4;
+  const validation = await window.bordeauxAPI.validateProject(project);
+  const javaConnection = await window.bordeauxAPI.linkJavaProject();
+  const installedJavaConnection = await window.bordeauxAPI.installJavaSupport();
+  const builtJavaConnection = await window.bordeauxAPI.buildJavaCatalog();
+  const recentJavaProjects = await window.bordeauxAPI.listRecentJavaProjects();
+  const reopenedJavaConnection = await window.bordeauxAPI.openRecentJavaProject(recentJavaProjects[0].id);
+  const secondPath = structuredClone(project.paths[0]);
+  secondPath.id = 'path_smoke_second'; secondPath.name = 'Smoke second';
+  secondPath.markers = [];
+  const persistedProject = { ...project, paths: [...project.paths, secondPath], editor: { activePathId: secondPath.id, javaProjectBookmarkId: recentJavaProjects[0].id } };
+  [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === 'Editor')?.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  [...document.querySelectorAll('.library-tabs button')].find((button) => button.textContent.trim() === 'Paths')?.click();
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const planStage = document.querySelector('.stage-plan .fieldcol');
+    if (planStage && planStage.getAttribute('aria-disabled') !== 'true') break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  document.querySelector('button[aria-label="Add event marker"]')?.click();
+  for (let attempt = 0; attempt < 100 && !document.querySelector('button[aria-label="Choose Java project"], .cmd-primary-action'); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const linkButton = document.querySelector('button[aria-label="Choose Java project"]')
+    || [...document.querySelectorAll('.cmd-primary-action')].find((button) => button.textContent.trim() === 'Choose Java project');
+  linkButton?.click();
+  for (let attempt = 0; attempt < 50 && document.getElementById('event-marker-command')?.disabled; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const commandPicker = document.getElementById('event-marker-command');
+  const setInputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+  commandPicker?.click();
+  for (let attempt = 0; attempt < 50 && !document.querySelector('#event-marker-command-listbox [role="option"]'); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const commandOptions = [...document.querySelectorAll('#event-marker-command-listbox [role="option"]')];
+  const commandSearch = document.getElementById('event-marker-command-search');
+  const smokeCommandOption = commandOptions.find((option) => option.getAttribute('data-value') === 'frc.robot.SmokeCommand');
+  if (smokeCommandOption) {
+    smokeCommandOption.click();
+    for (let attempt = 0; attempt < 100 && !document.getElementById('event-command-param-tags'); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  const jsonParameter = document.getElementById('event-command-param-tags');
+  const exactIntegerParameter = document.getElementById('event-command-param-sequence');
+  const smokeParametersPresent = Boolean(document.getElementById('event-command-param-count') && jsonParameter && exactIntegerParameter);
+  const setTextAreaValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+  if (jsonParameter) {
+    setTextAreaValue.call(jsonParameter, '{}');
+    jsonParameter.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    jsonParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const jsonShapeRejected = jsonParameter?.getAttribute('aria-invalid') === 'true';
+  if (jsonParameter) {
+    setTextAreaValue.call(jsonParameter, '["auto"]');
+    jsonParameter.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    jsonParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  if (exactIntegerParameter) {
+    setInputValue.call(exactIntegerParameter, '9223372036854775808');
+    exactIntegerParameter.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    exactIntegerParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const longRangeRejected = exactIntegerParameter?.getAttribute('aria-invalid') === 'true';
+  if (exactIntegerParameter) {
+    setInputValue.call(exactIntegerParameter, '9007199254740993');
+    exactIntegerParameter.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    exactIntegerParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  document.getElementById('event-marker-command')?.click();
+  for (let attempt = 0; attempt < 50 && !document.querySelector('#event-marker-command-listbox [role="option"]'); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const largeEnumCommandOption = [...document.querySelectorAll('#event-marker-command-listbox [role="option"]')]
+    .find((option) => option.getAttribute('data-value') === 'frc.robot.LargeEnumCommand');
+  largeEnumCommandOption?.click();
+  for (let attempt = 0; attempt < 50 && !document.getElementById('event-command-param-mode'); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const largeEnumPicker = document.getElementById('event-command-param-mode');
+  largeEnumPicker?.click();
+  for (let attempt = 0; attempt < 50 && !document.querySelector('#event-command-param-mode-listbox [role="option"]'); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const largeEnumOptions = [...document.querySelectorAll('#event-command-param-mode-listbox [role="option"]')];
+  const largeEnumOverflowNotice = document.querySelector('#event-command-param-mode-listbox .cmd-picker-more')?.textContent || '';
+  const largeEnumSearch = document.getElementById('event-command-param-mode-search');
+  if (largeEnumSearch) {
+    setInputValue.call(largeEnumSearch, 'MODE_150');
+    largeEnumSearch.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  for (let attempt = 0; attempt < 50 && !document.querySelector('#event-command-param-mode-listbox [data-value="MODE_150"]'); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const largeEnumChoice = [...document.querySelectorAll('#event-command-param-mode-listbox [role="option"]')]
+    .find((option) => option.getAttribute('data-value') === 'MODE_150');
+  largeEnumChoice?.click();
+  for (let attempt = 0; attempt < 50 && document.getElementById('event-command-param-mode-value')?.textContent !== 'MODE_150'; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const javaUi = {
+    markerInspector: Boolean(document.querySelector('.cmd-project')),
+    linkAction: Boolean(linkButton),
+    commandEnabled: Boolean(commandPicker && !commandPicker.disabled),
+    commandOptions: commandOptions.length,
+    searchHiddenForSmallCatalog: !commandSearch,
+    recentHiddenForSingleProject: !document.getElementById('event-marker-java-project'),
+    cancelSwitch: Boolean(document.getElementById('event-command-cancel') && document.querySelector('.cmd-toggle-track')),
+    parameter: smokeParametersPresent,
+    jsonShapeRejected,
+    jsonShapeAccepted: jsonParameter?.getAttribute('aria-invalid') === 'false',
+    longRangeRejected,
+    exactInteger: exactIntegerParameter?.value === '9007199254740993' && exactIntegerParameter?.type === 'text',
+    largeEnumDetails: { optionCount: largeEnumOptions.length, overflowNotice: largeEnumOverflowNotice, searchPresent: Boolean(largeEnumSearch), selectedValue: document.getElementById('event-command-param-mode-value')?.textContent, commandFound: Boolean(largeEnumCommandOption), pickerFound: Boolean(largeEnumPicker) },
+    largeEnumPicker: largeEnumOptions.length === 80
+      && largeEnumOverflowNotice.includes('80 of 160 shown')
+      && Boolean(largeEnumSearch)
+      && document.getElementById('event-command-param-mode-value')?.textContent === 'MODE_150',
+    accessible: unnamedOnPage().length === 0,
+  };
+  document.querySelector('button[aria-label="Add event marker"]')?.click();
+  let markerAutosave;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    markerAutosave = await window.bordeauxAPI.restoreLastProject();
+    if (markerAutosave.project.paths[0].markers.length === 2) break;
+  }
+  const eventMarkerAutosave = markerAutosave.project.paths[0].markers.length === 2
+    && markerAutosave.project.paths[0].markers[1].name === 'event2';
+  await window.bordeauxAPI.newProject();
+  let staleJavaExportRejected = false;
+  try { await window.bordeauxAPI.exportJava(persistedProject, 'linked'); }
+  catch (error) { staleJavaExportRejected = String(error && error.message || error).includes('Link a Java robot project'); }
+  await window.bordeauxAPI.openRecentJavaProject(recentJavaProjects[0].id);
+  const javaExported = await window.bordeauxAPI.exportJava(persistedProject, 'linked');
+  const saved = await window.bordeauxAPI.saveProject(persistedProject, true);
+  const restored = await window.bordeauxAPI.restoreLastProject();
+  await window.bordeauxAPI.newProject();
+  const opened = await window.bordeauxAPI.openProject();
+  [...document.querySelectorAll('.library-tabs button')].find((button) => button.textContent.trim() === 'Routines')?.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const routineLibraryOpened = document.querySelector('.library-tabs [aria-selected="true"]')?.textContent === 'Routines';
+  [...document.querySelectorAll('.library-tools button')].find((button) => button.textContent.trim() === 'New routine')?.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const newRoutineSelected = document.querySelector('.library-current-name')?.textContent === 'New routine';
+  document.querySelector('.library-rename')?.requestSubmit();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  document.querySelector('button[aria-label="Actions for New routine"]')?.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  [...document.querySelectorAll('.library-menu button')].find((button) => button.textContent.trim() === 'Duplicate')?.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const routineDuplicateSelected = document.querySelector('.library-current-name')?.textContent === 'New routine copy';
+  const multiRoutineUi = routineLibraryOpened && newRoutineSelected && routineDuplicateSelected;
+  document.querySelector('.library-rename')?.requestSubmit();
+  document.querySelector('.library-connection')?.click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const robotPushDialog = document.querySelector('[aria-labelledby="robot-push-title"]');
+  const robotPushUi = Boolean(robotPushDialog
+    && robotPushDialog.textContent.includes('Saving your project never sends robot data')
+    && robotPushDialog.querySelector('input[placeholder="roborio-2468-frc.local"]')
+    && robotPushDialog.querySelector('button[aria-label="Close robot connection"]'));
+  window.bordeauxAPI.setDirty(true);
+  const probe = document.createElement('script'); probe.textContent = 'window.__bordeauxInlineScriptRan = true'; document.head.appendChild(probe);
+  const editorRestored = opened.project.editor?.activePathId === secondPath.id && opened.project.editor?.javaProjectBookmarkId === recentJavaProjects[0].id;
+  return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), fatalError: document.querySelector('.fatal-error')?.textContent || '', unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, validation: validation.ok, motorPreset, eventMarkerAutosave, multiRoutineUi, robotPushUi, javaDiscovery: javaConnection.catalog.projectName === 'SmokeRobot' && javaConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), javaInstalled: installedJavaConnection.integration.installed, javaBuilt: builtJavaConnection.catalog.authoritative === true && builtJavaConnection.catalog.catalogHash === reopenedJavaConnection.catalog.catalogHash, javaRecent: recentJavaProjects.length === 1 && reopenedJavaConnection.catalog.projectName === 'SmokeRobot', javaUi, staleJavaExportRejected, javaExported: javaExported.exported && javaExported.eventCount === 1, restored: restored.project.name === persistedProject.name, roundTrip: saved.saved && opened.project.name === persistedProject.name && opened.project.routines.find((routine) => routine.id === opened.project.activeRoutineId)?.nodes[0]?.ref === 'path_smoke' && !('routine' in opened.project), editorRestored, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
+})();
