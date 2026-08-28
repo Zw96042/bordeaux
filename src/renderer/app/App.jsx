@@ -281,26 +281,92 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     };
   }
 
-  function App() {
-    const [project, setProject] = useState(() => freshProject());
-    const plannerId = project.plannerId;
+      return () => {
+        window.clearTimeout(revealTimer);
+        window.clearTimeout(dismissTimer);
+      };
+    }, [error, kind, planningInputRevision, pathId]);
+
+    return notice;
+  }
+
+  function useRoutinePlanning(enabled, paths, robot, plannerId) {
+    const planner = useMemo(() => FinalPlanning.create(), []);
+    const [planningState, setPlanningState] = useState(() => ({
+      paths, robot, plannerId, status: 'idle', values: {}, error: '',
+    }));
+    useEffect(() => {
+      if (!enabled) return undefined;
+      let active = true;
+      let currentRequest = null;
+      setPlanningState({ paths, robot, plannerId, status: 'pending', values: {}, error: '' });
+      void (async () => {
+        for (const path of paths) {
+          if (!active) return;
+          currentRequest = planner.request(
+            { key: path.id, path, robot, plannerId },
+            { deadline: 'common' },
+          );
+          const result = await currentRequest.promise;
+          if (!active) return;
+          if (result.status !== 'success' || !result.value?.finalTrajectory || (path.optimization?.accepted && !isOptimizationOutdated(path, robot) && !result.value.acceptedTrajectory)) {
+            setPlanningState((current) => ({
+              ...current,
+              status: 'error',
+              error: path.optimization?.accepted && !isOptimizationOutdated(path, robot) && !result.value?.acceptedTrajectory
+                ? `${path.name}: the selected optimization could not be validated. Review this path.`
+                : result.fallbackReason || result.error?.message || `Could not plan ${path.name}.`,
+            }));
+            return;
+          }
+          setPlanningState((current) => ({
+            ...current,
+            values: { ...current.values, [path.id]: result.value },
+          }));
+        }
+        if (active) setPlanningState((current) => ({ ...current, status: 'ready' }));
+      })();
+      return () => {
+        active = false;
+        if (currentRequest) currentRequest.cancel();
+      };
+    }, [enabled, planner, paths, robot, plannerId]);
+    return enabled
+      && planningState.paths === paths
+      && planningState.robot === robot
+      && planningState.plannerId === plannerId
+      ? planningState
+      : { status: enabled ? 'pending' : 'idle', values: {}, error: '' };
+  }
+
+  function App({ initialProject = null, initialAgentProposal = null } = {}) {
+    const [project, setProject] = useState(() => initialProject || freshProject());
+    const plannerId = 'profiledSpline';
     const [activeIdx, setActiveIdx] = useState(0);
     const [sel, setSel] = useState({ kind: null, idx: -1 });
     const [page, setPage] = useState('plan');
+    const [editorPage, setEditorPage] = useState('plan');
+    const [projectKey, setProjectKey] = useState(0);
+    const [libraryPreferenceKey, setLibraryPreferenceKey] = useState(() => project.name + ':' + project.paths[0].id);
+    useEffect(() => { if (page !== 'robot') setEditorPage(page); }, [page]);
     const [alliance, setAlliance] = useState('blue');
     const [showGrid, setShowGrid] = useState(true);
     const [view, setView] = useState(FIT);
     const [graphOpen, setGraphOpen] = useState(false);
-    const [outlineOpen, setOutlineOpen] = useState(true);
     const [inspectorOpen, setInspectorOpen] = useState(true);
-    const [secOpen, setSecOpen] = useState({ wp: true, sg: false, rt: false, em: false, cr: false });
-    const [times, setTimes] = useState({});
+    const libraryDurations = useMemo(() => createLibraryDurations(FinalPlanning.create()), []);
+    const times = useSyncExternalStore(libraryDurations.subscribe, libraryDurations.getSnapshot, libraryDurations.getSnapshot);
+    useEffect(() => () => libraryDurations.cancel(), [libraryDurations]);
+    const [optimizationOpen, setOptimizationOpen] = useState(false);
+    const [comparison, setComparison] = useState(null);
+    const appliedPreview = useRef(null);
     const [metric, setMetric] = useState('velocity');
     const [tool, setTool] = useState('select');
-    const [waypointPreview, setWaypointPreview] = useState(null);
+    const [brush, setBrush] = useState({ kind: 'push', radius: 0.9, strength: 0.7 });
+    const [waypointPreviewRequest, setWaypointPreviewRequest] = useState(null);
     const [headMenu, setHeadMenu] = useState(null);
     const [dirty, setDirty] = useState(false);
-    const [agentProposal, setAgentProposal] = useState(null);
+    const [agentProposal, setAgentProposal] = useState(initialAgentProposal);
     const [agentCandidateId, setAgentCandidateId] = useState(null);
     const [mcpEnabled, setMcpEnabled] = useState(false);
     const [agentSessionId] = useState(() => 'session_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)));
@@ -314,15 +380,31 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     if (javaProjectState.catalog && javaProjectState.catalog.semanticFingerprint) javaCatalogFingerprint.current = javaProjectState.catalog.semanticFingerprint;
     else if (!javaProjectState.operation) javaCatalogFingerprint.current = null;
     const [exportError, setExportError] = useState('');
+    const [planningInputRevision, setPlanningInputRevision] = useState(0);
     const [unitSystem, setUnitSystemState] = useState(() => UnitPrefs.current());
-    const setUnitSystem = useCallback((next) => setUnitSystemState(UnitPrefs.set(next)), []);
+    const setUnitSystem = useCallback((next) => {
+      const units = UnitPrefs.set(next);
+      setUnitSystemState(units);
+      setProject((current) => ({ ...current, editor: { ...current.editor, unitSystem: units } }));
+    }, []);
+    React.useLayoutEffect(() => {
+      if (project.editor?.unitSystem) setUnitSystemState(UnitPrefs.set(project.editor.unitSystem));
+    }, [project.editor?.unitSystem]);
     const javaRestoreGeneration = useRef(0);
     const skipDirty = useRef(true);
     const keyboardNavigation = useRef(false);
     const editStore = useMemo(() => PathEdit.create(), []);
     const playbackStore = useMemo(() => createPlaybackStore(), []);
     const routinePlaybackStore = useMemo(() => createPlaybackStore(), []);
+    const waypointPreviewer = useMemo(() => PathPreview.create(), []);
+    const [waypointPreviewSnapshot, setWaypointPreviewSnapshot] = useState(() => waypointPreviewer.getSnapshot());
+    const agentPreviewer = useMemo(() => PathPreview.create(), []);
+    const [agentPreview, setAgentPreview] = useState(() => agentPreviewer.getSnapshot());
     useEffect(() => () => { playbackStore.destroy(); routinePlaybackStore.destroy(); }, [playbackStore, routinePlaybackStore]);
+    useEffect(() => waypointPreviewer.retain(), [waypointPreviewer]);
+    useEffect(() => waypointPreviewer.subscribe(() => setWaypointPreviewSnapshot(waypointPreviewer.getSnapshot())), [waypointPreviewer]);
+    useEffect(() => agentPreviewer.retain(), [agentPreviewer]);
+    useEffect(() => agentPreviewer.subscribe(() => setAgentPreview(agentPreviewer.getSnapshot())), [agentPreviewer]);
 
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.listRecentJavaProjects !== 'function') return;
@@ -455,7 +537,6 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       setJavaProjectState((current) => ({ ...current, notice: result && result.canceled ? 'Canceling the Java catalog build…' : 'No Java catalog build is running.' }));
     }, []);
 
-    // ---- Autonomous Routine ----
     const routineLibrary = routineState(project);
     const routines = routineLibrary.routines;
     const routine = routines.find((candidate) => candidate.id === routineLibrary.activeRoutineId) || routines[0];
@@ -475,6 +556,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     }), [commitRoutineState]);
     const [routineOutcomes, setRoutineOutcomes] = useState({});
     const [routineSel, setRoutineSel] = useState(null);
+    const [routineCollapsed, setRoutineCollapsed] = useState({});
 
     const robot = project.robot;
     const accent = ACCENT;
