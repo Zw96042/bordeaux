@@ -280,30 +280,41 @@ import { UI } from "./ui";
   ];
   function ToolRail({ tool, setTool }) {
     return h('div', { className: 'toolrail' }, TOOLS.map((t) =>
-      h('button', { key: t.id, className: 'toolrail-b' + (tool === t.id ? ' on' : ''), type: 'button', 'aria-label': t.label, 'aria-pressed': tool === t.id, title: t.label + '  (' + t.key + ' or ' + t.alternateKey + ')', onClick: () => setTool(t.id) },
-        h(Icon, { name: t.icon, size: 18 }), h('span', { className: 'toolrail-k' }, t.key))));
+      tool === 'brush' && brushOpen && h('section', { className: 'brush-panel', 'aria-label': 'Path brush settings' },
+        h('div', { className: 'brush-panel-head' },
+          h('span', null, 'Brush'),
+          h('span', { className: 'brush-waypoint-count' }, waypointCount + ' pts'),
+          h('button', { className: 'brush-panel-close', type: 'button', 'aria-label': 'Close brush settings', onClick: () => setBrushOpen(false) }, h(Icon, { name: 'x', size: 13 }))),
+        h('div', { className: 'brush-modes', role: 'radiogroup', 'aria-label': 'Brush type' },
+          BRUSHES.map((option) => h('button', { key: option.id, className: 'brush-mode' + (brush.kind === option.id ? ' on' : ''), type: 'button', role: 'radio', 'aria-checked': brush.kind === option.id, title: option.detail, onClick: () => setBrush({ ...brush, kind: option.id }) },
+            h(Icon, { name: option.icon, size: 21 }), h('span', null, option.label)))),
+        h('label', { className: 'brush-setting' },
+          h('span', null, 'Radius'),
+          h('input', { type: 'range', min: 0.3, max: 2.4, step: 0.1, value: brush.radius, onChange: (event) => setBrush({ ...brush, radius: Number(event.target.value) }) }),
+          h('output', null, brush.radius.toFixed(1) + ' m')),
+        h('label', { className: 'brush-setting' },
+          h('span', null, 'Strength'),
+          h('input', { type: 'range', min: 0.1, max: 1, step: 0.05, value: brush.strength, onChange: (event) => setBrush({ ...brush, strength: Number(event.target.value) }) }),
+          h('output', null, Math.round(brush.strength * 100) + '%'))));
   }
 
-  // ---------------- global-constraint chip bar (top of canvas) — memo §6 ----------------
   function ConstraintBar({ c, robot, onOpen }) {
     const limits = PM.effectiveConstraints(c, robot);
-    const physical = limits !== c;
     const chips = [
       { k: 'Max V', v: UnitPrefs.fromCanonical(Math.min(limits.maxVel, robot.maxSpeed), 'm/s').toFixed(1), u: UnitPrefs.label('m/s') },
       { k: 'Max A', v: UnitPrefs.fromCanonical(limits.maxAccel, 'm/s²').toFixed(1), u: UnitPrefs.label('m/s²') },
       { k: 'Decel', v: UnitPrefs.fromCanonical(limits.maxDecel != null ? limits.maxDecel : limits.maxAccel, 'm/s²').toFixed(1), u: UnitPrefs.label('m/s²') },
       { k: 'Max \u03c9', v: (limits.maxAngVel || 0).toFixed(0), u: '\u00b0/s' },
     ];
-    return h('button', { className: 'cbar', type: 'button', title: physical ? 'View robot limits' : 'Edit global constraints', onClick: onOpen },
+    return h('button', { className: 'cbar', type: 'button', title: 'Edit global constraints', onClick: onOpen },
       h('span', { className: 'cbar-ic' }, h(Icon, { name: 'gauge', size: 14 })),
       chips.map((ch, i) => h('span', { key: i, className: 'cbar-chip' },
         h('span', { className: 'cbar-k' }, ch.k),
         h('span', { className: 'cbar-v' }, ch.v),
         h('span', { className: 'cbar-u' }, ch.u))),
-      h('span', { className: 'cbar-edit' }, physical ? 'Robot' : 'Edit'));
+      h('span', { className: 'cbar-edit' }, 'Edit'));
   }
 
-  // ---------------- outline: document STRUCTURE only (memo §5 / §7) ----------------
   const behPill = (w) => w.stop ? { t: w.wait ? 'stop ' + (w.wait) + 's' : 'stop', c: 'r' } : w.corner ? { t: 'corner', c: 'n' } : null;
   const inspectItem = (actions, kind, index, event) => {
     event.preventDefault(); event.stopPropagation();
@@ -311,9 +322,18 @@ import { UI } from "./ui";
     if (actions.openInspector) actions.openInspector();
   };
 
-  function WaypointList({ wps, sel, actions }) {
+  function WaypointList({ wps, sel, actions, ready }) {
     const [drag, setDrag] = useState(null);
     const rows = useRef([]);
+    const reorderFocus = useRef(null);
+    React.useLayoutEffect(() => {
+      const pending = reorderFocus.current;
+      if (!pending || !ready || pending.wps === wps) return;
+      reorderFocus.current = null;
+      if (document.activeElement === pending.trigger || document.activeElement === document.body) {
+        rows.current[pending.target]?.querySelector('.featgrip')?.focus();
+      }
+    }, [wps, ready]);
     const pointerDrag = PointerDrag.useController();
     const startDrag = (i) => (e) => {
       e.preventDefault(); e.stopPropagation();
@@ -335,14 +355,21 @@ import { UI } from "./ui";
       const bp = behPill(w);
       const cls = 'featrow wpfeatrow' + (sel.kind === 'wp' && sel.idx === i ? ' sel' : '') + (drag && drag.from === i ? ' dragging' : '') + (drag && drag.over === i && drag.from !== i ? ' over' : '');
       return h('div', { key: i, ref: (el) => (rows.current[i] = el), className: cls },
-        h('button', { className: 'featgrip', type: 'button', 'aria-label': 'Drag ' + label + ' to reorder', title: 'Drag to reorder', onPointerDown: startDrag(i) }, h(Icon, { name: 'drag', size: 13 })),
-        h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'wp' && sel.idx === i, onClick: (e) => { if (e.shiftKey && wps.length > 2) actions.delWp(i); else actions.select('wp', i); }, onDoubleClick: (e) => inspectItem(actions, 'wp', i, e) },
+        h('button', { className: 'featgrip', type: 'button', 'aria-label': 'Reorder ' + label, title: 'Drag to reorder, or use the up and down arrow keys', 'aria-keyshortcuts': 'ArrowUp ArrowDown', onPointerDown: startDrag(i), onKeyDown: (event) => {
+          if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+          event.preventDefault(); event.stopPropagation();
+          const target = i + (event.key === 'ArrowUp' ? -1 : 1);
+          if (target < 0 || target >= wps.length) return;
+          reorderFocus.current = { wps, target, trigger: event.currentTarget };
+          actions.reorderWp(i, target);
+        } }, h(Icon, { name: 'drag', size: 13 })),
+        h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'wp' && sel.idx === i, onClick: () => actions.select('wp', i), onDoubleClick: (e) => inspectItem(actions, 'wp', i, e) },
           h('span', { className: 'featdot ' + (w.stop ? 'r sq' : i === 0 ? 'g' : i === wps.length - 1 ? 'r' : 'b') }),
           h('span', { className: 'featnm', title: label }, label),
-          mid && w.thetaOn && h('span', { className: 'pill th' }, (w.theta || 0).toFixed(0) + '\u00b0'),
-          bp ? h('span', { className: 'pill ' + bp.c }, bp.t) : h('span', { className: 'featmeta' }, w.x.toFixed(1) + ', ' + w.y.toFixed(1))),
-        i > 0 && h('button', { className: 'featmove', type: 'button', 'aria-label': 'Move ' + label + ' up', onClick: () => actions.reorderWp(i, i - 1) }, '\u2191'),
-        i < wps.length - 1 && h('button', { className: 'featmove', type: 'button', 'aria-label': 'Move ' + label + ' down', onClick: () => actions.reorderWp(i, i + 1) }, '\u2193'),
+          h('span', { className: 'featdetails' },
+            h('span', { className: 'featmeta' }, UnitPrefs.fromCanonical(w.x, 'm').toFixed(1) + ', ' + UnitPrefs.format(w.y, 'm', 1)),
+            mid && w.thetaOn && h('span', { className: 'pill th' }, (w.theta || 0).toFixed(0) + '\u00b0'),
+            bp && h('span', { className: 'pill ' + bp.c }, bp.t))),
         wps.length > 2 && h('button', { className: 'featdel', 'aria-label': 'Delete ' + label, title: 'Delete', onClick: () => actions.delWp(i) }, h(Icon, { name: 'trash', size: 12 })));
     }));
   }
@@ -360,7 +387,7 @@ import { UI } from "./ui";
           h('span', { className: 'featmeta' }, typeName(w.segType))))));
   }
 
-  function Outline({ open, setOpen, doc, derived, sel, actions, secOpen, setSecOpen, robot }) {
+  function Outline({ open, setOpen, doc, derived, sel, actions, secOpen, setSecOpen, robot, ready }) {
     const tog = (k) => setSecOpen((o) => ({ ...o, [k]: !o[k] }));
     const wps = doc.waypoints;
     if (!open) {
@@ -372,32 +399,27 @@ import { UI } from "./ui";
         h('span', { className: 'outline-t' }, 'Outline'),
         h('button', { className: 'mini', type: 'button', title: 'Hide outline', 'aria-label': 'Hide outline', onClick: () => setOpen(false) }, h('span', { className: 'rot90' }, h(Icon, { name: 'chevron', size: 15 })))),
       h('div', { className: 'outline-scroll' },
-        h(Section, { icon: 'waypoint', title: 'Waypoints', count: wps.length, open: secOpen.wp, onToggle: () => tog('wp'),
-          right: h('button', { className: 'mini', type: 'button', title: 'Place waypoint', 'aria-label': 'Place waypoint', onClick: (e) => { e.stopPropagation(); actions.select(null, -1); actions.setTool('waypoint'); } }, h(Icon, { name: 'plus', size: 13 })) },
-          h(WaypointList, { wps, sel, actions })),
+        h(Section, { icon: 'waypoint', title: 'Waypoints', count: wps.length, open: secOpen.wp, onToggle: () => tog('wp') },
+          h(WaypointList, { key: doc.id, wps, sel, actions, ready })),
         h(Section, { icon: 'route', title: 'Segments', count: Math.max(0, wps.length - 1), open: !!secOpen.sg, onToggle: () => tog('sg') },
           h(SegmentList, { wps, sel, actions })),
-        h(Section, { icon: 'rotation', title: 'Rotation Targets', count: doc.targets.length, open: secOpen.rt, onToggle: () => tog('rt'),
-          right: h('button', { className: 'mini', type: 'button', title: 'Add rotation target', 'aria-label': 'Add rotation target', onClick: (e) => { e.stopPropagation(); actions.addTargetMid(); } }, h(Icon, { name: 'plus', size: 13 })) },
+        h(Section, { icon: 'rotation', title: 'Rotation Targets', count: doc.targets.length, open: secOpen.rt, onToggle: () => tog('rt') },
           doc.targets.length === 0 ? h('div', { className: 'featempty' }, 'Press R, then click the path') :
             doc.targets.map((t, i) => h('div', { key: i, className: 'featrow' + (sel.kind === 'rt' && sel.idx === i ? ' sel' : '') },
               h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'rt' && sel.idx === i, onClick: () => actions.select('rt', i), onDoubleClick: (e) => inspectItem(actions, 'rt', i, e) }, h('span', { className: 'featdot n' }), h('span', { className: 'featnm' }, t.deg.toFixed(0) + '\u00b0'), h('span', { className: 'featmeta' }, t.anchor === 'dist' ? UnitPrefs.format(t.d != null ? t.d : PM.featureFraction(t, derived.sample) * derived.sample.length, 'm', 1) : (PM.featureFraction(t, derived.sample) * 100).toFixed(0) + '%')),
               h('button', { className: 'featdel', 'aria-label': 'Delete rotation target', title: 'Delete', onClick: () => actions.delTarget(i) }, h(Icon, { name: 'trash', size: 12 }))))),
-        h(Section, { icon: 'flag2', title: 'Event Markers', count: doc.markers.length, open: secOpen.em, onToggle: () => tog('em'),
-          right: h('button', { className: 'mini', type: 'button', title: 'Add event marker', 'aria-label': 'Add event marker', onClick: (e) => { e.stopPropagation(); actions.addMarkerMid(); } }, h(Icon, { name: 'plus', size: 13 })) },
+        h(Section, { icon: 'flag2', title: 'Event Markers', count: doc.markers.length, open: secOpen.em, onToggle: () => tog('em') },
           doc.markers.length === 0 ? h('div', { className: 'featempty' }, 'Press M, then click the path') :
             doc.markers.map((m, i) => h('div', { key: i, className: 'featrow' + (sel.kind === 'em' && sel.idx === i ? ' sel' : '') },
               h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'em' && sel.idx === i, onClick: () => actions.select('em', i), onDoubleClick: (e) => inspectItem(actions, 'em', i, e) }, h('span', { className: 'featdot n' }), h('span', { className: 'featnm', title: m.name }, m.name), h('span', { className: 'featmeta' }, m.anchor === 'dist' ? UnitPrefs.format(m.d != null ? m.d : PM.featureFraction(m, derived.sample) * derived.sample.length, 'm', 1) : (PM.featureFraction(m, derived.sample) * 100).toFixed(0) + '%')),
               h('button', { className: 'featdel', 'aria-label': 'Delete event marker ' + m.name, title: 'Delete', onClick: () => actions.delMarker(i) }, h(Icon, { name: 'trash', size: 12 }))))),
-        h(Section, { icon: 'gauge', title: 'Constraint Ranges', count: (doc.ranges || []).length, open: secOpen.cr !== false, onToggle: () => tog('cr'),
-          right: h('button', { className: 'mini', type: 'button', title: 'Add constraint range', 'aria-label': 'Add constraint range', onClick: (e) => { e.stopPropagation(); actions.addRangeMid(); } }, h(Icon, { name: 'plus', size: 13 })) },
+        h(Section, { icon: 'gauge', title: 'Constraint Ranges', count: (doc.ranges || []).length, open: secOpen.cr !== false, onToggle: () => tog('cr') },
           (doc.ranges || []).length === 0 ? h('div', { className: 'featempty' }, 'Press C, then drag the path') :
             doc.ranges.map((rg, i) => { const effective = (derived.effRanges && derived.effRanges[i]) || rg; const summary = constraintRangeSummary(rg, doc.constraints, robot); const rangeLabel = summary ? summary.text : (rg.name || 'Constraint range'); const rangeMeta = rg.anchor === 'dist' ? UnitPrefs.fromCanonical(Math.min(effective.f0, effective.f1) * derived.sample.length, 'm').toFixed(1) + '\u2013' + UnitPrefs.format(Math.max(effective.f0, effective.f1) * derived.sample.length, 'm', 1) : rg.anchor === 'wp' && rg.t0 != null && rg.t1 != null ? 'S' + ((rg.w0 || 0) + 1) + ' ' + Math.round(rg.t0 * 100) + '% \u2013 S' + ((rg.w1 || 0) + 1) + ' ' + Math.round(rg.t1 * 100) + '%' : rg.anchor === 'wp' ? 'Waypoint ' + Math.min(rg.w0 || 0, rg.w1 || 0) + '\u2013' + Math.max(rg.w0 || 0, rg.w1 || 0) : (Math.min(effective.f0, effective.f1) * 100).toFixed(0) + '\u2013' + (Math.max(effective.f0, effective.f1) * 100).toFixed(0) + '%'; return h('div', { key: i, className: 'featrow' + (sel.kind === 'cr' && sel.idx === i ? ' sel' : '') },
               h('button', { className: 'featselect', type: 'button', 'aria-label': 'Constraint range, ' + (summary ? summary.ariaLabel : rangeLabel) + ', ' + rangeMeta, 'aria-pressed': sel.kind === 'cr' && sel.idx === i, onClick: () => actions.select('cr', i), onDoubleClick: (e) => inspectItem(actions, 'cr', i, e) }, h('span', { className: 'featdot w' }), h('span', { className: 'featnm' }, rangeLabel), h('span', { className: 'featmeta' }, rangeMeta)),
               h('button', { className: 'featdel', 'aria-label': 'Delete constraint range', title: 'Delete', onClick: () => actions.delRange(i) }, h(Icon, { name: 'trash', size: 12 }))); }))));
   }
 
-  // ---------------- compact metric control for the timeline toolbar ----------------
   function MetricControl({ metric, setMetric, derived }) {
     const M = derived.metrics || {};
     const grad = PM.metricGradient(metric);
@@ -417,13 +439,17 @@ import { UI } from "./ui";
       h('span', { className: 'metric-range', 'aria-hidden': true }, lo + '\u2013' + hi + ' ' + UnitPrefs.label(displayUnit)));
   }
 
-  // ---------------- telemetry graph + transport ----------------
   function Transport({ derived, doc, metric, setMetric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen }) {
-    const total = derived.prof.totalTime || 0.001;
+    const playback = derived.playback;
+    const prof = playback ? playback.prof : derived.prof;
+    const pts = playback ? playback.pts : derived.sample.pts;
+    const M = playback ? playback.metrics : derived.metrics;
+    const anchors = playback ? playback.anchors : derived.anchors;
+    const rev = playback ? playback.rev : derived.rev;
+    const total = prof.totalTime || 0.001;
     const pct = Math.max(0, Math.min(1, playTime / total));
     const scrubStep = Math.min(0.02, total);
     const graphRef = useRef(null);
-    const prof = derived.prof, pts = derived.sample.pts, M = derived.metrics;
     const timeline = useMemo(() => {
       const motionEnd = Math.max(0, Number(prof.t && prof.t[prof.t.length - 1]) || 0);
       const distance = pts.length ? Math.max(0, Number(pts[pts.length - 1].s) || 0) : 0;
@@ -443,7 +469,9 @@ import { UI } from "./ui";
       const markers = ((doc && doc.markers) || []).map((marker, index) => ({
         key: 'event-' + index,
         label: marker.name || 'Event marker ' + (index + 1),
-        left: percentAt(PM.featureFraction(marker, derived.sample)),
+        left: derived.markers && derived.markers[index]
+          ? Math.max(0, Math.min(100, derived.markers[index].timeS / total * 100))
+          : percentAt(PM.featureFraction(marker, derived.sample)),
       }));
       const targets = ((doc && doc.targets) || []).map((target, index) => ({
         key: 'target-' + index,
@@ -476,16 +504,24 @@ import { UI } from "./ui";
     const GW = 1000, GH = 132, padL = 0, padR = 0, padT = 10, padB = 20;
     const unitSystem = UnitPrefs.current();
     const graphModel = useMemo(() => {
-      let arr = graphOpen ? M.v.map((value) => UnitPrefs.fromCanonical(value, 'm/s')) : null;
+      const finalSamples = derived.finalTrajectory?.samples || [];
+      const authoritative = finalSamples.length >= 2;
+      const graphTimes = authoritative ? finalSamples.map((sample) => sample.t) : prof.t;
+      let arr = graphOpen
+        ? (authoritative
+          ? finalSamples.map((sample) => UnitPrefs.fromCanonical(sample.velocityMps, 'm/s'))
+          : M.v.map((value) => UnitPrefs.fromCanonical(value, 'm/s')))
+        : null;
       let vmin = 0, vmax = UnitPrefs.fromCanonical(M.vMax || 1, 'm/s'), signed = false;
       let unit = UnitPrefs.label('m/s'), title = 'Velocity';
-      if (graphOpen && metric === 'accel') { arr = M.accel.map((value) => UnitPrefs.fromCanonical(value, 'm/s²')); vmax = UnitPrefs.fromCanonical(M.aMax || 1, 'm/s²'); vmin = -vmax; signed = true; unit = UnitPrefs.label('m/s²'); title = 'Acceleration'; }
-      else if (graphOpen && metric === 'angvel') { arr = (M.omega || []).map((o) => o * R2D); vmax = (M.wMax || 0.01) * R2D; vmin = -vmax; signed = true; unit = '\u00b0/s'; title = 'Angular velocity'; }
-      else if (graphOpen && metric === 'curvature') { arr = M.curv.map((value) => UnitPrefs.fromCanonical(value, '1/m')); vmin = 0; vmax = UnitPrefs.fromCanonical(M.kMax || 0.01, '1/m'); unit = UnitPrefs.label('1/m'); title = 'Curvature'; }
+      if (graphOpen && metric === 'accel') { arr = authoritative ? finalSamples.map((sample) => UnitPrefs.fromCanonical(sample.accelerationMps2, 'm/s²')) : M.accel.map((value) => UnitPrefs.fromCanonical(value, 'm/s²')); vmax = UnitPrefs.fromCanonical(M.aMax || 1, 'm/s²'); vmin = -vmax; signed = true; unit = UnitPrefs.label('m/s²'); title = 'Acceleration'; }
+      else if (graphOpen && metric === 'angvel') { arr = authoritative ? finalSamples.map((sample) => sample.angularVelocityRadps * R2D) : (M.omega || []).map((o) => o * R2D); vmax = (M.wMax || 0.01) * R2D; vmin = -vmax; signed = true; unit = '\u00b0/s'; title = 'Angular velocity'; }
+      else if (graphOpen && metric === 'curvature') { arr = authoritative ? finalSamples.map((sample) => UnitPrefs.fromCanonical(sample.curvatureInvM, '1/m')) : M.curv.map((value) => UnitPrefs.fromCanonical(value, '1/m')); vmin = 0; vmax = UnitPrefs.fromCanonical(M.kMax || 0.01, '1/m'); unit = UnitPrefs.label('1/m'); title = 'Curvature'; }
 
       const jigglePeak = graphOpen && metric === 'velocity' && prof.jiggles
         ? UnitPrefs.fromCanonical(prof.jiggles.reduce((value, action) => Math.max(value, 4 * action.config.distanceM / action.strokeDuration), 0), 'm/s')
         : 0;
+      const seriesPeak = arr ? arr.reduce((maximum, value) => Math.max(maximum, Math.abs(value)), 0) : 0;
       const peak = Math.max(vmax, jigglePeak, seriesPeak);
       vmax = Math.max(0.01, peak * 1.1);
       if (signed) vmin = -vmax;
