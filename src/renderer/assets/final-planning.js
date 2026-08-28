@@ -1,5 +1,6 @@
   const FINAL_SAMPLES_PER_SEGMENT = 56;
   const DEFAULT_DEADLINES_MS = Object.freeze({ common: 5000, stress: 15000, hard: 30000 });
+  const WORKER_RESPONSE_GRACE_MS = 1000;
 
   /** Runs deliberate final-planning work independently from interactive preview. */
   function create(options) {
@@ -24,27 +25,47 @@
         let settled = false;
         let timer = 0;
         let worker = null;
+        let incumbent;
         let resolveResult;
         const promise = new Promise((resolve) => { resolveResult = resolve; });
+        const unchanged = input.optimize === true
+          ? 'The selected trajectory was not changed.'
+          : 'Continuing with the last interactive result.';
         const finish = (result) => {
           if (settled) return;
           settled = true;
           if (timer) clearTimeout(timer);
           if (worker) worker.terminate();
-          resolveResult(result);
+          resolveResult({
+            ...result,
+            ...(incumbent ? { incumbent } : {}),
+            ...(result.fallback ? { fallbackProvisional: true } : {}),
+          });
         };
         const fail = (message) => finish({
           status: 'failure',
           error: { message },
           fallback: requestConfig.interactiveResult,
-          fallbackReason: `Final planning failed: ${message}. Continuing with the last interactive result.`,
+          fallbackReason: `Final planning failed: ${message}. ${unchanged}`,
         });
         try {
           worker = workerFactory();
           worker.onmessage = (event) => {
             const result = event.data;
-            if (!result || result.id !== id) {
+            if (settled) return;
+            if (!result || typeof result.id !== 'number') {
               fail('The final-planning worker returned an invalid response');
+              return;
+            }
+            // A late result from another request must never replace this run.
+            if (result.id !== id) return;
+            if (result.type === 'progress') {
+              if (!result.value) {
+                fail('The final-planning worker returned invalid progress');
+                return;
+              }
+              incumbent = result.value;
+              requestConfig.onProgress?.(result.value);
               return;
             }
             if (result.error) {
@@ -68,8 +89,8 @@
             deadline,
             deadlineMs,
             fallback: requestConfig.interactiveResult,
-            fallbackReason: `Final planning exceeded the ${deadline} deadline (${deadlineMs} ms); continuing with the last interactive result.`,
-          }), deadlineMs);
+            fallbackReason: `Final planning exceeded the ${deadline} deadline (${deadlineMs} ms); ${unchanged.charAt(0).toLowerCase() + unchanged.slice(1)}`,
+          }), deadlineMs + WORKER_RESPONSE_GRACE_MS);
           worker.postMessage({
             id,
             ...input,
@@ -87,7 +108,7 @@
             finish({
               status: 'canceled',
               fallback: requestConfig.interactiveResult,
-              fallbackReason: 'Final planning was canceled; continuing with the last interactive result.',
+              fallbackReason: `Final planning was canceled; ${unchanged.charAt(0).toLowerCase() + unchanged.slice(1)}`,
             });
           },
         };

@@ -1,3 +1,17 @@
+const MAX_DIRECT_POLICY_SAMPLE_WORK = 2000;
+
+function headingTransitionCount(path) {
+  const waypoints = Array.isArray(path?.waypoints) ? path.waypoints : [];
+  const defaultMode = path?.headingMode || 'targets';
+  let previousLaw = null;
+  let transitions = 0;
+  for (let segment = 0; segment < waypoints.length - 1; segment++) {
+    const waypoint = waypoints[segment] || {};
+    const mode = waypoint.segmentHeadingMode || defaultMode;
+    const target = waypoint.segmentLookAt;
+    const law = mode === 'lookAt' ? `lookAt:${target ? target.x : ''}:${target ? target.y : ''}` : mode;
+    if (previousLaw !== null && law !== previousLaw) transitions++;
+    previousLaw = law;
   }
   return transitions;
 }
