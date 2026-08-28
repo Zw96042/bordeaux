@@ -221,6 +221,15 @@ import { PM } from "../lib/pathMath";
       listeners.clear();
       if (worker) worker.terminate();
       worker = null;
+      if (destroyed) return;
+      latestRevision += 1;
+      queued = null;
+      directJob = null;
+      takeInFlight();
+      if (worker) worker.terminate();
+      worker = null;
+      snapshot = { ...snapshot, status: 'idle', revision: latestRevision, error: null, errorKey: null, errorPath: null };
+      notify();
     };
 
     const attachWorker = (nextWorker) => {
@@ -254,8 +263,7 @@ import { PM } from "../lib/pathMath";
       failedWorker.terminate();
       worker = null;
       if (!queued && completed && completed.retried) {
-        directJob = completed;
-        runDirect();
+        runDirectOrFail(completed, message);
         return;
       }
       let next = queued;
@@ -267,8 +275,7 @@ import { PM } from "../lib/pathMath";
         send(next);
       } catch (_error) {
         worker = null;
-        directJob = next;
-        runDirect();
+        runDirectOrFail(next, message);
       }
     };
 
@@ -296,8 +303,7 @@ import { PM } from "../lib/pathMath";
         notify();
         ensureWorker();
         if (!worker) {
-          directJob = job;
-          runDirect();
+          runDirectOrFail(job, 'Path preview worker is unavailable.');
         } else if (inFlight) {
           queued = job;
         } else {
@@ -327,8 +333,9 @@ import { PM } from "../lib/pathMath";
           });
         };
       },
+      cancel,
       destroy,
     };
   }
 
-export const PathPreview = Object.freeze({ create, samplesForQuality });
+export const PathPreview = Object.freeze({ create, samplesForQuality, directPreviewWork, directWorkIsSafe, directPreviewIsSafe });

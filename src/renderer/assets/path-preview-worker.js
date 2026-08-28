@@ -1,17 +1,82 @@
+import { derivePlannerPreview } from "./optimized-preview";
+import { buildRoutineRun } from "../lib/routineRun";
+import { RoutinePreview } from "./routine-preview";
+const derivePathPreview = derivePlannerPreview;
 import { PM } from "../lib/pathMath";
 import { optimizeCorridorFinal } from "../../shared/planners/corridorFinal";
+import { getPlanner } from "../../shared/planners";
+import { authoredPath, getAcceptedTrajectory } from "../../shared/planners/acceptedTrajectory";
 
-function trajectoryAtGeometryPoint(samples, point, fraction) {
-  let match = null;
-  for (const sample of samples) {
-    if (Math.abs(sample.f - fraction) > 1e-5
-      || Math.hypot(sample.x - point.x, sample.y - point.y) > 1e-5) continue;
-    if (!match || sample.t < match.t) match = sample;
+const FINAL_POSITION_TOLERANCE_M = 1e-4;
+const FINAL_INTERPOLATION_POSITION_TOLERANCE_M = 1e-3;
+const FINAL_FRACTION_TOLERANCE = 1e-5;
+
+function firstFractionAtOrAfter(samples, fraction, tolerance = 0) {
+  let low = 0, high = samples.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const value = samples[middle].f;
+    if (value < fraction && Math.abs(value - fraction) > tolerance) low = middle + 1;
+    else high = middle;
   }
-  if (!match) throw new Error('Final optimization did not preserve the renderer geometry.');
-  return match;
+  return low;
 }
 
+function trajectorySamplesAtGeometryPoint(samples, point, fraction, ordered = false) {
+  const matches = [];
+  const start = ordered ? firstFractionAtOrAfter(samples, fraction, FINAL_FRACTION_TOLERANCE) : 0;
+  for (let index = start; index < samples.length; index += 1) {
+    const sample = samples[index];
+    const delta = Math.abs(sample.f - fraction);
+    if (ordered && sample.f > fraction && delta > FINAL_FRACTION_TOLERANCE) break;
+    if (delta <= FINAL_FRACTION_TOLERANCE
+      && Math.hypot(sample.x - point.x, sample.y - point.y) <= FINAL_POSITION_TOLERANCE_M) matches.push(sample);
+  }
+  return matches;
+}
+
+function fixedPathTrajectorySamples(finalTrajectory) {
+  const actions = finalTrajectory.stationaryActions || [];
+  return (finalTrajectory.samples || []).filter((sample) => !actions.some((action) => (
+    sample.t > action.startTimeS + 1e-9 && sample.t <= action.endTimeS + 1e-9
+  )));
+}
+
+function trajectoryAtGeometryPoint(samples, point, fraction, ordered) {
+  const match = trajectorySamplesAtGeometryPoint(samples, point, fraction, ordered)
+    .reduce((earliest, sample) => !earliest || sample.t < earliest.t ? sample : earliest, null);
+  if (match) return match;
+
+  const afterIndex = ordered
+    ? firstFractionAtOrAfter(samples, fraction)
+    : samples.findIndex((sample) => sample.f >= fraction);
+  if (afterIndex >= samples.length) throw new Error('Final optimization did not preserve the renderer geometry.');
+  if (afterIndex <= 0) throw new Error('Final optimization did not preserve the renderer geometry.');
+  const before = samples[afterIndex - 1];
+  const after = samples[afterIndex];
+  const span = after.f - before.f;
+  if (span <= 1e-9) throw new Error('Final optimization did not preserve the renderer geometry.');
+  const progress = Math.max(0, Math.min(1, (fraction - before.f) / span));
+  const mix = (first, second) => first + (second - first) * progress;
+  const headingDelta = Math.atan2(
+    Math.sin(after.headingRad - before.headingRad),
+    Math.cos(after.headingRad - before.headingRad),
+  );
+  const interpolated = {
+    ...before,
+    t: mix(before.t, after.t),
+    s: mix(before.s, after.s),
+    f: fraction,
+    x: mix(before.x, after.x),
+    y: mix(before.y, after.y),
+    headingRad: before.headingRad + headingDelta * progress,
+    velocityMps: Math.sqrt(Math.max(0, mix(before.velocityMps ** 2, after.velocityMps ** 2))),
+    accelerationMps2: mix(before.accelerationMps2, after.accelerationMps2),
+    angularVelocityRadps: mix(before.angularVelocityRadps, after.angularVelocityRadps),
+    curvatureInvM: mix(before.curvatureInvM, after.curvatureInvM),
+  };
+  if (Math.hypot(interpolated.x - point.x, interpolated.y - point.y) > FINAL_INTERPOLATION_POSITION_TOLERANCE_M) {
+    throw new Error('Final optimization did not preserve the renderer geometry.');
   }
   return interpolated;
 }
