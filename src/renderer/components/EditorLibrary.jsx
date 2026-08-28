@@ -1,3 +1,37 @@
+import * as React from 'react';
+import { UI } from './ui';
+import { AUTO } from '../lib/routineModel';
+
+const h = React.createElement;
+const { useState, useRef, useEffect } = React;
+const { Icon } = UI;
+const memory = new Map();
+const defaults = () => ({ query: '', collapsed: {}, scroll: 0, structureScroll: 0, checked: [], ratio: 48, libraryOpen: true, sections: { wp: true, sg: false, rt: false, em: false, cr: false } });
+
+function readPreferences(key) {
+  if (memory.has(key)) return memory.get(key);
+  try { return { ...defaults(), ...JSON.parse(localStorage.getItem(key) || '{}') }; }
+  catch (_) { return defaults(); }
+}
+
+export function referencingRoutines(routines, pathId) {
+  const references = (nodes) => (nodes || []).some((node) =>
+    (node.type === 'path' && node.ref === pathId)
+    || (node.type === 'decision' && (references(node.then) || references(node.else)))
+    || (node.type === 'generatedTrajectory' && node.fallback?.type === 'branch' && references(node.fallback.nodes)));
+  return routines.filter((routine) => references(routine.nodes));
+}
+
+export function selectedPathIds(paths, checkedIds) {
+  const checked = new Set(checkedIds);
+  return paths.filter((path) => checked.has(path.id)).map((path) => path.id);
+}
+
+export function LibraryRail({ preferenceKey, mode, children, ...props }) {
+  const storageKey = 'bordeaux.library.' + preferenceKey + '.' + mode;
+  const [prefs, setPrefs] = useState(() => readPreferences(storageKey));
+  const latest = useRef(prefs), rail = useRef(null), structureBody = useRef(null), timer = useRef(null);
+  const update = (patch) => {
     const next = { ...latest.current, ...patch };
     latest.current = next; memory.set(storageKey, next); setPrefs(next);
   };

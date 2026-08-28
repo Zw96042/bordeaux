@@ -665,7 +665,7 @@ import { UI } from "./ui";
           const fraction = (rg.f0 + rg.f1) / 2;
           const mid = PM.pointAtFraction(fraction, pts); const mc = W2P(mid);
           const summary = UI.constraintRangeSummary(rg, doc.constraints, robot);
-          if (summary) {
+          if (summary && labeledRangeIndexes.has(ri)) {
             const text = summary.text;
             const tw = P(Math.max(78, text.length * 7.4 + 20)), th = P(24);
             const label = placeRangeLabel(fraction, mc, tw, th);
@@ -685,7 +685,9 @@ import { UI } from "./ui";
       const headArrow = (cx, cy, deg, col, len, idx) => {
         const rot = deg;
         const interactive = idx != null;
-        return h('g', { transform: `translate(${cx} ${cy}) rotate(${-rot})`, style: interactive ? { cursor: 'grab' } : { pointerEvents: 'none' } },
+        return h('g', { transform: `translate(${cx} ${cy}) rotate(${-rot})`, style: interactive ? { cursor: 'grab' } : { pointerEvents: 'none' },
+          ...(interactive ? { 'data-heading-control': true, 'data-role': 'head', 'data-idx': idx, tabIndex: 0, role: 'button', 'aria-haspopup': 'menu', 'aria-label': idx === 0 ? 'Initial robot heading actions' : 'Waypoint ' + idx + ' heading actions' } : {}) },
+          interactive && h('title', null, idx === 0 ? 'Drag to change initial robot facing' : 'Drag to change robot facing'),
           h('line', { x1: 0, y1: 0, x2: len, y2: 0, stroke: col, strokeWidth: P(1.8), strokeLinecap: 'round' }),
           h('path', { d: `M ${len} ${-P(3.8)} L ${len + P(7)} 0 L ${len} ${P(3.8)} Z`, fill: col }),
           interactive && h('line', { x1: P(5), y1: 0, x2: len + P(8), y2: 0, stroke: 'transparent', strokeWidth: P(15), strokeLinecap: 'round', 'data-role': 'head', 'data-idx': idx }),
@@ -702,7 +704,7 @@ import { UI } from "./ui";
           const pf = PM.pointAtFraction(f, pts);
           let segment = 0;
           if (derived.wpFrac) for (let i = 0; i < derived.wpFrac.length - 1; i++) if (f >= derived.wpFrac[i] - 1e-6) segment = i;
-          const rad = segmentMode(segment) === 'tangent' ? pf.heading : PM.headingAt(f, derived.anchors);
+          const rad = segmentMode(segment) === 'tangent' ? pf.heading : plannedHeadingAt(f);
           const c = W2P(pf);
           const rot = rad * 180 / Math.PI;
           comb.push(h('g', { key: 'cb' + dl.toFixed(2), transform: `translate(${c.x} ${c.y}) rotate(${-rot})` },
@@ -742,7 +744,6 @@ import { UI } from "./ui";
         }
       }
 
-      // event markers — neutral diamond node + flag
       const markerOrder = doc.markers.map((mk, i) => ({ mk, i }));
       markerOrder.sort((a, b) => Number(sel.kind === 'em' && sel.idx === a.i) - Number(sel.kind === 'em' && sel.idx === b.i));
       markerOrder.forEach(({ mk, i }) => {
@@ -792,20 +793,19 @@ import { UI } from "./ui";
         }
       }
 
-      // waypoints — square CAD nodes + heading + control handles
       const waypointOrder = doc.waypoints.map((w, i) => ({ w, i }));
       waypointOrder.sort((a, b) => Number(sel.kind === 'wp' && sel.idx === a.i) - Number(sel.kind === 'wp' && sel.idx === b.i));
       waypointOrder.forEach(({ w, i }) => {
         const c = W2P(w);
         const isSel = sel.kind === 'wp' && sel.idx === i;
         const isStart = i === 0, isEnd = i === doc.waypoints.length - 1;
-        const baseCol = isStart ? C_START : isEnd ? C_END : C_NODE;
+          const baseCol = isStart ? C_START : isEnd ? C_END : tool === 'brush' ? accent : C_NODE;
         const col = isSel ? accent : baseCol;
         const group = [];
         const wpTangent = waypointTangent(i);
         const wpTracksPoint = waypointTracksPoint(i);
         if (!isTank && !waypointHeadingIgnored(i) && (wpTangent || isStart || isEnd || w.thetaOn || isSel)) {
-          group.push(h('g', { key: 'th' }, headArrow(c.x, c.y, waypointHeadingDeg(i), col, P(26), wpTangent || wpTracksPoint ? null : i)));
+          group.push(h('g', { key: 'th' }, headArrow(c.x, c.y, waypointHeadingDeg(i) + (isStart && derived.rev ? 180 : 0), col, P(26), isStart || (!wpTangent && !wpTracksPoint) ? i : null)));
         }
         if (isSel && showHandles) {
           [['prevC', 0], ['nextC', 1]].forEach(([key, b]) => {
@@ -881,7 +881,9 @@ import { UI } from "./ui";
 
     // ---------- ROBOT (dynamic) ----------
     const robotEl = useMemo(() => {
-      const pose = pts.length > 1 ? PM.poseAtTime(playTime, pts, derived.prof, derived.anchors, derived.mode, derived.rev)
+      const playback = derived.playback;
+      const posePoints = playback ? playback.pts : pts;
+      const pose = posePoints.length > 1 ? PM.poseAtTime(playTime, posePoints, playback ? playback.prof : derived.prof, playback ? playback.anchors : derived.anchors, derived.mode, playback ? playback.rev : derived.rev)
         : (doc.waypoints[0] ? { x: doc.waypoints[0].x, y: doc.waypoints[0].y, heading: ((doc.waypoints[0].theta || 0) + (derived.rev ? 180 : 0)) * Math.PI / 180, speed: 0 } : null);
       if (!pose) return null;
       const c = W2P(pose);
@@ -992,12 +994,22 @@ import { UI } from "./ui";
 
     const snapEl = (snap && doc.waypoints[snap.idx]) ? (function () { const c = W2P(doc.waypoints[snap.idx]); return h('g', { transform: `translate(${c.x} ${c.y - P(34)})`, style: { pointerEvents: 'none' } }, h('rect', { x: -P(37), y: -P(11), width: P(74), height: P(20), rx: P(4), fill: 'rgba(11,12,14,0.95)', stroke: accent, strokeWidth: P(1) }), h('text', { x: 0, y: P(4), fill: accent, fontSize: P(11), fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, textAnchor: 'middle' }, snap.label)); })() : null;
 
+    const brushEl = tool === 'brush' && brush && brushCursor ? (function () {
+      const center = W2P(brushCursor);
+      return h('g', { className: 'brush-cursor', style: { pointerEvents: 'none' } },
+        h('ellipse', { cx: center.x, cy: center.y, rx: brush.radius * SX, ry: brush.radius * SY, fill: accent, fillOpacity: 0.055, stroke: accent, strokeOpacity: 0.74, strokeWidth: P(1.4) }),
+        h('line', { x1: center.x - P(7), y1: center.y, x2: center.x + P(7), y2: center.y, stroke: '#ffffff', strokeWidth: P(1.3) }),
+        h('line', { x1: center.x, y1: center.y - P(7), x2: center.x, y2: center.y + P(7), stroke: '#ffffff', strokeWidth: P(1.3) }));
+    })() : null;
+
     const vb = `${view.x} ${view.y} ${view.w} ${view.h}`;
-    const cursor = drag.current && drag.current.moved && drag.current.role === 'bg' ? 'grabbing' : (tool === 'waypoint' || tool === 'rotation' || tool === 'marker' || tool === 'range') ? 'crosshair' : 'default';
+    const cursor = drag.current && drag.current.moved && drag.current.role === 'bg' ? 'grabbing' : (tool === 'waypoint' || tool === 'rotation' || tool === 'marker' || tool === 'range' || tool === 'brush') ? 'crosshair' : 'default';
 
     return h('svg', {
-      ref: svgRef, className: 'fieldsvg', viewBox: vb, preserveAspectRatio: 'xMidYMid meet',
-      onPointerDown: onDown, onWheel: onWheel, onDoubleClick: onDbl,
+      ref: svgRef, className: 'fieldsvg', tabIndex: routine ? undefined : 0, 'aria-label': 'Path field', onKeyDown: onFieldKeyDown, viewBox: vb, preserveAspectRatio: 'xMidYMid meet',
+      onPointerDown: onDown, onPointerMove: tool === 'brush' ? (event) => setBrushCursor(clientToWorld(event.clientX, event.clientY)) : undefined,
+      onPointerLeave: tool === 'brush' ? () => { if (!drag.current) setBrushCursor(null); } : undefined,
+      onWheel: onWheel, onDoubleClick: onDbl,
       style: { cursor, userSelect: 'none', WebkitUserSelect: 'none', touchAction: 'none' },
       onContextMenu: onCtx, onDragStart: (e) => e.preventDefault(), draggable: false,
     },
@@ -1006,15 +1018,24 @@ import { UI } from "./ui";
       h('foreignObject', { x: 0, y: 0, width: IMG_W, height: IMG_H, transform: flip ? `rotate(180 ${FIELD_CX} ${FIELD_CY})` : undefined, 'data-role': 'bg', style: { pointerEvents: 'none' } },
         h('img', { src: fieldImage, width: IMG_W, height: IMG_H, draggable: false, style: { width: IMG_W + 'px', height: IMG_H + 'px', display: 'block', opacity: 0.9, filter: 'brightness(0.38) saturate(0.32) contrast(1.06)', WebkitUserDrag: 'none', userSelect: 'none', pointerEvents: 'none' } })),
       h('rect', { x: X0 - 6, y: Y0 - 6, width: (X1 - X0) + 12, height: (Y1 - Y0) + 12, rx: 4, fill: 'none', stroke: '#ffffff', strokeOpacity: 0.07, strokeWidth: P(1), style: { pointerEvents: 'none' } }),
+      !routine && props.optimizationCorridor?.points?.length > 1 && h('polyline', {
+        className: 'optimization-corridor',
+        points: props.optimizationCorridor.points.map((point) => `${point.x},${point.y}`).join(' '),
+        fill: 'none', stroke: accent, strokeOpacity: 0.14,
+        strokeWidth: props.optimizationCorridor.widthM * 2, strokeLinecap: 'round', strokeLinejoin: 'round',
+        transform: `translate(${X0} ${Y1}) scale(${SX} ${-SY})`,
+        style: { pointerEvents: 'none' },
+      }),
       routine ? routineLayers : staticLayers,
       routine ? null : visitFocusEl,
       routine ? null : previewEl,
       routine ? null : insertionGhost,
       routine ? null : proposalGhosts,
       routine ? routineRobot : robotEl,
+      routine ? null : brushEl,
       routine ? null : snapEl,
     );
   }
 
 export const FIELD_DIMS = { FIELD_W, FIELD_H, IMG_W, IMG_H };
-export { FieldView };
+export { FieldView, rangeLabelIndexes };
