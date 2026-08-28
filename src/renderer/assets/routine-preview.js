@@ -1,3 +1,71 @@
+import { effectivePathConstraints } from "../../shared/robotLimits";
+import { directPreviewWork } from "./direct-preview-work";
+
+// A run retains several arrays per derived sample and then clones that result
+// back to the UI. Bound both derivation work and the result graph independently.
+const MAX_WORKER_ROUTINE_WORK = 250_000;
+const MAX_WORKER_OUTPUT_SAMPLES = 120_000;
+const MAX_RENDERED_ROUTINE_SAMPLES = 120_000;
+const MAX_WORKER_OUTPUT_STEPS = 2_000;
+const MIN_SAMPLE_PERIOD = 0.01;
+const EPSILON = 1e-9;
+const MIN_SAFE_ANGULAR_VELOCITY = 90;
+const MIN_SAFE_ANGULAR_ACCELERATION = 180;
+const MIN_SAFE_ANGULAR_JERK = 360;
+const MIN_SAFE_LINEAR_VELOCITY = 0.5;
+const MIN_SAFE_LINEAR_ACCELERATION = 0.5;
+const MAX_SAFE_JIGGLE_DISTANCE = 0.25;
+const MAX_SAFE_JIGGLE_STROKES = 4;
+const MAX_SAFE_TRANSLATION_SEGMENTS = 4;
+const SAFE_TURN_SECONDS = 10;
+const SAFE_JIGGLE_SECONDS = 8;
+const SAFE_TRANSLATION_SECONDS_PER_SAMPLE = 4;
+const ROUTINE_PREVIEW_LIMIT_MESSAGE = 'This routine is too large to preview safely. Reduce the number or complexity of its unique paths.';
+
+function referencedPaths(routine, paths, outcomes) {
+  const byId = new Map((paths || []).map((path) => [path.id, path]));
+  const referenced = [];
+  const seen = new Set();
+  const collect = (nodes) => (nodes || []).forEach((node) => {
+    if (node.type === 'decision') {
+      collect((outcomes?.[node.id] || 'then') === 'else' ? node.else : node.then);
+      return;
+    }
+    // Generated previews remain embedded on their routine node. Mixing them into
+    // this authored-path lookup lets a preview with the same ID shadow the path.
+    const path = node.type === 'path' ? byId.get(node.ref) : null;
+    if (path && !seen.has(path)) { seen.add(path); referenced.push(path); }
+  });
+  collect(routine?.nodes);
+  return referenced;
+}
+
+function walkSelected(nodes, outcomes, visit) {
+  (nodes || []).forEach((node) => {
+    visit(node);
+    if (node.type === 'decision') {
+      walkSelected((outcomes?.[node.id] || 'then') === 'else' ? node.else : node.then, outcomes, visit);
+    }
+  });
+}
+
+function directRoutineWork(routine, paths, perSegment = 56, outcomes = {}) {
+  const byId = new Map((paths || []).map((path) => [path.id, path]));
+  const unique = new Set();
+  // Routine assembly and lookup still cost work even when every node reuses one path.
+  // Weight each node conservatively so direct fallback stays comfortably below a frame.
+  let total = byId.size;
+  walkSelected(routine?.nodes, outcomes, (node) => {
+    total += 16;
+    const path = node.type === 'path'
+      ? byId.get(node.ref)
+      : node.type === 'function' && node.cat === 'generate' ? node.preview : null;
+    if (!path || unique.has(path)) return;
+    unique.add(path);
+    total += directPreviewWork(path, perSegment);
+  });
+  return total;
+}
 
 function minimumConstraint(constraints, ranges, key, fallbackKey = key, allowZero = false) {
   const initial = Number(constraints[key] ?? constraints[fallbackKey]);

@@ -630,17 +630,6 @@ import { UI } from "./ui";
       const outgoingHeadingMode = wps[i].segmentHeadingMode || headingMode;
       const continuityOwnedTransition = (incomingHeadingMode === 'tangent' || incomingHeadingMode === 'lookAt')
         && (outgoingHeadingMode === 'manual' || outgoingHeadingMode === 'targets');
-      const hasHeadingTransition = !isTank && i > 0 && !wps[i].turnInPlace && segmentLaw(i) !== segmentLaw(i - 1);
-      const transition = Object.assign({ placement: 'after', rotationPriority: 'heading', distanceM: 0.75 }, wps[i].headingTransition || {});
-      const transitionPlacementOptions = continuityOwnedTransition ? [
-        { v: 'after', label: incomingHeadingMode === 'lookAt' ? 'Keep tracking' : 'Keep tangent', title: 'Keep the incoming heading law exact through the waypoint' },
-        { v: 'split', label: 'Blend', title: 'Share the heading change across both segments' },
-        { v: 'before', label: 'Meet heading', title: 'Reach the authored heading at the waypoint' },
-      ] : [
-        { v: 'before', label: 'Before', title: 'Use the previous segment' },
-        { v: 'split', label: 'Split', title: 'Share both adjacent segments' },
-        { v: 'after', label: 'After', title: 'Use this segment' },
-      ];
       icon = 'route'; title = 'Segment'; tag = wpName(i, n) + ' \u2192 ' + wpName(i + 1, n);
       let segLen = 0, minR = Infinity, dur = 0;
       if (derived.wpFrac && derived.sample.pts.length > 1) {
@@ -677,18 +666,6 @@ import { UI } from "./ui";
             h(Num, { label: 'Target X', value: wps[i].segmentLookAt.x, unit: 'm', min: 0, max: FIELD_W, onChange: (v) => actions.setSegmentLookAt(i, { x: v }) }),
             h(Num, { label: 'Target Y', value: wps[i].segmentLookAt.y, unit: 'm', min: 0, max: FIELD_H, onChange: (v) => actions.setSegmentLookAt(i, { y: v }) })),
           h('div', { className: 'seg-hint' }, 'Drag target on field.')),
-        hasHeadingTransition && h(React.Fragment, null,
-          h('div', { className: 'fieldlabel' }, 'Heading blend'),
-          h(Seg, { value: transition.placement, ariaLabel: 'Heading transition side', options: transitionPlacementOptions, onChange: (v) => actions.setHeadingTransition(i, { placement: v }) }),
-          h('div', { className: 'seg-hint' }, transition.placement === 'before' ? 'Previous segment.' : transition.placement === 'split' ? 'Both segments.' : 'This segment.'),
-          continuityOwnedTransition && transition.placement !== 'after' && h(Num, { label: transition.placement === 'before' ? 'Heading to meet' : 'Heading goal', value: wps[i].theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v, thetaOn: true }) }),
-          h('div', { className: 'fieldlabel' }, 'Timing priority'),
-          h(Seg, { value: transition.rotationPriority, ariaLabel: 'Heading transition timing priority', options: [
-            { v: 'heading', label: 'Heading', title: 'Keep heading positionally exact' },
-            { v: 'translation', label: 'Translation', title: 'Preserve translational timing' },
-          ], onChange: (v) => actions.setHeadingTransition(i, { rotationPriority: v }) }),
-          h('div', { className: 'seg-hint' }, transition.rotationPriority === 'translation' ? 'Heading may lag.' : 'Travel may slow.'),
-          h(Num, { label: 'Blend distance', value: transition.distanceM, unit: 'm', min: 0.05, step: 0.05, precision: 2, onChange: (v) => actions.setHeadingTransition(i, { distanceM: v }) })),
         h('div', { className: 'fieldlabel' }, 'Ranges'),
         affecting.length === 0
           ? h('div', { className: 'seg-hint', style: { marginTop: '0' } }, 'None.')
@@ -701,7 +678,6 @@ import { UI } from "./ui";
         h('button', { className: 'qbtn wide', type: 'button', style: { marginTop: '14px' }, onClick: () => actions.insertWp(i) }, h(Icon, { name: 'plus', size: 14 }), 'Insert waypoint'));
     }
 
-    // ---------------- ROTATION TARGET ----------------
     else if (sel.kind === 'rt' && doc.targets[sel.idx]) {
       const t = doc.targets[sel.idx];
       const targetFraction = PM.featureFraction(t, derived.sample);
@@ -724,7 +700,6 @@ import { UI } from "./ui";
         h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delTarget(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete target'));
     }
 
-    // ---------------- EVENT MARKER ----------------
     else if (sel.kind === 'em' && doc.markers[sel.idx]) {
       const m = doc.markers[sel.idx];
       const markerFraction = PM.featureFraction(m, derived.sample);
@@ -909,7 +884,6 @@ import { UI } from "./ui";
         h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delMarker(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete marker'));
     }
 
-    // ---------------- CONSTRAINT RANGE ----------------
     else if (sel.kind === 'cr' && doc.ranges && doc.ranges[sel.idx]) {
       const rg = doc.ranges[sel.idx];
       const len = derived.sample.length || 1;
@@ -937,14 +911,6 @@ import { UI } from "./ui";
                   h(Num, { label: 'Start position', value: loF * 100, unit: '%', min: 0, max: 100, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { f0: Math.min(clampFraction(v), hiF), f1: hiF }) }),
                   h(Num, { label: 'End position', value: hiF * 100, unit: '%', min: 0, max: 100, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { f0: loF, f1: Math.max(clampFraction(v), loF) }) })),
           h('div', { className: 'seg-hint' }, rangeAnchor === 'dist' ? 'Legacy distance.' : rangeAnchor === 'wp' ? 'Stays on these segments.' : 'Scales with path.')),
-        h('div', { className: 'fieldlabel' }, 'Timing priority'),
-        h(Seg, { value: drive === 'tank' ? 'heading' : (rg.rotationPriority || 'heading'), ariaLabel: 'Timing priority', options: drive === 'tank'
-          ? [{ v: 'heading', label: 'Heading', ariaLabel: 'Heading priority, required for tank drive' }]
-          : [
-              { v: 'heading', label: 'Heading', ariaLabel: 'Heading priority, adjust translation so rotation stays on schedule' },
-              { v: 'translation', label: 'Translation', ariaLabel: 'Translation priority, preserve translational timing while rotation catches up' },
-            ], onChange: (v) => actions.setRange(sel.idx, { rotationPriority: v }) }),
-        h('div', { className: 'seg-hint' }, drive === 'tank' ? 'Required for tank.' : rg.rotationPriority === 'translation' ? 'Heading may lag.' : 'Travel may slow.'),
         h('button', { className: 'range-disclosure' + (moreRangeLimits ? ' on' : ''), type: 'button', 'aria-expanded': moreRangeLimits, onClick: () => setMoreRangeLimits(!moreRangeLimits) },
           h('span', { className: 'range-disclosure-copy' }, h('strong', null, 'Acceleration & rotation'), h('small', null, 'Optional local limits')),
           h(Icon, { name: 'chevron', size: 14 })),
