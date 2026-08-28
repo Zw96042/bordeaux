@@ -486,29 +486,23 @@ import { UI } from "./ui";
       const jigglePeak = graphOpen && metric === 'velocity' && prof.jiggles
         ? UnitPrefs.fromCanonical(prof.jiggles.reduce((value, action) => Math.max(value, 4 * action.config.distanceM / action.strokeDuration), 0), 'm/s')
         : 0;
-      const peak = Math.max(vmax, jigglePeak);
+      const peak = Math.max(vmax, jigglePeak, seriesPeak);
       vmax = Math.max(0.01, peak * 1.1);
       if (signed) vmin = -vmax;
       const span = Math.max(1e-6, vmax - vmin);
       const yOf = (value) => padT + (1 - (value - vmin) / span) * (GH - padT - padB);
       const zeroY = yOf(0);
       const valueAtTime = (time) => {
-        if (!arr || !arr.length || !prof.t.length) return 0;
+        if (!arr || !arr.length || !graphTimes.length) return 0;
         if (time <= 0) return arr[0] || 0;
-        if (time >= total) return arr[arr.length - 1] || 0;
-        const geometryEnd = prof.t[prof.t.length - 1];
-        if (time > geometryEnd + 1e-9) {
-          if (metric !== 'velocity') return 0;
-          const pose = PM.poseAtTime(time, pts, prof, derived.anchors, derived.mode, derived.rev);
-          return pose ? UnitPrefs.fromCanonical(pose.speed, 'm/s') : 0;
-        }
-        let lo = 1, hi = prof.t.length - 1;
-        while (lo < hi) { const mid = (lo + hi) >> 1; if (prof.t[mid] < time) lo = mid + 1; else hi = mid; }
-        const t0 = prof.t[lo - 1], t1 = prof.t[lo], u = t1 - t0 > 1e-6 ? (time - t0) / (t1 - t0) : 0;
+        if (time >= graphTimes[graphTimes.length - 1]) return arr[arr.length - 1] || 0;
+        let lo = 1, hi = graphTimes.length - 1;
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (graphTimes[mid] < time) lo = mid + 1; else hi = mid; }
+        const t0 = graphTimes[lo - 1], t1 = graphTimes[lo], u = t1 - t0 > 1e-6 ? (time - t0) / (t1 - t0) : 0;
         return arr[lo - 1] + (arr[lo] - arr[lo - 1]) * u;
       };
       let poly = '';
-      if (pts.length > 1 && arr && arr.length) {
+      if (graphTimes.length > 1 && arr && arr.length) {
         const N = 170;
         for (let k = 0; k <= N; k++) {
           const time = (k / N) * total;
@@ -517,9 +511,12 @@ import { UI } from "./ui";
           poly += (k === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + yOf(value).toFixed(1) + ' ';
         }
       }
-      return { baseY: signed ? zeroY : GH - padB, peak, poly, signed, title, unit, valueAtTime, yOf, zeroY };
+      const rotationLimiter = metric === 'velocity' && prof.rotLimited && prof.rotLimited.some(Boolean)
+        ? 'Angular limits active'
+        : null;
+      return { baseY: signed ? zeroY : GH - padB, peak, poly, rotationLimiter, signed, title, unit, valueAtTime, yOf, zeroY };
     }, [derived, graphOpen, metric, total, unitSystem]);
-    const { baseY, peak, poly, signed, title, unit, valueAtTime, yOf, zeroY } = graphModel;
+    const { baseY, peak, poly, rotationLimiter, signed, title, unit, valueAtTime, yOf, zeroY } = graphModel;
     const playX = padL + pct * (GW - padL - padR);
     const currentValue = valueAtTime(playTime), playY = yOf(currentValue);
     const pointerDrag = PointerDrag.useController();
@@ -534,6 +531,7 @@ import { UI } from "./ui";
       graphOpen && h('div', { className: 'velgraph open' },
         h('div', { className: 'velgraph-top' },
           h('span', { className: 'velgraph-ttl' }, title + ' profile'),
+          rotationLimiter && h('span', { className: 'velgraph-limit', title: 'Rotation timing is limiting speed somewhere on this path. Spread heading changes over more distance or inspect the rotation limits.' }, rotationLimiter),
           h('span', { className: 'velgraph-readout' },
             h('b', null, currentValue.toFixed(metric === 'angvel' ? 0 : metric === 'curvature' ? 2 : 1) + ' ' + unit),
             h('span', null, 'Peak ' + peak.toFixed(metric === 'angvel' ? 0 : metric === 'curvature' ? 2 : 1) + ' ' + unit))),
@@ -596,7 +594,6 @@ import { UI } from "./ui";
               h('span', { id: 'trajectory-feature-summary', className: 'sr-only' }, featureSummary || 'No authored timeline features'))))));
   }
 
-  // ---------------- zoom / view controls ----------------
   function ViewControls({ zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen }) {
     return h('div', { className: 'viewctl' + (graphOpen ? ' graph-open' : '') },
       h('button', { className: 'vc-btn', type: 'button', title: 'Zoom out', 'aria-label': 'Zoom out', onClick: () => zoomBy(1.18) }, h(Icon, { name: 'zoomout', size: 16 })),
