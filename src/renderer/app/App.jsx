@@ -478,9 +478,14 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
 
     const robot = project.robot;
     const accent = ACCENT;
+    useEffect(() => {
+      if (waypointPreviewRequest) requestWaypointPreview(waypointPreviewer, waypointPreviewRequest, robot, plannerId);
+    }, [waypointPreviewer, waypointPreviewRequest, robot, plannerId]);
+    const waypointPreview = waypointPreviewResult(waypointPreviewSnapshot, waypointPreviewRequest);
 
     const doc = project.paths[activeIdx];
     const docRef = useRef(doc); docRef.current = doc;
+    const selRef = useRef(sel); selRef.current = sel;
     const projectRef = useRef(project); projectRef.current = project;
     const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
     const hist = useRef({ past: [], future: [] });
@@ -488,6 +493,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     const projectHist = useRef({ past: [], future: [] });
     const autosaveRevision = useRef(0);
     const autosaveTimer = useRef(0);
+    const draftInputGeneration = useRef(0);
     const persistenceTail = useRef(Promise.resolve());
     const [, force] = useState(0);
     const updateDirty = useCallback((next) => {
@@ -495,6 +501,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       setDirty(next);
       if (window.bordeauxAPI && typeof window.bordeauxAPI.setDirty === 'function') window.bordeauxAPI.setDirty(next);
     }, []);
+    const flushProjectDraft = useCallback(() => flushFocusedProjectDraft(document, flushSync), []);
     const markAgentProposalStale = useCallback(() => {
       const current = agentProposalRef.current;
       if (!current || current.status !== 'ready') return;
@@ -513,6 +520,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       const before = base.paths.find((path) => path.id === draft.id);
       return PathLinks.sync(materialized, draft.id, before);
     }, [editStore]);
+    const pushController = useRobotPushController({ getProject: materializeProject, projectKey, catalogKey: javaProjectState.catalog?.catalogHash, bookmarkKey: javaProjectState.bookmarkId });
     const enqueuePersistence = useCallback((operation) => {
       const pending = persistenceTail.current.catch(() => undefined).then(operation);
       persistenceTail.current = pending.then(() => undefined, () => undefined);
@@ -529,6 +537,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
       autosaveTimer.current = 0;
       const persist = () => enqueuePersistence(async () => {
+        if (!flushProjectDraft()) return;
         if (revision !== autosaveRevision.current) return;
         const sourceProject = projectRef.current;
         const editRevision = editStore.getRevision();
@@ -544,7 +553,19 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
         autosaveTimer.current = 0;
         void persist().catch((error) => console.warn('Could not autosave the Bordeaux project:', error));
       }, 900);
-    }, [editStore, enqueuePersistence, materializeProject, updateDirty]);
+    }, [editStore, enqueuePersistence, flushProjectDraft, materializeProject, updateDirty]);
+
+    useEffect(() => {
+      const onDraftInput = (event) => {
+        if (noteProjectDraftInput(event.target, dirtyRef.current, () => updateDirty(true), scheduleAutosave)) {
+          draftInputGeneration.current += 1;
+        }
+      };
+      // React must record the draft before dirty-state rendering can restore the
+      // controlled input value. Observe after its root input handler has run.
+      document.addEventListener('input', onDraftInput);
+      return () => document.removeEventListener('input', onDraftInput);
+    }, [scheduleAutosave, updateDirty]);
 
     useEffect(() => {
       const activePathId = project.paths[activeIdx] && project.paths[activeIdx].id;
@@ -667,23 +688,69 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       return () => document.removeEventListener('visibilitychange', pauseHiddenPlayback);
     }, []);
 
-    // ---- derived path data ----
-    const derivation = useFinalPlanning(doc, robot, plannerId);
-    if (!derivation.value) throw derivation.error || new Error('Could not derive the active path');
-    const derived = derivation.value;
+    // A search candidate never owns the selected result. Apply persists that choice.
+    const optimizer = useMemo(() => PathOptimization.create({ getProject: () => projectRef.current }), []);
+    const optimizationState = useSyncExternalStore(optimizer.subscribe, optimizer.getSnapshot, optimizer.getSnapshot);
+    useEffect(() => { optimizer.sync(); }, [optimizer, project]);
+    useEffect(() => () => optimizer.cancel(), [optimizer]);
+    const optimizationKey = useMemo(() => optimizationInputKey(doc, robot, project.field), [doc, robot, project.field]);
+    const planningPath = useMemo(() => ({ ...doc }), [doc.id, optimizationKey, doc.optimization?.accepted]);
+    const normalPath = useMemo(() => authoredPath(doc), [doc.id, optimizationKey]);
+    const planningRobot = useMemo(() => robot, [optimizationKey]);
+    const selectedPlanning = useFinalPlanning(planningPath, planningRobot, plannerId);
+    const currentOptimization = Boolean(doc.optimization?.accepted && !isOptimizationOutdated(doc, robot, project.field));
+    const normalPlanning = useFinalPlanning(normalPath, planningRobot, plannerId, optimizationOpen && currentOptimization);
+    const normal = currentOptimization ? normalPlanning : selectedPlanning;
+    const selectedReady = selectedPlanning.path === planningPath && !selectedPlanning.pending && Boolean(selectedPlanning.value?.finalTrajectory);
+    const justApplied = appliedPreview.current?.artifact === doc.optimization?.accepted && appliedPreview.current?.key === optimizationKey
+      ? appliedPreview.current.value : null;
+    const acceptedPreview = selectedReady ? (selectedPlanning.value.acceptedTrajectory ? selectedPlanning.value : null) : justApplied;
+    const accepted = acceptedPreview?.finalTrajectory || null;
+    const staleOptimization = Boolean(doc.optimization?.accepted && (doc.optimization.accepted.inputKey !== optimizationKey || (selectedReady && !accepted)));
+    const optimizationEntry = optimizationState.paths[doc.id];
+    const candidate = optimizationEntry?.key === optimizationKey ? optimizationEntry.value : null;
+    const normalReady = normal.path === (currentOptimization ? normalPath : planningPath)
+      && !normal.pending && !normal.error && Boolean(normal.value?.finalTrajectory);
+    const normalError = normal.error;
+    const normalBaseline = useRef(null);
+    if (normalReady) normalBaseline.current = { id: doc.id, key: optimizationKey, time: normal.value.prof.totalTime };
+    // Applying changes selection, not the normal baseline. Keep its comparison
+    // time while the accepted-result worker starts, only for identical inputs.
+    const baselineTime = normalBaseline.current?.id === doc.id && normalBaseline.current.key === optimizationKey
+      ? normalBaseline.current.time : null;
+    const comparisonMode = comparison?.id === doc.id && comparison.key === optimizationKey ? comparison.mode : 'selected';
+    const comparedPreview = comparisonMode === 'candidate' ? candidate : comparisonMode === 'normal' && normalReady ? normal.value : null;
+    const selectedPreview = comparedPreview || acceptedPreview;
+    const derivation = selectedPreview
+      ? { value: selectedPreview, path: doc, current: true, pending: false, error: null, errorKind: null }
+      : { ...selectedPlanning, path: selectedPlanning.path === planningPath ? doc : selectedPlanning.path };
+    const planningNotice = usePlanningNotice(derivation.error, derivation.errorKind, planningInputRevision, doc.id);
+    const derived = derivation.value || PENDING_PATH_PREVIEW;
     const derivationDoc = derivation.path || doc;
-    const derivationCurrent = derivationDoc === doc;
+    const derivationCurrent = derivation.current;
+    const reverseDistance = currentPathLength(derivation);
 
+    const durationInputs = useMemo(() => project.paths.map((path) => ({
+      id: path.id, path, robot, plannerId,
+      key: JSON.stringify([optimizationInputKey(path, robot, project.field), robot.planning, plannerId, path.optimization?.accepted]),
+      outdatedOptimization: isOptimizationOutdated(path, robot, project.field),
+    })), [project.paths, robot, plannerId, project.field]);
     useEffect(() => {
-      if (!derivationCurrent) return;
-      setTimes((t) => (t[doc.id] === derived.prof.totalTime ? t : { ...t, [doc.id]: derived.prof.totalTime }));
-    }, [derived, derivationCurrent, doc.id]);
+      const error = selectedPlanning.error || (currentOptimization && selectedReady && !accepted ? new Error('The selected optimization could not be validated. Review this path.') : null);
+      libraryDurations.update(durationInputs, error
+        ? { id: doc.id, status: 'error', message: error.message }
+        : selectedReady
+          ? { id: doc.id, status: 'ready', seconds: selectedPlanning.value.prof.totalTime }
+          : { id: doc.id, status: 'pending' });
+    }, [libraryDurations, durationInputs, doc.id, selectedReady, selectedPlanning.value, selectedPlanning.error, currentOptimization, accepted]);
 
-    // ---- doc mutation ----
-    const writeDoc = useCallback((nd) => { setProject((pr) => {
-      const paths = pr.paths.slice(), before = paths[activeIdx]; paths[activeIdx] = nd;
-      return PathLinks.sync({ ...pr, paths }, nd.id, before);
-    }); }, [activeIdx]);
+    const writeDoc = useCallback((nd) => {
+      setPlanningInputRevision((revision) => revision + 1);
+      setProject((pr) => {
+        const paths = pr.paths.slice(), before = paths[activeIdx]; paths[activeIdx] = nd;
+        return PathLinks.sync({ ...pr, paths }, nd.id, before);
+      });
+    }, [activeIdx]);
     const beginHistory = useCallback(() => { hist.current.past.push(clone(docRef.current)); if (hist.current.past.length > 80) hist.current.past.shift(); hist.current.future = []; projectHist.current.future = []; force((x) => x + 1); }, []);
     const beginEdit = useCallback(() => {
       if (editStore.getSnapshot()) return;
@@ -713,6 +780,13 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       editStore.update(fn(clone(draft)));
     }, [editStore, writeDoc]);
 
+    const waypointSnapshot = (current) => ({
+      waypoints: Object.fromEntries(current.paths.map((path) => [path.id, clone(path.waypoints)])),
+      pathLinks: clone(current.pathLinks),
+    });
+    const restoreWaypointSnapshot = (current, snapshot) => ({ ...current,
+      paths: current.paths.map((path) => snapshot.waypoints[path.id] ? { ...path, waypoints: clone(snapshot.waypoints[path.id]) } : path),
+      pathLinks: clone(snapshot.pathLinks).filter((link) => current.paths.some((path) => path.id === link.fromPathId) && current.paths.some((path) => path.id === link.toPathId)),
     });
 
     const undo = useCallback(() => {
