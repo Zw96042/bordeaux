@@ -462,6 +462,29 @@ import { UI } from "./ui";
     const headingMode = isTank ? 'tangent' : (doc.headingMode || 'targets');
     const handlesEffective = true;
     const endpointJiggle = wps[n - 1] && wps[n - 1].jiggle;
+    const firstHeadingMode = isTank ? 'tangent' : (wps[0]?.segmentHeadingMode || headingMode);
+    const facingOffset = doc.driveBackward ? 180 : 0;
+    const endpointSpeed = (index) => {
+      const start = index === 0, waypoint = wps[index], stopped = !!waypoint?.stop;
+      const label = start ? 'Entry speed (vi)' : 'Exit speed (vf)';
+      return h('div', { className: 'endpoint-speed' },
+        h('fieldset', { disabled: stopped, style: { border: 0, margin: 0, padding: 0, minWidth: 0 } },
+          h(Num, { label, value: stopped ? 0 : (start ? doc.startVel : doc.goalVel) || 0, unit: 'm/s', min: 0, max: pathLimits.maxVel,
+            onChange: (value) => { if (!stopped) actions.setDoc(start ? { startVel: value } : { goalVel: value }); } })),
+        stopped && h('button', { type: 'button', className: 'morebtn', onClick: () => actions.select('wp', index) },
+          start ? 'Stopped at entry · edit start' : 'Stopped at exit · edit end'));
+    };
+    const initialFacing = () => {
+      const followsLaw = firstHeadingMode === 'tangent' || firstHeadingMode === 'lookAt';
+      const plannedFacing = derived.metrics?.head?.[0];
+      const tangent = derived.sample?.pts?.[0]?.heading;
+      const degrees = followsLaw && Number.isFinite(plannedFacing) ? plannedFacing * 180 / Math.PI
+        : followsLaw && Number.isFinite(tangent) ? tangent * 180 / Math.PI : wps[0]?.theta || 0;
+      return h(React.Fragment, null,
+        h(Num, { label: 'Initial robot facing', value: degrees + facingOffset, unit: '\u00b0', step: 1, precision: 1,
+          onChange: (value) => actions.setWp(0, { theta: value - facingOffset, thetaOn: true }) }),
+        h('div', { className: 'seg-hint' }, 'Edit facing without changing the path.'));
+    };
 
     React.useEffect(() => {
       setJiggleDistance(endpointJiggle?.distanceM ?? JIGGLE_DEFAULTS.distanceM);
@@ -474,20 +497,11 @@ import { UI } from "./ui";
 
     let icon = 'route', title = '', tag = null, body = null;
 
-    // ---------------- NO SELECTION → path summary, heading mode, global constraints ----------------
     if (!sel.kind) {
       icon = 'route'; title = doc.name || 'Path'; tag = 'summary';
-      const checks = derived.checks || [];
-      const issues = checks.filter((check) => check.level !== 'note');
-      const errors = issues.filter((check) => check.level === 'error').length;
       body = h(React.Fragment, null,
-        Stat3([
-          { v: (derived.prof.totalTime || 0).toFixed(2) + 's', k: 'Time' },
-          { v: UnitPrefs.format(derived.totalDistance || derived.sample.length || 0, 'm', 2), k: 'Length' },
-          { v: issues.length ? String(issues.length) : '\u2713', k: issues.length ? 'Issues' : 'Clear', color: issues.length ? (errors ? 'var(--bad)' : 'var(--warn)') : 'var(--good)' },
-        ]),
-        h('div', { className: 'qrow', style: { marginTop: '10px' } },
-          h('button', { className: 'qbtn', type: 'button', onClick: () => actions.reversePath() }, h(Icon, { name: 'shuffle', size: 14 }), 'Reverse path'),
+        h('div', { className: 'qrow' },
+          h('button', { className: 'qbtn', type: 'button', disabled: !actions.canReversePath, title: actions.canReversePath ? 'Reverse waypoint order and traverse the route from the opposite end' : 'Waiting for the current path preview', onClick: () => actions.reversePath() }, h(Icon, { name: 'shuffle', size: 14 }), 'Swap start/end'),
           h('button', { className: 'qbtn', type: 'button', onClick: () => { actions.select(null, -1); actions.setTool('waypoint'); } }, h(Icon, { name: 'plus', size: 14 }), 'Place waypoint')),
 
         h('div', { className: 'cgroup-h' }, 'Facing'),
@@ -495,6 +509,7 @@ import { UI } from "./ui";
           ? h('div', { className: 'hint' }, h(Icon, { name: 'info', size: 14 }), 'Tangent only.')
           : h(React.Fragment, null,
               h(Seg, { value: headingMode, options: HEAD_MODES, ariaLabel: 'Default heading', onChange: (v) => actions.setHeadingMode(v) }),
+              initialFacing(),
               h('div', { className: 'inrow' },
                 h('span', { className: 'inrow-l' }, 'Drive backward'),
                 h(Toggle, { on: !!doc.driveBackward, ariaLabel: 'Drive backward', onChange: () => actions.toggleDriveBackward() }))),
@@ -507,12 +522,10 @@ import { UI } from "./ui";
 
         h('div', { className: 'cgroup-h' }, 'Endpoints'),
         h('div', { className: 'grid2' },
-          h(Num, { label: 'Start vel', value: doc.startVel || 0, unit: 'm/s', min: 0, onChange: (v) => actions.setDoc({ startVel: v }) }),
-          h(Num, { label: 'Goal vel', value: doc.goalVel || 0, unit: 'm/s', min: 0, onChange: (v) => actions.setDoc({ goalVel: v }) })),
-        h('div', { style: { height: '2px' } }),
-        h('div', { className: 'cgroup-h' }, PM.robotHardLimits(robot) ? 'Hard limits' : 'Global constraints'),
+          endpointSpeed(0), endpointSpeed(n - 1)),
+        h('div', { className: 'seg-hint' }, 'Use 0 to start or finish at rest.'),
         h(ConstraintsBody, {
-          c: doc.constraints,
+          c: pathLimits,
           robot,
           setC: actions.setConstraint,
           moreLimits,
@@ -520,7 +533,6 @@ import { UI } from "./ui";
         }));
     }
 
-    // ---------------- WAYPOINT ----------------
     else if (sel.kind === 'wp' && wps[sel.idx]) {
       const i = sel.idx, w = wps[i];
       const isStart = i === 0, isEnd = i === n - 1, isAnchor = isStart || isEnd;
@@ -530,12 +542,6 @@ import { UI } from "./ui";
       const mixedHeadingLaw = !isAnchor && incomingHeadingMode !== waypointHeadingMode;
       const continuityOwnedHeading = mixedHeadingLaw && (waypointHeadingMode === 'manual' || waypointHeadingMode === 'targets')
         && (incomingHeadingMode === 'tangent' || incomingHeadingMode === 'lookAt');
-      const boundaryTransition = Object.assign({ placement: 'after', rotationPriority: 'heading', distanceM: 0.75 }, w.headingTransition || {});
-      const boundaryHeadingOptions = [
-        { v: 'after', label: incomingHeadingMode === 'lookAt' ? 'Keep tracking' : 'Keep tangent', title: 'Keep the incoming heading law exact through the waypoint' },
-        { v: 'split', label: 'Blend', title: 'Share the heading change across both segments' },
-        { v: 'before', label: 'Meet heading', title: 'Reach the authored heading at the waypoint' },
-      ];
       const incomingAuthoredHeading = mixedHeadingLaw && (incomingHeadingMode === 'manual' || incomingHeadingMode === 'targets');
       const interiorHeadingEditor = (headingHint) => h(React.Fragment, null,
         headingHint,
@@ -548,16 +554,15 @@ import { UI } from "./ui";
         h('div', { className: 'grid2' },
           h(Num, { label: 'X', value: w.x, unit: 'm', onChange: (v) => actions.setWp(i, { x: v }) }),
           h(Num, { label: 'Y', value: w.y, unit: 'm', onChange: (v) => actions.setWp(i, { y: v }) })),
+        props.project && props.setWaypointPositionLink && h(SharedWaypointPosition, { project: props.project, doc, index: i, onLink: props.setWaypointPositionLink, onName: (at, name) => actions.setWp(at, { positionName: name }) }),
 
-        // Heading — mode-aware
         isTank
           ? h('div', { className: 'hint' }, h(Icon, { name: 'info', size: 14 }), 'Tank \u2014 heading follows the path tangent.')
+          : isStart
+            ? initialFacing()
           : continuityOwnedHeading
-            ? h(React.Fragment, null,
-                h('div', { className: 'fieldlabel' }, 'Heading at this boundary'),
-                h(Seg, { value: boundaryTransition.placement, ariaLabel: 'Heading at this boundary', options: boundaryHeadingOptions, onChange: (v) => actions.setHeadingTransition(i, { placement: v }) }),
-                h('div', { className: 'seg-hint' }, boundaryTransition.placement === 'after' ? 'After this point.' : boundaryTransition.placement === 'split' ? 'Across both segments.' : 'Before this point.'),
-                boundaryTransition.placement !== 'after' && h(Num, { label: boundaryTransition.placement === 'before' ? 'Heading to meet' : 'Heading goal', value: w.theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v, thetaOn: true }) }))
+            ? h('div', { className: 'hint' }, h(Icon, { name: 'compass', size: 14 }),
+                'The outgoing heading law begins here. The planner turns toward its anchors while the robot keeps moving.')
           : incomingAuthoredHeading
             ? interiorHeadingEditor(h('div', { className: 'hint' }, h(Icon, { name: 'compass', size: 14 }),
                 'This heading finishes the incoming ' + incomingHeadingMode + ' law. The outgoing ' + waypointHeadingMode + ' law begins from it continuously.'))
@@ -568,14 +573,15 @@ import { UI } from "./ui";
                 h('div', { className: 'hint' }, h(Icon, { name: 'compass', size: 14 }), 'This segment follows the path tangent. Set a manual heading to override only this segment.'),
                 h('button', { className: 'qbtn wide', type: 'button', style: { marginTop: '4px' }, onClick: () => { actions.setSegmentHeadingMode(headingSegment, 'manual'); actions.faceWaypoint(i, 'tangent'); } }, h(Icon, { name: 'compass', size: 14 }), 'Set manual heading on segment'))
             : isAnchor
-              ? h(Num, { label: 'Heading \u03b8', value: w.theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v }) })
+              ? h(React.Fragment, null,
+                  h(Num, { label: isStart ? 'Initial robot facing' : 'Final robot facing', value: (w.theta || 0) + facingOffset, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v - facingOffset }) }),
+                  h('div', { className: 'seg-hint' }, 'Facing does not change the path tangent.'))
               : interiorHeadingEditor(),
 
-        // Stop & wait
-        !isAnchor && h('div', { className: 'inrow' },
-          h('span', { className: 'inrow-l' }, 'Stop here', h('small', null, 'decelerate to a full stop')),
-          h(Toggle, { on: !!w.stop, ariaLabel: 'Stop at waypoint', onChange: (v) => actions.setStop(i, v) })),
-        !isAnchor && w.stop && h(Num, { label: 'Wait at waypoint', value: w.wait || 0, unit: 's', step: 0.1, precision: 1, min: 0, onChange: (v) => actions.setWait(i, v) }),
+        h('div', { className: 'inrow' },
+          h('span', { className: 'inrow-l' }, isStart ? 'Stop at entry' : isEnd ? 'Stop at exit' : 'Stop here', h('small', null, isStart ? 'enter from rest' : 'decelerate to a full stop')),
+          h(Toggle, { on: !!w.stop, ariaLabel: isStart ? 'Stop at entry' : isEnd ? 'Stop at exit' : 'Stop at waypoint', onChange: (v) => actions.setStop(i, v) })),
+        w.stop && h(Num, { label: 'Wait at waypoint', value: w.wait || 0, unit: 's', step: 0.1, precision: 1, min: 0, onChange: (v) => actions.setWait(i, v) }),
         !isStart && h('div', { className: 'inrow' },
           h('span', { className: 'inrow-l' }, 'Turn in place', h('small', null, 'rotate without translating')),
           h(Toggle, { on: !!w.turnInPlace, ariaLabel: 'Turn in place at waypoint', onChange: (v) => actions.setTurnInPlace(i, v) })),
@@ -584,13 +590,14 @@ import { UI } from "./ui";
           h('div', { className: 'fieldlabel' }, 'Turn direction'),
           h(Seg, { value: w.turnInPlace.direction || 'shortest', ariaLabel: 'Turn direction', options: [{ v: 'shortest', label: 'Shortest' }, { v: 'counterclockwise', label: 'CCW' }, { v: 'clockwise', label: 'CW' }], onChange: (v) => actions.setTurnInPlaceMeta(i, { direction: v }) }),
           h('div', { className: 'seg-hint' }, 'Uses rotation limits.')),
-        isAnchor && h(Num, { label: isStart ? 'Start velocity' : 'End velocity', value: isStart ? (doc.startVel || 0) : (doc.goalVel || 0), unit: 'm/s', min: 0, onChange: (v) => actions.setDoc(isStart ? { startVel: v } : { goalVel: v }) }),
+        isAnchor && endpointSpeed(i),
+        isAnchor && h('div', { className: 'seg-hint' }, 'Speed along the path; 0 means stopped.'),
 
         // Tangent handles only appear when the selected planner consumes them.
         handlesEffective && h(React.Fragment, null,
           h('div', { className: !isStart && !isEnd ? 'grid2' : '' },
-            !isStart && h(Num, { label: 'Incoming tangent length', value: handleLen(w, 'prevC'), unit: 'm', min: 0.1, onChange: (v) => actions.setHandleLen(i, 'prevC', v) }),
-            !isEnd && h(Num, { label: 'Outgoing tangent length', value: handleLen(w, 'nextC'), unit: 'm', min: 0.1, onChange: (v) => actions.setHandleLen(i, 'nextC', v) }))),
+            !isStart && h(Num, { label: 'Incoming tangent', value: handleLen(w, 'prevC'), unit: 'm', min: 0.1, onChange: (v) => actions.setHandleLen(i, 'prevC', v) }),
+            !isEnd && h(Num, { label: 'Outgoing tangent', value: handleLen(w, 'nextC'), unit: 'm', min: 0.1, onChange: (v) => actions.setHandleLen(i, 'nextC', v) }))),
 
         isEnd && !isTank && h(React.Fragment, null,
           h('div', { className: 'inrow' },
@@ -601,11 +608,11 @@ import { UI } from "./ui";
             } })),
           endpointJiggle && h(React.Fragment, null,
             h('div', { className: 'grid2 compact-fields' },
-              h(Num, { label: 'Distance', value: jiggleDistance, unit: 'm', min: 0.03, max: 1.5, step: 0.01, precision: 2, onChange: (v) => { setJiggleDistance(v); setJiggleError(false); } }),
-              h(Num, { label: 'Stroke time', value: jiggleStrokeTime, unit: 's', min: 0.08, max: 5, step: 0.05, precision: 2, onChange: (v) => { setJiggleStrokeTime(v); setJiggleError(false); } }),
-              h(Num, { label: 'Strokes', value: jiggleStrokes, min: 2, max: 12, step: 1, precision: 0, onChange: (v) => { setJiggleStrokes(v); setJiggleError(false); } }),
-              h(Num, { label: 'First direction', value: jiggleStart, unit: '\u00b0 rel', step: 15, precision: 0, onChange: (v) => { setJiggleStart(v); setJiggleError(false); } }),
-              h(Num, { label: 'Direction step', value: jiggleStep, unit: '\u00b0', step: 15, precision: 0, onChange: (v) => { setJiggleStep(v); setJiggleError(false); } })),
+              h(Num, { label: 'Distance', value: jiggleDistance, unit: 'm', min: 0.03, max: 1.5, step: 0.01, precision: 2, projectDraft: false, onChange: (v) => { setJiggleDistance(v); setJiggleError(false); } }),
+              h(Num, { label: 'Stroke time', value: jiggleStrokeTime, unit: 's', min: 0.08, max: 5, step: 0.05, precision: 2, projectDraft: false, onChange: (v) => { setJiggleStrokeTime(v); setJiggleError(false); } }),
+              h(Num, { label: 'Strokes', value: jiggleStrokes, min: 2, max: 12, step: 1, precision: 0, projectDraft: false, onChange: (v) => { setJiggleStrokes(v); setJiggleError(false); } }),
+              h(Num, { label: 'First direction', value: jiggleStart, unit: '\u00b0 rel', step: 15, precision: 0, projectDraft: false, onChange: (v) => { setJiggleStart(v); setJiggleError(false); } }),
+              h(Num, { label: 'Direction step', value: jiggleStep, unit: '\u00b0', step: 15, precision: 0, projectDraft: false, onChange: (v) => { setJiggleStep(v); setJiggleError(false); } })),
             h('button', { className: 'qbtn wide', type: 'button', onClick: () => setJiggleError(!actions.setJiggle({ distanceM: jiggleDistance, strokes: jiggleStrokes, startDeg: jiggleStart, stepDeg: jiggleStep, strokeTimeS: jiggleStrokeTime })) }, h(Icon, { name: 'route', size: 14 }), 'Update jiggle')),
           endpointJiggle && h('div', { className: 'seg-hint' }, jiggleError ? 'Keep strokes unique and on-field.' : 'Limits may extend the time.')),
         isEnd && isTank && endpointJiggle && h(React.Fragment, null,
@@ -618,18 +625,9 @@ import { UI } from "./ui";
           n > 2 && h('button', { className: 'qbtn danger', type: 'button', onClick: () => actions.delWp(i) }, h(Icon, { name: 'trash', size: 14 }), 'Delete')));
     }
 
-    // ---------------- SEGMENT (true segment properties only) ----------------
     else if (sel.kind === 'seg' && wps[sel.idx] && wps[sel.idx + 1]) {
       const i = sel.idx;
       const st = segNorm(wps[i].segType);
-      const segmentLaw = (index) => {
-        const mode = wps[index].segmentHeadingMode || headingMode;
-        return mode === 'lookAt' ? 'lookAt:' + (wps[index].segmentLookAt ? wps[index].segmentLookAt.x + ':' + wps[index].segmentLookAt.y : '') : mode;
-      };
-      const incomingHeadingMode = i > 0 ? (wps[i - 1].segmentHeadingMode || headingMode) : (wps[i].segmentHeadingMode || headingMode);
-      const outgoingHeadingMode = wps[i].segmentHeadingMode || headingMode;
-      const continuityOwnedTransition = (incomingHeadingMode === 'tangent' || incomingHeadingMode === 'lookAt')
-        && (outgoingHeadingMode === 'manual' || outgoingHeadingMode === 'targets');
       icon = 'route'; title = 'Segment'; tag = wpName(i, n) + ' \u2192 ' + wpName(i + 1, n);
       let segLen = 0, minR = Infinity, dur = 0;
       if (derived.wpFrac && derived.sample.pts.length > 1) {
