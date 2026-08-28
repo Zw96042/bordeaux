@@ -1,19 +1,38 @@
+import { createLibraryDurations } from "../lib/libraryDurations";
+import { FieldStatus } from "../components/FieldStatus";
 import * as React from "react";
+import { flushSync } from "react-dom";
 import { FinalPlanning } from "../assets/final-planning";
 import { PathEdit } from "../assets/path-edit";
+import { RoutinePreview } from "../assets/routine-preview";
 import { PathPreview } from "../assets/path-preview";
+import { PathOptimization } from "../assets/path-optimization";
+import { OptimizationPanel } from "../components/OptimizationPanel";
+import { authoredPath, optimizationInputKey, isOptimizationOutdated } from "../../shared/planners/acceptedTrajectoryIdentity";
 import { ContextInspector } from "../components/ContextInspector";
 import { FIELD_DIMS, FieldView } from "../components/FieldView";
 import { Panels } from "../components/Panels";
 import { RobotPage } from "../components/RobotPage";
 import { DiagnosticBundleDialog } from "../components/DiagnosticBundleDialog";
-import { RobotPushDialog } from "../components/RobotPushDialog";
+import { LibraryRail, referencingRoutines } from "../components/EditorLibrary";
+import { RobotPushDialog, useRobotPushController } from "../components/RobotPushDialog";
 import { RoutineTransport, StepInspector } from "../components/RoutineInspector";
 import { RoutinePanel } from "../components/RoutinePanel";
+import { RoutineWorkspace } from "../components/RoutineWorkspace";
 import { UI } from "../components/ui";
 import { PM } from "../lib/pathMath";
+import { applyBrushDraft, remapBrushSelection, syncBrushSelection } from "../lib/brushEditing";
+import { agentProposalMatchesPublishedContext } from "../lib/agentProposalContext";
 import { PathLinks } from "../lib/pathLinks";
+import {
+  FINAL_PLANNING_NOTICE_COOLDOWN_MS,
+  FINAL_PLANNING_NOTICE_DELAY_MS,
+  FINAL_PLANNING_NOTICE_DURATION_MS,
+  planningErrorMessage,
+  shouldPresentPlanningError,
+} from "../lib/planningFeedback";
 import { AUTO } from "../lib/routineModel";
+import { enqueuePersistenceAfterPreflight, flushFocusedProjectDraft, noteProjectDraftInput, projectPersistenceStayedCurrent } from "../lib/draftPersistence";
 import { UnitPrefs } from "../lib/unitPreferences";
 import {
   createMarkerId as markerId,
@@ -22,18 +41,63 @@ import {
   createRoutineId as routineId,
 } from "../../shared/project/ids";
 import { normalizeProject as normalizeProjectData } from "../../shared/project/normalize";
-import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
+import { blankPath, buildWaypoints as buildWps, clampWorldPoint as clampWorld, clone } from "../../shared/project/defaults";
+import { blankRoutine, freshProject, routineState, uniqueItemName, withRoutineState } from "../lib/editorProject";
+import { alignWaypointHandles, duplicateWaypoint, moveWaypointTo, removeWaypoint, remapWaypointRanges, reorderWaypoint, setWaypointFacing, reversePath as reversePathDraft } from "../lib/pathEditing";
+import { createPlaybackStore } from "../lib/playbackStore";
 
-// Bordeaux application root.
   const { useState, useRef, useEffect, useMemo, useCallback, useSyncExternalStore } = React;
   const h = React.createElement;
   const { FIELD_W, FIELD_H, IMG_W, IMG_H } = FIELD_DIMS;
   const PERSEG = 56;
-  const clone = (o) => JSON.parse(JSON.stringify(o));
-  const clampWorld = (p) => ({ x: Math.max(0, Math.min(FIELD_W, p.x)), y: Math.max(0, Math.min(FIELD_H, p.y)) });
-  const blankRoutine = (name) => ({ id: routineId(), name: name || 'Autonomous Routine', nodes: [] });
   function normalizeProject(raw) {
     return PathLinks.reconcile(normalizeProjectData(raw));
+  }
+  function duplicatePathForLibrary(source, name) {
+    const duplicate = clone(source);
+    duplicate.id = pathId();
+    duplicate.name = name;
+    duplicate.markers = duplicate.markers.map((marker) => ({ ...marker, id: markerId() }));
+    return duplicate;
+  }
+
+  const EMPTY_ROUTINE_RUN = Object.freeze({ steps: Object.freeze([]), segs: Object.freeze([]), total: 0 });
+  function routinePreviewResult(snapshot, request, active, admissionError = null) {
+    const current = !admissionError && snapshot.status === 'ready' && snapshot.key === request
+      && snapshot.path === request && snapshot.value ? snapshot.value : null;
+    const error = admissionError || (snapshot.status === 'error' && snapshot.errorKey === request
+      && snapshot.errorPath === request ? snapshot.error : null);
+    return { run: current || EMPTY_ROUTINE_RUN, pending: active && !current && !error, error };
+  }
+
+  function requestRoutinePreview(previewer, request, admission, active = true) {
+    if (!active || !admission.allowed) { previewer.cancel(); return false; }
+    previewer.request({ key: request, path: request, ...request, quality: 'final' });
+    return true;
+  }
+
+  function currentPathLength(derivation) {
+    const length = derivation?.current ? derivation.value?.sample?.length : null;
+    return Number.isFinite(length) ? length : null;
+  }
+
+  function selectedAgentProposalPreview(snapshot, candidate, request, plannerId) {
+    if (snapshot.status !== 'ready' || !candidate?.path || snapshot.key !== request
+      || snapshot.path !== candidate.path || snapshot.value?.planner !== plannerId) return [];
+    return [{ id: candidate.id, label: candidate.label, selected: true, valid: candidate.valid !== false, derived: snapshot.value }];
+  }
+
+  function agentProposalPreviewResult(snapshot, candidate, request, plannerId) {
+    const previews = selectedAgentProposalPreview(snapshot, candidate, request, plannerId);
+    const failed = Boolean(snapshot.status === 'error' && candidate?.path
+      && snapshot.errorKey === request && snapshot.errorPath === candidate.path);
+    return { previews, ready: previews.length === 1, pending: Boolean(candidate?.path) && previews.length === 0 && !failed, error: failed ? snapshot.error : null };
+  }
+
+  function canApplyAgentProposalCandidate(proposal, candidate, preview) {
+    if (!proposal || proposal.status !== 'ready') return false;
+    if (proposal.operation === 'configureRobot') return true;
+    return Boolean(candidate?.path && candidate.valid !== false && preview.ready);
   }
 
   function requestWaypointPreview(previewer, request, robot, plannerId) {
