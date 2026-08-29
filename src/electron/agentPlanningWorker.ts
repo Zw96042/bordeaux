@@ -1,11 +1,14 @@
 import { parentPort } from "node:worker_threads";
 import { runAgentPlanningJobDirect, type AgentPlanningJob } from "./agentSession";
 
-if (!parentPort) throw new Error("Agent planning worker requires a parent port");
+import type { WorkerResult } from "./workerTask";
 
-parentPort.once("message", (job: AgentPlanningJob) => {
+const port = parentPort;
+if (!port) throw new Error("Agent planning worker requires a parent port");
+
+port.once("message", (job: AgentPlanningJob) => {
   void runAgentPlanningJobDirect(job).then(
-    (result) => parentPort!.postMessage({ result }),
-    (error) => parentPort!.postMessage({ error: error instanceof Error ? error.message : String(error) }),
+    (result) => port.postMessage({ ok: true, result } satisfies WorkerResult<unknown>),
+    (error) => port.postMessage({ ok: false, error: error instanceof Error ? error.message : String(error) } satisfies WorkerResult<unknown>),
   );
 });

@@ -76,6 +76,8 @@ function endpointForLaunch(): string {
 export class AgentBridgeServer {
   private server: net.Server | null = null;
   private descriptor: AgentRuntimeDescriptor | null = null;
+  private starting: Promise<AgentRuntimeDescriptor> | null = null;
+  private stopping: Promise<void> | null = null;
   private readonly sockets = new Set<net.Socket>();
 
   constructor(private readonly userData: string, private readonly sessions: AgentSessionService) {}
@@ -83,7 +85,15 @@ export class AgentBridgeServer {
   get enabled(): boolean { return this.server !== null; }
 
   async start(): Promise<AgentRuntimeDescriptor> {
+    if (this.stopping) await this.stopping;
     if (this.descriptor) return this.descriptor;
+    if (!this.starting) {
+      this.starting = this.startServer().finally(() => { this.starting = null; });
+    }
+    return this.starting;
+  }
+
+  private async startServer(): Promise<AgentRuntimeDescriptor> {
     const endpoint = endpointForLaunch();
     const descriptor: AgentRuntimeDescriptor = {
       schemaVersion: 1,
@@ -110,22 +120,41 @@ export class AgentBridgeServer {
         if (!socket.destroyed) socket.end(encode({ error: message }));
       });
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(endpoint, () => { server.off("error", reject); resolve(); });
-    });
-    if (process.platform !== "win32") await fs.promises.chmod(endpoint, 0o600);
     const target = descriptorPath(this.userData);
-    await fs.promises.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
     const temporary = `${target}.${process.pid}.tmp`;
-    await fs.promises.writeFile(temporary, JSON.stringify(descriptor), { encoding: "utf8", mode: 0o600, flag: "wx" });
-    await fs.promises.rename(temporary, target);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(endpoint, () => { server.off("error", reject); resolve(); });
+      });
+      if (process.platform !== "win32") await fs.promises.chmod(endpoint, 0o600);
+      await fs.promises.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+      await fs.promises.writeFile(temporary, JSON.stringify(descriptor), { encoding: "utf8", mode: 0o600, flag: "wx" });
+      await fs.promises.rename(temporary, target);
+    } catch (error) {
+      for (const socket of this.sockets) socket.destroy();
+      this.sockets.clear();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await fs.promises.rm(temporary, { force: true });
+      if (process.platform !== "win32") await fs.promises.rm(endpoint, { force: true });
+      throw error;
+    }
     this.server = server;
     this.descriptor = descriptor;
     return descriptor;
   }
 
   async stop(): Promise<void> {
+    if (!this.stopping) {
+      this.stopping = this.stopServer().finally(() => { this.stopping = null; });
+    }
+    return this.stopping;
+  }
+
+  private async stopServer(): Promise<void> {
+    // A start owns its listening socket until descriptor publication succeeds or
+    // its failure cleanup completes; wait before removing the published state.
+    await this.starting?.catch(() => undefined);
     const server = this.server;
     const descriptor = this.descriptor;
     this.server = null;
