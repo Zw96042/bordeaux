@@ -1,3 +1,105 @@
+    const nowOutside = outsideBrush(t);
+    if (nowOutside !== previousOutside) {
+      const boundary = exteriorBoundaryParameter(curve, center, radius, (index - 1) / steps, t, previousOutside);
+      appendCandidate(boundary, true);
+    }
+    previousOutside = nowOutside;
+    if (!nowOutside) appendCandidate(t, false);
+  }
+  return candidates;
+}
+
+function splitSegment(path, segmentIndex, parameters) {
+  if (!parameters.length) return 0;
+  const waypoints = path.waypoints;
+  const source = waypoints[segmentIndex];
+  const end = waypoints[segmentIndex + 1];
+  const metadata = segmentMetadata(source);
+  let remaining = cubicPoints(source, end);
+  let previousT = 0;
+  let currentStart = source;
+  source.segType = 'bezier';
+
+  parameters.forEach((parameter, offset) => {
+    const localT = (parameter - previousT) / Math.max(1e-9, 1 - previousT);
+    const halves = splitCubic(remaining, localT);
+    const leftLength = approximateLength(halves.left);
+    const rightLength = approximateLength(halves.right);
+    const splitFraction = leftLength / Math.max(leftLength + rightLength, 1e-9);
+    currentStart.nextC = point(halves.left[1]);
+    const insertedIndex = segmentIndex + offset + 1;
+    const waypoint = {
+      x: halves.left[3].x,
+      y: halves.left[3].y,
+      prevC: point(halves.left[2]),
+      nextC: point(halves.right[1]),
+      linked: true,
+      corner: false,
+      stop: false,
+      thetaOn: false,
+      theta: mix(Number(source.theta) || 0, Number(end.theta) || 0, parameter),
+      ...metadata,
+    };
+    waypoints.splice(insertedIndex, 0, waypoint);
+    shiftWaypointRanges(path, insertedIndex, splitFraction);
+    currentStart = waypoint;
+    remaining = halves.right;
+    previousT = parameter;
+  });
+  currentStart.nextC = point(remaining[1]);
+  end.prevC = point(remaining[2]);
+  return parameters.length;
+}
+
+function densify(path, center, radius) {
+  const spacing = clamp(radius * 0.3, 0.12, 0.48);
+  let added = 0;
+  let segmentIndex = 0;
+  while (segmentIndex < path.waypoints.length - 1 && path.waypoints.length < 320) {
+    const start = path.waypoints[segmentIndex];
+    const end = path.waypoints[segmentIndex + 1];
+    if (!isReshapeable(start)) { segmentIndex += 1; continue; }
+    const curve = cubicPoints(start, end);
+    const parameters = subdivisionParameters(curve, center, radius, spacing)
+      .slice(0, Math.max(0, 320 - path.waypoints.length));
+    const inserted = splitSegment(path, segmentIndex, parameters);
+    added += inserted;
+    segmentIndex += inserted + 1;
+  }
+  return added;
+}
+
+function falloff(value, radius) {
+  const u = clamp(1 - value / Math.max(radius, 1e-6), 0, 1);
+  return u * u * (3 - 2 * u);
+}
+
+// How far the pointer swept around the stroke's anchor, in radians. Using real angular
+// motion rather than a linear mix of dx and dy means no drag direction silently cancels:
+// orbiting the anchor either way twirls that way, and only a straight radial drag (which
+// is not a twirl gesture at all) produces nothing.
+function twirlAngle(stroke) {
+  const anchor = stroke.origin;
+  const ax = stroke.previous.x - anchor.x;
+  const ay = stroke.previous.y - anchor.y;
+  const bx = stroke.center.x - anchor.x;
+  const by = stroke.center.y - anchor.y;
+  const swept = Math.atan2(ax * by - ay * bx, ax * bx + ay * by);
+  if (Number.isFinite(swept) && Math.abs(swept) > 1e-9) return swept;
+  // A straight drag away from the anchor has no angular sweep, including the first UI
+  // sample where origin === previous. Use its full travel and choose direction by the
+  // dominant axis so no diagonal can cancel to zero.
+  const dx = stroke.center.x - stroke.previous.x;
+  const dy = stroke.center.y - stroke.previous.y;
+  const travel = Math.hypot(dx, dy);
+  if (travel <= 1e-9) return 0;
+  const direction = Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx || 1) : -Math.sign(dy || 1);
+  return direction * travel / Math.max(stroke.radius, 1e-6);
+}
+
+function transformPoint(value, stroke) {
+  const weight = falloff(distance(value, stroke.center), stroke.radius);
+  if (weight <= 0) return point(value);
   const dx = stroke.center.x - stroke.previous.x;
   const dy = stroke.center.y - stroke.previous.y;
   if (stroke.kind === 'twirl') {
