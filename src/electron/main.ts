@@ -4,9 +4,10 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
-import { javaTrajectoryFileName, type BuiltJavaTrajectory } from "../shared/export/javaTrajectory";
+import { javaTrajectoryFileName } from "../shared/export/javaTrajectory";
 import { buildJavaRevision } from "../shared/export/javaRevision";
+import type { RobotPushScope } from "../shared/export/javaDeployment";
+import { hasDeploymentReceipt, readDeploymentReceipts, saveDeploymentReceipt, sameDeploymentRevision } from "./deploymentReceipts";
 import { javaCatalogSemanticSignature } from "../shared/agent/catalogSignature";
 import type { BordeauxProject, JavaCommandCatalog, JavaIntegrationStatus } from "../shared/types";
 import type { AgentSessionSnapshot } from "../shared/agent/types";
@@ -41,6 +42,7 @@ import {
   type DiagnosticRobotAcknowledgement,
 } from "./diagnosticBundle";
 import { AgentSessionService } from "./agentSession";
+import { buildJavaTrajectoryOffThread, compareJavaDeploymentOffThread, buildJavaDeploymentOffThread } from "./javaTrajectoryWorkerClient";
 import { runAgentPlanningInWorker } from "./agentPlanningWorkerClient";
 import { serveBordeauxMcp } from "../mcp/server";
 import { RobotPairingController, readRobotPairing, writeRobotPairing } from "./robotPairings";
@@ -70,27 +72,6 @@ let appUpdates: AppUpdateController | null = null;
 let updateCheckTimer: NodeJS.Timeout | null = null;
 let backgroundShutdownPromise: Promise<void> | null = null;
 
-function buildJavaTrajectoryOffThread(project: BordeauxProject, catalog: JavaCommandCatalog): Promise<BuiltJavaTrajectory> {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(path.join(__dirname, "javaTrajectoryWorker.js"));
-    let settled = false;
-    const finish = (action: () => void) => {
-      if (settled) return;
-      settled = true;
-      void worker.terminate();
-      action();
-    };
-    worker.once("message", (message: { ok: true; built: BuiltJavaTrajectory } | { ok: false; error: string }) => {
-      if (message.ok) finish(() => resolve(message.built));
-      else finish(() => reject(new Error(message.error)));
-    });
-    worker.once("error", (error) => finish(() => reject(error)));
-    worker.once("exit", (code) => {
-      if (!settled && code !== 0) finish(() => reject(new Error(`Java trajectory worker stopped with exit code ${code}`)));
-    });
-    worker.postMessage({ project, catalog });
-  });
-}
 let smokeCloseGuardTriggered = false;
 let linkedJavaProjectPath: string | null = null;
 let linkedJavaProjectBookmarkId: string | null = null;
@@ -101,8 +82,8 @@ let javaProjectBookmarks: JavaProjectBookmark[] = [];
 let robotPairings = new RobotPairingController();
 const robotTransport = new BordeauxRobotTransport(connectRobotSftp);
 type PendingRobotOperation =
-  | { kind: "push"; operation: RobotPushOperation; pairing: RobotPairing }
-  | { kind: "retention"; operation: RobotRetentionOperation };
+  | { kind: "push"; operation: RobotPushOperation; pairing: RobotPairing; projectGeneration: number; javaGeneration: number; receiptProject: string }
+  | { kind: "retention"; operation: RobotRetentionOperation; pairing: RobotPairing; projectGeneration: number; javaGeneration: number };
 type ActiveRobotOperation = { operationId: string; controller: AbortController; kind: PendingRobotOperation["kind"] };
 let pendingRobotOperation: PendingRobotOperation | null = null;
 let activeRobotPush: ActiveRobotOperation | null = null;
@@ -252,6 +233,8 @@ function createAppUpdateController(): AppUpdateController {
 function activateProjectTarget(filePath: string | null): void {
   currentProjectPath = filePath;
   projectTargetGeneration += 1;
+  pendingRobotOperation = null;
+  robotPushPreparationGeneration += 1;
 }
 
 async function rememberFile(filePath: string) {
@@ -495,212 +478,28 @@ function createWindow() {
 
   if (process.env.BORDEAUX_SMOKE_TEST === "1") {
     window.webContents.once("did-finish-load", async () => {
-      const result: any = await window.webContents.executeJavaScript(`(async () => {
-        const unnamedOnPage = () => {
-          const controls = [...document.querySelectorAll('button,input,select,textarea,[role="button"]')];
-          const name = (el) => el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.getAttribute('title') || el.labels?.[0]?.textContent || (el.matches('button,[role="button"]') ? el.textContent : '');
-          return controls.filter((el) => !String(name(el) || '').trim()).map((el) => el.className);
-        };
-        const unnamed = [...unnamedOnPage()];
-        for (const page of ['Aquitaine', 'Robot']) {
-          [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === page)?.click();
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          unnamed.push(...unnamedOnPage());
-        }
-        const project = { schemaVersion: '1.0', field: { id: '2026-rebuilt', revision: '2026-manual-tu19-welded-4', coordinateSchemaId: 'bordeaux-field/1.0' }, name: 'Smoke edited', robot: { drive: 'swerve', w: .8, l: .8, maxSpeed: 4 }, paths: [{ id: 'path_smoke', name: 'Smoke', waypoints: [{ x: 1, y: 1, theta: 0, thetaOn: true, linked: true, stop: false, prevC: { x: .8, y: 1 }, nextC: { x: 1.2, y: 1 } }, { x: 2, y: 1, theta: 0, thetaOn: true, linked: true, stop: false, prevC: { x: 1.8, y: 1 }, nextC: { x: 2.2, y: 1 } }], targets: [], markers: [{ id: 'event_smoke', f: .5, name: 'Smoke event', invocation: { commandId: 'frc.robot.SmokeCommand', arguments: { count: 2, sequence: '9007199254740993', tags: ['auto'] }, cancelOnPathEnd: true } }], ranges: [], constraints: { maxVel: 2, maxAccel: 2, maxDecel: 2, maxAngVel: 180, maxAngAccel: 360 }, startVel: 0, goalVel: 0 }], pathLinks: [], routines: [{ id: 'routine_smoke_active', name: 'Smoke routine', nodes: [{ id: 'routine_smoke', type: 'path', ref: 'path_smoke' }] }], activeRoutineId: 'routine_smoke_active', plannerId: 'profiledSpline' };
-        await window.bordeauxAPI.saveProject(project, true);
-        document.getElementById('robot-drive-motor')?.click();
-        for (let attempt = 0; attempt < 50 && !document.querySelector('#robot-drive-motor-listbox [data-value="rev-neo"]'); attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        document.querySelector('#robot-drive-motor-listbox [data-value="rev-neo"]')?.click();
-        await new Promise((resolve) => setTimeout(resolve, 1_050));
-        const motorAutosave = await window.bordeauxAPI.restoreLastProject();
-        const motorPreset = motorAutosave.project.robot.driveModel?.motorId === 'rev-neo'
-          && motorAutosave.project.robot.driveModel?.motorFreeRpm === 5676
-          && motorAutosave.project.robot.maxSpeed > 4;
-        const validation = await window.bordeauxAPI.validateProject(project);
-        const javaConnection = await window.bordeauxAPI.linkJavaProject();
-        const installedJavaConnection = await window.bordeauxAPI.installJavaSupport();
-        const builtJavaConnection = await window.bordeauxAPI.buildJavaCatalog();
-        const recentJavaProjects = await window.bordeauxAPI.listRecentJavaProjects();
-        const reopenedJavaConnection = await window.bordeauxAPI.openRecentJavaProject(recentJavaProjects[0].id);
-        const secondPath = structuredClone(project.paths[0]);
-        secondPath.id = 'path_smoke_second'; secondPath.name = 'Smoke second';
-        secondPath.markers = [];
-        const persistedProject = { ...project, paths: [...project.paths, secondPath], editor: { activePathId: secondPath.id, javaProjectBookmarkId: recentJavaProjects[0].id } };
-        [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === 'Plan')?.click();
-        for (let attempt = 0; attempt < 100; attempt++) {
-          const planStage = document.querySelector('.stage-plan');
-          if (planStage && planStage.getAttribute('aria-disabled') !== 'true') break;
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        document.querySelector('button[aria-label="Add event marker"]')?.click();
-        for (let attempt = 0; attempt < 100 && !document.querySelector('button[aria-label="Choose Java project"], .cmd-primary-action'); attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        const linkButton = document.querySelector('button[aria-label="Choose Java project"]')
-          || [...document.querySelectorAll('.cmd-primary-action')].find((button) => button.textContent.trim() === 'Choose Java project');
-        linkButton?.click();
-        for (let attempt = 0; attempt < 50 && document.getElementById('event-marker-command')?.disabled; attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        const commandPicker = document.getElementById('event-marker-command');
-        const setInputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-        commandPicker?.click();
-        for (let attempt = 0; attempt < 50 && !document.querySelector('#event-marker-command-listbox [role="option"]'); attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        const commandOptions = [...document.querySelectorAll('#event-marker-command-listbox [role="option"]')];
-        const commandSearch = document.getElementById('event-marker-command-search');
-        const smokeCommandOption = commandOptions.find((option) => option.getAttribute('data-value') === 'frc.robot.SmokeCommand');
-        if (smokeCommandOption) {
-          smokeCommandOption.click();
-          for (let attempt = 0; attempt < 100 && !document.getElementById('event-command-param-tags'); attempt++) {
-            await new Promise((resolve) => setTimeout(resolve, 10));
-          }
-        }
-        const jsonParameter = document.getElementById('event-command-param-tags');
-        const exactIntegerParameter = document.getElementById('event-command-param-sequence');
-        const smokeParametersPresent = Boolean(document.getElementById('event-command-param-count') && jsonParameter && exactIntegerParameter);
-        const setTextAreaValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
-        if (jsonParameter) {
-          setTextAreaValue.call(jsonParameter, '{}');
-          jsonParameter.dispatchEvent(new Event('input', { bubbles: true }));
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          jsonParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        }
-        const jsonShapeRejected = jsonParameter?.getAttribute('aria-invalid') === 'true';
-        if (jsonParameter) {
-          setTextAreaValue.call(jsonParameter, '["auto"]');
-          jsonParameter.dispatchEvent(new Event('input', { bubbles: true }));
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          jsonParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        }
-        if (exactIntegerParameter) {
-          setInputValue.call(exactIntegerParameter, '9223372036854775808');
-          exactIntegerParameter.dispatchEvent(new Event('input', { bubbles: true }));
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          exactIntegerParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        }
-        const longRangeRejected = exactIntegerParameter?.getAttribute('aria-invalid') === 'true';
-        if (exactIntegerParameter) {
-          setInputValue.call(exactIntegerParameter, '9007199254740993');
-          exactIntegerParameter.dispatchEvent(new Event('input', { bubbles: true }));
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          exactIntegerParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        }
-        document.getElementById('event-marker-command')?.click();
-        for (let attempt = 0; attempt < 50 && !document.querySelector('#event-marker-command-listbox [role="option"]'); attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        const largeEnumCommandOption = [...document.querySelectorAll('#event-marker-command-listbox [role="option"]')]
-          .find((option) => option.getAttribute('data-value') === 'frc.robot.LargeEnumCommand');
-        largeEnumCommandOption?.click();
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        const largeEnumPicker = document.getElementById('event-command-param-mode');
-        largeEnumPicker?.click();
-        for (let attempt = 0; attempt < 50 && !document.querySelector('#event-command-param-mode-listbox [role="option"]'); attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        const largeEnumOptions = [...document.querySelectorAll('#event-command-param-mode-listbox [role="option"]')];
-        const largeEnumOverflowNotice = document.querySelector('#event-command-param-mode-listbox .cmd-picker-more')?.textContent || '';
-        const largeEnumSearch = document.getElementById('event-command-param-mode-search');
-        if (largeEnumSearch) {
-          setInputValue.call(largeEnumSearch, 'MODE_150');
-          largeEnumSearch.dispatchEvent(new Event('input', { bubbles: true }));
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        }
-        const largeEnumChoice = [...document.querySelectorAll('#event-command-param-mode-listbox [role="option"]')]
-          .find((option) => option.getAttribute('data-value') === 'MODE_150');
-        largeEnumChoice?.click();
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        const javaUi = {
-          markerInspector: Boolean(document.querySelector('.cmd-project')),
-          linkAction: Boolean(linkButton),
-          commandEnabled: Boolean(commandPicker && !commandPicker.disabled),
-          commandOptions: commandOptions.length,
-          searchHiddenForSmallCatalog: !commandSearch,
-          recentHiddenForSingleProject: !document.getElementById('event-marker-java-project'),
-          cancelSwitch: Boolean(document.getElementById('event-command-cancel') && document.querySelector('.cmd-toggle-track')),
-          parameter: smokeParametersPresent,
-          jsonShapeRejected,
-          jsonShapeAccepted: jsonParameter?.getAttribute('aria-invalid') === 'false',
-          longRangeRejected,
-          exactInteger: exactIntegerParameter?.value === '9007199254740993' && exactIntegerParameter?.type === 'text',
-          largeEnumPicker: largeEnumOptions.length === 80
-            && largeEnumOverflowNotice.includes('80 of 160 shown')
-            && Boolean(largeEnumSearch)
-            && document.getElementById('event-command-param-mode-value')?.textContent === 'MODE_150',
-          accessible: unnamedOnPage().length === 0,
-        };
-        document.querySelector('button[aria-label="Add event marker"]')?.click();
-        let markerAutosave;
-        for (let attempt = 0; attempt < 30; attempt++) {
+      try {
+        if (!smokeDirectory) throw new Error("Smoke test requires a fixture directory");
+        const smokeScript = await fs.promises.readFile(path.join(smokeDirectory, "renderer.js"), "utf8");
+        const result: Record<string, unknown> = await window.webContents.executeJavaScript(smokeScript);
+        if (process.env.BORDEAUX_SMOKE_CAPTURE_PATH) {
           await new Promise((resolve) => setTimeout(resolve, 100));
-          markerAutosave = await window.bordeauxAPI.restoreLastProject();
-          if (markerAutosave.project.paths[0].markers.length === 2) break;
+          const capture = await window.webContents.capturePage();
+          await fs.promises.writeFile(process.env.BORDEAUX_SMOKE_CAPTURE_PATH, capture.toPNG());
         }
-        const eventMarkerAutosave = markerAutosave.project.paths[0].markers.length === 2
-          && markerAutosave.project.paths[0].markers[1].name === 'event2';
-        await window.bordeauxAPI.newProject();
-        let staleJavaExportRejected = false;
-        try { await window.bordeauxAPI.exportJava(persistedProject, 'linked'); }
-        catch (error) { staleJavaExportRejected = String(error && error.message || error).includes('Link a Java robot project'); }
-        await window.bordeauxAPI.openRecentJavaProject(recentJavaProjects[0].id);
-        const javaExported = await window.bordeauxAPI.exportJava(persistedProject, 'linked');
-        const saved = await window.bordeauxAPI.saveProject(persistedProject, true);
-        const restored = await window.bordeauxAPI.restoreLastProject();
-        await window.bordeauxAPI.newProject();
-        const opened = await window.bordeauxAPI.openProject();
-        [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === 'Aquitaine')?.click();
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        document.querySelector('.routinelib .pathsw-btn')?.click();
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        const routineLibraryOpened = document.querySelector('[aria-label="Routine library"]') !== null;
-        [...document.querySelectorAll('.routinelib-create button')].find((button) => button.textContent.trim() === 'New routine')?.click();
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        const newRoutineSelected = document.querySelector('.routinelib .pathsw-nm')?.textContent === 'New routine';
-        document.querySelector('.routinelib .pathsw-btn')?.click();
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        document.querySelector('button[aria-label="Actions for New routine"]')?.click();
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        [...document.querySelectorAll('.pathlib-actionrow button')].find((button) => button.textContent.trim() === 'Duplicate')?.click();
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        const routineDuplicateSelected = document.querySelector('.routinelib .pathsw-nm')?.textContent === 'New routine copy';
-        const multiRoutineUi = routineLibraryOpened && newRoutineSelected && routineDuplicateSelected;
-        document.querySelector('.robot-push-trigger')?.click();
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        const robotPushDialog = document.querySelector('[aria-labelledby="robot-push-title"]');
-        const robotPushUi = Boolean(robotPushDialog
-          && robotPushDialog.textContent.includes('Saving never contacts the robot')
-          && robotPushDialog.textContent.includes('Port 22 is unavailable on the FMS field network')
-          && robotPushDialog.querySelector('input[placeholder="roborio-2468-frc.local"]')
-          && robotPushDialog.querySelector('button[aria-label="Close robot push"]'));
-        window.bordeauxAPI.setDirty(true);
-        const probe = document.createElement('script'); probe.textContent = 'window.__bordeauxInlineScriptRan = true'; document.head.appendChild(probe);
-        const editorRestored = opened.project.editor?.activePathId === secondPath.id && opened.project.editor?.javaProjectBookmarkId === recentJavaProjects[0].id;
-        return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), fatalError: document.querySelector('.fatal-error')?.textContent || '', unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, validation: validation.ok, motorPreset, eventMarkerAutosave, multiRoutineUi, robotPushUi, javaDiscovery: javaConnection.catalog.projectName === 'SmokeRobot' && javaConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), javaInstalled: installedJavaConnection.integration.installed, javaBuilt: builtJavaConnection.catalog.authoritative === true && builtJavaConnection.catalog.catalogHash === reopenedJavaConnection.catalog.catalogHash, javaRecent: recentJavaProjects.length === 1 && reopenedJavaConnection.catalog.projectName === 'SmokeRobot', javaUi, staleJavaExportRejected, javaExported: javaExported.exported && javaExported.eventCount === 1, restored: restored.project.name === persistedProject.name, roundTrip: saved.saved && opened.project.name === persistedProject.name && opened.project.routines.find((routine) => routine.id === opened.project.activeRoutineId)?.nodes[0]?.ref === 'path_smoke' && !('routine' in opened.project), editorRestored, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
-      })()`);
-      if (process.env.BORDEAUX_SMOKE_CAPTURE_PATH) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        const capture = await window.webContents.capturePage();
-        await fs.promises.writeFile(process.env.BORDEAUX_SMOKE_CAPTURE_PATH, capture.toPNG());
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        window.close();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const filesWritten = fs.existsSync(path.join(smokeDirectory, "project.bordeaux.json")) && fs.existsSync(path.join(smokeDirectory, "java-project", "src", "main", "deploy", "bordeaux", "Smoke-edited.bordeaux.json"));
+        result.filesWritten = filesWritten;
+        result.closeGuard = smokeCloseGuardTriggered && !window.isDestroyed();
+        console.log(`BORDEAUX_SMOKE_RESULT ${JSON.stringify(result)}`);
+        allowClose = true;
+        app.exit(0);
+      } catch (error) {
+        console.error("BORDEAUX_SMOKE_FAILED", error);
+        app.exit(1);
       }
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      window.close();
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      const filesWritten = smokeDirectory ? fs.existsSync(path.join(smokeDirectory, "project.bordeaux.json")) && fs.existsSync(path.join(smokeDirectory, "java-project", "src", "main", "deploy", "bordeaux", "Smoke-edited.bordeaux.json")) : false;
-      result.filesWritten = filesWritten;
-      result.closeGuard = smokeCloseGuardTriggered && !window.isDestroyed();
-      console.log(`BORDEAUX_SMOKE_OK ${JSON.stringify(result)}`);
-      const passed = result.api && result.root && result.unnamed.length === 0 && result.main > 0 && result.nav > 0 && result.validation && result.motorPreset && result.eventMarkerAutosave && result.multiRoutineUi && result.robotPushUi && result.javaDiscovery && result.javaInstalled && result.javaBuilt && result.javaRecent && result.javaUi.markerInspector && result.javaUi.linkAction && result.javaUi.commandEnabled && result.javaUi.commandOptions === 4 && result.javaUi.searchHiddenForSmallCatalog && result.javaUi.recentHiddenForSingleProject && result.javaUi.cancelSwitch && result.javaUi.parameter && result.javaUi.jsonShapeRejected && result.javaUi.jsonShapeAccepted && result.javaUi.longRangeRejected && result.javaUi.exactInteger && result.javaUi.largeEnumPicker && result.javaUi.accessible && result.staleJavaExportRejected && result.javaExported && result.restored && result.roundTrip && result.editorRestored && result.nodeGlobalsBlocked && result.popupBlocked && result.inlineScriptBlocked && result.filesWritten && result.closeGuard;
-      allowClose = true;
-      app.exit(passed ? 0 : 1);
     });
   }
 }
@@ -1144,6 +943,7 @@ handle("robot:prepareRetention", async (_event, rawProject, rawAction, rawTarget
     throw new Error("Link a Java robot project before preparing revision retention");
   }
   const preparationGeneration = ++robotPushPreparationGeneration;
+  const projectGeneration = projectTargetGeneration;
   pendingRobotOperation = null;
   if (rawAction !== "rollback" && rawAction !== "pin") throw new Error("Choose a valid revision retention action");
   if (!rawTarget || typeof rawTarget !== "object" || typeof (rawTarget as { revisionId?: unknown }).revisionId !== "string"
@@ -1160,7 +960,7 @@ handle("robot:prepareRetention", async (_event, rawProject, rawAction, rawTarget
   const catalog = linkedJavaCatalog;
   const connectionGeneration = javaConnectionGeneration;
   const status = await robotTransport.inspect(robotPairing, { password: "" });
-  if (preparationGeneration !== robotPushPreparationGeneration || connectionGeneration !== javaConnectionGeneration
+  if (projectGeneration !== projectTargetGeneration || preparationGeneration !== robotPushPreparationGeneration || connectionGeneration !== javaConnectionGeneration
     || catalog !== linkedJavaCatalog || robotPairings.current() !== robotPairing) {
     throw new Error("The paired robot or linked Java project changed while preparing retention; review it again");
   }
@@ -1176,10 +976,57 @@ handle("robot:prepareRetention", async (_event, rawProject, rawAction, rawTarget
     status,
     target: rawTarget as { revisionId: string; payloadSha256: string },
   });
-  pendingRobotOperation = { kind: "retention", operation };
+  pendingRobotOperation = { kind: "retention", operation, pairing: robotPairing, projectGeneration, javaGeneration: connectionGeneration };
   return operation.preview;
 });
-handle("robot:preparePush", async (_event, rawProject) => {
+const deploymentSessionId = randomBytes(16).toString("hex");
+let unconfirmedDeployment: { project: string; runtimeId: string; catalogHash: string; revisionId: string; payloadSha256: string } | null = null;
+
+function deploymentReceiptProject(): string {
+  return currentProjectPath || `unsaved:${deploymentSessionId}:${projectTargetGeneration}`;
+}
+
+function deploymentReceiptFile(): string {
+  return path.join(app.getPath("userData"), "deployment-receipts.json");
+}
+
+handle("robot:inspectLibrary", async (_event, rawProject) => {
+  const pairing = robotPairings.current();
+  if (!pairing) throw new Error("Pair a robot before refreshing its library");
+  const project = rawProject as BordeauxProject;
+  const generation = projectTargetGeneration;
+  const javaGeneration = javaConnectionGeneration;
+  const catalog = linkedJavaCatalog;
+  const receiptProject = deploymentReceiptProject();
+  const baseline = await robotTransport.readActiveRevision(pairing, { password: "" });
+  const verifiedAt = new Date().toISOString();
+  if (generation !== projectTargetGeneration || javaGeneration !== javaConnectionGeneration || pairing !== robotPairings.current()) {
+    throw new Error("The project or robot changed while refreshing its library; refresh again");
+  }
+  if (!catalog || project.editor?.javaProjectBookmarkId !== linkedJavaProjectBookmarkId) {
+    return { status: baseline.status, comparison: null, verifiedAt, message: "Link the matching Java project to compare items" };
+  }
+  const pending = unconfirmedDeployment;
+  if (pending && pending.project === receiptProject && pending.runtimeId === pairing.runtimeId && pending.catalogHash === catalog.catalogHash
+    && pending.revisionId === baseline.status.activeRevisionId && pending.payloadSha256 === baseline.status.activePayloadSha256) {
+    await saveDeploymentReceipt(deploymentReceiptFile(), { ...pending, verifiedAt });
+    unconfirmedDeployment = null;
+  }
+  if (baseline.status.activeRevisionId && !hasDeploymentReceipt(await readDeploymentReceipts(deploymentReceiptFile()), {
+    project: receiptProject, runtimeId: pairing.runtimeId, catalogHash: catalog.catalogHash!, revisionId: baseline.status.activeRevisionId,
+  })) {
+    return { status: baseline.status, comparison: null, verifiedAt, message: "This robot revision is not associated with this project. Review a push to adopt its baseline or explicitly replace its contents." };
+  }
+  const comparison = await compareJavaDeploymentOffThread(project, catalog, baseline.contents);
+  const latest = await robotTransport.inspect(pairing, { password: "" });
+  if (generation !== projectTargetGeneration || javaGeneration !== javaConnectionGeneration || pairing !== robotPairings.current()
+    || !sameDeploymentRevision(baseline.status, latest)) {
+    throw new Error("The project or robot revision changed while comparing items; refresh again");
+  }
+  return { status: latest, comparison, verifiedAt: new Date().toISOString() };
+});
+
+handle("robot:preparePush", async (_event, rawProject, rawScope) => {
   if (activeRobotPush) throw new Error("Wait for the current robot push to finish before preparing another one");
   const robotPairing = robotPairings.current();
   if (!robotPairing) throw new Error("Pair a robot before preparing a push");
@@ -1187,6 +1034,8 @@ handle("robot:preparePush", async (_event, rawProject) => {
     throw new Error("Link a Java robot project before preparing a push");
   }
   const preparationGeneration = ++robotPushPreparationGeneration;
+  const projectGeneration = projectTargetGeneration;
+  const receiptProject = deploymentReceiptProject();
   pendingRobotOperation = null;
   if (!linkedJavaIntegration.installed || linkedJavaIntegration.supportVersion !== linkedJavaCatalog.supportVersion) {
     throw new Error("Install matching Bordeaux Java support and rebuild the command catalog before pushing");
@@ -1195,27 +1044,43 @@ handle("robot:preparePush", async (_event, rawProject) => {
   if (project.editor?.javaProjectBookmarkId !== linkedJavaProjectBookmarkId) {
     throw new Error("The linked Java project does not match this Bordeaux project; relink it before pushing");
   }
+  const scope = (rawScope === undefined ? { kind: "project" } : rawScope) as RobotPushScope;
   const connectionGeneration = javaConnectionGeneration;
   const catalog = linkedJavaCatalog;
-  const status = await robotTransport.inspect(robotPairing, { password: "" });
-  const trajectory = await buildJavaTrajectoryOffThread(project, catalog);
-  if (preparationGeneration !== robotPushPreparationGeneration
-    || connectionGeneration !== javaConnectionGeneration || catalog !== linkedJavaCatalog) {
-    throw new Error("The linked Java project changed while preparing the push; review it again");
+  // Full replacement remains an explicit recovery path for older runtimes.
+  const baseline = scope?.kind === "project"
+    ? { status: await robotTransport.inspect(robotPairing, { password: "" }), contents: null }
+    : await robotTransport.readActiveRevision(robotPairing, { password: "" });
+  const built = await buildJavaDeploymentOffThread(project, catalog, scope, baseline.contents);
+  let adoptionRequired = false;
+  let receiptWarning: string | undefined;
+  if (scope.kind !== "project" && baseline.status.activeRevisionId) {
+    try {
+      adoptionRequired = !hasDeploymentReceipt(await readDeploymentReceipts(deploymentReceiptFile()), {
+        project: receiptProject, runtimeId: robotPairing.runtimeId, catalogHash: catalog.catalogHash!, revisionId: baseline.status.activeRevisionId,
+      });
+    } catch {
+      adoptionRequired = true;
+      receiptWarning = "Local deployment history could not be read. Review the robot baseline before continuing.";
+    }
+  }
+  if (preparationGeneration !== robotPushPreparationGeneration || projectGeneration !== projectTargetGeneration
+    || connectionGeneration !== javaConnectionGeneration || catalog !== linkedJavaCatalog || robotPairings.current() !== robotPairing) {
+    throw new Error("The project, robot, or Java catalog changed while preparing the push; review it again");
   }
   const operationId = `push-${randomBytes(12).toString("hex")}`;
   const operation = createRobotPushOperation({
-    operationId,
-    nonce: operationId,
-    projectName: project.name,
-    pairing: robotPairing,
-    status,
-    trajectory,
+    operationId, nonce: operationId, projectName: project.name, pairing: robotPairing,
+    status: baseline.status, trajectory: built.trajectory,
   });
-  pendingRobotOperation = { kind: "push", operation, pairing: robotPairing };
+  operation.preview.summary = built.summary;
+  operation.preview.adoptionRequired = adoptionRequired;
+  operation.preview.baselineRevision = baseline.status.activeRevisionId;
+  operation.preview.receiptWarning = receiptWarning;
+  pendingRobotOperation = { kind: "push", operation, pairing: robotPairing, projectGeneration, javaGeneration: connectionGeneration, receiptProject };
   return operation.preview;
 });
-handle("robot:confirmPush", async (event, rawOperationId) => {
+handle("robot:confirmPush", async (event, rawOperationId, adoptBaseline) => {
   if (typeof rawOperationId !== "string" || !pendingRobotOperation || pendingRobotOperation.kind !== "push"
     || pendingRobotOperation.operation.preview.operationId !== rawOperationId) {
     throw new Error("The reviewed robot push is no longer current; prepare it again");
@@ -1223,6 +1088,10 @@ handle("robot:confirmPush", async (event, rawOperationId) => {
   if (activeRobotPush) throw new Error("A robot push is already in progress");
   const operation = pendingRobotOperation.operation;
   const pairing = pendingRobotOperation.pairing;
+  const receiptProject = pendingRobotOperation.receiptProject;
+  if (pendingRobotOperation.projectGeneration !== projectTargetGeneration || pendingRobotOperation.javaGeneration !== javaConnectionGeneration
+    || pairing !== robotPairings.current()) throw new Error("The push context changed; review it again");
+  if (operation.preview.adoptionRequired && adoptBaseline !== true) throw new Error("Confirm the reviewed robot baseline before pushing");
   pendingRobotOperation = null;
   const controller = new AbortController();
   activeRobotPush = { operationId: rawOperationId, controller, kind: "push" };
@@ -1255,6 +1124,20 @@ handle("robot:confirmPush", async (event, rawOperationId) => {
     if (activeRobotPush?.operationId === rawOperationId) activeRobotPush = null;
   }
   const revision = operation.revision.document.revision;
+  if (result && typeof result === "object" && "state" in result && result.state === "staged") {
+    unconfirmedDeployment = { project: receiptProject, runtimeId: pairing.runtimeId, catalogHash: revision.catalog.catalogHash,
+      revisionId: revision.revisionId, payloadSha256: revision.payloadSha256 };
+  }
+  if (result && typeof result === "object" && "state" in result && result.state === "active") {
+    try {
+      await saveDeploymentReceipt(deploymentReceiptFile(), {
+        project: receiptProject, runtimeId: pairing.runtimeId, catalogHash: revision.catalog.catalogHash,
+        revisionId: revision.revisionId, verifiedAt: new Date().toISOString(),
+      });
+    } catch {
+      result = { ...result, receiptWarning: "The robot accepted this update, but local deployment history could not be saved." };
+    }
+  }
   lastDiagnosticRobotAcknowledgement = reduceRobotAcknowledgement(result, {
     teamNumber: pairing.teamNumber,
     revisionId: revision.revisionId,
@@ -1285,6 +1168,8 @@ handle("robot:confirmRetention", async (event, rawOperationId) => {
   }
   if (activeRobotPush) throw new Error("A robot operation is already in progress");
   const operation = pendingRobotOperation.operation;
+  if (pendingRobotOperation.projectGeneration !== projectTargetGeneration || pendingRobotOperation.javaGeneration !== javaConnectionGeneration
+    || pendingRobotOperation.pairing !== robotPairings.current()) throw new Error("The retention context changed; review it again");
   pendingRobotOperation = null;
   const controller = new AbortController();
   activeRobotPush = { operationId: rawOperationId, controller, kind: "retention" };
