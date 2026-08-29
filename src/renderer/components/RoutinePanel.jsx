@@ -146,22 +146,48 @@ import { UI } from "./ui";
 
   function EmptyState({ acq, waitAvailable }) {
     return h('div', { className: 'rt-empty' },
-      h('div', { className: 'rt-empty-t' }, 'No steps yet'),
+      h('span', { className: 'rt-empty-ic' }, h(Icon, { name: 'layers', size: 18 })),
+      h('div', { className: 'rt-empty-t' }, 'Build the run order'),
+      h('p', null, 'Add paths, decisions, and robot commands. Steps run from top to bottom.'),
       h(AddStep, { variant: 'end', label: 'Add first step', waitAvailable, onPick: (t, c) => acq.addEnd(t, c) }));
   }
 
   function RoutinePanel(props) {
     const { routine, run, paths, selId, onSelect, acq, time, running, catalog } = props;
     const waitAvailable = A.hasWaitBuiltIn(catalog);
-    const dnd = useDnd(acq);
-    const [collapsed, setCollapsed] = useState(() => new Set());
-    const toggleCollapse = (id) => setCollapsed((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+    const dnd = useDnd(acq, routine);
+    const [localCollapsed, setLocalCollapsed] = useState(() => new Set());
+    const collapsed = props.collapsedIds ? new Set(props.collapsedIds) : localCollapsed;
+    const toggleCollapse = (id) => {
+      const next = new Set(collapsed); next.has(id) ? next.delete(id) : next.add(id);
+      if (props.onCollapsedIdsChange) props.onCollapsedIdsChange([...next]); else setLocalCollapsed(next);
+    };
 
     const activeIdx = run.steps.length ? A.stepAt(run, time) : -1;
     const activeId = (running && activeIdx >= 0) ? run.steps[activeIdx].node.id : null;
     const firedIds = new Set();
     run.steps.forEach((s) => { if (s.t1 <= time + 1e-6) firedIds.add(s.node.id); });
+
+    const totals = { steps: A.countSteps(routine), paths: 0, decisions: 0 };
+    A.walk(routine.nodes, (node) => {
+      if (node.type === 'path') totals.paths += 1;
+      else if (node.type === 'decision') totals.decisions += 1;
+    });
+    const status = run.planningStatus === 'error' ? 'error' : run.blocked ? 'planning' : 'ready';
+    const statusLabel = status === 'error' ? 'Needs attention' : status === 'planning' ? 'Planning paths' : (run.total > 0 ? fmt(run.total) : 'Ready');
+
     return h('div', { className: 'rt-panel' + (dnd.drag ? ' dragging' : '') },
+      !props.embedded && h('header', { className: 'rt-panel-head' },
+        h('div', { className: 'rt-panel-heading' },
+          h('div', null,
+            h('span', { className: 'rt-panel-kicker' }, 'Routine flow'),
+            h('strong', { className: 'rt-panel-title', title: routine.name }, routine.name)),
+          h('span', { className: 'rt-panel-status ' + status }, h('span', { className: 'rt-panel-status-dot' }), statusLabel)),
+        h('div', { className: 'rt-panel-summary' },
+          h('span', null, plural(totals.steps, 'step')),
+          h('span', null, plural(totals.paths, 'path')),
+          totals.decisions > 0 && h('span', null, plural(totals.decisions, 'decision'))),
+        h('p', null, 'Runs top to bottom. The highlighted branch is used for the preview.')),
       h('div', { className: 'rt-scroll' },
         routine.nodes.length === 0
           ? h(EmptyState, { acq, waitAvailable })
