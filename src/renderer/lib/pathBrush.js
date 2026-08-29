@@ -1,3 +1,19 @@
+// Local path sculpting with adaptive Bézier subdivision. Brush edits leave
+// distant segments untouched and create control points only inside the brush.
+const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
+
+// Arc and clothoid segments are generated from their endpoints rather than from
+// control handles, so subdividing or retangenting one would silently reinterpret it
+// as a Bézier and reshape the whole segment. The brush leaves those spans alone.
+const RESHAPEABLE = new Set(['bezier', 'line', undefined, null, '']);
+const isReshapeable = (waypoint) => !!waypoint && RESHAPEABLE.has(waypoint.segType);
+const mix = (a, b, t) => a + (b - a) * t;
+const pointMix = (a, b, t) => ({ x: mix(a.x, b.x, t), y: mix(a.y, b.y, t) });
+const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const point = (value) => ({ x: value.x, y: value.y });
+
+function cubicPoints(start, end) {
+  const p0 = point(start), p1 = point(end);
   if (start.segType === 'line') {
     return [p0, pointMix(p0, p1, 1 / 3), pointMix(p0, p1, 2 / 3), p1];
   }
