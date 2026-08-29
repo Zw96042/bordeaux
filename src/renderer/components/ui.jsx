@@ -242,7 +242,19 @@ import { UnitPrefs } from "../lib/unitPreferences";
     const ref = useRef(null);
     const pointerDrag = PointerDrag.useController();
     const unitSystem = UnitPrefs.current();
-    useEffect(() => setEdit(null), [unitSystem]);
+      setEdit(null);
+      setError('');
+    }, [unitSystem]);
+    const commitEdit = (raw) => {
+      const parsed = parseFiniteDraftNumber(raw);
+      if (parsed == null) { setError('Enter a finite number.'); return false; }
+      let next = UnitPrefs.toCanonical(parsed, unit, imperialUnit);
+      if (min != null) next = Math.max(min, next);
+      if (max != null) next = Math.min(max, next);
+      setError('');
+      onChange(next);
+      return true;
+    };
     const start = () => (down) => {
       down.preventDefault();
       const sx = down.clientX, v0 = (typeof value === 'number' ? value : 0);
@@ -257,12 +269,14 @@ import { UnitPrefs } from "../lib/unitPreferences";
       h('div', { className: 'numbox' },
         h('input', {
           id, ref, className: 'numinput', value: disp, inputMode: 'decimal', 'aria-describedby': unit ? id + '-unit' : undefined,
-          onChange: (e) => setEdit(e.target.value),
-          onFocus: (e) => { setEdit(typeof displayValue === 'number' ? String(displayValue) : displayValue); requestAnimationFrame(() => e.target.select()); },
-          onBlur: (e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) onChange(UnitPrefs.toCanonical(n, unit, imperialUnit)); setEdit(null); },
-          onKeyDown: (e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setEdit(null); e.target.blur(); } },
+          'data-project-draft': projectDraft ? true : undefined, 'aria-invalid': !!error,
+          onChange: (e) => { setEdit(e.target.value); if (error) setError(''); },
+          onFocus: (e) => { cancelEdit.current = false; if (edit == null) setEdit(typeof displayValue === 'number' ? String(displayValue) : displayValue); requestAnimationFrame(() => e.target.select()); },
+          onBlur: (e) => { const committed = cancelEdit.current || commitEdit(e.target.value); cancelEdit.current = false; if (committed) setEdit(null); },
+          onKeyDown: (e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { e.preventDefault(); cancelEdit.current = true; setError(''); setEdit(null); e.target.blur(); } },
         }),
         unit && h('span', { id: id + '-unit', className: 'numunit' }, UnitPrefs.label(unit, imperialUnit))),
+      error && h('span', { className: 'cmd-param-error numerror', role: 'alert' }, error),
     );
   }
 
@@ -295,7 +309,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
     };
     return h('div', { className: 'seg' + (className ? ' ' + className : ''), role: 'group', 'aria-label': ariaLabel, style },
       h('span', { className: 'seg-indicator', 'aria-hidden': true }),
-      options.map(o => h('button', { key: o.v, type: 'button', className: 'seg-i' + (value === o.v ? ' on' : ''), title: o.title, 'aria-label': o.ariaLabel, 'aria-pressed': value === o.v, onClick: () => onChange(o.v) }, o.label)));
+      options.map(o => h('button', { key: o.v, type: 'button', disabled: Boolean(o.disabled), className: 'seg-i' + (value === o.v ? ' on' : ''), title: o.title, 'aria-label': o.ariaLabel, 'aria-pressed': value === o.v, onClick: () => onChange(o.v) }, o.label)));
   }
 
   function constraintRangeSummary(range, constraints, robot) {
@@ -317,26 +331,54 @@ import { UnitPrefs } from "../lib/unitPreferences";
   }
 
   // floating context menu — items: [{label,icon,onClick,danger,sep}]
-  function ContextMenu({ x, y, items, onClose }) {
+  function ContextMenu({ x, y, items, onClose, returnFocus }) {
     const ref = useRef(null);
+    const origin = useRef(returnFocus || null);
     const [pos, setPos] = useState({ x, y });
     useEffect(() => {
       const el = ref.current; if (!el) return;
       const r = el.getBoundingClientRect();
-      const nx = Math.min(x, window.innerWidth - r.width - 8);
-      const ny = Math.min(y, window.innerHeight - r.height - 8);
-      setPos({ x: nx, y: ny });
+      setPos({ x: Math.max(8, Math.min(x, window.innerWidth - r.width - 8)), y: Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) });
     }, [x, y]);
     useEffect(() => {
-      const away = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
-      const esc = (e) => { if (e.key === 'Escape') onClose(); };
-      window.addEventListener('pointerdown', away, true); window.addEventListener('keydown', esc);
-      return () => { window.removeEventListener('pointerdown', away, true); window.removeEventListener('keydown', esc); };
+      const el = ref.current;
+      if (!origin.current) origin.current = document.activeElement;
+      el?.querySelector('button:not(:disabled)')?.focus();
+      return () => {
+        if (el?.contains(document.activeElement) && origin.current?.isConnected) origin.current.focus();
+      };
+    }, []);
+    useEffect(() => {
+      const close = () => {
+        if (ref.current?.contains(document.activeElement) && origin.current?.isConnected) origin.current.focus();
+        onClose();
+      };
+      const away = (event) => { if (ref.current && !ref.current.contains(event.target)) close(); };
+      const key = (event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault(); event.stopPropagation(); close(); return;
+        }
+        if (!ref.current?.contains(event.target)) return;
+        if (event.key === 'Tab') { close(); return; }
+        if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault(); event.stopPropagation();
+        const buttons = Array.from(ref.current.querySelectorAll('button:not(:disabled)'));
+        if (!buttons.length) return;
+        const index = buttons.indexOf(document.activeElement);
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+          : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+        buttons[next].focus();
+      };
+      window.addEventListener('pointerdown', away, true); window.addEventListener('keydown', key, true);
+      return () => { window.removeEventListener('pointerdown', away, true); window.removeEventListener('keydown', key, true); };
     }, [onClose]);
-    return h('div', { ref, className: 'ctxmenu', style: { left: pos.x + 'px', top: pos.y + 'px' } },
+    return h('div', { ref, role: 'menu', 'aria-label': 'Heading actions', className: 'ctxmenu', style: { left: pos.x + 'px', top: pos.y + 'px' } },
       items.map((it, i) => it.sep
-        ? h('div', { key: 'sep' + i, className: 'ctxmenu-sep' })
-        : h('button', { key: i, type: 'button', className: 'ctxmenu-i' + (it.danger ? ' danger' : ''), onClick: () => { onClose(); it.onClick(); } },
+        ? h('div', { key: 'sep' + i, role: 'separator', className: 'ctxmenu-sep' })
+        : h('button', { key: i, type: 'button', role: 'menuitem', tabIndex: -1, disabled: it.disabled, className: 'ctxmenu-i' + (it.danger ? ' danger' : ''), onClick: () => {
+            if (origin.current?.isConnected) origin.current.focus();
+            onClose(); it.onClick();
+          } },
             it.icon && h('span', { className: 'ctxmenu-ic' }, h(Icon, { name: it.icon, size: 14 })),
             h('span', null, it.label),
             it.hint && h('span', { className: 'ctxmenu-k' }, it.hint))));

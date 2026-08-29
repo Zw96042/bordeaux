@@ -1,3 +1,29 @@
+import * as React from "react";
+import { PathLinks } from "../lib/pathLinks";
+import { UI } from "./ui";
+
+const h = React.createElement;
+const waypointName = (index, count) => index === 0 ? 'Start' : index === count - 1 ? 'End' : 'Waypoint ' + index;
+
+export function sharedPositionChoices(project, pathId, index) {
+  const allWaypoints = project.paths.flatMap((path) => path.waypoints.flatMap((point, at) =>
+    path.id === pathId && at === index ? [] : [{
+      value: JSON.stringify([path.id, at]), label: point.positionName || path.name + ' / ' + waypointName(at, path.waypoints.length),
+      meta: path.name + ' / ' + waypointName(at, path.waypoints.length), positionName: point.positionName,
+      pathId: path.id, index: at, positionLink: point.positionLink,
+    }]));
+  const connected = PathLinks.positionMembers(project, pathId, index);
+  const members = allWaypoints.filter((item) => connected.some((member) => member.pathId === item.pathId && member.index === item.index));
+  const seen = new Set();
+  const candidates = allWaypoints.filter((item) => {
+    if (!item.positionName || members.includes(item)) return false;
+    const key = item.positionLink || item.value;
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  });
+  return { candidates, members };
+}
+
 export function SharedWaypointPosition({ project, doc, index, onLink, onName }) {
   const waypoint = doc.waypoints[index];
   const [name, setName] = React.useState(waypoint.positionName || '');
