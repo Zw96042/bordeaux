@@ -50,11 +50,11 @@ import { UI } from "./ui";
     const unitSystem = UnitPrefs.current();
     useEffect(() => setEdit(null), [unitSystem]);
     const commitEdit = (raw) => {
-      let next = UnitPrefs.toCanonical(Number(raw), unit, imperialUnit);
-      if (!Number.isFinite(next)) return;
+      let next = UnitPrefs.toCanonical(parsed, unit, imperialUnit);
       if (min != null) next = Math.max(min, next);
       if (max != null) next = Math.min(max, next);
-      onChange(next);
+      setError(''); onChange(next);
+      return true;
     };
     const start = (down) => {
       down.preventDefault();
@@ -68,18 +68,20 @@ import { UI } from "./ui";
     return h('div', { className: 'rp-big', onPointerDown: (e) => { if (e.target.tagName !== 'INPUT') start(e); } },
       h('input', {
         value: display, inputMode: 'decimal', 'aria-label': label, min, max, step,
-        onChange: (e) => setEdit(e.target.value),
-        onFocus: (e) => { cancelEdit.current = false; setEdit(String(displayValue)); requestAnimationFrame(() => e.target.select()); },
-        onBlur: (e) => { if (!cancelEdit.current) commitEdit(e.target.value); cancelEdit.current = false; setEdit(null); },
+        'data-project-draft': true, 'aria-invalid': !!error,
+        onChange: (e) => { setEdit(e.target.value); if (error) setError(''); },
+        onFocus: (e) => { cancelEdit.current = false; if (edit == null) setEdit(String(displayValue)); requestAnimationFrame(() => e.target.select()); },
+        onBlur: (e) => { const committed = cancelEdit.current || commitEdit(e.target.value); cancelEdit.current = false; if (committed) setEdit(null); },
         onKeyDown: (e) => {
           if (e.key === 'Enter') e.currentTarget.blur();
-          else if (e.key === 'Escape') { e.preventDefault(); cancelEdit.current = true; e.currentTarget.blur(); }
+          else if (e.key === 'Escape') { e.preventDefault(); cancelEdit.current = true; setError(''); setEdit(null); e.currentTarget.blur(); }
         },
       }),
-      unit && h('span', { className: 'u' }, UnitPrefs.label(unit, imperialUnit)));
+      unit && h('span', { className: 'u' }, UnitPrefs.label(unit, imperialUnit)),
+      error && h('span', { className: 'cmd-param-error', role: 'alert' }, error));
   }
 
-  function RobotPage({ robot, setRobot, mcpEnabled, agentProposal, onApplyProposal, onRejectProposal }) {
+  function RobotPage({ robot, setRobot, unitSystem, setUnitSystem, pushController, mcpEnabled, agentProposal, onApplyProposal, onRejectProposal }) {
     const isSwerve = robot.drive === 'swerve';
     const [customEditing, setCustomEditing] = useState(false);
     const [selectedVertex, setSelectedVertex] = useState(0);
@@ -248,8 +250,8 @@ import { UI } from "./ui";
       h('div', { className: 'rp-vertexhead' }, h('span', null, 'Custom convex vertices'), h('span', null, '+X forward · +Y left')),
       footprint.map((point, index) => h('div', { className: 'rp-vertex' + (selectedVertex === index ? ' selected' : ''), key: index, onClick: () => setSelectedVertex(index) },
         h('span', null, index + 1),
-        h('label', null, 'X', h('input', { type: 'number', step: 0.01, value: point.x, 'aria-label': `Vertex ${index + 1} X`, onChange: (event) => updateVertex(index, 'x', Number(event.target.value)) })),
-        h('label', null, 'Y', h('input', { type: 'number', step: 0.01, value: point.y, 'aria-label': `Vertex ${index + 1} Y`, onChange: (event) => updateVertex(index, 'y', Number(event.target.value)) })),
+        h('div', { className: 'rp-vertex-coordinate' }, h('span', null, 'X'), h(BigNum, { label: `Vertex ${index + 1} X`, unit: 'm', value: point.x, precision: 3, onChange: (value) => updateVertex(index, 'x', value) })),
+        h('div', { className: 'rp-vertex-coordinate' }, h('span', null, 'Y'), h(BigNum, { label: `Vertex ${index + 1} Y`, unit: 'm', value: point.y, precision: 3, onChange: (value) => updateVertex(index, 'y', value) })),
         h('button', { type: 'button', disabled: footprint.length <= 3, 'aria-label': `Remove vertex ${index + 1}`, onClick: () => setVertices(footprint.filter((_, pointIndex) => pointIndex !== index)) }, '\u00d7'))),
       h('button', { className: 'rp-addvertex', type: 'button', disabled: footprint.length >= 16, onClick: () => addVertex() }, 'Add vertex on longest edge'),
       h('div', { className: 'rp-note' + (footprintValid ? '' : ' invalid'), role: footprintValid ? undefined : 'status' }, footprintValid
@@ -258,7 +260,17 @@ import { UI } from "./ui";
 
     return h('div', { className: 'robotpage' },
       h('div', { className: 'rp-wrap' },
-        h('div', { className: 'rp-title' }, 'Robot'),
+        h('div', { className: 'rp-title' }, 'Settings'),
+        h('section', { className: 'settings-general', 'aria-label': 'General settings' },
+          h('div', { className: 'settings-row' },
+            h('div', { className: 'settings-label' }, h('strong', null, 'Robot connection'),
+              h('span', null, pushController.pairing || pushController.busy ? pushController.connectionLabel : 'Not connected')),
+            h('button', { className: 'qbtn library-connection', type: 'button', onClick: pushController.openConnection },
+              pushController.busy ? 'Push progress' : pushController.pairing ? 'Manage connection' : 'Connect robot')),
+          h('div', { className: 'settings-row' },
+            h('strong', null, 'Display units'),
+            h(UI.Seg, { ariaLabel: 'Display units', value: unitSystem, options: [{ v: 'metric', label: 'Metric' }, { v: 'imperial', label: 'Imperial' }], onChange: setUnitSystem }))),
+        h('h2', { className: 'settings-robot-heading' }, 'Robot'),
         h('div', { className: 'rp-sub' }, 'Project-wide dimensions and drivetrain limits.'),
         h('div', { className: 'rp-grid' },
           // ---- left column: controls ----

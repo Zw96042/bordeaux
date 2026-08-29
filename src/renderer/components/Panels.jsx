@@ -5,75 +5,11 @@ import { AUTO } from "../lib/routineModel";
 import { UnitPrefs } from "../lib/unitPreferences";
 import { UI } from "./ui";
 
-// Bordeaux — chrome: top bar, path switcher, tool rail, outline, constraint chip bar,
-// metric overlay, telemetry/transport, view controls.
   const { useRef, useState, useEffect, useMemo } = React;
   const h = React.createElement;
-  const { Icon, IconBtn, Dropdown, Section, Seg, constraintRangeSummary } = UI;
+  const { Icon, IconBtn, Dropdown, Section, constraintRangeSummary } = UI;
   const R2D = 180 / Math.PI;
 
-  // ---------------- path manager ----------------
-  function PathLibrary({ project, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times }) {
-    const [open, setOpen] = useState(false);
-    const [query, setQuery] = useState('');
-    const [collapsed, setCollapsed] = useState({});
-    const [editing, setEditing] = useState(null);
-    const [menu, setMenu] = useState(null);
-    const [draft, setDraft] = useState('');
-    const [error, setError] = useState('');
-    const triggerRef = useRef(null), panelRef = useRef(null), searchRef = useRef(null), editRef = useRef(null), editOriginRef = useRef(null);
-    const cur = project.paths[activeIdx], folders = project.pathFolders || [];
-    const close = () => {
-      setOpen(false); setMenu(null); setEditing(null); setError('');
-      editOriginRef.current = null;
-      requestAnimationFrame(() => triggerRef.current && triggerRef.current.focus());
-    };
-    const finishEdit = () => {
-      setEditing(null); setError('');
-    };
-    useEffect(() => {
-      if (open) requestAnimationFrame(() => searchRef.current && searchRef.current.focus());
-    }, [open]);
-    useEffect(() => {
-      if (!open) return;
-      const onKey = (e) => {
-        if (e.key === '/' && !editing) { e.preventDefault(); searchRef.current && searchRef.current.focus(); }
-        if (e.key !== 'Escape') return;
-        e.preventDefault();
-        if (editing) finishEdit();
-        else if (menu) setMenu(null);
-        else if (query) setQuery('');
-        else close();
-      };
-      window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
-    }, [open, editing, menu, query]);
-    useEffect(() => {
-      if (!menu) return;
-      const actionId = (menu.kind === 'path' ? 'path-actions-' : 'folder-actions-') + menu.id;
-      requestAnimationFrame(() => {
-        const action = document.getElementById(actionId);
-        if (action) action.scrollIntoView({ block: 'nearest' });
-      });
-      const away = (e) => {
-        if (!(e.target instanceof Element) || !e.target.closest('.pathlib-actionmenu,.pathlib-more')) setMenu(null);
-      };
-      window.addEventListener('pointerdown', away); return () => window.removeEventListener('pointerdown', away);
-    }, [menu]);
-    const trapFocus = (e) => {
-      if (e.key !== 'Tab' || !panelRef.current) return;
-      const focusable = Array.from(panelRef.current.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex]:not([tabindex="-1"])'));
-      if (!focusable.length) return;
-      const first = focusable[0], last = focusable[focusable.length - 1];
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-    };
-    useEffect(() => { if (editing) requestAnimationFrame(() => { if (editRef.current) { editRef.current.focus(); editRef.current.select(); } }); }, [editing]);
-    useEffect(() => { if (open && !editing) requestAnimationFrame(() => { if (panelRef.current) panelRef.current.focus({ preventScroll: true }); }); }, [open]);
-    useEffect(() => {
-      if (!open || editing || !editOriginRef.current) return;
-      const origin = editOriginRef.current;
-      const controlId = (origin.kind === 'path' ? 'path-actions-' : 'folder-actions-') + origin.id;
-      const trigger = panelRef.current && Array.from(panelRef.current.querySelectorAll('[aria-controls]')).find((node) => node.getAttribute('aria-controls') === controlId);
   function Toolbar(props) {
     const { page, setPage, alliance, setAlliance, onUndo, onRedo,
       optimizationOpen, toggleOptimization, optimizationApplied, editorPage } = props;
