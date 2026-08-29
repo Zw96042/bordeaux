@@ -4,16 +4,17 @@ import { AUTO } from "../lib/routineModel";
 import { UnitPrefs } from "../lib/unitPreferences";
 import { UI } from "./ui";
 
-// Autonomous Routine — routine hierarchy (LEFT rail). Step list + inline Add Step chooser.
+// Routine flow. Step list + inline Add Step chooser.
 // Stable layout: selecting a step only changes the right inspector. Drag the grip to reorder.
   const { useState, useRef } = React;
   const h = React.createElement;
   const { Icon } = UI;
   const A = AUTO;
   const fmt = (t) => (t || 0).toFixed(2) + 's';
+  const plural = (count, singular) => count + ' ' + singular + (count === 1 ? '' : 's');
 
   // ---- drag-reorder controller (siblings only) ----
-  function useDnd(acq) {
+  function useDnd(acq, routine) {
     const [drag, setDrag] = useState(null);   // { id }
     const [over, setOver] = useState(null);    // { id, before }
     const overRef = useRef(null);
@@ -25,7 +26,12 @@ import { UI } from "./ui";
         const el = document.elementFromPoint(ev.clientX, ev.clientY);
         const card = el && el.closest && el.closest('.rt-step');
         let o = null;
-        if (card) { const tid = card.getAttribute('data-id'); if (tid && tid !== id) { const r = card.getBoundingClientRect(); o = { id: tid, before: ev.clientY < r.top + r.height / 2 }; } }
+        if (card) {
+          const tid = card.getAttribute('data-id');
+          const r = card.getBoundingClientRect();
+          const before = ev.clientY < r.top + r.height / 2;
+          if (A.canReorderRelative(routine, id, tid, before)) o = { id: tid, before };
+        }
         overRef.current = o; setOver(o);
       };
       const up = () => {
@@ -35,7 +41,7 @@ import { UI } from "./ui";
       };
       pointerDrag.start(e, { move, end: up, cancel: () => { overRef.current = null; setDrag(null); setOver(null); } });
     };
-    return { drag, over, start };
+    return { drag, over, start, routine };
   }
 
   // ---- inline Add Step chooser (expands in-flow; never floats over the canvas) ----
@@ -71,7 +77,9 @@ import { UI } from "./ui";
 
   // ---- one step card ----
   function StepCard(props) {
-    const { node, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction, nested, waitAvailable, catalog } = props;
+    const { node, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction, nested, waitAvailable, catalog, previewIncluded = true } = props;
+    const siblings = A.siblingNodes(dnd.routine, node.id) || [];
+    const siblingIndex = siblings.findIndex((item) => item.id === node.id);
     const sel = selId === node.id;
     const active = activeId === node.id;
     const fired = firedIds.has(node.id) && !active;
@@ -86,9 +94,14 @@ import { UI } from "./ui";
       icon = 'info'; color = '#d2655f'; kindCls = 'fn'; tag = 'Legacy — cannot deploy'; meta = deployment.legacy ? 'Replace or remove this legacy step before export' : 'This unsupported step can be removed but cannot deploy';
     } else if (node.type === 'path') {
       const doc = paths.find((path) => path.id === node.ref); icon = 'route'; color = 'var(--accent)'; kindCls = 'path';
-      meta = seg ? (fmt(seg.t1 - seg.t0) + '  ·  ' + UnitPrefs.format(seg.deriv.sample.length, 'm', 2)) : (doc ? 'not in run path' : 'unbound');
+      if (seg) meta = fmt(seg.t1 - seg.t0) + '  ·  ' + UnitPrefs.format(seg.deriv.sample.length, 'm', 2);
+      else if (!doc) meta = 'Choose a path';
+      else if (!previewIncluded) meta = 'Skipped in this preview';
+      else if (run.planningStatus === 'error') meta = 'Preview unavailable';
+      else if (run.blocked || !run.steps.some((step) => step.node.id === node.id)) meta = 'Preparing preview…';
+      else meta = 'No trajectory available';
     } else if (node.type === 'decision') {
-      icon = 'branch'; color = '#9aa3b0'; kindCls = 'decision'; meta = 'routes the run';
+      icon = 'branch'; color = '#9aa3b0'; kindCls = 'decision'; meta = node.cond ? 'Branches on ' + node.cond : 'Choose a registered condition';
     } else if (node.type === 'builtin') {
       icon = 'pause'; color = '#cf962f'; kindCls = 'fn'; tag = 'Wait'; meta = fmt(node.arguments && node.arguments.durationS) + ' pause';
     } else if (node.type === 'generatedTrajectory') {
@@ -109,16 +122,15 @@ import { UI } from "./ui";
       h(Grip, { onPointerDown: (e) => dnd.start(node.id, e) }),
       isDecision
         ? h('button', { className: 'rt-collapse' + (isCollapsed ? ' on' : ''), type: 'button', 'aria-expanded': !isCollapsed, 'aria-label': isCollapsed ? 'Expand decision branches' : 'Collapse decision branches', title: isCollapsed ? 'Expand branches' : 'Collapse branches', onClick: (e) => { e.stopPropagation(); toggleCollapse(node.id); } }, h(Icon, { name: 'chevron', size: 14 }))
-        : seg ? h('span', { className: 'rt-step-idx' }, seg.idxLabel) : null,
-      h('span', { className: 'rt-step-ic', style: { color } }, h(Icon, { name: icon, size: 15 })),
+        : h('span', { className: 'rt-step-ic', style: { color } }, h(Icon, { name: icon, size: 15 })),
       h('button', { className: 'rt-step-body', type: 'button', 'aria-pressed': sel, onClick: () => onSelect(sel ? null : node.id) },
         h('div', { className: 'rt-step-title' }, A.nodeTitle(node, paths, catalog)),
-        h('div', { className: 'rt-step-meta' }, isCollapsed ? (A.branchCount(node.then) + A.branchCount(node.else)) + ' steps in 2 branches' : meta)),
-      tag && h('span', { className: 'rt-step-tag', style: { color, borderColor: color } }, tag),
-      active && h('span', { className: 'rt-step-live' }, node.type === 'path' || node.type === 'builtin' || node.cat === 'generate' ? 'running' : 'firing'),
+        h('div', { className: 'rt-step-meta' }, isCollapsed ? (A.branchCount(node.then) + A.branchCount(node.else)) + ' steps in 2 branches' : meta),
+        tag && h('span', { className: 'rt-step-tag', style: { color } }, tag),
+        active && h('span', { className: 'rt-step-live' }, node.type === 'path' || node.type === 'builtin' || node.cat === 'generate' ? 'Running' : 'Firing')),
       h('span', { className: 'rt-step-tools' },
-        h('button', { className: 'rt-tool', type: 'button', title: 'Move step up', 'aria-label': 'Move step up', onClick: () => acq.move(node.id, -1) }, '\u2191'),
-        h('button', { className: 'rt-tool', type: 'button', title: 'Move step down', 'aria-label': 'Move step down', onClick: () => acq.move(node.id, 1) }, '\u2193'),
+        h('button', { className: 'rt-tool', type: 'button', disabled: siblingIndex <= 0, title: 'Move step up', 'aria-label': 'Move step up', onClick: () => acq.move(node.id, -1) }, '\u2191'),
+        h('button', { className: 'rt-tool', type: 'button', disabled: siblingIndex < 0 || siblingIndex === siblings.length - 1, title: 'Move step down', 'aria-label': 'Move step down', onClick: () => acq.move(node.id, 1) }, '\u2193'),
         h('button', { className: 'rt-tool danger', type: 'button', title: 'Delete step', 'aria-label': 'Delete step', onClick: (e) => { e.stopPropagation(); acq.del(node.id); } }, h(Icon, { name: 'trash', size: 13 }))));
 
     if (!isDecision) {
@@ -134,13 +146,13 @@ import { UI } from "./ui";
           return h('div', { key: br, className: 'rt-branch' + (out === br ? ' live' : '') },
             h('button', { className: 'rt-brlbl', type: 'button', onClick: () => acq.setOutcome(node.id, br), title: 'Make this branch the simulated outcome' },
               h('span', { className: 'rt-brdot' }),
-              h('span', { className: 'rt-brkey' }, br === 'then' ? 'if true' : 'if false'),
+              h('span', { className: 'rt-brkey' }, br === 'then' ? 'True' : 'False'),
               h('span', { className: 'rt-brname' }, br === 'then' ? node.thenLabel : node.elseLabel),
-              h('span', { className: 'rt-brcount' }, cnt),
-              out === br && h('span', { className: 'rt-brlive' }, 'sim')),
+              h('span', { className: 'rt-brcount' }, plural(cnt, 'step')),
+              out === br && h('span', { className: 'rt-brlive' }, 'Preview')),
             h('div', { className: 'rt-brbody' },
-              (Array.isArray(node[br]) ? node[br] : []).map((cn, index) => h(StepCard, { key: cn.id || index, node: cn, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction: cn.type === 'function', nested: true, waitAvailable, catalog })),
-              h(AddStep, { variant: 'end', label: 'Add to branch', waitAvailable, onPick: (t, c) => acq.addBranch(node.id, br, t, c) })));
+              (Array.isArray(node[br]) ? node[br] : []).map((cn, index) => h(StepCard, { key: cn.id || index, node: cn, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction: cn.type === 'function', nested: true, waitAvailable, catalog, previewIncluded: previewIncluded && out === br })),
+              h(AddStep, { variant: 'end', label: 'Add step', waitAvailable, onPick: (t, c) => acq.addBranch(node.id, br, t, c) })));
         })));
   }
 
