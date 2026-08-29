@@ -1,3 +1,105 @@
+  if (start.segType === 'line') {
+    return [p0, pointMix(p0, p1, 1 / 3), pointMix(p0, p1, 2 / 3), p1];
+  }
+  return [p0, point(start.nextC || pointMix(p0, p1, 1 / 3)), point(end.prevC || pointMix(p0, p1, 2 / 3)), p1];
+}
+
+function cubicPoint(curve, t) {
+  const a = pointMix(curve[0], curve[1], t);
+  const b = pointMix(curve[1], curve[2], t);
+  const c = pointMix(curve[2], curve[3], t);
+  return pointMix(pointMix(a, b, t), pointMix(b, c, t), t);
+}
+
+function splitCubic(curve, t) {
+  const q0 = pointMix(curve[0], curve[1], t);
+  const q1 = pointMix(curve[1], curve[2], t);
+  const q2 = pointMix(curve[2], curve[3], t);
+  const r0 = pointMix(q0, q1, t);
+  const r1 = pointMix(q1, q2, t);
+  const center = pointMix(r0, r1, t);
+  return { left: [curve[0], q0, r0, center], right: [center, r1, q2, curve[3]] };
+}
+
+function approximateLength(curve, steps = 32) {
+  let length = 0;
+  let previous = curve[0];
+  for (let index = 1; index <= steps; index++) {
+    const next = cubicPoint(curve, index / steps);
+    length += distance(previous, next);
+    previous = next;
+  }
+  return length;
+}
+
+function segmentMetadata(source) {
+  const result = { segType: 'bezier' };
+  for (const key of ['segmentHeadingMode', 'segmentFollowMode', 'segmentLookAt']) {
+    if (source[key] !== undefined) result[key] = typeof source[key] === 'object' ? { ...source[key] } : source[key];
+  }
+  return result;
+}
+
+// `wp` range anchors are deliberately segment-local arclength fractions. Splitting a
+// segment must therefore remap them by the split's length ratio, not its Bezier parameter.
+function shiftWaypointRanges(path, insertedIndex, splitFraction) {
+  const segmentIndex = insertedIndex - 1;
+  for (const range of path.ranges || []) {
+    if (range.anchor !== 'wp') continue;
+    for (const [waypointKey, localKey] of [['w0', 't0'], ['w1', 't1']]) {
+      if (!Number.isInteger(range[waypointKey])) continue;
+      if (range[localKey] == null) {
+        if (range[waypointKey] >= insertedIndex) range[waypointKey] += 1;
+        continue;
+      }
+      if (range[waypointKey] > segmentIndex) {
+        range[waypointKey] += 1;
+        continue;
+      }
+      if (range[waypointKey] !== segmentIndex) continue;
+      const local = clamp(Number(range[localKey]), 0, 1);
+      if (local <= splitFraction) range[localKey] = local / Math.max(splitFraction, 1e-9);
+      else {
+        range[waypointKey] += 1;
+        range[localKey] = (local - splitFraction) / Math.max(1 - splitFraction, 1e-9);
+      }
+    }
+  }
+}
+
+// Finds the outside side of a sampled radius crossing. A zero-falloff waypoint there pins
+// the exterior half of the exact split while leaving the interior half free to deform.
+function exteriorBoundaryParameter(curve, center, radius, firstT, secondT, firstOutside) {
+  let first = firstT;
+  let second = secondT;
+  for (let iteration = 0; iteration < 24; iteration++) {
+    const middle = (first + second) / 2;
+    const middleOutside = distance(cubicPoint(curve, middle), center) >= radius;
+    if (middleOutside === firstOutside) first = middle;
+    else second = middle;
+  }
+  return firstOutside ? first : second;
+}
+
+function subdivisionParameters(curve, center, radius, spacing) {
+  const length = approximateLength(curve);
+  if (length < spacing * 1.35) return [];
+  const steps = clamp(Math.ceil(length / Math.max(0.04, spacing / 2)), 12, 96);
+  const candidates = [];
+  let lastDistance = -Infinity;
+  const outsideBrush = (t) => distance(cubicPoint(curve, t), center) >= radius;
+  const appendCandidate = (parameter, forced) => {
+    const along = length * parameter;
+    if (parameter <= 1e-7 || parameter >= 1 - 1e-7) return;
+    if (Math.abs((candidates.at(-1) ?? -1) - parameter) <= 1e-9) return;
+    if (!forced && (along < spacing * 0.35 || length - along < spacing * 0.35
+      || along - lastDistance < spacing * 0.78)) return;
+    candidates.push(parameter);
+    lastDistance = along;
+  };
+  let previousOutside = outsideBrush(0);
+  for (let index = 1; index <= steps; index++) {
+    const t = index / steps;
     const nowOutside = outsideBrush(t);
     if (nowOutside !== previousOutside) {
       const boundary = exteriorBoundaryParameter(curve, center, radius, (index - 1) / steps, t, previousOutside);
