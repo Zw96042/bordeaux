@@ -1,3 +1,26 @@
+import type { ControlPoint, PathDoc, Waypoint } from "../../shared/types";
+import { clone } from "../../shared/project/defaults";
+import { PathEdit } from "../assets/path-edit";
+import { PathBrush } from "./pathBrush";
+
+export interface BrushStroke {
+  kind: "push" | "smooth" | "twirl";
+  center: ControlPoint;
+  previous?: ControlPoint;
+  origin?: ControlPoint;
+  radius: number;
+  strength: number;
+}
+export interface EditorSelection {
+  kind: "wp" | "seg" | "rt" | "em" | "cr" | null;
+  idx: number;
+}
+
+// Brush drags stay in one draft and produce one undo entry. A stroke that never
+// reaches the path remains a true no-op.
+export function applyBrushDraft(editStore: ReturnType<typeof PathEdit.create<PathDoc>>, source: PathDoc, stroke: BrushStroke) {
+  const active = editStore.getSnapshot();
+  const candidate = clone(active || source);
   const beforeWaypoints = candidate.waypoints.slice();
   const result = PathBrush.apply(candidate, stroke);
   if (result.changed) {
