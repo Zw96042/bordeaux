@@ -1,8 +1,10 @@
 import * as React from "react";
 import { PointerDrag } from "../hooks/usePointerDrag";
+import { parseFiniteDraftNumber } from "../lib/numericDraft";
 import { PM } from "../lib/pathMath";
 import { UnitPrefs } from "../lib/unitPreferences";
 import { UI } from "./ui";
+import "../styles/settings.css";
 
 // Bordeaux Robot config page (project-global).
   const { useRef, useState, useEffect } = React;
@@ -45,11 +47,17 @@ import { UI } from "./ui";
   // big numeric field with drag-to-scrub on the label
   function BigNum({ label, value, onChange, unit, imperialUnit = unit === 'm' ? 'in' : undefined, step = 0.01, min, max, precision = 2 }) {
     const [edit, setEdit] = useState(null);
+    const [error, setError] = useState('');
     const cancelEdit = useRef(false);
     const pointerDrag = PointerDrag.useController();
     const unitSystem = UnitPrefs.current();
-    useEffect(() => setEdit(null), [unitSystem]);
+    useEffect(() => {
+      setEdit(null);
+      setError('');
+    }, [unitSystem]);
     const commitEdit = (raw) => {
+      const parsed = parseFiniteDraftNumber(raw);
+      if (parsed == null) { setError('Enter a finite number.'); return false; }
       let next = UnitPrefs.toCanonical(parsed, unit, imperialUnit);
       if (min != null) next = Math.max(min, next);
       if (max != null) next = Math.min(max, next);
