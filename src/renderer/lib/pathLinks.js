@@ -34,14 +34,43 @@
   function reconcile(project) {
     const paths = project.paths.slice();
     (project.pathLinks || []).forEach((link) => {
-      const source = paths.find((path) => path.id === link.fromPathId);
-      const targetIndex = paths.findIndex((path) => path.id === link.toPathId);
-      if (!source || targetIndex < 0 || !source.waypoints.length || !paths[targetIndex].waypoints.length) return;
-      const target = clone(paths[targetIndex]);
-      target.waypoints[0] = copyPose(target.waypoints[0], source.waypoints[source.waypoints.length - 1]);
-      paths[targetIndex] = target;
     });
-    return { ...project, paths };
+    for (const members of graph.groups.values()) seeds.push({ key: members[0], position: graph.members.get(members[0]).waypoint });
+    return propagate(project, graph, seeds);
   }
 
-export const PathLinks = { copyPose, sync, reconcile };
+  function linkPosition(project, pathId, index, targetPathId, targetIndex, groupId) {
+    const source = project.paths.find((path) => path.id === pathId)?.waypoints[index];
+    const target = project.paths.find((path) => path.id === targetPathId)?.waypoints[targetIndex];
+    if (!source || !target || (pathId === targetPathId && index === targetIndex)) return project;
+    const id = target.positionLink || source.positionLink || groupId;
+    if (typeof id !== 'string' || !id.trim()) return project;
+    const sourceIndex = project.paths.findIndex((path) => path.id === pathId), targetPathIndex = project.paths.findIndex((path) => path.id === targetPathId);
+    const merged = connectedKeys(positionGraph(project), [sourceIndex + ':' + index, targetPathIndex + ':' + targetIndex]);
+    const paths = project.paths.map((path, pi) => {
+      let changed = false;
+      const waypoints = path.waypoints.map((waypoint, wi) => {
+        if (!merged.has(pi + ':' + wi)) return waypoint;
+        changed = true; return { ...waypoint, positionLink: id };
+      });
+      return changed ? { ...path, waypoints } : path;
+    });
+    const linked = { ...project, paths }, graph = positionGraph(linked);
+    return propagate(linked, graph, [{ key: graph.groups.get(id)[0], position: target }]);
+  }
+
+  function unlinkPosition(project, pathId, index) {
+    const pi = project.paths.findIndex((path) => path.id === pathId), waypoint = project.paths[pi]?.waypoints[index];
+    if (!waypoint) return project;
+    const pathLinks = (project.pathLinks || []).filter((link) => !((index === 0 && link.toPathId === pathId) || (index === project.paths[pi].waypoints.length - 1 && link.fromPathId === pathId)));
+    if (!waypoint.positionLink && pathLinks.length === (project.pathLinks || []).length) return project;
+    const paths = project.paths.slice();
+    if (waypoint.positionLink) {
+      const next = { ...waypoint }; delete next.positionLink;
+      const waypoints = paths[pi].waypoints.slice(); waypoints[index] = next;
+      paths[pi] = { ...paths[pi], waypoints };
+    }
+    return { ...project, paths, pathLinks };
+  }
+
+export const PathLinks = { copyPose, sync, reconcile, linkPosition, unlinkPosition, positionMembers };

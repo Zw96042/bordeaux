@@ -1,3 +1,60 @@
+import { autoHandles } from "../../shared/math/geometry";
+import { remapWaypointRange } from "../../shared/math/pathRanges";
+import { clampWorldPoint, clone } from "../../shared/project/defaults";
+import { alignedWaypointHandles } from "../../shared/project/waypointHandles";
+import type { ControlPoint, PathDoc, Waypoint } from "../../shared/types";
+
+type EditablePath = PathDoc & { _selAfter?: number };
+
+export function alignWaypointHandles(waypoint: Waypoint): void {
+  Object.assign(waypoint, alignedWaypointHandles(waypoint), { linked: true, corner: false });
+}
+
+export function remapWaypointRanges(path: PathDoc, oldToNew: Array<number | null>, removedIndex?: number): void {
+  path.ranges = (path.ranges || []).map((range) => remapWaypointRange(range, oldToNew, removedIndex, path.waypoints.length));
+}
+
+export function setWaypointFacing(path: PathDoc, index: number, degrees: number): PathDoc {
+  const waypoint = path.waypoints[index];
+  if (!waypoint) return path;
+  waypoint.theta = degrees;
+  waypoint.thetaOn = true;
+  // A start-facing edit must become an authored anchor, rather than being ignored
+  // by a tangent or look-at law. Other segments keep their own heading modes.
+  const mode = waypoint.segmentHeadingMode || path.headingMode || "targets";
+  if (index === 0 && (mode === "tangent" || mode === "lookAt")) waypoint.segmentHeadingMode = "manual";
+  return path;
+}
+
+export function moveWaypointTo(path: PathDoc, index: number, point: ControlPoint): PathDoc {
+  const waypoint = path.waypoints[index];
+  if (!waypoint) return path;
+  const next = clampWorldPoint(point), dx = next.x - waypoint.x, dy = next.y - waypoint.y;
+  waypoint.x = next.x; waypoint.y = next.y;
+  if (waypoint.prevC) { waypoint.prevC.x += dx; waypoint.prevC.y += dy; }
+  if (waypoint.nextC) { waypoint.nextC.x += dx; waypoint.nextC.y += dy; }
+  return path;
+}
+
+// These operations mutate the isolated draft owned by the editor's history commit.
+// Endpoint actions and outgoing-segment metadata must follow their topology rules.
+export function removeWaypoint(path: PathDoc, index: number): PathDoc {
+  if (path.waypoints.length <= 2 || index < 0 || index >= path.waypoints.length) return path;
+  const oldCount = path.waypoints.length;
+  const endpointJiggle = index === oldCount - 1 && path.waypoints[index].jiggle ? { ...path.waypoints[index].jiggle } : null;
+  const indexMap = Array.from({ length: oldCount }, (_, oldIndex) => oldIndex === index ? null : oldIndex < index ? oldIndex : oldIndex - 1);
+  path.waypoints.splice(index, 1);
+  const last = path.waypoints.length - 1;
+  remapWaypointRanges(path, indexMap, index);
+  delete path.waypoints[last].segmentHeadingMode;
+  delete path.waypoints[last].segmentLookAt;
+  delete path.waypoints[0].headingTransition;
+  delete path.waypoints[last].headingTransition;
+  if (endpointJiggle) path.waypoints[last].jiggle = endpointJiggle;
+  path.waypoints[0].thetaOn = true; path.waypoints[last].thetaOn = true;
+  return path;
+}
+
 export function duplicateWaypoint(path: EditablePath, index: number): EditablePath {
   const oldCount = path.waypoints.length;
   const src = clone(path.waypoints[index]);
