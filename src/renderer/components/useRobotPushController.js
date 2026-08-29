@@ -1,3 +1,43 @@
+import { useEffect, useRef, useState } from 'react';
+import { deploymentInputKey, deploymentInputKeys, deploymentItemStatus } from '../lib/deploymentStatus';
+
+const errorMessage = (error) => error?.message || String(error || 'The robot operation failed');
+const clone = (value) => structuredClone(value);
+const sending = (phase) => ['uploading', 'uploaded', 'staged'].includes(phase);
+
+export function useRobotPushController({ getProject, projectKey, catalogKey: suppliedCatalogKey, bookmarkKey }) {
+  const catalogKey = String(suppliedCatalogKey || '') + ':' + String(bookmarkKey || '');
+  const [open, setOpen] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const confirmationLock = useRef(false);
+  const [pairing, setPairing] = useState(null);
+  const [probe, setProbe] = useState(null);
+  const [host, setHost] = useState('');
+  const [port, setPort] = useState('22');
+  const [phase, setPhase] = useState('idle');
+  const [preview, setPreview] = useState(null);
+  const [retentionPreview, setRetentionPreview] = useState(null);
+  const [status, setStatus] = useState(null);
+  const [inspection, setInspection] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+  const [adoptBaseline, setAdoptBaseline] = useState(false);
+  const [clock, setClock] = useState(Date.now);
+  const intent = useRef(null);
+  const generation = useRef(0);
+  const inspectGeneration = useRef(0);
+  const projectRef = useRef(getProject); projectRef.current = getProject;
+  const origin = useRef(null);
+  const context = useRef({ projectKey, catalogKey });
+  const state = useRef(null);
+  const api = typeof window === 'undefined' ? undefined : window.bordeauxAPI;
+  const desktopAvailable = Boolean(api?.prepareRobotPush);
+  const busy = confirming || ['probing', 'pairing', 'preparing', 'retention-preparing', 'uploading', 'uploaded'].includes(phase) || (phase === 'staged' && !result);
+  state.current = { phase, preview, retentionPreview, result, busy, confirming };
+
+  useEffect(() => {
+    let live = true;
     api?.getRobotPairing?.().then((saved) => {
       if (!live) return;
       setPairing(saved);
