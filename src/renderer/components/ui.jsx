@@ -1,6 +1,7 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { PointerDrag } from "../hooks/usePointerDrag";
+import { parseFiniteDraftNumber } from "../lib/numericDraft";
 import { PM } from "../lib/pathMath";
 import { UnitPrefs } from "../lib/unitPreferences";
 
@@ -11,6 +12,10 @@ import { UnitPrefs } from "../lib/unitPreferences";
   const PATHS = {
     select: 'M5 3l6 14 2-6 6-2z',
     waypoint: 'M12 4v4M12 16v4M4 12h4M16 12h4',
+    brush: 'M4 16c4-10 9 5 16-8 M5 20h14',
+    brushPush: 'M3 16c5-11 10 6 18-8',
+    brushSmooth: 'M3 16c4-10 7 7 11-3s5 2 7-6',
+    brushTwirl: 'M4 15c2-10 16-10 16 0 0 6-10 5-8 0 1-4 7-2 5 1',
     rotation: 'M5 12a7 7 0 1 1 2.5 5.3 M5 17v-4h4',
     marker: 'M6 4v16 M6 4h11l-2.5 4L17 12H6',
     play: 'M7 4l13 8-13 8z',
@@ -236,12 +241,15 @@ import { UnitPrefs } from "../lib/unitPreferences";
   }
 
   // numeric field with drag-to-scrub
-  function Num({ label, value, onChange, unit, imperialUnit, step = 0.01, min, max, precision = 2 }) {
+  function Num({ label, value, onChange, unit, imperialUnit, step = 0.01, min, max, precision = 2, projectDraft = true }) {
     const id = useId();
     const [edit, setEdit] = useState(null);
+    const [error, setError] = useState('');
+    const cancelEdit = useRef(false);
     const ref = useRef(null);
     const pointerDrag = PointerDrag.useController();
     const unitSystem = UnitPrefs.current();
+    useEffect(() => {
       setEdit(null);
       setError('');
     }, [unitSystem]);
