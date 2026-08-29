@@ -1,0 +1,14 @@
+import { spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import electron from 'electron';
+const output = process.env.BORDEAUX_LIBRARY_UI_OUTPUT ? path.resolve(process.env.BORDEAUX_LIBRARY_UI_OUTPUT) : await fs.mkdtemp(path.join(os.tmpdir(), 'bordeaux-library-ui-'));
+await fs.mkdir(output, { recursive: true });
+const env = { ...process.env, BORDEAUX_LIBRARY_UI_OUTPUT: output, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' };
+delete env.ELECTRON_RUN_AS_NODE;
+console.log('Library UI artifacts: ' + output);
+const child = spawn(electron, [path.resolve('scripts/verify-library-ui-electron.cjs')], { env, stdio: 'inherit' });
+const timer = setTimeout(() => child.kill('SIGKILL'), 90_000);
+child.on('error', (error) => { clearTimeout(timer); console.error(error); process.exitCode = 1; });
+child.on('exit', (code) => { clearTimeout(timer); process.exitCode = code === 0 ? 0 : 1; });
