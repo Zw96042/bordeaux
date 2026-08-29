@@ -1,4 +1,6 @@
-import * as React from "react";
+import * as React from 'react';
+import { useRobotPushController } from './useRobotPushController';
+export { useRobotPushController };
 
 const h = React.createElement;
 const shortHash = (value) => !value ? 'None' : value.length > 28 ? value.slice(0, 18) + '…' + value.slice(-8) : value;
