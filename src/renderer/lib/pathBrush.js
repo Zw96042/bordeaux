@@ -1,3 +1,105 @@
+  const dx = stroke.center.x - stroke.previous.x;
+  const dy = stroke.center.y - stroke.previous.y;
+  if (stroke.kind === 'twirl') {
+    const angle = twirlAngle(stroke) * stroke.strength * 1.8 * weight;
+    const x = value.x - stroke.center.x;
+    const y = value.y - stroke.center.y;
+    const cosine = Math.cos(angle), sine = Math.sin(angle);
+    return { x: stroke.center.x + x * cosine - y * sine, y: stroke.center.y + x * sine + y * cosine };
+  }
+  return { x: value.x + dx * stroke.strength * weight, y: value.y + dy * stroke.strength * weight };
+}
+
+// A waypoint bounding an arc or clothoid cannot move: those segments are generated from
+// their endpoints, so shifting one silently reshapes the entire span, most of which lies
+// outside the brush.
+function boundsGeneratedSegment(path, index) {
+  return !isReshapeable(path.waypoints[index])
+    || (index > 0 && !isReshapeable(path.waypoints[index - 1]));
+}
+
+// Displaces every waypoint the stroke reaches, along with its handles, and reports each
+// one's falloff weight so the refit can scale with how hard the stroke actually hit it.
+function displaceWaypoints(path, stroke) {
+  const touched = new Map();
+  path.waypoints.forEach((waypoint, index) => {
+    const weight = falloff(distance(waypoint, stroke.center), stroke.radius);
+    if (weight <= 0 || boundsGeneratedSegment(path, index)) return;
+    touched.set(index, weight);
+    const transformed = transformPoint(waypoint, stroke);
+    const previousControl = transformPoint(waypoint.prevC || waypoint, stroke);
+    const nextControl = transformPoint(waypoint.nextC || waypoint, stroke);
+    waypoint.x = clamp(transformed.x, 0, 17.548);
+    waypoint.y = clamp(transformed.y, 0, 8.052);
+    waypoint.prevC = previousControl;
+    waypoint.nextC = nextControl;
+  });
+  return touched;
+}
+
+// Blends each touched waypoint's tangent toward the one implied by its neighbours,
+// scaled by that waypoint's falloff weight. Blending rather than replacing matters: a
+// waypoint grazed at the rim of the brush keeps essentially the handles it was authored
+// with, so a small drag cannot swing far-away geometry. Handles stay collinear, which
+// the project schema requires of interior moving waypoints.
+function refitHandles(path, touched) {
+  const waypoints = path.waypoints;
+  for (const [index, weight] of touched) {
+    const waypoint = waypoints[index];
+    if (!waypoint || waypoint.stop || waypoint.corner || boundsGeneratedSegment(path, index)) continue;
+    const previous = waypoints[Math.max(0, index - 1)];
+    const next = waypoints[Math.min(waypoints.length - 1, index + 1)];
+    let tx = next.x - previous.x;
+    let ty = next.y - previous.y;
+    const magnitude = Math.hypot(tx, ty);
+    if (magnitude < 1e-8) continue;
+    tx /= magnitude;
+    ty /= magnitude;
+
+    // Existing tangent, so a partially-weighted refit can rotate toward the fitted one
+    // instead of snapping to it.
+    const priorPrev = waypoint.prevC || waypoint;
+    const priorNext = waypoint.nextC || waypoint;
+    let ax = priorNext.x - priorPrev.x;
+    let ay = priorNext.y - priorPrev.y;
+    const priorMagnitude = Math.hypot(ax, ay);
+    if (priorMagnitude > 1e-8) {
+      ax /= priorMagnitude;
+      ay /= priorMagnitude;
+      // Keep the blend on the near side so a reversed handle pair cannot flip the tangent.
+      if (ax * tx + ay * ty < 0) { ax = -ax; ay = -ay; }
+      let bx = mix(ax, tx, weight);
+      let by = mix(ay, ty, weight);
+      const blended = Math.hypot(bx, by);
+      if (blended > 1e-8) { tx = bx / blended; ty = by / blended; }
+    }
+
+    const priorIncoming = distance(waypoint, priorPrev);
+    const priorOutgoing = distance(waypoint, priorNext);
+    const incoming = index > 0 ? mix(priorIncoming, distance(waypoint, previous) * 0.34, weight) : 0;
+    const outgoing = index + 1 < waypoints.length ? mix(priorOutgoing, distance(waypoint, next) * 0.34, weight) : 0;
+    waypoint.prevC = { x: waypoint.x - tx * incoming, y: waypoint.y - ty * incoming };
+    waypoint.nextC = { x: waypoint.x + tx * outgoing, y: waypoint.y + ty * outgoing };
+    waypoint.linked = true;
+    waypoint.corner = false;
+  }
+}
+
+// Relaxes interior waypoints toward the midpoint of their neighbours and reports each
+// one's falloff weight so the refit can scale with it.
+function smoothWaypoints(path, stroke) {
+  const original = path.waypoints.map(point);
+  const travel = distance(stroke.center, stroke.previous);
+  const scale = clamp(travel / Math.max(stroke.radius, 1e-6) * 3.2, 0.025, 0.22) * stroke.strength;
+  const touched = new Map();
+  for (let index = 1; index < path.waypoints.length - 1; index++) {
+    const waypoint = path.waypoints[index];
+    const weight = falloff(distance(waypoint, stroke.center), stroke.radius);
+    if (weight <= 0 || waypoint.stop || waypoint.corner || boundsGeneratedSegment(path, index)) continue;
+    const average = pointMix(original[index - 1], original[index + 1], 0.5);
+    waypoint.x = mix(waypoint.x, average.x, scale * weight);
+    waypoint.y = mix(waypoint.y, average.y, scale * weight);
+    touched.set(index, weight);
   }
   return touched;
 }
