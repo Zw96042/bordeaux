@@ -1,3 +1,105 @@
+  }
+  return touched;
+}
+
+const SEGMENT_KEYS = ['segType', 'segmentHeadingMode', 'segmentFollowMode', 'segmentLookAt'];
+
+function sameSegmentMetadata(first, second) {
+  return SEGMENT_KEYS.every((key) => JSON.stringify(first[key]) === JSON.stringify(second[key]));
+}
+
+function isSemanticWaypoint(waypoint) {
+  return waypoint.stop || waypoint.corner || waypoint.thetaOn || waypoint.wait != null
+    || waypoint.turnInPlace != null || waypoint.jiggle != null || waypoint.headingTransition != null;
+}
+
+function distanceToSegment(value, start, end) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared < 1e-18) return distance(value, start);
+  const t = clamp(((value.x - start.x) * dx + (value.y - start.y) * dy) / lengthSquared, 0, 1);
+  return distance(value, { x: start.x + dx * t, y: start.y + dy * t });
+}
+
+// Shortest distance from a point to a curve, approximated by its chord polyline. Unlike
+// comparing points at equal t, this ignores the reparameterization a merge necessarily
+// introduces and only reports genuine changes in shape.
+function distanceToCurve(value, curve, steps = 64) {
+  let closest = Infinity;
+  let previous = curve[0];
+  for (let index = 1; index <= steps; index++) {
+    const current = cubicPoint(curve, index / steps);
+    closest = Math.min(closest, distanceToSegment(value, previous, current));
+    previous = current;
+  }
+  return closest;
+}
+
+// Fits one cubic through the span previous..waypoint..next and reports how far it
+// strays from the original. `error` covers the whole span; `outsideError` covers only
+// the portion beyond the stroke, which must stay put even when the merge is accepted.
+function mergedCurveCandidate(previous, waypoint, next, stroke) {
+  const left = cubicPoints(previous, waypoint);
+  const right = cubicPoints(waypoint, next);
+  const incoming = distance(left[2], left[3]);
+  const outgoing = distance(right[0], right[1]);
+  const handleTotal = incoming + outgoing;
+  const lengthTotal = approximateLength(left, 16) + approximateLength(right, 16);
+  const splitT = clamp(handleTotal > 1e-8 ? incoming / handleTotal : approximateLength(left, 16) / Math.max(lengthTotal, 1e-8), 0.08, 0.92);
+  const curve = [
+    left[0],
+    { x: left[0].x + (left[1].x - left[0].x) / splitT, y: left[0].y + (left[1].y - left[0].y) / splitT },
+    { x: right[3].x + (right[2].x - right[3].x) / (1 - splitT), y: right[3].y + (right[2].y - right[3].y) / (1 - splitT) },
+    right[3],
+  ];
+  if (distance(curve[0], curve[1]) > lengthTotal * 1.5 || distance(curve[2], curve[3]) > lengthTotal * 1.5) return null;
+  let error = 0;
+  let outsideError = 0;
+  for (let index = 0; index <= 24; index++) {
+    const t = index / 24;
+    const original = t <= splitT
+      ? cubicPoint(left, t / splitT)
+      : cubicPoint(right, (t - splitT) / (1 - splitT));
+    error = Math.max(error, distance(original, cubicPoint(curve, t)));
+    if (falloff(distance(original, stroke.center), stroke.radius) <= 0) {
+      outsideError = Math.max(outsideError, distanceToCurve(original, curve));
+    }
+  }
+  const halves = splitCubic(curve, splitT);
+  const leftLength = approximateLength(halves.left);
+  const rightLength = approximateLength(halves.right);
+  return { curve, error, outsideError, splitFraction: leftLength / Math.max(leftLength + rightLength, 1e-9) };
+}
+
+// Merges redundant waypoints back into a single curve. A merge rewrites the handles of
+// both neighbours, which can reach past the stroke, so the merged curve must also leave
+// the part of the span outside the radius where it was.
+const OUTSIDE_TOLERANCE = 1e-6;
+const MAX_MERGES_PER_STROKE = 16;
+
+// Range endpoints are attached to the original segment objects. Each accepted merge adds
+// one affine parent link, so all links can be composed once after consolidation instead
+// of rescanning every range after every removed waypoint.
+function createRangeRemapper(path) {
+  const waypoints = path.waypoints;
+  const originalWaypoints = waypoints.slice();
+  const originalSegments = waypoints.slice(0, -1).map(() => ({ parent: null, resolved: null }));
+  const segments = originalSegments.slice();
+  const merge = (waypointIndex, splitFraction) => {
+    const left = segments[waypointIndex - 1], right = segments[waypointIndex];
+    const merged = { parent: null, resolved: null };
+    left.parent = { node: merged, scale: splitFraction, offset: 0 };
+    right.parent = { node: merged, scale: 1 - splitFraction, offset: splitFraction };
+    segments.splice(waypointIndex - 1, 2, merged);
+  };
+  const resolve = (segment) => {
+    if (!segment.parent) return { node: segment, scale: 1, offset: 0 };
+    if (segment.resolved) return segment.resolved;
+    const parent = resolve(segment.parent.node);
+    segment.resolved = {
+      node: parent.node,
+      scale: parent.scale * segment.parent.scale,
       offset: parent.offset + parent.scale * segment.parent.offset,
     };
     return segment.resolved;
