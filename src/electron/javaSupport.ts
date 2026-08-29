@@ -26,7 +26,13 @@ interface InstallPreview {
   replacingManagedBlock: boolean;
 }
 
-let activeBuild: { child: ChildProcessWithoutNullStreams; canceled: boolean; killGraceMs: number } | null = null;
+interface CatalogBuild {
+  child: ChildProcessWithoutNullStreams | null;
+  canceled: boolean;
+  killGraceMs: number;
+}
+
+let activeBuild: CatalogBuild | null = null;
 const killEscalations = new WeakMap<ChildProcessWithoutNullStreams, NodeJS.Timeout>();
 
 function sha256(value: Uint8Array | string): string {
@@ -98,7 +104,7 @@ function gradleSupportScript(): string {
 `  outputs.file(catalogOutput)\n` +
 `  doLast {\n` +
 `    def inputFile = catalogInput.get().asFile\n` +
-`    if (!inputFile.isFile()) throw new GradleException('No Bordeaux command catalog was generated. Annotate at least one provider method with @BordeauxCommand.')\n` +
+`    if (!inputFile.isFile()) throw new GradleException('No Bordeaux capability catalog was generated. Annotate at least one public command factory/field, condition, or trajectory generator.')\n` +
 `    def outputFile = catalogOutput.get().asFile\n` +
 `    outputFile.parentFile.mkdirs()\n` +
 `    outputFile.bytes = inputFile.bytes\n` +
@@ -109,35 +115,40 @@ function gradleSupportScript(): string {
 function integrationGuide(): string {
   return `# Bordeaux Java integration\n\n` +
 `Bordeaux owns the JSON contract and generated bindings, but your robot project keeps ownership of subsystems and autonomous lifecycle.\n\n` +
-`1. Put \`@BordeauxCommand\` on public command factory methods and \`@BordeauxCondition\` on public boolean predicates. Add \`@BordeauxParam\` metadata to authored parameters.\n` +
-`2. In Bordeaux, run **Java > Build Command Catalog**, then select generated commands and conditions.\n` +
+`1. Put \`@BordeauxCommand\` on public command factories/fields, \`@BordeauxCondition\` on public boolean predicates, and \`@BordeauxTrajectoryGenerator\` on bounded robot-side generators. Add \`@BordeauxParam\` metadata to authored parameters.\n` +
+`2. In Bordeaux, run **Java > Build Command Catalog**, then select generated capabilities.\n` +
 `3. Call \`dev.bordeaux.runtime.BordeauxBindings.generatedCapabilities(...)\` with instances of each non-static provider.\n` +
-`4. Open the exported JSON below WPILib's deploy directory and call \`BordeauxTrajectoryReader.read(input, pathId)\`.\n` +
-`5. Create \`BordeauxEventRunner\`, call \`periodic(elapsedSeconds)\` beside the path follower, and call \`endPath()\` when the path ends.\n\n` +
+`4. Open the exported JSON below WPILib's deploy directory and call the bounded, validated \`BordeauxTrajectoryReader.read(input, pathId, compatibility)\` overload.\n` +
+`5. Create \`BordeauxEventRunner\`, call \`periodic(elapsedSeconds, measuredFraction)\` beside the path follower, and call \`endPath()\` when that follower actually ends. Use the one-argument overload only for paths with time-triggered events.\n\n` +
 `A minimal team-owned integration looks like this (replace \`actions\`, file name, and path ID with your code):\n\n` +
 "```java\n" +
-`import dev.bordeaux.runtime.BordeauxBindings;\n` +
 `import dev.bordeaux.runtime.*;\n` +
 `import edu.wpi.first.wpilibj.Filesystem;\n` +
 `import java.nio.file.Files;\n\n` +
 `private final BordeauxCapabilities bordeauxCapabilities =\n` +
 `    BordeauxBindings.generatedCapabilities(actions);\n` +
+`private final BordeauxRuntimeCompatibility bordeauxCompatibility =\n` +
+`    new BordeauxRuntimeCompatibility(\n` +
+`        bordeauxCapabilities.catalogId(), bordeauxCapabilities.catalogHash(), "0.4.0",\n` +
+`        "2026-rebuilt", "2026-manual-tu19-welded-4", "bordeaux-field/1.0");\n` +
 `private BordeauxEventRunner bordeauxEvents;\n\n` +
 `void startBordeauxPath(String fileName, String pathId) throws Exception {\n` +
+`  endBordeauxPath();\n` +
 `  var file = Filesystem.getDeployDirectory().toPath().resolve("bordeaux").resolve(fileName);\n` +
 `  try (var input = Files.newInputStream(file)) {\n` +
-`    bordeauxEvents = new BordeauxEventRunner(BordeauxTrajectoryReader.read(input, pathId), bordeauxCapabilities);\n` +
+`    var path = BordeauxTrajectoryReader.read(input, pathId, bordeauxCompatibility);\n` +
+`    bordeauxEvents = new BordeauxEventRunner(path, bordeauxCapabilities);\n` +
 `  }\n` +
 `}\n\n` +
-`void autonomousPeriodic(double elapsedSeconds) {\n` +
-`  if (bordeauxEvents != null) bordeauxEvents.periodic(elapsedSeconds);\n` +
+`void autonomousPeriodic(double elapsedSeconds, double measuredFraction) {\n` +
+`  if (bordeauxEvents != null) bordeauxEvents.periodic(elapsedSeconds, measuredFraction);\n` +
 `}\n\n` +
 `void endBordeauxPath() {\n` +
 `  if (bordeauxEvents != null) bordeauxEvents.endPath();\n` +
 `  bordeauxEvents = null;\n` +
 `}\n` +
 "```\n\n" +
-`Pass every non-static command and condition provider to \`BordeauxBindings.generatedCapabilities(...)\`; provider order does not matter. Bordeaux intentionally does not edit \`RobotContainer\` or deploy robot code.\n`;
+`Pass every non-static command, condition, and trajectory-generator provider compiled into the catalog to \`BordeauxBindings.generatedCapabilities(...)\`; provider order does not matter. Replace the field constants above with the exact certified field pack compiled into the robot. Bordeaux intentionally does not edit \`RobotContainer\` or deploy robot code.\n`;
 }
 
 async function assertSafeSupportDirectory(projectRoot: string): Promise<void> {
@@ -298,8 +309,10 @@ function forceStopBuild(child: ChildProcessWithoutNullStreams): void {
 export function cancelJavaCatalogBuild(force = false): boolean {
   if (!activeBuild) return false;
   activeBuild.canceled = true;
-  if (force) forceStopBuild(activeBuild.child);
-  else stopBuild(activeBuild.child, activeBuild.killGraceMs);
+  if (activeBuild.child) {
+    if (force) forceStopBuild(activeBuild.child);
+    else stopBuild(activeBuild.child, activeBuild.killGraceMs);
+  }
   return true;
 }
 
@@ -311,10 +324,21 @@ export function windowsGradleCommand(wrapper: string, args: readonly string[]): 
 
 export async function runJavaCatalogBuild(projectRoot: string, limits: { timeoutMs?: number; outputBytes?: number; killGraceMs?: number } = {}): Promise<{ output: string }> {
   if (activeBuild) throw new Error("A Java catalog build is already running");
+  const build: CatalogBuild = { child: null, canceled: false, killGraceMs: limits.killGraceMs ?? 2_000 };
+  activeBuild = build;
+  try {
+    return await executeJavaCatalogBuild(projectRoot, limits, build);
+  } finally {
+    activeBuild = null;
+  }
+}
+
+async function executeJavaCatalogBuild(projectRoot: string, limits: { timeoutMs?: number; outputBytes?: number; killGraceMs?: number }, build: CatalogBuild): Promise<{ output: string }> {
   const canonicalRoot = await fs.realpath(projectRoot);
   const wrapperName = process.platform === "win32" ? "gradlew.bat" : "gradlew";
   const wrapper = path.join(canonicalRoot, wrapperName);
   if (!(await regularFile(wrapper))) throw new Error(`Linked project does not have a regular ${wrapperName} wrapper`);
+  if (build.canceled) throw new Error("Java catalog build was canceled");
   const fixedArgs = ["bordeauxCatalog", "--no-daemon", "--console=plain"];
   const child = process.platform === "win32"
     ? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", windowsGradleCommand(wrapper, fixedArgs)], {
@@ -324,8 +348,8 @@ export async function runJavaCatalogBuild(projectRoot: string, limits: { timeout
         windowsVerbatimArguments: true,
       })
     : spawn(wrapper, fixedArgs, { cwd: canonicalRoot, env: sanitizedBuildEnvironment(), detached: true });
-  const killGraceMs = limits.killGraceMs ?? 2_000;
-  activeBuild = { child, canceled: false, killGraceMs };
+  const killGraceMs = build.killGraceMs;
+  build.child = child;
   let output = "";
   let outputBytes = 0;
   let overflow = false;
@@ -350,23 +374,18 @@ export async function runJavaCatalogBuild(projectRoot: string, limits: { timeout
       child.once("error", reject);
       child.once("exit", resolve);
     });
-  } catch (error) {
-    activeBuild = null;
-    throw error;
   } finally {
     clearTimeout(timeout);
     const escalation = killEscalations.get(child);
     if (escalation) clearTimeout(escalation);
     killEscalations.delete(child);
-    if (activeBuild?.child === child && child.exitCode === null) stopBuild(child, killGraceMs);
+    if (child.exitCode === null) stopBuild(child, killGraceMs);
   }
-  const canceled = activeBuild?.canceled === true;
-  activeBuild = null;
   const redacted = output
     .replaceAll(canonicalRoot, "<robot-project>")
     .replace(/\u001b\[[0-9;]*m/g, "")
     .trim();
-  if (canceled) throw new Error("Java catalog build was canceled");
+  if (build.canceled) throw new Error("Java catalog build was canceled");
   if (timedOut) throw new Error(`Java catalog build exceeded the ${timeoutMs / 1000}-second time limit`);
   if (overflow) throw new Error(`Java catalog build exceeded the ${limits.outputBytes ?? MAX_BUILD_OUTPUT_BYTES}-byte output limit`);
   if (exitCode !== 0) throw new Error(`Java catalog build failed with exit code ${exitCode ?? "unknown"}${redacted ? `\n${redacted.slice(-8_192)}` : ""}`);

@@ -1,16 +1,27 @@
 import { parentPort } from "node:worker_threads";
+import { buildJavaDeployment, compareJavaDeployment } from "../shared/export/javaDeployment";
 import { buildJavaTrajectory } from "../shared/export/javaTrajectory";
-import type { BordeauxProject, JavaCommandCatalog } from "../shared/types";
+import type { JavaTrajectoryJob, JavaTrajectoryResult } from "./javaTrajectoryProtocol";
+import type { WorkerResult } from "./workerTask";
 
-if (!parentPort) throw new Error("Java trajectory worker requires a parent port");
+const port = parentPort;
+if (!port) throw new Error("Java trajectory worker requires a parent port");
 
-parentPort.once("message", (value: { project: BordeauxProject; catalog: JavaCommandCatalog }) => {
+function execute(job: JavaTrajectoryJob): JavaTrajectoryResult {
+  switch (job.kind) {
+    case "trajectory":
+      return { kind: job.kind, built: buildJavaTrajectory(job.project, job.catalog) };
+    case "comparison":
+      return { kind: job.kind, comparison: compareJavaDeployment(job.project, job.catalog, job.baselineContents) };
+    case "deployment":
+      return { kind: job.kind, deployment: buildJavaDeployment(job.project, job.catalog, job.scope, job.baselineContents) };
+  }
+}
+
+port.once("message", (job: JavaTrajectoryJob) => {
   try {
-    parentPort!.postMessage({ ok: true, built: buildJavaTrajectory(value.project, value.catalog) });
+    port.postMessage({ ok: true, result: execute(job) } satisfies WorkerResult<JavaTrajectoryResult>);
   } catch (error) {
-    parentPort!.postMessage({
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    port.postMessage({ ok: false, error: error instanceof Error ? error.message : String(error) } satisfies WorkerResult<JavaTrajectoryResult>);
   }
 });
