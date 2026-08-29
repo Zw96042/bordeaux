@@ -1,3 +1,16 @@
+export const PROJECT_DRAFT_SELECTOR = "[data-project-draft]";
+
+type DraftElement = Element & { blur: () => void; focus: () => void };
+type PersistenceSnapshot = { project: unknown; editRevision: number; draftGeneration: number };
+type PersistenceEnqueue = <T>(operation: () => T | Promise<T>) => Promise<T>;
+
+export function enqueuePersistenceAfterPreflight<T>(
+  enqueue: PersistenceEnqueue,
+  preflight: () => boolean,
+  operation: () => T | Promise<T>,
+): Promise<T | undefined> {
+  return enqueue(async () => preflight() ? operation() : undefined);
+}
 
 export function projectPersistenceStayedCurrent(before: PersistenceSnapshot, after: PersistenceSnapshot): boolean {
   return before.project === after.project
