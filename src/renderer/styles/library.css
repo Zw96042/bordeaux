@@ -1,3 +1,26 @@
+/* The collection stays in the same column in both editor modes. */
+.library-rail{width:264px;flex:0 0 264px;flex-direction:column;background:var(--bg-1);border-right:1px solid var(--line);overflow:hidden}
+.library-top{flex:0 0 var(--library-ratio);min-height:245px;overflow:hidden}
+.library-only .library-top{flex:1;min-height:0}
+.editor-library{height:100%;display:flex;flex-direction:column;min-height:0;font-size:12px}
+.library-tabs{display:flex;align-items:stretch;flex:0 0 42px;padding:0 12px;gap:22px;border-bottom:1px solid var(--line)}
+.library-tabs>button{position:relative;padding:0 2px;color:var(--txt-3);font-size:12px;font-weight:600;border-radius:0}
+.library-tabs>button[aria-selected="true"]{color:var(--txt)}
+.library-tabs>button[aria-selected="true"]::after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--txt-2)}
+.library-tools{display:flex;align-items:center;justify-content:space-between;flex:0 0 36px;padding:0 10px}
+.library-tools button{height:28px;display:flex;align-items:center;gap:6px;padding:0 4px;color:var(--txt-2);font-size:11px}
+.library-tools button[aria-label="New folder"]{width:28px;justify-content:center}
+.library-search{height:28px;min-height:28px;min-width:0;margin:0 12px 8px;padding:0 8px;color:var(--txt);background:var(--bg-2);border:1px solid var(--line);border-radius:4px;font-size:11px}
+.library-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:0 0 8px;scrollbar-width:thin}
+.library-row{display:flex;align-items:center;min-height:31px;padding:0 8px 0 14px;min-width:0;user-select:none}
+.library-row.selected{background:var(--bg-3)}
+.library-pick{flex:1;min-width:0;min-height:31px;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;align-content:center;text-align:left;padding:6px 0;gap:12px}
+.library-name{flex:1;min-width:0;font-size:12px;line-height:16px;font-weight:400;color:var(--txt-2);overflow-wrap:anywhere;white-space:normal}
+/* Center the visible glyphs, whose ink sits above the line-box midpoint. */
+.library-name,.library-meta{transform:translateY(1px)}
+.library-row.selected .library-name{color:var(--txt);font-weight:500}
+.library-meta{flex:0 0 auto;font-size:12px;line-height:16px;color:var(--txt-3);font-variant-numeric:tabular-nums;white-space:nowrap}
+.library-more{width:24px;height:28px;flex:0 0 24px;margin-left:4px;color:var(--txt-3);font-size:16px;line-height:1}
 .library-folder{display:flex;align-items:center;padding:4px 8px 0;margin:0;user-select:none}
 .library-folder>button:first-child{display:flex;align-items:center;gap:5px;min-width:0;flex:1;height:29px;text-align:left;color:var(--txt-3);font-size:11px}
 .library-folder>button:first-child>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
