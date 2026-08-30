@@ -180,49 +180,6 @@
           head = Math.atan2(p1.y - p0.y, p1.x - p0.x); curv = 0;
         } else if (effType === 'arc') {
           const ang = arc.a0 + arc.sweep * t;
-          pos = { x: arc.Cx + arc.rad * Math.cos(ang), y: arc.Cy + arc.rad * Math.sin(ang) };
-          head = ang + (arc.sweep >= 0 ? Math.PI / 2 : -Math.PI / 2);
-          curv = arc.rad > 1e-6 ? 1 / arc.rad : 0;
-        } else if (effType === 'clothoid') {
-          pos = { x: cloth.xs[k], y: cloth.ys[k] }; head = cloth.hs[k]; curv = Math.abs(cloth.ks[k]);
-        } else {
-          pos = bez(p0, c0, c1, p1, t);
-          const d = bezD(p0, c0, c1, p1, t), dd = bezDD(p0, c0, c1, p1, t);
-          const speed2 = d.x * d.x + d.y * d.y, cross = d.x * dd.y - d.y * dd.x;
-          head = Math.atan2(d.y, d.x); curv = speed2 > 1e-9 ? Math.abs(cross) / Math.pow(speed2, 1.5) : 0;
-        }
-        pts.push({ x: pos.x, y: pos.y, seg: i, t, heading: head, curv, s: 0 });
-      }
-      wpIdx.push(pts.length - 1);
-    }
-
-    // Blend curvature across adjacent clothoid joints. Position/heading already use a shared
-    // tangent; this removes artificial velocity dips from independent curvature estimates.
-    for (let j = 1; j < segs; j++) {
-      if (!clothoidSegments.has(j - 1) || !clothoidSegments.has(j)) continue;
-      const center = wpIdx[j];
-      if (center < 0) continue;
-      const next = Math.min(pts.length - 1, center + 1);
-      const jointK = 0.5 * ((pts[center].curv || 0) + (pts[next].curv || 0));
-      const span = Math.max(2, Math.round(steps * 0.16));
-      for (let off = -span; off <= span; off++) {
-        const idx = center + off;
-        if (idx < 0 || idx >= pts.length) continue;
-        if (!clothoidSegments.has(pts[idx].seg)) continue;
-        const u = 1 - Math.min(1, Math.abs(off) / span);
-        const w = u * u * (3 - 2 * u);
-        pts[idx].curv = lerp(pts[idx].curv || 0, jointK, w);
-      }
-    }
-
-    // arclength
-    let s = 0;
-    for (let i = 1; i < pts.length; i++) {
-      const dx = pts[i].x - pts[i - 1].x, dy = pts[i].y - pts[i - 1].y;
-      s += Math.hypot(dx, dy);
-      pts[i].s = s;
-    }
-    return { pts, length: s, segs, wpIdx };
   }
 
   // ---- trapezoidal velocity profile with curvature (centripetal) limit ----
@@ -269,49 +226,34 @@
     v[n - 1] = Math.min(v[n - 1], endV);
     // hard stops: velocity pinned to 0
     stopSet.forEach(idx => { if (idx >= 0 && idx < n) v[idx] = 0; });
-    // per-point accel/decel limits, tightened by any constraint ranges (tightest wins)
+    // Per-interval limits, tightened by any overlapping constraint range (tightest wins).
     const ranges = opts.ranges || [];
     const totalS = pts[n - 1].s || 1;
     const accelG = Math.max(0.1, c.maxAccel);
     const decelG = (c.maxDecel != null && c.maxDecel > 0) ? c.maxDecel : accelG;
     const aFwd = new Array(n).fill(accelG), aBack = new Array(n).fill(decelG);
-    const rangeAngV = new Array(n).fill(Infinity);
+    const rangeAngV = new Array(n).fill(Infinity), rangeAngA = new Array(n).fill(Infinity);
     // Index i describes the interval (i - 1, i). Evaluating overlap instead of
     // requiring both endpoints to be inside a policy preserves very short
     // transition windows that fall between geometry samples.
-    const translationPriority = new Array(n).fill(false);
     const headingTransitions = opts.headingTransitions || [];
-    if (ranges.length || headingTransitions.length) {
-      for (let i = 0; i < n; i++) {
-        const f = pts[i].s / totalS;
-        let rv = Infinity, ra = Infinity, rd = Infinity, rw = Infinity;
-        for (let r = 0; r < ranges.length; r++) {
-          const R = ranges[r]; const lo = Math.min(R.f0, R.f1), hi = Math.max(R.f0, R.f1);
-          if (f >= lo && f <= hi) {
-            if (R.maxVel > 0) rv = Math.min(rv, R.maxVel);
-            if (R.maxAccel > 0) ra = Math.min(ra, R.maxAccel);
-            if (R.maxDecel > 0) rd = Math.min(rd, R.maxDecel);
-            if (R.maxAngVel > 0) rw = Math.min(rw, R.maxAngVel);
-          }
-        }
-        if (rv < Infinity) { v[i] = Math.min(v[i], rv); vLimit[i] = Math.min(vLimit[i], rv); }
-        if (ra < Infinity) aFwd[i] = Math.min(accelG, ra);
-        if (rd < Infinity) aBack[i] = Math.min(decelG, rd);
-        if (rw < Infinity) rangeAngV[i] = rw * Math.PI / 180;
+    const intervalPolicies = indexIntervalPolicies(
+      pts.map((point) => point.s / totalS),
+      ranges.map((range) => ({ ...range, start: Math.min(range.f0, range.f1), end: Math.max(range.f0, range.f1) })),
+      headingTransitions,
+    );
+    const translationPriority = intervalPolicies.translationPriority;
+    for (let i = 1; i < n; i++) {
+      const rv = intervalPolicies.maxVel[i], ra = intervalPolicies.maxAccel[i], rd = intervalPolicies.maxDecel[i];
+      const rw = intervalPolicies.maxAngVel[i], rwa = intervalPolicies.maxAngAccel[i];
+      if (rv < Infinity) {
+        v[i - 1] = Math.min(v[i - 1], rv); v[i] = Math.min(v[i], rv);
+        vLimit[i - 1] = Math.min(vLimit[i - 1], rv); vLimit[i] = Math.min(vLimit[i], rv);
       }
-      let translationFollowing = false;
-      for (let i = 1; i < n; i++) {
-        const start = pts[i - 1].s / totalS, end = pts[i].s / totalS;
-        const overlaps = (lo, hi) => Math.min(end, hi) - Math.max(start, lo) >= -1e-9;
-        const activeRanges = ranges.filter((R) => overlaps(Math.min(R.f0, R.f1), Math.max(R.f0, R.f1)));
-        const activeTransitions = headingTransitions.filter((policy) => overlaps(policy.start, policy.end));
-        const activePolicies = activeRanges.length + activeTransitions.length;
-        if (activePolicies > 0) {
-          translationFollowing = activeRanges.every((R) => R.rotationPriority === 'translation')
-            && activeTransitions.every((policy) => policy.rotationPriority === 'translation');
-        }
-        translationPriority[i] = translationFollowing;
-      }
+      if (ra < Infinity) { aFwd[i - 1] = Math.min(accelG, ra); aFwd[i] = Math.min(accelG, ra); }
+      if (rd < Infinity) aBack[i - 1] = Math.min(decelG, rd);
+      if (rw < Infinity) rangeAngV[i] = rw * Math.PI / 180;
+      if (rwa < Infinity) rangeAngA[i] = rwa * Math.PI / 180;
     }
     // ---- rotational limit: cap v so the commanded heading can actually be tracked ----
     // omega = (dtheta/ds) * v ; enforce |omega| <= Wmax and |d omega/dt| <= Aang (memo §16)
@@ -319,6 +261,7 @@
     const head = opts.heading;
     const Wmax = (c.maxAngVel || 0) * Math.PI / 180;
     const Aang = (c.maxAngAccel || 0) * Math.PI / 180;
+    const AangDecel = (c.maxAngDecel || c.maxAngAccel || 0) * Math.PI / 180;
     if (head && head.length === n && Wmax > 1e-4) {
       const g = new Array(n).fill(0), dth = new Array(n).fill(0);
       for (let i = 1; i < n; i++) { const ds = pts[i].s - pts[i - 1].s; const dd = angWrap(head[i] - head[i - 1]); dth[i] = Math.abs(dd); g[i] = ds > 1e-6 ? dd / ds : 0; }
@@ -327,10 +270,10 @@
       for (let i = 0; i < n; i++) w[i] = Math.min(Wmax, rangeAngV[i]);
       stopSet.forEach(idx => { if (idx >= 0 && idx < n) w[idx] = 0; });
       if (Aang > 1e-4) {
-        for (let i = 1; i < n; i++) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i - 1] * w[i - 1] + 2 * Aang * dth[i])));
-        for (let i = n - 2; i >= 0; i--) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i + 1] * w[i + 1] + 2 * Aang * dth[i + 1])));
+        for (let i = 1; i < n; i++) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i - 1] * w[i - 1] + 2 * Math.min(Aang, rangeAngA[i]) * dth[i])));
+        for (let i = n - 2; i >= 0; i--) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i + 1] * w[i + 1] + 2 * Math.min(AangDecel, rangeAngA[i + 1]) * dth[i + 1])));
       }
-      for (let i = 0; i < n; i++) { const gi = Math.abs(g[i]); const translationInterval = i > 0 && translationPriority[i]; if (!translationInterval && gi > 1e-4) { const vr = w[i] / gi; if (vr < v[i] - 0.05) rotLimited[i] = 1; v[i] = Math.min(v[i], vr); } }
+      for (let i = 1; i < n; i++) { const gi = Math.abs(g[i]); if (!translationPriority[i] && gi > 1e-4) { const vr = w[i] / gi, rangeVr = rangeAngV[i] / gi; if (Math.min(vr, rangeVr) < Math.max(v[i - 1], v[i]) - 0.05) rotLimited[i] = 1; v[i - 1] = Math.min(v[i - 1], rangeVr); v[i] = Math.min(v[i], vr, rangeVr); } }
     }
     // forward
     for (let i = 1; i < n; i++) {
@@ -345,6 +288,7 @@
       const ds = pts[i + 1].s - pts[i].s;
       v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i + 1] * v[i + 1] + 2 * aBack[i] * ds)));
     }
+    // Enforce signed angular acceleration in the generated timing itself. A
     // local window scale changes omega linearly and alpha quadratically, which
     // avoids the alternating zero-speed samples produced by point-wise caps.
     if (head && head.length === n && Aang > 1e-4) {
