@@ -1,3 +1,105 @@
+}
+function unique(items: Array<{ id: string; name: string }>, kind: string): void {
+  const ids = new Set<string>(); const names = new Set<string>();
+  for (const item of items) {
+    if (!item || typeof item.id !== "string" || !item.id.trim() || ids.has(item.id)) throw new Error(`${kind} IDs must be present and unique`);
+    if (typeof item.name !== "string" || !item.name.trim() || names.has(item.name)) throw new Error(`${kind} names must be present and unique`);
+    ids.add(item.id); names.add(item.name);
+  }
+  for (const item of items) {
+    if (item.name !== item.id && ids.has(item.name)) throw new Error(`${kind} name ${item.name} conflicts with another stable ID`);
+  }
+}
+function validateDocument(document: DeploymentDocument, project: BordeauxProject, catalog: JavaCommandCatalog): void {
+  const parsed = documentSchema.safeParse(document);
+  if (!parsed.success) throw new Error(`Java deployment is invalid: ${parsed.error.issues[0].path.join(".")}: ${parsed.error.issues[0].message}`);
+  unique(document.paths, "Path");
+  const eventIds = new Set<string>();
+  let sampleCount = 0; let eventCount = 0;
+  for (const path of document.paths) {
+    sampleCount += path.samples.length; eventCount += path.events.length;
+    if (sampleCount > 100_000) throw new Error("Java trajectory export exceeds 100000 samples");
+    if (eventCount > 2_000) throw new Error("Java trajectory export exceeds 2000 events");
+    path.samples.forEach((sample, index) => {
+      if (sample.i !== index || (index && sample.t < path.samples[index - 1].t - 1e-9)
+        || sample.t > path.totalTimeS + 1e-9) throw new Error(`${path.name}: sample indexes/times are invalid`);
+    });
+    path.followSections.forEach((section, index) => {
+      if (section.startSample !== (index ? path.followSections[index - 1].endSample : 0)
+        || section.endSample < section.startSample || section.endSample >= path.samples.length) throw new Error(`${path.name}: follow sections must be contiguous and within sample bounds`);
+    });
+    if (path.followSections.at(-1)!.endSample !== path.samples.length - 1) throw new Error(`${path.name}: follow sections must cover every sample`);
+    for (const event of path.events) {
+      if (eventIds.has(event.eventId)) throw new Error(`Duplicate event ID ${event.eventId}`);
+      eventIds.add(event.eventId);
+      if (event.timeS > path.totalTimeS + 1e-9 || (event.endTimeS !== undefined && event.endTimeS < event.timeS)) throw new Error(`${path.name}: event ${event.name} has invalid timing`);
+    }
+  }
+  if (document.routine) visitNodes(document.routine.nodes, () => {});
+  // Reuse catalog validation for every retained event and all routine branches.
+  // No retained trajectory is regenerated from the current editor project.
+  const routine = document.routine ? { ...document.routine, id: "deployment-validation" } : null;
+  const validationProject: BordeauxProject = { ...project,
+    paths: document.paths.map((path) => ({ ...blankPath(path.name), id: path.id,
+      markers: path.events.map((event) => ({ id: event.eventId, name: event.name, f: event.fraction,
+        invocation: { commandId: event.commandId, arguments: event.arguments, cancelOnPathEnd: event.cancelOnPathEnd },
+        schedule: { trigger: event.trigger, repeatEveryS: event.repeatEveryS, endTimeS: event.endTimeS, conditionId: event.conditionId } })) })),
+    routines: routine ? [routine] : [], activeRoutineId: routine?.id ?? "",
+  };
+  const issues = validateProjectJavaInvocations(validationProject, catalog);
+  if (issues.length) throw new Error(issues.map((issue) => `${issue.path}: ${issue.message}`).join("\n"));
+}
+function compatible(document: DeploymentDocument, project: BordeauxProject, catalog: JavaCommandCatalog): void {
+  if (!document.deploymentContext) throw new Error("Robot baseline has no deployment context. Review a full-project replacement before pushing individual paths or routines.");
+  if (stable(document.deploymentContext) !== stable(context(project))) throw new Error("Robot configuration changed. Review a full-project replacement instead of combining old trajectories with new robot settings.");
+  if (stable(document.field) !== stable(project.field)) throw new Error("Robot baseline field differs. Review a full-project replacement.");
+  if (stable(document.catalog) !== stable({ schemaVersion: catalog.generatedSchemaVersion, catalogId: catalog.catalogId, catalogHash: catalog.catalogHash, supportVersion: catalog.supportVersion })) throw new Error("Robot baseline catalog/support identity differs. Rebuild and review a full-project replacement.");
+}
+function parseScope(scope: RobotPushScope): RobotPushScope {
+  const schema = z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("paths"), pathIds: z.array(text).min(1).max(64).refine((ids) => new Set(ids).size === ids.length, "Selected path IDs must be unique") }).strict(),
+    z.object({ kind: z.literal("routine"), routineId: text }).strict(), z.object({ kind: z.literal("project") }).strict(),
+  ]);
+  const result = schema.safeParse(scope);
+  if (!result.success) throw new Error(`Invalid push selection: ${result.error.issues[0].message}`);
+  return result.data;
+}
+function compileSelection(project: BordeauxProject, catalog: JavaCommandCatalog, scope: RobotPushScope, checkLinks = true, baseline: DeploymentDocument | null = null): { built: Pick<BuiltJavaTrajectory, "document">; dependencyNames: string[]; selectedNames: string[] } {
+  if (new Set(project.paths.map((path) => path.id)).size !== project.paths.length) throw new Error("Project path IDs must be unique");
+  // IDs must be unambiguous even when another routine is only an invalid draft.
+  if (new Set(project.routines.map((routine) => routine.id)).size !== project.routines.length) throw new Error("Project routine IDs must be unique");
+  const routine = scope.kind === "paths" ? undefined : scope.kind === "routine" ? project.routines.find((item) => item.id === scope.routineId) : activeRoutine(project);
+  if (scope.kind === "routine" && !routine) throw new Error("Selected routine no longer exists");
+  const pathIds = new Set(scope.kind === "paths" ? scope.pathIds : scope.kind === "project" ? project.paths.filter((path) => path.exportable !== false).map((path) => path.id) : []);
+  if (routine) visitNodes(routine.nodes, (node) => { if (node.type === "path") pathIds.add(node.ref); });
+  if (scope.kind === "routine") {
+    // Continuity partners are named dependencies, even when the routine does
+    // not execute them. Include the whole linked group in the frozen review.
+    let previousSize: number;
+    do {
+      previousSize = pathIds.size;
+      for (const link of project.pathLinks) {
+        if (pathIds.has(link.fromPathId) || pathIds.has(link.toPathId)) {
+          pathIds.add(link.fromPathId);
+          pathIds.add(link.toPathId);
+        }
+      }
+    } while (pathIds.size !== previousSize);
+  }
+  for (const id of pathIds) {
+    const path = project.paths.find((item) => item.id === id);
+    if (!path) throw new Error(`Selected or required path ${id} no longer exists`);
+    if (path.exportable === false) throw new Error(`${path.name} is not exportable. Enable export before pushing it.`);
+  }
+  if (checkLinks && scope.kind !== "project") {
+    const missing = new Set<string>();
+    for (const link of project.pathLinks) {
+      if (pathIds.has(link.fromPathId) !== pathIds.has(link.toPathId)) missing.add(pathIds.has(link.fromPathId) ? link.toPathId : link.fromPathId);
+    }
+    if (missing.size) throw new Error(`Linked paths must be pushed together to preserve endpoint continuity. Include: ${[...missing].map((id) => project.paths.find((path) => path.id === id)?.name ?? id).join(", ")}.`);
+  }
+  const paths = project.paths.filter((path) => pathIds.has(path.id));
+
   if (scope.kind === "routine" && paths.length === 0) {
     if (!baseline) throw new Error("Push a path first, then push this routine. The robot runtime requires at least one deployed path, and this routine has no static path dependencies.");
     // A routine-only selection changes no motion. Validate against the verified
