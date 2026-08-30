@@ -1,16 +1,43 @@
-// Bordeaux path math engine. Kept renderer-local until the shared planner reaches API parity.
-  // ---- geometry helpers ----
-  const lerp = (a, b, t) => a + (b - a) * t;
-  function bez(p0, c0, c1, p1, t) {
-    const u = 1 - t, tt = t * t, uu = u * u;
-    const a = uu * u, b = 3 * uu * t, c = 3 * u * tt, d = tt * t;
-    return { x: a * p0.x + b * c0.x + c * c1.x + d * p1.x, y: a * p0.y + b * c0.y + c * c1.y + d * p1.y };
+import { indexIntervalPolicies } from "../../shared/planners/intervalPolicies";
+import { lerp, angWrap, angLerp, D2R, R2D, sample as sampleGeometry, pointAtFraction, nearestFraction, autoHandles, SEGTYPES } from "../../shared/math/geometry";
+import { headingAt, buildAnchors } from "../../shared/math/headingAnchors";
+import { waypointFracs, effectiveRanges, featureFraction, insertHeadingTargetSamples, remapWaypointRange } from "../../shared/math/pathRanges";
+import { metricColor, metricGradient, METRICS } from "../../shared/math/metricDisplay";
+import { headingTransitionWindows, headingTransitionGoals, smoothHeadingTransitions } from "../../shared/planners/headingTransitions";
+  function reversePathAnchors(doc, totalDistance) {
+    const total = Math.max(0, Number(totalDistance) || 0);
+    const fraction = (value) => Math.max(0, Math.min(1, Number(value) || 0));
+    const distance = (value, fallbackFraction) => Math.max(0, Math.min(total,
+      Number.isFinite(Number(value)) ? Number(value) : fraction(fallbackFraction) * total));
+    const reverseFeature = (feature) => {
+      const originalFraction = fraction(feature.f);
+      if (feature.anchor === 'dist') {
+        feature.d = total - distance(feature.d, originalFraction);
+        feature.f = total > 1e-9 ? feature.d / total : 1 - originalFraction;
+      } else feature.f = 1 - originalFraction;
+    };
+    (doc.targets || []).forEach(reverseFeature);
+    (doc.markers || []).forEach(reverseFeature);
+    (doc.ranges || []).forEach((range) => {
+      if (range.anchor === 'wp') return;
+      const originalStart = fraction(range.f0), originalEnd = fraction(range.f1);
+      if (range.anchor === 'dist') {
+        const originalStartDistance = distance(range.d0, originalStart);
+        const originalEndDistance = distance(range.d1, originalEnd);
+        range.d0 = total - originalEndDistance;
+        range.d1 = total - originalStartDistance;
+        range.f0 = total > 1e-9 ? range.d0 / total : 1 - originalEnd;
+        range.f1 = total > 1e-9 ? range.d1 / total : 1 - originalStart;
+      } else {
+        range.f0 = 1 - originalEnd;
+        range.f1 = 1 - originalStart;
+      }
+    });
+    return doc;
   }
-  function bezD(p0, c0, c1, p1, t) {
-    const u = 1 - t;
-    const a = 3 * u * u, b = 6 * u * t, c = 3 * t * t;
-    return { x: a * (c0.x - p0.x) + b * (c1.x - c0.x) + c * (p1.x - c1.x), y: a * (c0.y - p0.y) + b * (c1.y - c0.y) + c * (p1.y - c1.y) };
-  }
+
+  function sample(waypoints, perSeg = 60) { return sampleGeometry(waypoints, perSeg, true); }
+
   function splitBezier(p0, c0, c1, p1, t) {
     t = Math.max(0, Math.min(1, t));
     const mix = (a, b) => ({ x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) });
@@ -41,15 +68,6 @@
     });
     return best;
   }
-  function bezDD(p0, c0, c1, p1, t) {
-    const u = 1 - t;
-    return { x: 6 * u * (c1.x - 2 * c0.x + p0.x) + 6 * t * (p1.x - 2 * c1.x + c0.x), y: 6 * u * (c1.y - 2 * c0.y + p0.y) + 6 * t * (p1.y - 2 * c1.y + c0.y) };
-  }
-
-  // shortest signed angle difference (radians)
-  function angWrap(a) { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; }
-  function angLerp(a, b, t) { return a + angWrap(b - a) * t; }
-  const D2R = Math.PI / 180, R2D = 180 / Math.PI;
   function robotHardLimits(robot) {
     const m = robot && robot.driveModel;
     if (!m) return null;
@@ -73,11 +91,16 @@
   }
   function effectiveConstraints(constraints, robot) {
     const limits = robotHardLimits(robot);
-    return limits ? { ...constraints, maxVel: limits.maxSpeed, maxAccel: limits.maxAccel, maxDecel: limits.maxAccel, maxCentripetalAccel: limits.maxCornerAccel, maxAngVel: limits.maxAngVel, maxAngAccel: limits.maxAngAccel, maxAngDecel: limits.maxAngAccel } : constraints;
-  }
-
-  // ---- arc primitive: circle tangent to the start handle, through the endpoint ----
-  function arcSetup(p0, p1, c0) {
+    return limits ? {
+      ...constraints,
+      maxVel: Math.min(constraints.maxVel, limits.maxSpeed),
+      maxAccel: Math.min(constraints.maxAccel, limits.maxAccel),
+      maxDecel: Math.min(constraints.maxDecel ?? constraints.maxAccel, limits.maxAccel),
+      maxCentripetalAccel: Math.min(constraints.maxCentripetalAccel ?? constraints.maxAccel, limits.maxCornerAccel),
+      maxAngVel: Math.min(constraints.maxAngVel, limits.maxAngVel),
+      maxAngAccel: Math.min(constraints.maxAngAccel, limits.maxAngAccel),
+      maxAngDecel: Math.min(constraints.maxAngDecel || constraints.maxAngAccel, limits.maxAngAccel),
+    } : constraints;
   }
 
   // ---- trapezoidal velocity profile with curvature (centripetal) limit ----
