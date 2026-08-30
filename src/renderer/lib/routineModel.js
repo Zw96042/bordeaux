@@ -1,12 +1,10 @@
 import { PM } from "./pathMath";
+import { createRoutineNodeId } from "../../shared/project/ids";
 
 // Autonomous Routine — autonomous routine model + run engine (no React).
 // A routine is an ordered list of STEPS. Three step kinds: Path, Decision, Function.
 // A Function carries a runtime capability or a generated Java command.
 // Autonomous Routine is robot-agnostic: it ORCHESTRATES runtime generation, it does not define behaviors.
-  let _id = 0;
-  const uid = (p) => (p || 'n') + '_' + (++_id);
-
   // ---- runtime capabilities a Function can carry ----
   const CATS = {
     command:   { id: 'command',   label: 'Command',   icon: 'bolt',     color: '#4fbf78', blurb: 'Run a robot command between paths' },
@@ -15,34 +13,12 @@ import { PM } from "./pathMath";
     generate:  { id: 'generate',  label: 'Generate',  icon: 'compass',  color: '#cf962f', blurb: 'Invoke a runtime path function' },
     velocity:  { id: 'velocity',  label: 'Velocity',  icon: 'gauge',    color: '#2bb3c4', blurb: 'Scale drive velocities live' },
   };
-  const CAT_LIST = ['command', 'terminate', 'sequence', 'generate', 'velocity'];
   const AUTHORABLE_STEPS = [
     { id: 'path', type: 'path', label: 'Path', description: 'Follow a planned trajectory', icon: 'route', color: 'var(--accent)' },
     { id: 'decision', type: 'decision', label: 'Decision', description: 'Branch the routine on a condition', icon: 'branch', color: '#9aa3b0' },
     { id: 'command', type: 'function', cat: 'command', label: 'Command', description: 'Run a generated robot command between paths', icon: 'bolt', color: '#4fbf78' },
     { id: 'wait', type: 'builtin', cat: 'wait', label: 'Wait', description: 'Pause the routine before its next step', icon: 'pause', color: '#cf962f' },
   ];
-
-  const FUNCTIONS = [
-    { value: 'GeneratePath', label: 'Generate path', meta: 'Runtime trajectory function' },
-    { value: 'GenerateNearestGamePiece', label: 'Nearest game piece', meta: 'Runtime trajectory function' },
-    { value: 'GenerateParkingPath', label: 'Parking path', meta: 'Runtime trajectory function' },
-  ];
-  const TRIGGERS = [
-    { value: 'On entry', label: 'On entry', meta: 'When this step becomes active' },
-    { value: 'On branch entry', label: 'On branch entry', meta: 'When its decision branch is chosen' },
-    { value: 'On path complete', label: 'On path complete', meta: 'After the current path settles' },
-    { value: 'Routine end', label: 'Routine end', meta: 'After the final authored step' },
-    { value: 'When condition is true', label: 'When condition is true', meta: 'Uses a registered condition' },
-  ];
-
-  function pickerItems(items, value, empty) {
-    const out = empty ? [{ value: '', label: empty, meta: 'No runtime reference' }, ...items] : [...items];
-    if (value && !out.some((item) => item.value === value)) {
-      out.unshift({ value, label: value, meta: 'Exact project reference', badge: 'custom' });
-    }
-    return out;
-  }
 
   function authoritativeConditions(catalog) {
     if (!catalog || catalog.authoritative !== true || !['1.1', '1.2', '1.3'].includes(catalog.generatedSchemaVersion)) return [];
@@ -121,10 +97,13 @@ import { PM } from "./pathMath";
 
   // ---- node factory ----
   function newNode(type, cat, pathRef) {
-    if (type === 'path') return { id: uid('p'), type: 'path', ref: pathRef || '' };
-    if (type === 'decision') return { id: uid('d'), type: 'decision', cond: '', thenLabel: 'Yes', elseLabel: 'No', then: [], else: [] };
-    if (type === 'builtin' && cat === 'wait') return { id: uid('wait'), type: 'builtin', builtinId: 'bordeaux.wait', arguments: { durationS: 1 } };
+    const id = createRoutineNodeId();
+    if (type === 'path') return { id, type: 'path', ref: pathRef || '' };
+    if (type === 'decision') return { id, type: 'decision', cond: '', thenLabel: 'Yes', elseLabel: 'No', then: [], else: [] };
+    if (type === 'builtin' && cat === 'wait') return { id, type: 'builtin', builtinId: 'bordeaux.wait', arguments: { durationS: 1 } };
     const c = cat || 'terminate';
+    if (c === 'command') return { id, type: 'function', cat: 'command', title: 'Robot command', invocation: null };
+    if (c === 'generate') return { id, type: 'function', cat: 'generate', funcRef: 'GeneratePath', trigger: 'On entry', params: [], note: '', preview: null };
     if (c === 'sequence') return { id, type: 'function', cat: 'sequence', op: 'skip', target: '', trigger: 'When condition is true', note: '' };
     if (c === 'velocity') return { id, type: 'function', cat: 'velocity', title: 'Velocity rule', trigger: 'When condition is true', scale: 0.5, note: '' };
     return { id, type: 'function', cat: 'terminate', title: 'Terminate', trigger: 'When condition is true', note: '' };

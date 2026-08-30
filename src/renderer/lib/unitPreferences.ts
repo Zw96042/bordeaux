@@ -3,7 +3,8 @@ type UnitDefinition = { label: string; factor: number };
 type UnitStorage = Pick<Storage, "getItem" | "setItem">;
 type UnitRoot = { dataset: DOMStringMap | Record<string, string> };
 
-// Machine-local display units. Project data, planning, validation, and export remain SI.
+// The document selects display units; local storage supplies the default for older files.
+// Project geometry, planning, validation, and export remain SI.
 export function createUnitPreferences(storage: UnitStorage = localStorage, root: UnitRoot = document.documentElement) {
   const STORAGE_KEY = 'bordeaux.unitSystem';
   const definitions: Record<string, UnitDefinition> = {
