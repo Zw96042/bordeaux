@@ -1,18 +1,35 @@
+import { createLibraryDurations } from "../lib/libraryDurations";
+import { FieldStatus } from "../components/FieldStatus";
 import * as React from "react";
+import { flushSync } from "react-dom";
 import { FinalPlanning } from "../assets/final-planning";
 import { PathEdit } from "../assets/path-edit";
 import { PathPreview } from "../assets/path-preview";
+import { PathOptimization } from "../assets/path-optimization";
+import { OptimizationPanel } from "../components/OptimizationPanel";
+import { authoredPath, optimizationInputKey, isOptimizationOutdated } from "../../shared/planners/acceptedTrajectoryIdentity";
 import { ContextInspector } from "../components/ContextInspector";
 import { FIELD_DIMS, FieldView } from "../components/FieldView";
 import { Panels } from "../components/Panels";
 import { RobotPage } from "../components/RobotPage";
 import { DiagnosticBundleDialog } from "../components/DiagnosticBundleDialog";
-import { RobotPushDialog } from "../components/RobotPushDialog";
+import { LibraryRail, referencingRoutines } from "../components/EditorLibrary";
+import { RobotPushDialog, useRobotPushController } from "../components/RobotPushDialog";
 import { RoutineTransport, StepInspector } from "../components/RoutineInspector";
 import { RoutinePanel } from "../components/RoutinePanel";
+import { RoutineWorkspace } from "../components/RoutineWorkspace";
 import { UI } from "../components/ui";
 import { PM } from "../lib/pathMath";
+import { applyBrushDraft, syncBrushSelection } from "../lib/brushEditing";
+import { agentProposalMatchesPublishedContext } from "../lib/agentProposalContext";
 import { PathLinks } from "../lib/pathLinks";
+import {
+  FINAL_PLANNING_NOTICE_COOLDOWN_MS,
+  FINAL_PLANNING_NOTICE_DELAY_MS,
+  FINAL_PLANNING_NOTICE_DURATION_MS,
+  planningErrorMessage,
+  shouldPresentPlanningError,
+} from "../lib/planningFeedback";
 import { AUTO } from "../lib/routineModel";
 import { UnitPrefs } from "../lib/unitPreferences";
 import {
@@ -22,140 +39,22 @@ import {
   createRoutineId as routineId,
 } from "../../shared/project/ids";
 import { normalizeProject as normalizeProjectData } from "../../shared/project/normalize";
-import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
+import { blankPath, buildWaypoints as buildWps, clampWorldPoint as clampWorld, clone } from "../../shared/project/defaults";
+import { blankRoutine, freshProject, routineState, uniqueItemName, withRoutineState } from "../lib/editorProject";
+import { alignWaypointHandles, duplicateWaypoint, moveWaypointTo, removeWaypoint, remapWaypointRanges, reorderWaypoint, setWaypointFacing, reversePath as reversePathDraft } from "../lib/pathEditing";
+import { createPlaybackStore } from "../lib/playbackStore";
 
-// Bordeaux application root.
   const { useState, useRef, useEffect, useMemo, useCallback, useSyncExternalStore } = React;
   const h = React.createElement;
   const { FIELD_W, FIELD_H, IMG_W, IMG_H } = FIELD_DIMS;
   const PERSEG = 56;
-  const clone = (o) => JSON.parse(JSON.stringify(o));
-  const clampWorld = (p) => ({ x: Math.max(0, Math.min(FIELD_W, p.x)), y: Math.max(0, Math.min(FIELD_H, p.y)) });
-  const blankRoutine = (name) => ({ id: routineId(), name: name || 'Autonomous Routine', nodes: [] });
   function normalizeProject(raw) {
     return PathLinks.reconcile(normalizeProjectData(raw));
   }
 
-  function agentProposalMatchesPublishedContext(proposal, sessionId, publishedContext, currentContext) {
-    return Boolean(proposal && publishedContext
-      && proposal.baseSessionId === sessionId
-      && proposal.baseRevision === publishedContext.revision
-      && proposal.baseActivePathId === publishedContext.activePathId
-      && publishedContext.project === currentContext.project
-      && publishedContext.activePathId === currentContext.activePathId
-      && publishedContext.editRevision === currentContext.editRevision
-      && (!proposal.baseJavaCatalogFingerprint || proposal.baseJavaCatalogFingerprint === currentContext.javaCatalogFingerprint)
-      && !currentContext.hasDraft);
-  }
-
   const ACCENT = '#3f6fd0';
 
-  const DEF_CONS = { maxVel: 4.2, maxAccel: 6.5, maxDecel: 6.5, maxAngVel: 540, maxAngAccel: 720, maxAngDecel: 720, maxJerk: 0, maxAngJerk: 0 };
-  function alignWaypointHandles(w) {
-    if (!w || !w.prevC || !w.nextC) return;
-    const inLen = Math.hypot(w.x - w.prevC.x, w.y - w.prevC.y);
-    const outLen = Math.hypot(w.nextC.x - w.x, w.nextC.y - w.y);
-    const inX = inLen > 1e-6 ? (w.x - w.prevC.x) / inLen : 0;
-    const inY = inLen > 1e-6 ? (w.y - w.prevC.y) / inLen : 0;
-    const outX = outLen > 1e-6 ? (w.nextC.x - w.x) / outLen : 0;
-    const outY = outLen > 1e-6 ? (w.nextC.y - w.y) / outLen : 0;
-    let dx = inX + outX, dy = inY + outY;
-    let mag = Math.hypot(dx, dy);
-    if (mag < 1e-6) { dx = outLen > 1e-6 ? outX : inX; dy = outLen > 1e-6 ? outY : inY; mag = Math.hypot(dx, dy); }
-    if (mag < 1e-6) { dx = 1; dy = 0; mag = 1; }
-    dx /= mag; dy /= mag;
-    w.prevC = { x: w.x - dx * inLen, y: w.y - dy * inLen };
-    w.nextC = { x: w.x + dx * outLen, y: w.y + dy * outLen };
-    w.linked = true;
-    w.corner = false;
-  }
-
-  function buildWps(raw) {
-    const out = raw.map((w) => ({ linked: true, thetaOn: false, theta: 0, stop: false, ...w }));
-    out.forEach((w, i) => { const hd = PM.autoHandles(out, i); if (!w.prevC) w.prevC = hd.prevC; if (!w.nextC) w.nextC = hd.nextC; });
-    out.forEach((w, i) => { if (!w.stop && i > 0 && i < out.length - 1) alignWaypointHandles(w); });
-    if (out.length) { out[0].thetaOn = true; out[out.length - 1].thetaOn = true; }
-    return out;
-  }
-
-  function remapWaypointRanges(doc, oldToNew, removedIndex) {
-    doc.ranges = (doc.ranges || []).map((range) => PM.remapWaypointRange(range, oldToNew, removedIndex, doc.waypoints.length));
-  }
-
-  // ---- blank startup path ----
-  function blankPath(name) {
-    return {
-      id: pathId(),
-      name,
-      waypoints: buildWps([{ x: 2.2, y: 4.0, theta: 0 }, { x: 5.0, y: 4.0, theta: 0 }]),
-      targets: [], markers: [],
-      ranges: [],
-      constraints: { ...DEF_CONS },
-      headingMode: 'targets',
-      startVel: 0, goalVel: 0,
-    };
-  }
-
-  function freshProject() {
-    const routine = blankRoutine();
-    const path = blankPath('NewPath');
-    return {
-      schemaVersion: '1.0',
-      field: { ...ACTIVE_FIELD_REFERENCE },
-      name: 'Untitled',
-      robot: { drive: 'swerve', w: 0.84, l: 0.84, heightM: 0.5, maxSpeed: 5.0 },
-      paths: [path],
-      pathLinks: [],
-      routines: [routine],
-      activeRoutineId: routine.id,
-      plannerId: 'profiledSpline',
-      editor: { activePathId: path.id },
-    };
-  }
-
-  function routineState(project) {
-    const routines = Array.isArray(project.routines) && project.routines.length
-      ? project.routines : [blankRoutine()];
-    const activeRoutineId = routines.some((routine) => routine.id === project.activeRoutineId)
-      ? project.activeRoutineId : routines[0].id;
-    return { routines, activeRoutineId };
-  }
-
-  function withRoutineState(project, state) {
-    const activeRoutine = state.routines.find((routine) => routine.id === state.activeRoutineId) || state.routines[0];
-    return { ...project, routines: state.routines, activeRoutineId: activeRoutine.id };
-  }
-
   const FIT = { x: 307, y: 7, w: 3285, h: 1569 };
-
-  function createPlaybackStore() {
-    let snapshot = { time: 0, playing: false, total: 0 };
-    let frame = 0, last = 0;
-    const listeners = new Set();
-    const emit = (patch) => { snapshot = { ...snapshot, ...patch }; listeners.forEach((listener) => listener()); };
-    const stopFrame = () => { if (frame) cancelAnimationFrame(frame); frame = 0; };
-    const tick = (now) => {
-      const time = Math.min(snapshot.total, snapshot.time + (now - last) / 1000); last = now;
-      const playing = time < snapshot.total - 1e-6;
-      emit({ time, playing });
-      frame = playing ? requestAnimationFrame(tick) : 0;
-    };
-    const startFrame = () => { if (frame || !snapshot.playing) return; last = performance.now(); frame = requestAnimationFrame(tick); };
-    return {
-      subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-      getSnapshot() { return snapshot; },
-      setTotal(total) { const next = Math.max(0, total || 0); emit({ total: next, time: Math.min(snapshot.time, next), playing: snapshot.playing && snapshot.time < next }); startFrame(); },
-      toggle() {
-        if (snapshot.playing) { stopFrame(); emit({ playing: false }); return; }
-        emit({ time: snapshot.time >= snapshot.total - 1e-3 ? 0 : snapshot.time, playing: snapshot.total > 0 }); startFrame();
-      },
-      restart() { stopFrame(); emit({ time: 0, playing: snapshot.total > 0 }); startFrame(); },
-      pause() { stopFrame(); if (snapshot.playing) emit({ playing: false }); },
-      seek(time) { stopFrame(); emit({ time: Math.max(0, Math.min(snapshot.total, time)), playing: false }); },
-      reset() { stopFrame(); emit({ time: 0, playing: false }); },
-      destroy() { stopFrame(); listeners.clear(); },
-    };
-  }
 
   const usePlayback = (store) => useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   function EditablePlaybackField({ store, editStore, doc, derived, derivedPath, robot, plannerId, ...props }) {
@@ -204,7 +103,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
   }
 
   /** Keeps the last valid interactive result visible while final planning runs independently. */
-  function useFinalPlanning(doc, robot, plannerId) {
+  function useFinalPlanning(doc, robot, plannerId, enabled = true) {
     const previewer = useMemo(() => PathPreview.create(), []);
     const planner = useMemo(() => FinalPlanning.create(), []);
     const [initial] = useState(() => {
@@ -227,18 +126,21 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     useEffect(() => previewer.retain(), [previewer]);
     useEffect(() => previewer.subscribe(() => setInteractive(previewer.getSnapshot())), [previewer]);
     useEffect(() => {
+      if (!enabled) return;
       requestedRevision.current = previewer.request({ key: doc.id, path: doc, robot, plannerId, quality: 'interactive' });
-    }, [previewer, doc, robot, plannerId]);
+    }, [previewer, doc, robot, plannerId, enabled]);
     useEffect(() => {
-      if (interactive.revision !== requestedRevision.current || interactive.path !== doc) return undefined;
-      if (interactive.status === 'error') {
+      if (!enabled || interactive.revision !== requestedRevision.current) return undefined;
+      // Failed previews retain the last valid display path; errorPath identifies
+      // the current request that failed. Do not gate that error on display identity.
+      if (interactive.status === 'error' && interactive.errorPath === doc) {
         setSnapshot({
           status: 'error', key: doc.id, path: lastValid.current?.path || doc, value: lastValid.current?.value || null,
           error: interactive.error, errorPath: doc, durationMs: 0,
         });
         return undefined;
       }
-      if (interactive.status !== 'ready' || !interactive.value) return undefined;
+      if (interactive.path !== doc || interactive.status !== 'ready' || !interactive.value) return undefined;
       let active = true;
       const interactiveResult = interactive.value;
       lastValid.current = { path: doc, value: interactiveResult };
@@ -264,7 +166,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
         });
       });
       return () => { active = false; request.cancel(); };
-    }, [planner, doc, robot, plannerId, interactive]);
+    }, [planner, doc, robot, plannerId, interactive, enabled]);
 
     const current = snapshot.path === doc && snapshot.value
       ? { path: doc, value: snapshot.value }
@@ -275,28 +177,129 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       value: displayed && displayed.value,
       path: displayed && displayed.path,
       error: snapshot.errorPath === doc ? snapshot.error : null,
+      // This hook prepares the selected trajectory; failures are blocking even on initial load.
+      errorKind: snapshot.errorPath === doc && snapshot.error ? 'interactive' : null,
       pending: interactive.status === 'pending' || snapshot.status === 'pending',
       durationMs: snapshot.durationMs || 0,
       optimization: snapshot.value?.finalOptimization || null,
     };
   }
 
+  function usePlanningNotice(error, kind, planningInputRevision, pathId) {
+    const [notice, setNotice] = useState(null);
+    const lastFinalNoticeAt = useRef(new Map());
+
+    useEffect(() => {
+      let revealTimer = 0;
+      let dismissTimer = 0;
+      if (!shouldPresentPlanningError(error, kind, planningInputRevision)) {
+        setNotice(null);
+        return undefined;
+      }
+
+      const message = planningErrorMessage(error, kind);
+      const key = pathId + ':' + kind;
+      if (kind === 'interactive') {
+        setNotice({ key, kind, message });
+        return undefined;
+      }
+
+      const lastShown = lastFinalNoticeAt.current.get(key) || 0;
+      if (Date.now() - lastShown < FINAL_PLANNING_NOTICE_COOLDOWN_MS) {
+        setNotice(null);
+        return undefined;
+      }
+
+      revealTimer = window.setTimeout(() => {
+        lastFinalNoticeAt.current.set(key, Date.now());
+        setNotice({ key, kind, message });
+        dismissTimer = window.setTimeout(() => {
+          setNotice((current) => current?.key === key ? null : current);
+        }, FINAL_PLANNING_NOTICE_DURATION_MS);
+      }, FINAL_PLANNING_NOTICE_DELAY_MS);
+
+      return () => {
+        window.clearTimeout(revealTimer);
+        window.clearTimeout(dismissTimer);
+      };
+    }, [error, kind, planningInputRevision, pathId]);
+
+    return notice;
+  }
+
+  function useRoutinePlanning(enabled, paths, robot, plannerId) {
+    const planner = useMemo(() => FinalPlanning.create(), []);
+    const [planningState, setPlanningState] = useState(() => ({
+      paths, robot, plannerId, status: 'idle', values: {}, error: '',
+    }));
+    useEffect(() => {
+      if (!enabled) return undefined;
+      let active = true;
+      let currentRequest = null;
+      setPlanningState({ paths, robot, plannerId, status: 'pending', values: {}, error: '' });
+      void (async () => {
+        for (const path of paths) {
+          if (!active) return;
+          currentRequest = planner.request(
+            { key: path.id, path, robot, plannerId },
+            { deadline: 'common' },
+          );
+          const result = await currentRequest.promise;
+          if (!active) return;
+          if (result.status !== 'success' || !result.value?.finalTrajectory || (path.optimization?.accepted && !isOptimizationOutdated(path, robot) && !result.value.acceptedTrajectory)) {
+            setPlanningState((current) => ({
+              ...current,
+              status: 'error',
+              error: path.optimization?.accepted && !isOptimizationOutdated(path, robot) && !result.value?.acceptedTrajectory
+                ? `${path.name}: the selected optimization could not be validated. Review this path.`
+                : result.fallbackReason || result.error?.message || `Could not plan ${path.name}.`,
+            }));
+            return;
+          }
+          setPlanningState((current) => ({
+            ...current,
+            values: { ...current.values, [path.id]: result.value },
+          }));
+        }
+        if (active) setPlanningState((current) => ({ ...current, status: 'ready' }));
+      })();
+      return () => {
+        active = false;
+        if (currentRequest) currentRequest.cancel();
+      };
+    }, [enabled, planner, paths, robot, plannerId]);
+    return enabled
+      && planningState.paths === paths
+      && planningState.robot === robot
+      && planningState.plannerId === plannerId
+      ? planningState
+      : { status: enabled ? 'pending' : 'idle', values: {}, error: '' };
+  }
+
   function App() {
     const [project, setProject] = useState(() => freshProject());
-    const plannerId = project.plannerId;
+    const plannerId = 'profiledSpline';
     const [activeIdx, setActiveIdx] = useState(0);
     const [sel, setSel] = useState({ kind: null, idx: -1 });
     const [page, setPage] = useState('plan');
+    const [editorPage, setEditorPage] = useState('plan');
+    const [projectKey, setProjectKey] = useState(0);
+    const [libraryPreferenceKey, setLibraryPreferenceKey] = useState(() => project.name + ':' + project.paths[0].id);
+    useEffect(() => { if (page !== 'robot') setEditorPage(page); }, [page]);
     const [alliance, setAlliance] = useState('blue');
     const [showGrid, setShowGrid] = useState(true);
     const [view, setView] = useState(FIT);
     const [graphOpen, setGraphOpen] = useState(false);
-    const [outlineOpen, setOutlineOpen] = useState(true);
     const [inspectorOpen, setInspectorOpen] = useState(true);
-    const [secOpen, setSecOpen] = useState({ wp: true, sg: false, rt: false, em: false, cr: false });
-    const [times, setTimes] = useState({});
+    const libraryDurations = useMemo(() => createLibraryDurations(FinalPlanning.create()), []);
+    const times = useSyncExternalStore(libraryDurations.subscribe, libraryDurations.getSnapshot, libraryDurations.getSnapshot);
+    useEffect(() => () => libraryDurations.cancel(), [libraryDurations]);
+    const [optimizationOpen, setOptimizationOpen] = useState(false);
+    const [comparison, setComparison] = useState(null);
+    const appliedPreview = useRef(null);
     const [metric, setMetric] = useState('velocity');
     const [tool, setTool] = useState('select');
+    const [brush, setBrush] = useState({ kind: 'push', radius: 0.9, strength: 0.7 });
     const [waypointPreview, setWaypointPreview] = useState(null);
     const [headMenu, setHeadMenu] = useState(null);
     const [dirty, setDirty] = useState(false);
@@ -314,8 +317,16 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     if (javaProjectState.catalog && javaProjectState.catalog.semanticFingerprint) javaCatalogFingerprint.current = javaProjectState.catalog.semanticFingerprint;
     else if (!javaProjectState.operation) javaCatalogFingerprint.current = null;
     const [exportError, setExportError] = useState('');
+    const [planningInputRevision, setPlanningInputRevision] = useState(0);
     const [unitSystem, setUnitSystemState] = useState(() => UnitPrefs.current());
-    const setUnitSystem = useCallback((next) => setUnitSystemState(UnitPrefs.set(next)), []);
+    const setUnitSystem = useCallback((next) => {
+      const units = UnitPrefs.set(next);
+      setUnitSystemState(units);
+      setProject((current) => ({ ...current, editor: { ...current.editor, unitSystem: units } }));
+    }, []);
+    React.useLayoutEffect(() => {
+      if (project.editor?.unitSystem) setUnitSystemState(UnitPrefs.set(project.editor.unitSystem));
+    }, [project.editor?.unitSystem]);
     const javaRestoreGeneration = useRef(0);
     const skipDirty = useRef(true);
     const keyboardNavigation = useRef(false);
@@ -455,7 +466,6 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       setJavaProjectState((current) => ({ ...current, notice: result && result.canceled ? 'Canceling the Java catalog build…' : 'No Java catalog build is running.' }));
     }, []);
 
-    // ---- Autonomous Routine ----
     const routineLibrary = routineState(project);
     const routines = routineLibrary.routines;
     const routine = routines.find((candidate) => candidate.id === routineLibrary.activeRoutineId) || routines[0];
@@ -475,12 +485,14 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     }), [commitRoutineState]);
     const [routineOutcomes, setRoutineOutcomes] = useState({});
     const [routineSel, setRoutineSel] = useState(null);
+    const [routineCollapsed, setRoutineCollapsed] = useState({});
 
     const robot = project.robot;
     const accent = ACCENT;
 
     const doc = project.paths[activeIdx];
     const docRef = useRef(doc); docRef.current = doc;
+    const selRef = useRef(sel); selRef.current = sel;
     const projectRef = useRef(project); projectRef.current = project;
     const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
     const hist = useRef({ past: [], future: [] });
@@ -513,6 +525,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       const before = base.paths.find((path) => path.id === draft.id);
       return PathLinks.sync(materialized, draft.id, before);
     }, [editStore]);
+    const pushController = useRobotPushController({ getProject: materializeProject, projectKey, catalogKey: javaProjectState.catalog?.catalogHash, bookmarkKey: javaProjectState.bookmarkId });
     const enqueuePersistence = useCallback((operation) => {
       const pending = persistenceTail.current.catch(() => undefined).then(operation);
       persistenceTail.current = pending.then(() => undefined, () => undefined);
@@ -667,23 +680,69 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       return () => document.removeEventListener('visibilitychange', pauseHiddenPlayback);
     }, []);
 
-    // ---- derived path data ----
-    const derivation = useFinalPlanning(doc, robot, plannerId);
+    // A search candidate never owns the selected result. Apply persists that choice.
+    const optimizer = useMemo(() => PathOptimization.create({ getProject: () => projectRef.current }), []);
+    const optimizationState = useSyncExternalStore(optimizer.subscribe, optimizer.getSnapshot, optimizer.getSnapshot);
+    useEffect(() => { optimizer.sync(); }, [optimizer, project]);
+    useEffect(() => () => optimizer.cancel(), [optimizer]);
+    const optimizationKey = useMemo(() => optimizationInputKey(doc, robot, project.field), [doc, robot, project.field]);
+    const planningPath = useMemo(() => ({ ...doc }), [doc.id, optimizationKey, doc.optimization?.accepted]);
+    const normalPath = useMemo(() => authoredPath(doc), [doc.id, optimizationKey]);
+    const planningRobot = useMemo(() => robot, [optimizationKey]);
+    const selectedPlanning = useFinalPlanning(planningPath, planningRobot, plannerId);
+    const currentOptimization = Boolean(doc.optimization?.accepted && !isOptimizationOutdated(doc, robot, project.field));
+    const normalPlanning = useFinalPlanning(normalPath, planningRobot, plannerId, optimizationOpen && currentOptimization);
+    const normal = currentOptimization ? normalPlanning : selectedPlanning;
+    const selectedReady = selectedPlanning.path === planningPath && !selectedPlanning.pending && Boolean(selectedPlanning.value?.finalTrajectory);
+    const justApplied = appliedPreview.current?.artifact === doc.optimization?.accepted && appliedPreview.current?.key === optimizationKey
+      ? appliedPreview.current.value : null;
+    const acceptedPreview = selectedReady ? (selectedPlanning.value.acceptedTrajectory ? selectedPlanning.value : null) : justApplied;
+    const accepted = acceptedPreview?.finalTrajectory || null;
+    const staleOptimization = Boolean(doc.optimization?.accepted && (doc.optimization.accepted.inputKey !== optimizationKey || (selectedReady && !accepted)));
+    const optimizationEntry = optimizationState.paths[doc.id];
+    const candidate = optimizationEntry?.key === optimizationKey ? optimizationEntry.value : null;
+    const normalReady = normal.path === (currentOptimization ? normalPath : planningPath)
+      && !normal.pending && !normal.error && Boolean(normal.value?.finalTrajectory);
+    const normalError = normal.error;
+    const normalBaseline = useRef(null);
+    if (normalReady) normalBaseline.current = { id: doc.id, key: optimizationKey, time: normal.value.prof.totalTime };
+    // Applying changes selection, not the normal baseline. Keep its comparison
+    // time while the accepted-result worker starts, only for identical inputs.
+    const baselineTime = normalBaseline.current?.id === doc.id && normalBaseline.current.key === optimizationKey
+      ? normalBaseline.current.time : null;
+    const comparisonMode = comparison?.id === doc.id && comparison.key === optimizationKey ? comparison.mode : 'selected';
+    const comparedPreview = comparisonMode === 'candidate' ? candidate : comparisonMode === 'normal' && normalReady ? normal.value : null;
+    const selectedPreview = comparedPreview || acceptedPreview;
+    const derivation = selectedPreview
+      ? { value: selectedPreview, path: doc, pending: false, error: null, errorKind: null }
+      : { ...selectedPlanning, path: selectedPlanning.path === planningPath ? doc : selectedPlanning.path };
+    const planningNotice = usePlanningNotice(derivation.error, derivation.errorKind, planningInputRevision, doc.id);
     if (!derivation.value) throw derivation.error || new Error('Could not derive the active path');
     const derived = derivation.value;
     const derivationDoc = derivation.path || doc;
     const derivationCurrent = derivationDoc === doc;
 
+    const durationInputs = useMemo(() => project.paths.map((path) => ({
+      id: path.id, path, robot, plannerId,
+      key: JSON.stringify([optimizationInputKey(path, robot, project.field), robot.planning, plannerId, path.optimization?.accepted]),
+      outdatedOptimization: isOptimizationOutdated(path, robot, project.field),
+    })), [project.paths, robot, plannerId, project.field]);
     useEffect(() => {
-      if (!derivationCurrent) return;
-      setTimes((t) => (t[doc.id] === derived.prof.totalTime ? t : { ...t, [doc.id]: derived.prof.totalTime }));
-    }, [derived, derivationCurrent, doc.id]);
+      const error = selectedPlanning.error || (currentOptimization && selectedReady && !accepted ? new Error('The selected optimization could not be validated. Review this path.') : null);
+      libraryDurations.update(durationInputs, error
+        ? { id: doc.id, status: 'error', message: error.message }
+        : selectedReady
+          ? { id: doc.id, status: 'ready', seconds: selectedPlanning.value.prof.totalTime }
+          : { id: doc.id, status: 'pending' });
+    }, [libraryDurations, durationInputs, doc.id, selectedReady, selectedPlanning.value, selectedPlanning.error, currentOptimization, accepted]);
 
-    // ---- doc mutation ----
-    const writeDoc = useCallback((nd) => { setProject((pr) => {
-      const paths = pr.paths.slice(), before = paths[activeIdx]; paths[activeIdx] = nd;
-      return PathLinks.sync({ ...pr, paths }, nd.id, before);
-    }); }, [activeIdx]);
+    const writeDoc = useCallback((nd) => {
+      setPlanningInputRevision((revision) => revision + 1);
+      setProject((pr) => {
+        const paths = pr.paths.slice(), before = paths[activeIdx]; paths[activeIdx] = nd;
+        return PathLinks.sync({ ...pr, paths }, nd.id, before);
+      });
+    }, [activeIdx]);
     const beginHistory = useCallback(() => { hist.current.past.push(clone(docRef.current)); if (hist.current.past.length > 80) hist.current.past.shift(); hist.current.future = []; projectHist.current.future = []; force((x) => x + 1); }, []);
     const beginEdit = useCallback(() => {
       if (editStore.getSnapshot()) return;
@@ -713,10 +772,26 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       editStore.update(fn(clone(draft)));
     }, [editStore, writeDoc]);
 
+    const waypointSnapshot = (current) => ({
+      waypoints: Object.fromEntries(current.paths.map((path) => [path.id, clone(path.waypoints)])),
+      pathLinks: clone(current.pathLinks),
+    });
+    const restoreWaypointSnapshot = (current, snapshot) => ({ ...current,
+      paths: current.paths.map((path) => snapshot.waypoints[path.id] ? { ...path, waypoints: clone(snapshot.waypoints[path.id]) } : path),
+      pathLinks: clone(snapshot.pathLinks).filter((link) => current.paths.some((path) => path.id === link.fromPathId) && current.paths.some((path) => path.id === link.toPathId)),
+    });
+
     const undo = useCallback(() => {
       if (cancelEdit()) return;
       const H = hist.current;
-      if (H.past.length) { H.future.push(clone(docRef.current)); writeDoc(H.past.pop()); force((x) => x + 1); return; }
+      if (H.past.length) {
+        const previous = H.past.pop();
+        if (previous.waypointSnapshot) {
+          H.future.push({ waypointSnapshot: waypointSnapshot(project) });
+          setProject((current) => restoreWaypointSnapshot(current, previous.waypointSnapshot)); setPlanningInputRevision((value) => value + 1);
+        } else { H.future.push(clone(docRef.current)); writeDoc(previous); }
+        force((x) => x + 1); return;
+      }
       const R = routineHist.current;
       if (R.past.length) {
         R.future.push(clone(routineState(project)));
@@ -731,7 +806,14 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     const redo = useCallback(() => {
       if (cancelEdit()) return;
       const H = hist.current;
-      if (H.future.length) { H.past.push(clone(docRef.current)); writeDoc(H.future.pop()); force((x) => x + 1); return; }
+      if (H.future.length) {
+        const next = H.future.pop();
+        if (next.waypointSnapshot) {
+          H.past.push({ waypointSnapshot: waypointSnapshot(project) });
+          setProject((current) => restoreWaypointSnapshot(current, next.waypointSnapshot)); setPlanningInputRevision((value) => value + 1);
+        } else { H.past.push(clone(docRef.current)); writeDoc(next); }
+        force((x) => x + 1); return;
+      }
       const R = routineHist.current;
       if (R.future.length) {
         R.past.push(clone(routineState(project)));
@@ -745,12 +827,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     }, [cancelEdit, writeDoc, project, activeIdx]);
 
     const select = useCallback((kind, idx) => setSel(kind ? { kind, idx } : { kind: null, idx: -1 }), []);
-    // ---- field actions ----
-    const moveWaypoint = useCallback((i, p) => mutate((d) => {
-      p = clampWorld(p);
-      const w = d.waypoints[i]; const dx = p.x - w.x, dy = p.y - w.y;
-      w.x = p.x; w.y = p.y; w.prevC.x += dx; w.prevC.y += dy; w.nextC.x += dx; w.nextC.y += dy; return d;
-    }), [mutate]);
+    const moveWaypoint = useCallback((i, point) => mutate((path) => moveWaypointTo(path, i, point)), [mutate]);
     const moveHandle = useCallback((i, which, p) => mutate((d) => {
       const w = d.waypoints[i]; const key = which ? 'nextC' : 'prevC'; const other = which ? 'prevC' : 'nextC';
       w[key] = { x: p.x, y: p.y };
@@ -762,6 +839,12 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       }
       return d;
     }), [mutate]);
+    const applyBrush = useCallback((stroke) => {
+      const result = applyBrushDraft(editStore, docRef.current, stroke);
+      if (!result.changed) return false;
+      syncBrushSelection(selRef, result.beforeWaypoints, result.path.waypoints, select);
+      return true;
+    }, [editStore, select]);
     const prepareWaypointInsertion = useCallback((rawPoint, segmentHint, onPath, selectedVisit) => {
       const p = clampWorld(rawPoint);
       const candidate = clone(docRef.current);
@@ -928,28 +1011,32 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       const w = d.waypoints[i];
       if (patch.x != null || patch.y != null) {
         const next = clampWorld({ x: patch.x != null ? patch.x : w.x, y: patch.y != null ? patch.y : w.y });
+        moveWaypointTo(d, i, next);
         patch = { ...patch, x: next.x, y: next.y };
       }
-      Object.assign(w, patch); return d;
+      Object.assign(w, patch);
+      if (patch.theta != null && i === 0) setWaypointFacing(d, i, patch.theta);
+      return d;
     }), [commit]);
+    const setWaypointPositionLink = (index, target) => {
+      const before = materializeProject();
+      finishEdit();
+      const next = target
+        ? PathLinks.linkPosition(before, doc.id, index, target.pathId, target.index, pathLinkId())
+        : PathLinks.unlinkPosition(before, doc.id, index);
+      commitWaypointProject(before, next);
+    };
+    const commitWaypointProject = (before, next) => {
+      if (next === before) return;
+      hist.current.past.push({ waypointSnapshot: waypointSnapshot(before) });
+      if (hist.current.past.length > 80) hist.current.past.shift();
+      hist.current.future = []; projectHist.current.future = [];
+      setProject(next); setPlanningInputRevision((value) => value + 1);
+      force((value) => value + 1);
+    };
     const toggleTheta = useCallback((i, on) => commit((d) => { d.waypoints[i].thetaOn = on; return d; }), [commit]);
     const setHandleLen = useCallback((i, key, len) => commit((d) => { const w = d.waypoints[i]; const a = Math.atan2(w[key].y - w.y, w[key].x - w.x); w[key] = { x: w.x + Math.cos(a) * len, y: w.y + Math.sin(a) * len }; return d; }), [commit]);
-    const delWp = useCallback((i) => { commit((d) => {
-      if (d.waypoints.length <= 2 || i < 0 || i >= d.waypoints.length) return d;
-      const oldCount = d.waypoints.length;
-      const endpointJiggle = i === oldCount - 1 && d.waypoints[i].jiggle ? { ...d.waypoints[i].jiggle } : null;
-      const indexMap = Array.from({ length: oldCount }, (_, index) => index === i ? null : index < i ? index : index - 1);
-      d.waypoints.splice(i, 1);
-      const last = d.waypoints.length - 1;
-      remapWaypointRanges(d, indexMap, i);
-      delete d.waypoints[last].segmentHeadingMode;
-      delete d.waypoints[last].segmentLookAt;
-      delete d.waypoints[0].headingTransition;
-      delete d.waypoints[last].headingTransition;
-      if (endpointJiggle) d.waypoints[last].jiggle = endpointJiggle;
-      d.waypoints[0].thetaOn = true; d.waypoints[last].thetaOn = true;
-      return d;
-    }); select(null, -1); }, [commit, select]);
+    const delWp = useCallback((i) => { commit((d) => removeWaypoint(d, i)); select(null, -1); }, [commit, select]);
 
     const enableTargetsAtFraction = (d, f) => {
       const fractions = derived.wpFrac || PM.waypointFracs(d, derived.sample);
@@ -1044,9 +1131,11 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
 
     const setConstraint = useCallback((patch) => commit((d) => { Object.assign(d.constraints, patch); return d; }), [commit]);
     const setDoc = useCallback((patch) => commit((d) => Object.assign(d, patch)), [commit]);
-    const setRobot = useCallback((patch) => setProject((pr) => ({ ...pr, robot: { ...pr.robot, ...patch } })), []);
+    const setRobot = useCallback((patch) => {
+      setPlanningInputRevision((revision) => revision + 1);
+      setProject((pr) => ({ ...pr, robot: { ...pr.robot, ...patch } }));
+    }, []);
 
-    // ---- modeless “add” actions: create + select, then edit on canvas / inspector ----
     const addTargetMid = useCallback(() => commit((d) => {
       const pts = derived.sample.pts;
       const deg = pts.length > 1 ? PM.pointAtFraction(0.5, pts).heading * 180 / Math.PI : 0;
@@ -1058,7 +1147,6 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     const addMarkerMid = useCallback(() => commit((d) => { d.markers.push({ id: markerId(), f: 0.5, name: 'event' + (d.markers.length + 1), cmd: 'none', group: 'sequential' }); d._selM = d.markers.length - 1; return d; }), [commit]);
     const addRangeMid = useCallback(() => addRange(0.35, 0.6), [addRange]);
 
-    // ---- segment + waypoint structural ops (memo §3 / §4 / §7 / §8) ----
     const setSegMeta = useCallback((i, patch) => commit((d) => { Object.assign(d.waypoints[i], patch); return d; }), [commit]);
     const setSegmentHeadingMode = useCallback((i, mode) => commit((d) => {
       const w = d.waypoints[i], next = d.waypoints[i + 1];
@@ -1067,19 +1155,6 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       if (mode === 'lookAt' && !w.segmentLookAt && next) {
         const dx = next.x - w.x, dy = next.y - w.y, length = Math.hypot(dx, dy) || 1;
         w.segmentLookAt = clampWorld({ x: (w.x + next.x) / 2 - dy / length * 1.25, y: (w.y + next.y) / 2 + dx / length * 1.25 });
-      }
-      return d;
-    }), [commit]);
-    const setHeadingTransition = useCallback((i, patch) => commit((d) => {
-      const w = d.waypoints[i]; if (!w || i <= 0 || i >= d.waypoints.length - 1) return d;
-      w.headingTransition = Object.assign({ placement: 'after', rotationPriority: 'heading', distanceM: 0.75 }, w.headingTransition || {}, patch);
-      if (patch.placement && patch.placement !== 'after') {
-        const defaultMode = d.headingMode || 'targets';
-        const incomingMode = d.waypoints[i - 1].segmentHeadingMode || defaultMode;
-        const outgoingMode = w.segmentHeadingMode || defaultMode;
-        if ((incomingMode === 'tangent' || incomingMode === 'lookAt') && (outgoingMode === 'manual' || outgoingMode === 'targets')) {
-          w.thetaOn = true;
-        }
       }
       return d;
     }), [commit]);
@@ -1114,110 +1189,36 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     }), [commit]);
     const setHeadingMode = useCallback((m) => commit((d) => { d.headingMode = m; return d; }), [commit]);
     const toggleDriveBackward = useCallback(() => commit((d) => { d.driveBackward = !d.driveBackward; return d; }), [commit]);
-    const nudgeWp = useCallback((i, dx, dy) => commit((d) => { const w = d.waypoints[i]; if (!w) return d; const nx = Math.max(0, Math.min(FIELD_W, w.x + dx)), ny = Math.max(0, Math.min(FIELD_H, w.y + dy)); const ddx = nx - w.x, ddy = ny - w.y; w.x = nx; w.y = ny; if (w.prevC) { w.prevC.x += ddx; w.prevC.y += ddy; } if (w.nextC) { w.nextC.x += ddx; w.nextC.y += ddy; } return d; }), [commit]);
+    const nudgeWp = useCallback((i, dx, dy) => commit((path) => {
+      const waypoint = path.waypoints[i];
+      return waypoint ? moveWaypointTo(path, i, { x: waypoint.x + dx, y: waypoint.y + dy }) : path;
+    }), [commit]);
     const nudgeFrac = useCallback((kind, i, df) => commit((d) => {
       const arr = kind === 'rt' ? d.targets : d.markers; const item = arr[i]; if (!item) return d;
       const f = Math.max(0, Math.min(1, PM.featureFraction(item, derived.sample) + df));
       item.f = f; if (item.anchor === 'dist') item.d = +(f * (derived.sample.length || 0)).toFixed(3);
       return d;
     }), [commit, derived]);
-    const setWaypointHeading = useCallback((i, deg) => mutate((d) => { const w = d.waypoints[i]; w.theta = deg; w.thetaOn = true; return d; }), [mutate]);
+    const setWaypointHeading = useCallback((i, deg) => mutate((d) => setWaypointFacing(d, i, deg)), [mutate]);
     const faceWaypoint = useCallback((i, mode) => commit((d) => {
       const w = d.waypoints[i]; let deg = w.theta || 0;
       if (mode === 'next' && d.waypoints[i + 1]) { const t = d.waypoints[i + 1]; deg = Math.atan2(t.y - w.y, t.x - w.x) * 180 / Math.PI; }
       else if (mode === 'prev' && d.waypoints[i - 1]) { const t = d.waypoints[i - 1]; deg = Math.atan2(t.y - w.y, t.x - w.x) * 180 / Math.PI; }
       else if (mode === 'tangent') { const idx = (derived.wpIdx && derived.wpIdx[i]) || 0; const p = derived.sample.pts[idx]; if (p) deg = (p.heading || 0) * 180 / Math.PI; }
-      w.theta = deg; w.thetaOn = true; return d;
+      return setWaypointFacing(d, i, deg - (i === 0 && d.driveBackward ? 180 : 0));
     }), [commit, derived]);
-    const headingMenu = useCallback((i, x, y) => {
-      setHeadMenu({ x, y, items: [
+    const headingMenu = useCallback((i, x, y, returnFocus) => {
+      setHeadMenu({ x, y, returnFocus, items: [
         { label: 'Face next waypoint', icon: 'compass', onClick: () => faceWaypoint(i, 'next') },
         { label: 'Face previous waypoint', icon: 'compass', onClick: () => faceWaypoint(i, 'prev') },
         { label: 'Align to path tangent', icon: 'route', onClick: () => faceWaypoint(i, 'tangent') },
         { sep: true },
-        { label: 'Type exact angle\u2026', icon: 'compass', onClick: () => select('wp', i) },
+        { label: 'Type exact angle\u2026', icon: 'compass', onClick: () => { setOptimizationOpen(false); setComparison(null); setInspectorOpen(true); select('wp', i); } },
       ] });
     }, [faceWaypoint, select]);
-    const duplicateWp = useCallback((i) => commit((d) => {
-      const oldCount = d.waypoints.length;
-      const src = JSON.parse(JSON.stringify(d.waypoints[i]));
-      delete src.headingTransition;
-      if (i === oldCount - 1) delete d.waypoints[i].jiggle;
-      else delete src.jiggle;
-      const next = clampWorld({ x: src.x + 0.4, y: src.y + 0.4 }); src.x = next.x; src.y = next.y;
-      d.waypoints.splice(i + 1, 0, src);
-      remapWaypointRanges(d, Array.from({ length: oldCount }, (_, index) => index <= i ? index : index + 1));
-      const hd = PM.autoHandles(d.waypoints, i + 1); src.prevC = hd.prevC; src.nextC = hd.nextC;
-      d.waypoints[0].thetaOn = true; d.waypoints[d.waypoints.length - 1].thetaOn = true;
-      d._selAfter = i + 1; return d;
-    }), [commit]);
-    const reversePath = useCallback(() => commit((d) => {
-      const endpointJiggle = d.waypoints[d.waypoints.length - 1].jiggle ? { ...d.waypoints[d.waypoints.length - 1].jiggle } : null;
-      const oldSeg = d.waypoints.map((w) => w.segType);
-      const oldHeading = d.waypoints.map((w) => w.segmentHeadingMode);
-      const oldFollow = d.waypoints.map((w) => w.segmentFollowMode);
-      const oldLookAt = d.waypoints.map((w) => w.segmentLookAt && { ...w.segmentLookAt });
-      const oldLaws = d.waypoints.slice(0, -1).map((waypoint) => {
-        const mode = waypoint.segmentHeadingMode || d.headingMode || 'targets';
-        return mode === 'lookAt' ? 'lookAt:' + (waypoint.segmentLookAt ? waypoint.segmentLookAt.x + ':' + waypoint.segmentLookAt.y : '') : mode;
-      });
-      const oldTransitions = d.waypoints.map((waypoint, index) => index > 0 && index < d.waypoints.length - 1
-        && oldLaws[index] !== oldLaws[index - 1] && !waypoint.turnInPlace
-        ? { placement: 'after', rotationPriority: 'heading', distanceM: 0.75, ...(waypoint.headingTransition || {}) }
-        : null);
-      const w = d.waypoints.slice().reverse(); const n = w.length;
-      w.forEach((x) => {
-        const p = x.prevC; x.prevC = x.nextC; x.nextC = p;
-        if (x.turnInPlace && x.turnInPlace.direction === 'clockwise') x.turnInPlace.direction = 'counterclockwise';
-        else if (x.turnInPlace && x.turnInPlace.direction === 'counterclockwise') x.turnInPlace.direction = 'clockwise';
-      });
-      for (let j = 0; j < n; j++) {
-        if (j < n - 1) {
-          w[j].segType = oldSeg[n - 2 - j];
-          if (oldHeading[n - 2 - j]) w[j].segmentHeadingMode = oldHeading[n - 2 - j];
-          else delete w[j].segmentHeadingMode;
-          if (oldFollow[n - 2 - j]) w[j].segmentFollowMode = oldFollow[n - 2 - j];
-          else delete w[j].segmentFollowMode;
-          if (oldLookAt[n - 2 - j]) w[j].segmentLookAt = { ...oldLookAt[n - 2 - j] };
-          else delete w[j].segmentLookAt;
-        } else {
-          delete w[j].segType;
-          delete w[j].segmentHeadingMode;
-          delete w[j].segmentFollowMode;
-          delete w[j].segmentLookAt;
-        }
-        delete w[j].headingTransition;
-      }
-      for (let oldIndex = 1; oldIndex < n - 1; oldIndex++) {
-        const transition = oldTransitions[oldIndex]; if (!transition) continue;
-        const newIndex = n - 1 - oldIndex;
-        w[newIndex].headingTransition = { ...transition,
-          placement: transition.placement === 'before' ? 'after' : transition.placement === 'split' ? 'split' : 'before' };
-      }
-      d.waypoints = w; remapWaypointRanges(d, Array.from({ length: n }, (_, index) => n - 1 - index));
-      w.forEach((waypoint) => delete waypoint.jiggle);
-      if (endpointJiggle) w[n - 1].jiggle = endpointJiggle;
-      const sv = d.startVel, gv = d.goalVel; d.startVel = gv; d.goalVel = sv;
-      if (endpointJiggle) d.goalVel = 0;
-      w[0].thetaOn = true; w[n - 1].thetaOn = true; return d;
-    }), [commit]);
-    const reorderWp = useCallback((from, to) => commit((d) => {
-      const w = d.waypoints; if (to < 0 || to >= w.length || from === to) return d;
-      const endpointJiggle = w[w.length - 1].jiggle ? { ...w[w.length - 1].jiggle } : null;
-      const order = Array.from({ length: w.length }, (_, index) => index);
-      const [oldIndex] = order.splice(from, 1); order.splice(to, 0, oldIndex);
-      const indexMap = []; order.forEach((value, index) => { indexMap[value] = index; });
-      const [m] = w.splice(from, 1); w.splice(to, 0, m);
-      w.forEach((waypoint) => delete waypoint.jiggle);
-      if (endpointJiggle) w[w.length - 1].jiggle = endpointJiggle;
-      delete w[w.length - 1].segmentHeadingMode;
-      delete w[w.length - 1].segmentFollowMode;
-      delete w[w.length - 1].segmentLookAt;
-      delete w[0].headingTransition;
-      delete w[w.length - 1].headingTransition;
-      remapWaypointRanges(d, indexMap);
-      w[0].thetaOn = true; w[w.length - 1].thetaOn = true; d._selAfter = to; return d;
-    }), [commit]);
+    const duplicateWp = useCallback((i) => commit((d) => duplicateWaypoint(d, i)), [commit]);
+    const reversePath = useCallback(() => commit(reversePathDraft), [commit]);
+    const reorderWp = useCallback((from, to) => commit((d) => reorderWaypoint(d, from, to)), [commit]);
     const insertWp = useCallback((i) => {
       const pts = derived.sample.pts;
       if (!pts || pts.length < 2) return;
@@ -1227,40 +1228,38 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     }, [addWaypoint, derived, doc.waypoints.length]);
     const inspActions = { setWp, toggleTheta, setHandleLen, delWp, setTarget, delTarget, setMarker, delMarker, setRange, setRangeAnchor, delRange, setConstraint, setDoc, select, setTool,
       addTargetMid, addMarkerMid, addRangeMid,
-      setSegMeta, setSegmentHeadingMode, setHeadingTransition, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, reorderWp, insertWp,
+      setSegMeta, setSegmentHeadingMode, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, reorderWp, insertWp,
       setStop, setWait, setTurnInPlace, setTurnInPlaceMeta, setHeadingMode, toggleDriveBackward,
       openInspector: () => setInspectorOpen(true) };
-    const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginEdit, finishEdit, cancelEdit,
+    const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, applyBrush, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginEdit, finishEdit, cancelEdit,
       setWaypointHeading, moveSegmentLookAt, headingMenu, faceWaypoint, delWp, delTarget, delMarker, delRange,
       openInspector: () => setInspectorOpen(true),
       select };
 
-    // ---- project ops ----
-    const uniquePathName = (base) => {
-      const used = new Set(project.paths.map((path) => path.name.toLowerCase()));
-      if (!used.has(base.toLowerCase())) return base;
-      let suffix = 2;
-      while (used.has((base + ' ' + suffix).toLowerCase())) suffix++;
-      return base + ' ' + suffix;
-    };
+    const uniquePathName = (base) => uniqueItemName(project.paths, base);
     const resetForPath = (i) => {
-      cancelEdit();
+      finishEdit();
+      routinePlaybackStore.reset();
+      if (i !== activeIdx) setPlanningInputRevision(0);
       setActiveIdx(i); setSel({ kind: null, idx: -1 }); playbackStore.reset();
       hist.current = { past: [], future: [] }; setPage('plan');
     };
     const updatePathLibrary = (update) => {
-      cancelEdit();
+      finishEdit();
       setProject(update);
     };
     const addPath = (folderId) => {
+      finishEdit();
       const name = uniquePathName('New path'), index = project.paths.length;
-      const path = blankPath(name); if (folderId) path.folderId = folderId;
+      const path = blankPath(name, robot); if (folderId) path.folderId = folderId;
       setProject((pr) => ({ ...pr, paths: [...pr.paths, path] })); resetForPath(index);
-      return { index, name, id: path.id };
+      return { index, name, id: path.id, folderId: path.folderId };
     };
-    const appendPath = () => {
-      const source = project.paths[activeIdx]; if (!source) return null;
-      const name = uniquePathName('New path'), index = project.paths.length, path = blankPath(name);
+    const appendPath = (sourceId) => {
+      const paths = materializeProject().paths;
+      const source = sourceId ? paths.find((path) => path.id === sourceId) : paths[activeIdx]; if (!source) return null;
+      finishEdit();
+      const name = uniquePathName('New path'), index = project.paths.length, path = blankPath(name, robot);
       const start = source.waypoints[source.waypoints.length - 1], angle = (start.theta || 0) * Math.PI / 180;
       let end = clampWorld({ x: start.x + Math.cos(angle) * 2.8, y: start.y + Math.sin(angle) * 2.8 });
       if (Math.hypot(end.x - start.x, end.y - start.y) < 0.75) {
@@ -1271,29 +1270,33 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       if (source.folderId) path.folderId = source.folderId;
       const link = { id: pathLinkId(), fromPathId: source.id, toPathId: path.id };
       setProject((pr) => ({ ...pr, paths: [...pr.paths, path], pathLinks: [...(pr.pathLinks || []).filter((item) => item.fromPathId !== source.id), link] }));
-      resetForPath(index); return { index, name, id: path.id };
+      resetForPath(index); return { index, name, id: path.id, folderId: path.folderId };
     };
-    const setPathLink = (fromPathId, toPathId) => updatePathLibrary((pr) => {
+    const setPathLink = (fromPathId, toPathId) => {
+      const pr = materializeProject(); finishEdit();
       let pathLinks = (pr.pathLinks || []).filter((link) => link.fromPathId !== fromPathId);
-      if (!toPathId || fromPathId === toPathId) return { ...pr, pathLinks };
+      if (!toPathId || fromPathId === toPathId) { commitWaypointProject(pr, { ...pr, pathLinks }); return; }
       pathLinks = pathLinks.filter((link) => link.toPathId !== toPathId);
       const paths = pr.paths.slice(), source = paths.find((path) => path.id === fromPathId), targetIndex = paths.findIndex((path) => path.id === toPathId);
-      if (!source || targetIndex < 0) return pr;
+      if (!source || targetIndex < 0) return;
       const target = clone(paths[targetIndex]), end = source.waypoints[source.waypoints.length - 1];
       target.waypoints[0] = PathLinks.copyPose(target.waypoints[0], end); paths[targetIndex] = target;
-      return { ...pr, paths, pathLinks: [...pathLinks, { id: pathLinkId(), fromPathId, toPathId }] };
-    });
+      const next = { ...pr, paths, pathLinks: [...pathLinks, { id: pathLinkId(), fromPathId, toPathId }] };
+      commitWaypointProject(pr, PathLinks.sync(next, target.id, pr.paths[targetIndex]));
+    };
     const dupPath = (i) => {
-      const source = project.paths[i]; if (!source) return null;
+      const source = materializeProject().paths[i]; if (!source) return null;
+      finishEdit();
       const name = uniquePathName(source.name + ' copy'), index = i + 1;
-      setProject((pr) => { const cp = clone(pr.paths[i]); cp.id = pathId(); cp.name = name; const paths = pr.paths.slice(); paths.splice(index, 0, cp); return { ...pr, paths }; });
-      resetForPath(index); return { index, name, id: null };
+      const cp = { ...clone(source), id: pathId(), name };
+      setProject((pr) => { const paths = pr.paths.slice(); paths.splice(index, 0, cp); return { ...pr, paths }; });
+      resetForPath(index); return { index, name, id: cp.id, folderId: cp.folderId };
     };
     const delPath = (i) => {
       if (project.paths.length <= 1) return false;
-      const target = project.paths[i]; let referenced = false;
-      routines.forEach((candidate) => AUTO.walk(candidate.nodes, (node) => { if (node.type === 'path' && node.ref === target.id) referenced = true; }));
-      if (referenced) { alert('“' + target.name + '” is used by an autonomous routine. Remove those routine steps before deleting the path.'); return false; }
+      const target = project.paths[i]; if (!target) return false;
+      const references = referencingRoutines(routines, target.id);
+      if (references.length) { alert('“' + target.name + '” is used by ' + references.map((candidate) => candidate.name).join(', ') + '. Remove those steps before deleting the path.'); return false; }
       if (!confirm('Delete path “' + target.name + '”? This cannot be undone.')) return false;
       updatePathLibrary((pr) => { const paths = pr.paths.filter((_, k) => k !== i); return { ...pr, paths, pathLinks: (pr.pathLinks || []).filter((link) => link.fromPathId !== target.id && link.toPathId !== target.id) }; });
       setActiveIdx((a) => Math.max(0, a > i ? a - 1 : a === i ? Math.min(a, project.paths.length - 2) : a));
@@ -1302,8 +1305,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     };
     const renamePath = (i, name) => { const clean = (name || '').trim(); if (!clean) return false; updatePathLibrary((pr) => { const paths = pr.paths.slice(); paths[i] = { ...paths[i], name: clean }; return { ...pr, paths }; }); return true; };
     const addPathFolder = () => {
-      const folders = project.pathFolders || [], used = new Set(folders.map((folder) => folder.name.toLowerCase()));
-      let name = 'New folder', suffix = 2; while (used.has(name.toLowerCase())) name = 'New folder ' + suffix++;
+      const folders = project.pathFolders || [], name = uniqueItemName(folders, 'New folder');
       const folder = { id: 'folder_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)), name };
       setProject((pr) => ({ ...pr, pathFolders: [...(pr.pathFolders || []), folder] }));
       return folder;
@@ -1322,22 +1324,20 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     const movePathToFolder = (i, folderId) => updatePathLibrary((pr) => ({ ...pr, paths: pr.paths.map((path, index) => {
       if (index !== i) return path; const next = { ...path }; if (folderId) next.folderId = folderId; else delete next.folderId; return next;
     }) }));
-    const setActive = (i) => resetForPath(i);
+    const setActive = (i) => { if (i === activeIdx && page === 'plan') return; setComparison(null); resetForPath(i); };
     const resetForRoutine = () => {
       setRoutineSel(null); routinePlaybackStore.reset(); setRoutineOutcomes({});
     };
-    const uniqueRoutineName = (base) => {
-      const used = new Set(routines.map((candidate) => candidate.name.toLowerCase()));
-      if (!used.has(base.toLowerCase())) return base;
-      let suffix = 2; while (used.has((base + ' ' + suffix).toLowerCase())) suffix++;
-      return base + ' ' + suffix;
-    };
+    const uniqueRoutineName = (base) => uniqueItemName(routines, base);
     const setActiveRoutine = (id) => {
+      if (id === routine.id && page === 'auto') return;
+      finishEdit(); playbackStore.reset();
       if (!routines.some((candidate) => candidate.id === id)) return;
       setProject((current) => withRoutineState(current, { ...routineState(current), activeRoutineId: id }));
       routineHist.current = { past: [], future: [] }; resetForRoutine(); setPage('auto');
     };
     const addRoutine = () => {
+      finishEdit(); playbackStore.reset();
       const created = blankRoutine(uniqueRoutineName('New routine'));
       commitRoutineState((state) => ({ routines: [...state.routines, created], activeRoutineId: created.id }));
       resetForRoutine(); setPage('auto'); return created;
@@ -1417,14 +1417,26 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     const total = derived.prof.totalTime || 0;
     useEffect(() => playbackStore.setTotal(total), [playbackStore, total]);
 
-    // ---- routine run engine ----
+    const routinePlanningPaths = useMemo(() => {
+      const referenced = new Map();
+      AUTO.walk(routine.nodes, (node) => {
+        if (node.type === 'path') {
+          const path = project.paths.find((candidate) => candidate.id === node.ref);
+          if (path) referenced.set(path.id, path);
+        } else if (node.type === 'function' && node.cat === 'generate' && node.preview) {
+          referenced.set(node.preview.id, node.preview);
+        }
+      });
+      return [...referenced.values()];
+    }, [routine, project.paths]);
+    const routinePlans = useRoutinePlanning(page === 'auto', routinePlanningPaths, robot, plannerId);
     const lastRun = useRef({ steps: [], total: 0 });
     const run = useMemo(() => {
       if (page !== 'auto') return lastRun.current;
-      const nextRun = AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId, javaProjectState.catalog);
+      const nextRun = AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId, javaProjectState.catalog, routinePlans);
       lastRun.current = nextRun;
       return nextRun;
-    }, [page, routine, project.paths, robot, routineOutcomes, plannerId, javaProjectState.catalog]);
+    }, [page, routine, project.paths, robot, routineOutcomes, plannerId, javaProjectState.catalog, routinePlans]);
     useEffect(() => routinePlaybackStore.setTotal(run.total), [routinePlaybackStore, run.total]);
     useEffect(() => { if (page !== 'plan') playbackStore.pause(); if (page !== 'auto') routinePlaybackStore.pause(); }, [page, playbackStore, routinePlaybackStore]);
 
@@ -1449,7 +1461,6 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     }), [routineOutcomes, routine, project.paths, javaProjectState.catalog]);
     const autoFieldActions = useMemo(() => ({ selectNode: (id) => setRoutineSel((s) => s === id ? null : id), select: () => setRoutineSel(null) }), []);
 
-    // ---- view ----
     const onFit = useCallback(() => setView(FIT), []);
     const zoomBy = useCallback((factor) => setView((v) => {
       const cx = v.x + v.w / 2, cy = v.y + v.h / 2;
@@ -1458,21 +1469,71 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       return { x: cx - nw / 2, y: cy - nh / 2, w: nw, h: nh };
     }), []);
     const zoomPct = Math.round(FIT.w / view.w * 100);
-    const setPlannerFamily = useCallback((nextPlannerId) => {
-      setProject((current) => ({ ...current, plannerId: nextPlannerId === 'optimizedTrajectory' ? 'optimizedTrajectory' : 'profiledSpline' }));
-    }, []);
+    const compareTrajectory = (mode) => {
+      if (mode === 'normal' && !normalReady) return;
+      playbackStore.reset();
+      setComparison({ id: doc.id, key: optimizationKey, mode });
+    };
+    const toggleOptimization = () => {
+      if (optimizationOpen) {
+        compareTrajectory('selected');
+        setOptimizationOpen(false);
+        return;
+      }
+      setOptimizationOpen(true);
+      if (normalReady && !accepted && !candidate && !optimizationState.running) {
+        setComparison(null);
+        void optimizer.start(doc.id, 'common');
+      }
+    };
+    const startOptimization = (deadline) => {
+      setComparison(null);
+      void optimizer.start(doc.id, deadline);
+    };
+    const setCorridor = (value) => {
+      if (!Number.isFinite(value)) return;
+      const corridorM = Math.max(0.03, Math.min(1.5, value));
+      if (Math.abs(corridorM - (doc.optimization?.corridorM ?? 0.15)) < 1e-9) return;
+      beginHistory();
+      playbackStore.reset();
+      writeDoc({ ...doc, optimization: { ...doc.optimization, corridorM } });
+    };
+    const applyOptimization = () => {
+      if (!candidate?.finalTrajectory || editStore.getSnapshot()) return;
+      const current = projectRef.current;
+      const currentPath = current.paths.find((path) => path.id === doc.id);
+      if (!currentPath || optimizationInputKey(currentPath, current.robot, current.field) !== optimizationKey) return;
+      try {
+        const result = { version: 1, inputKey: optimizationKey, samplesPerSegment: PERSEG, result: clone(candidate.finalTrajectory) };
+        appliedPreview.current = { artifact: result, key: optimizationKey, value: candidate };
+        beginHistory();
+        playbackStore.reset();
+        setComparison(null);
+        writeDoc({ ...currentPath, optimization: { corridorM: currentPath.optimization?.corridorM ?? 0.15, accepted: result } });
+      } catch (error) { setExportError(error.message || 'The candidate could not be applied.'); }
+    };
+    const useNormalTrajectory = () => {
+      beginHistory();
+      playbackStore.reset();
+      setComparison(null);
+      writeDoc({ ...doc, optimization: { corridorM: doc.optimization?.corridorM ?? 0.15 } });
+    };
 
-    // ---- desktop project workflow ----
     const canReplaceProject = useCallback(() => !dirtyRef.current || confirm('Discard unsaved changes to this project?'), []);
     const loadProject = useCallback((incoming) => {
       invalidateScheduledAutosave();
       cancelEdit();
+      optimizer.cancel();
+      setComparison(null);
       const next = normalizeProject(incoming);
+      setProjectKey((key) => key + 1);
+      setLibraryPreferenceKey(next.name + ':' + next.paths[0].id);
       const javaGeneration = ++javaRestoreGeneration.current;
       const requestedPathId = next.editor && next.editor.activePathId;
       const requestedPathIndex = requestedPathId ? next.paths.findIndex((path) => path.id === requestedPathId) : -1;
       skipDirty.current = true;
       projectRef.current = next;
+      setPlanningInputRevision(0);
       setProject(next);
       setActiveIdx(requestedPathIndex >= 0 ? requestedPathIndex : 0); setSel({ kind: null, idx: -1 }); setRoutineSel(null);
       playbackStore.reset();
@@ -1586,13 +1647,14 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       });
     }, [newProject, openProject, saveProject, onExportJava, linkJavaProject, installJavaSupport, buildJavaCatalog, cancelJavaCatalogBuild]);
 
-    // ---- keyboard ----
     useEffect(() => {
       const onKey = (e) => {
+        if (e.defaultPrevented || document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')) return;
+        if (e.target.closest && e.target.closest('.editor-library,.library-divider,[role="menu"]')) return;
         const matches = e.target.matches && e.target.matches.bind(e.target);
         if (e.key === 'Tab') { keyboardNavigation.current = true; return; }
         const nativeKeyboardControl = keyboardNavigation.current && matches && matches('button,select,input[type="range"]');
-        const textEditing = nativeKeyboardControl || (matches && (matches('textarea,[contenteditable="true"]') || (matches('input:not([type="range"])') && !matches('.numinput'))));
+        const textEditing = nativeKeyboardControl || e.target.isContentEditable || (matches && matches('textarea,input:not([type="range"])'));
         const k = e.key.toLowerCase();
         if (page === 'plan' && e.key === ' ' && !textEditing) {
           e.preventDefault();
@@ -1601,7 +1663,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
           playbackStore.toggle();
           return;
         }
-        const toolShortcut = !e.metaKey && !e.ctrlKey && !e.altKey && !textEditing && ({ '1': 'select', '2': 'waypoint', '3': 'rotation', '4': 'marker', '5': 'range', v: 'select', w: 'waypoint', r: 'rotation', m: 'marker', c: 'range' })[k];
+        const toolShortcut = !e.metaKey && !e.ctrlKey && !e.altKey && !textEditing && ({ '1': 'select', '2': 'waypoint', '3': 'rotation', '4': 'marker', '5': 'range', '6': 'brush', v: 'select', w: 'waypoint', r: 'rotation', m: 'marker', c: 'range', b: 'brush' })[k];
         if (page === 'plan' && toolShortcut) {
           e.preventDefault();
           if (typeof e.target.blur === 'function') e.target.blur();
@@ -1610,6 +1672,12 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
         }
         const formControl = matches && matches('input,select,textarea,[contenteditable="true"]');
         if (formControl) return;
+        if (page === 'plan' && tool === 'brush' && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === '[' || e.key === ']')) {
+          e.preventDefault();
+          const direction = e.key === ']' ? 1 : -1;
+          setBrush((current) => ({ ...current, radius: Math.max(0.3, Math.min(2.4, +(current.radius + direction * 0.1).toFixed(1))) }));
+          return;
+        }
         if ((e.metaKey || e.ctrlKey) && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
         if ((e.metaKey || e.ctrlKey) && k === 'y') { e.preventDefault(); redo(); return; }
         if (page !== 'plan') return;
@@ -1635,44 +1703,68 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
       };
       window.addEventListener('keydown', onKey);
       return () => window.removeEventListener('keydown', onKey);
-    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, derivationCurrent, nudgeWp, nudgeFrac, playbackStore]);
+    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, tool, derivationCurrent, nudgeWp, nudgeFrac, playbackStore]);
+
+    const pathIndex = (id) => project.paths.findIndex((path) => path.id === id);
+    const renderLibrary = (mode, structure) => h(LibraryRail, {
+      key: projectKey + ':' + mode, preferenceKey: libraryPreferenceKey, mode, project, routines,
+      activePathId: doc.id, activeRoutineId: routine.id, times,
+      onMode: (next) => next === 'paths' ? setActive(activeIdx) : setActiveRoutine(routine.id),
+      onPath: (id) => { const index = pathIndex(id); if (index >= 0) setActive(index); }, onRoutine: setActiveRoutine,
+      controller: { ...pushController, requestPush: (scope) => { flushSync(() => finishEdit()); pushController.requestPush(scope); } },
+      actions: { addPath, appendPath, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine,
+        duplicatePath: (id) => dupPath(pathIndex(id)), deletePath: (id) => delPath(pathIndex(id)), renamePath: (id, name) => renamePath(pathIndex(id), name),
+        addFolder: addPathFolder, renameFolder: renamePathFolder, deleteFolder: deletePathFolder,
+        movePath: (id, folderId) => movePathToFolder(pathIndex(id), folderId), linkPath: setPathLink },
+    }, structure);
 
     const selNode = (page === 'auto' && routineSel) ? AUTO.findNode(routine, routineSel) : null;
+    const fieldNotices = [
+      exportError && { id: 'export', error: true, label: 'Export failed', detail: exportError,
+        action: { label: 'Dismiss', onClick: () => setExportError('') } },
+      planningNotice && !(optimizationOpen && normalError) && { id: 'planning', error: planningNotice.kind === 'interactive',
+        label: planningNotice.kind === 'interactive' ? 'Trajectory unavailable' : 'Interactive preview',
+        detail: planningNotice.message + (planningNotice.kind === 'interactive' ? ' Undo or adjust the geometry to try again.' : ''),
+        action: !optimizationOpen ? { label: 'Optimize', onClick: () => setOptimizationOpen(true) } : undefined },
+      !selectedPreview && !normalReady && !normal.error && { id: 'loading', label: 'Preparing trajectory…', detail: 'Preview timing is provisional until planning finishes.' },
+      !optimizationOpen && currentOptimization && selectedReady && !accepted && { id: 'optimization', error: true, label: 'Optimization unavailable', detail: 'The saved optimization could not be validated. Review it before using this path.',
+        action: { label: 'Optimize', onClick: () => setOptimizationOpen(true) } },
+    ].filter(Boolean);
+
 
     return h('div', { className: 'app' },
-      h(Panels.Toolbar, { project, page, setPage, alliance, setAlliance, exportError, unitSystem, setUnitSystem, onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo, onExportJava: () => onExportJava('linked'), javaProject: javaProjectState, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
-        routines, activeRoutineId: routine.id, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine }),
-      h(RobotPushDialog, { getProject: materializeProject }),
-      h(DiagnosticBundleDialog, { getProject: materializeProject }),
+      h(Panels.Toolbar, { page, setPage: (next) => { finishEdit(); playbackStore.reset(); routinePlaybackStore.reset(); setPage(next); }, editorPage,
+        alliance, setAlliance,
+        onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo,
+        optimizationOpen, toggleOptimization, optimizationApplied: Boolean(accepted) }),
+      h(RobotPushDialog, { controller: pushController }),
+      h(DiagnosticBundleDialog, { getProject: materializeProject, targetSelector: '.robot-connection-diagnostics', onOpen: pushController.close, renderKey: pushController.open + ':' + pushController.phase }),
       page === 'robot'
-        ? h('main', { className: 'page-main' }, h(RobotPage, { robot, setRobot, mcpEnabled, agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
+        ? h('main', { className: 'page-main' }, h(RobotPage, { robot, setRobot, unitSystem, setUnitSystem, pushController, mcpEnabled, agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
         : page === 'auto'
         ? h('main', { className: 'stage stage-auto' },
-            h('nav', { className: 'rail rail-l', 'aria-label': 'Autonomous routine steps' },
-              h(RoutinePanelPlayback, { store: routinePlaybackStore, routine, run, paths: project.paths, selId: routineSel, onSelect: setRoutineSel, acq, catalog: javaProjectState.catalog })),
-            h('div', { className: 'fieldcol' },
-              h(RoutineFieldPlayback, { store: routinePlaybackStore, run, selectedId: routineSel, doc, derived, sel: { kind: null, idx: -1 }, tool: 'select', view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: autoFieldActions }),
-              h(RoutineTransportPlayback, { store: routinePlaybackStore, run }),
-              h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
+            renderLibrary('routines', null),
+            h(RoutineWorkspace, {
+              routine,
+              flow: h(RoutinePanelPlayback, { key: routine.id, embedded: true, collapsedIds: routineCollapsed[projectKey + ':' + routine.id] || [], onCollapsedIdsChange: (ids) => setRoutineCollapsed((current) => ({ ...current, [projectKey + ':' + routine.id]: ids })), store: routinePlaybackStore, routine, run, paths: project.paths, selId: routineSel, onSelect: setRoutineSel, acq, catalog: javaProjectState.catalog }),
+              field: h(React.Fragment, null,
+                h(RoutineFieldPlayback, { store: routinePlaybackStore, run, selectedId: routineSel, doc, derived, sel: { kind: null, idx: -1 }, tool: 'select', view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: autoFieldActions }),
+                h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
+              status: run.blocked && h('div', { className: 'routine-status ' + (run.planningStatus === 'error' ? 'error' : 'planning'), role: run.planningStatus === 'error' ? 'alert' : 'status' },
+                h('span', { className: 'routine-status-icon' }, h(UI.Icon, { name: run.planningStatus === 'error' ? 'info' : 'route', size: 14 })),
+                h('div', { className: 'routine-status-copy' },
+                  h('b', null, run.planningStatus === 'error' ? 'Routine planning failed' : 'Planning routine trajectories…'),
+                  run.planningError && h('span', null, run.planningError))),
+              transport: h(RoutineTransportPlayback, { store: routinePlaybackStore, run }) }),
             h('aside', { className: 'rail rail-r' + (selNode ? '' : ' collapsed'), 'aria-label': 'Routine step inspector' },
               selNode && h(StepInspector, { node: selNode, paths: project.paths, acq, run, javaProject: { ...javaProjectState, link: linkJavaProject }, conditionOptions: AUTO.authoritativeConditions(javaProjectState.catalog) })))
-        : h('main', { className: 'stage stage-plan', inert: derivationCurrent ? undefined : '', 'aria-disabled': derivationCurrent ? undefined : true },
-            h('nav', { className: 'rail rail-l' + (outlineOpen ? '' : ' collapsed'), 'aria-label': 'Path outline' },
-              h(Panels.Outline, { open: outlineOpen, setOpen: setOutlineOpen, doc: derivationDoc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot })),
-            h('div', { className: 'fieldcol' },
-              h(Panels.ToolRail, { tool, setTool }),
-              exportError && h('div', { className: 'insert-preview export-error-banner', role: 'alert' },
-                h('div', { className: 'insert-preview-copy' }, h('b', null, 'Export failed'), h('span', null, exportError)),
-                h('button', { type: 'button', 'aria-label': 'Dismiss export error', onClick: () => setExportError('') }, '\u00d7')),
-              plannerId === 'optimizedTrajectory' && derivation.pending && h('div', { className: 'stage-hint', role: 'status' }, 'Optimizing the final trajectory…'),
-              plannerId === 'optimizedTrajectory' && !derivation.pending && derivation.optimization && h('div', { className: 'stage-hint', role: 'status' },
-                derivation.optimization.status === 'equivalent'
-                  ? 'Final optimizer kept the interactive trajectory; no valid time improvement was found.'
-                  : `Final trajectory ${derivation.optimization.totalTimeS.toFixed(2)} s · solved in ${derivation.optimization.solveTimeMs.toFixed(1)} ms${derivation.optimization.optimizationClass === 'corridor' ? ` · ${derivation.optimization.budgetTier} budget ${(derivation.optimization.budgetMs / 1000).toFixed(0)} s · max shift ${(derivation.optimization.maxDeviationM || 0).toFixed(2)} m` : ''}`),
-              derivation.error && h('div', { className: 'insert-preview derivation-error', role: 'alert' },
-                h('div', { className: 'insert-preview-copy' }, h('b', null, 'Path preview unavailable'), h('span', null, derivation.error.message || String(derivation.error))),
-                h('span', null, 'Showing the last valid preview. Undo or edit the selected geometry.')),
-              h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, derivedPath: derivation.path, robot, plannerId, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, showHandles: true }),
+        : h('main', { className: 'stage stage-plan' },
+            renderLibrary('paths', (secOpen, setSecOpen) => h('div', { style: { height: '100%' }, inert: derivationCurrent ? undefined : '' }, h(Panels.Outline, { open: true, setOpen: () => {}, doc: derivationDoc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot, ready: derivationCurrent }))),
+            h('div', { className: 'fieldcol', inert: derivationCurrent ? undefined : '', 'aria-disabled': derivationCurrent ? undefined : true },
+              h(Panels.ToolRail, { tool, setTool, brush, setBrush, waypointCount: derivationDoc.waypoints.length }),
+              h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, derivedPath: derivation.path, robot, plannerId, optimizationCorridor: optimizationOpen && normalReady ? { points: normal.value?.sample.pts, widthM: doc.optimization?.corridorM ?? 0.15 } : null, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, brush, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, showHandles: true }),
+              h('div', { className: 'field-notices' },
+              h(FieldStatus, { key: doc.id, notices: fieldNotices }),
               tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
               waypointPreview && h('div', { className: 'insert-preview', role: 'region', 'aria-label': 'Preview waypoint insertion' },
                 h('div', { className: 'insert-preview-copy' },
@@ -1695,14 +1787,26 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
                 h('div', { className: 'insert-preview-actions' },
                   agentProposal.status === 'ready' && h('button', { type: 'button', onClick: rejectAgentProposal }, 'Reject'),
                   agentProposal.status === 'ready' && h('button', { className: 'primary', type: 'button', disabled: !agentCandidate || agentCandidate.valid === false || (agentProposal.blockingIssues && agentProposal.blockingIssues.length > 0), onClick: applyAgentProposal }, agentProposal.operation === 'replace' ? 'Apply repair' : 'Add path'))),
-              h(Panels.ConstraintBar, { c: derivationDoc.constraints, robot, onOpen: () => select(null, -1) }),
+              ),
+              h(Panels.ConstraintBar, { c: derivationDoc.constraints, robot, onOpen: () => { setOptimizationOpen(false); setComparison(null); select(null, -1); } }),
               h(PlaybackTransport, { store: playbackStore, derived, doc: derivationDoc, metric, setMetric, graphOpen, setGraphOpen }),
               h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen })),
-            h('aside', { className: 'rail rail-r' + (inspectorOpen ? '' : ' collapsed'), 'aria-label': 'Path inspector' },
-              inspectorOpen
-                ? h(ContextInspector, { doc: derivationDoc, sel, derived, actions: inspActions, drive: robot.drive, robot, javaProject: { ...javaProjectState, link: linkJavaProject, openRecent: openRecentJavaProject, refresh: refreshJavaProject, install: installJavaSupport, build: buildJavaCatalog, cancelBuild: cancelJavaCatalogBuild, export: () => onExportJava('linked') }, onClose: () => setInspectorOpen(false) })
+            h('aside', { inert: derivationCurrent || (optimizationOpen && normalError) ? undefined : '', className: 'rail rail-r' + (inspectorOpen || optimizationOpen ? '' : ' collapsed'), 'aria-label': optimizationOpen ? 'Path optimization' : 'Path inspector' },
+              optimizationOpen ? h(OptimizationPanel, {
+                path: doc, paths: project.paths, state: optimizationState, candidate, accepted, stale: staleOptimization,
+                baselineTime, pending: !normalReady && !normalError, error: normalError, mode: comparisonMode, unitSystem,
+                recovery: !derivationCurrent ? (hist.current.past.length || routineHist.current.past.length || projectHist.current.past.length
+                  ? { label: 'Undo last edit', onClick: undo }
+                  : { label: 'Open project', onClick: openProject }) : undefined,
+                onCorridor: setCorridor, onStart: startOptimization,
+                onStartAll: () => { setComparison(null); void optimizer.startAll(); }, onCancel: optimizer.cancel,
+                onCompare: compareTrajectory, onApply: applyOptimization, onNormal: useNormalTrajectory,
+                onSelectPath: (id) => { const index = project.paths.findIndex((path) => path.id === id); if (index >= 0) setActive(index); },
+                onClose: () => { compareTrajectory('selected'); setOptimizationOpen(false); setInspectorOpen(true); },
+              }) : inspectorOpen
+                ? h(ContextInspector, { project, setWaypointPositionLink, doc: derivationDoc, sel, derived, actions: inspActions, drive: robot.drive, robot, javaProject: { ...javaProjectState, link: linkJavaProject, openRecent: openRecentJavaProject, refresh: refreshJavaProject, install: installJavaSupport, build: buildJavaCatalog, cancelBuild: cancelJavaCatalogBuild, export: () => onExportJava('linked') }, onClose: () => setInspectorOpen(false) })
                 : h('button', { className: 'inspector-tab', type: 'button', title: 'Show inspector', onClick: () => setInspectorOpen(true) }, h(UI.Icon, { name: 'sliders', size: 16 }), h('span', null, 'Inspector'))),
-            headMenu && h(UI.ContextMenu, { x: headMenu.x, y: headMenu.y, items: headMenu.items, onClose: () => setHeadMenu(null) })));
+            headMenu && h(UI.ContextMenu, { x: headMenu.x, y: headMenu.y, items: headMenu.items, returnFocus: headMenu.returnFocus, onClose: () => setHeadMenu(null) })));
   }
 
   function toolHint(tool) {
@@ -1710,6 +1814,7 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     if (tool === 'rotation') return 'Click the path to set a <b>rotation target</b>';
     if (tool === 'marker') return 'Click the path to place an <b>event marker</b>';
     if (tool === 'range') return 'Drag along the path to define a <b>constraint range</b> \u00b7 then edit its limits';
+    if (tool === 'brush') return 'Drag to <b>sculpt Bézier and line segments</b> \u00b7 arcs and clothoids stay locked \u00b7 [ and ] adjust the radius';
     return '';
   }
 
@@ -1725,4 +1830,4 @@ import { ACTIVE_FIELD_REFERENCE } from "../../shared/field/rebuilt2026";
     }
   }
 
-export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, freshProject };
+export { App, AppErrorBoundary };
