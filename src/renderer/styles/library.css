@@ -1,0 +1,88 @@
+.library-folder{display:flex;align-items:center;padding:4px 8px 0;margin:0;user-select:none}
+.library-folder>button:first-child{display:flex;align-items:center;gap:5px;min-width:0;flex:1;height:29px;text-align:left;color:var(--txt-3);font-size:11px}
+.library-folder>button:first-child>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.library-folder [aria-expanded="false"]>svg:first-child{transform:rotate(-90deg)}
+.library-group .library-row{padding-left:32px}
+.library-menu{position:fixed;inset:auto;margin:0;padding:4px;width:208px;max-height:calc(100vh - 16px);overflow:auto;border:1px solid var(--line-2);border-radius:6px;background:var(--bg-2);color:var(--txt);box-shadow:0 8px 24px #0005;font-size:12px}
+.library-menu button{display:block;width:100%;height:30px;padding:0 9px;text-align:left;border-radius:3px;font-size:12px}
+.library-menu button:disabled{color:var(--txt-3);cursor:not-allowed}
+.library-menu button.danger{color:var(--bad)}
+.library-menu hr{border:0;border-top:1px solid var(--line);margin:4px}
+.library-properties{width:360px;max-width:calc(100vw - 32px);margin:auto;padding:18px;border:1px solid var(--line-2);border-radius:8px;background:var(--bg-1);color:var(--txt);font-size:12px}
+.library-properties::backdrop{background:#0007}
+.library-properties header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px}
+.library-properties header strong{overflow-wrap:anywhere}
+.library-properties header button{flex:0 0 24px;height:24px}
+.library-properties label{display:flex;flex-direction:column;gap:8px;margin:16px 0;color:var(--txt-2)}
+.library-properties select{height:32px;width:100%;border:1px solid var(--line-2);border-radius:4px;background:var(--bg-2);color:var(--txt);padding:0 8px}
+.library-properties footer{display:flex;justify-content:flex-end;margin-top:18px}
+.library-properties footer button{height:30px;padding:0 16px;border:1px solid var(--line-2);border-radius:4px;background:var(--bg-3)}
+.library-link{font-size:11px;line-height:1.5;overflow-wrap:anywhere;color:var(--txt-2)}
+.library-link button{padding:6px;text-decoration:underline}
+.library-rename{display:grid;grid-template-columns:minmax(0,1fr) 24px 24px;gap:2px;padding:2px 8px}
+.library-rename input{min-width:0;width:100%;height:28px;color:var(--txt);border:1px solid var(--line-2);border-radius:3px;background:var(--bg-2);padding:0 6px;font-size:12px}
+.library-rename button{display:grid;place-items:center;color:var(--txt-2);padding:0}
+.library-error{grid-column:1/-1;color:var(--bad);font-size:11px}
+.library-empty{padding:10px 14px;color:var(--txt-3);font-size:11px;line-height:1.5}
+.library-blocked{padding:12px;color:var(--txt-2);font-size:11px;line-height:1.5;overflow-wrap:anywhere}
+.library-blocked p{margin:4px 0}
+.library-blocked button{display:block;min-height:28px;color:var(--txt);text-align:left;text-decoration:underline}
+.library-push{flex-shrink:0;display:flex;flex-direction:column;gap:7px;padding:9px 12px;border-top:1px solid var(--line)}
+.library-selection{display:flex;align-items:center;justify-content:space-between;gap:6px;min-height:14px;color:var(--txt-3);font-size:10px}
+.library-current-name{min-width:0;white-space:normal;overflow-wrap:anywhere}
+.library-selection button{font-size:10px;color:var(--txt-2)}
+.library-push>button{height:30px;display:flex;align-items:center;justify-content:center;gap:7px;border:1px solid var(--line-2);background:var(--bg-2);border-radius:4px;color:var(--txt);font-size:11px;font-weight:500}
+.library-selection-hint{font-size:9px;color:var(--txt-3);text-align:center}
+.editor-library button:disabled{color:var(--txt-3);cursor:not-allowed}
+.editor-library button:focus-visible,.editor-library input:focus-visible,.library-menu button:focus-visible{outline:1px solid var(--txt-2);outline-offset:-1px}
+.library-divider{height:5px;flex:0 0 5px;cursor:row-resize;touch-action:none;position:relative;border-top:1px solid var(--line)}
+.library-divider::after{content:'';position:absolute;width:24px;height:1px;left:calc(50% - 12px);top:2px;background:var(--line-2)}
+.library-structure{display:flex;flex:1;min-height:0;flex-direction:column;overflow:hidden}
+.library-section-title{height:32px;flex:0 0 32px;padding:0 12px;display:flex;align-items:center;gap:7px;font-size:10px;font-weight:500;color:var(--txt-3);text-align:left;border-bottom:1px solid var(--line)}
+.library-structure-body{flex:1;min-height:0;overflow:hidden}
+.library-structure .outline{width:100%;border-right:0}
+.library-structure .outline-hd{display:none}
+.library-connection,.toolbar .document-settings-trigger{flex:0 0 auto;white-space:nowrap}
+@media(hover:hover){.library-row:not(.selected):hover{background:var(--bg-2)}.library-menu button:not(:disabled):hover{background:var(--bg-3)}.library-more:hover,.library-tools button:hover{color:var(--txt)}.library-push>button:not(:disabled):hover{border-color:var(--line-3)}}
+
+/* Every outline item reserves the same grip, content, and action columns. */
+.library-structure .featrow{display:grid;grid-template-columns:14px minmax(0,1fr) 22px;gap:6px;min-height:34px;padding:0 5px;border-left:0}
+.library-structure .featrow.sel{background:var(--bg-3)}
+.library-structure .featselect{grid-column:2;min-height:34px;padding:0;border-radius:0}
+.library-structure .featgrip,.library-structure .featindent{grid-column:1;grid-row:1;margin:0;width:14px}
+.library-structure .featdel{grid-column:3;grid-row:1;display:flex;opacity:0;margin:0;border-radius:3px}
+.library-structure .featrow:hover .featdel,.library-structure .featrow:focus-within .featdel{opacity:.65}
+.library-structure .featnm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:16px}
+.library-structure .featmeta{white-space:nowrap;line-height:16px}
+.library-structure .featempty{padding-left:25px}
+@media(hover:none){.library-structure .featdel{opacity:.65}}
+
+/* Use spacing and weight to distinguish labels from group headings. */
+.ctxinsp .fieldlabel,.ctxinsp .numlbl,.ctxinsp .cgroup-h,.ctxinsp-tag,.timeline-title{font-family:var(--ui);text-transform:none;letter-spacing:0!important}
+.ctxinsp .fieldlabel,.ctxinsp .numlbl{font-size:11px;font-weight:400;white-space:normal;line-height:16px}
+.ctxinsp .fieldlabel>span{white-space:normal}
+.ctxinsp .cgroup-h{font-size:12px;font-weight:600;color:var(--txt-2);margin:20px 0 10px;padding:0;border:0}
+.ctxinsp .seg+.numrow{margin-top:12px}
+.library-structure .featempty{background:none;border:0;border-radius:0;margin:0;color:var(--txt-3)}
+
+.cbar-k{text-transform:none;letter-spacing:0}
+
+.library-structure .segfeatrow .featselect{grid-column:2/-1;display:grid;grid-template-columns:7px minmax(0,1fr);column-gap:8px;row-gap:2px;padding:7px 0}
+.library-structure .segfeatrow .featdot{grid-column:1;grid-row:1;align-self:start;margin-top:5px}
+.library-structure .segfeatrow .featnm{grid-column:2;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+.library-structure .segfeatrow .featmeta{grid-column:2;font-family:var(--ui);white-space:normal;overflow-wrap:anywhere}
+
+.library-structure .wpfeatrow .featselect{display:grid;grid-template-columns:7px minmax(0,1fr);column-gap:8px;row-gap:3px;padding:7px 0}
+.library-structure .wpfeatrow .featdot{grid-column:1;grid-row:1;align-self:start;margin-top:5px}
+.library-structure .wpfeatrow .featnm{grid-column:2;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+.library-structure .featdetails{grid-column:2;display:flex;align-items:center;flex-wrap:wrap;gap:4px 7px;min-width:0}
+.library-structure .featdetails .pill{text-transform:none;letter-spacing:0;line-height:14px}
+.optimizer-label{text-transform:none;letter-spacing:0;font:11px var(--ui)}
+.optimizer-failure{margin:0 0 14px;color:var(--txt-2);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+
+.fieldsvg [data-heading-control]:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+
+.ctxinsp .ctxinsp-t{min-width:0;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;line-height:1.4}
+.ctxinsp .ctxinsp-tag,.ctxinsp .ctxinsp-x{flex-shrink:0}
+.rail-r .dropdown:not(.compact) .cmd-picker-trigger{height:auto;min-height:38px;padding-block:8px}
+.rail-r .cmd-picker-trigger>span{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
