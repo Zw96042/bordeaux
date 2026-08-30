@@ -1,3 +1,19 @@
+import { createHash } from "node:crypto";
+import { z } from "zod";
+import { validateProjectJavaInvocations } from "../javaCommands";
+import { activeRoutine } from "../project/routines";
+import { blankPath } from "../project/defaults";
+import { buildJavaTrajectory, type BuiltJavaTrajectory, type JavaTrajectoryDocument } from "./javaTrajectory";
+import type { BordeauxProject, JavaCommandCatalog, RoutineFallbackNode, RoutineNode } from "../types";
+
+export type RobotPushScope = { kind: "paths"; pathIds: string[] } | { kind: "routine"; routineId: string } | { kind: "project" };
+export interface JavaDeploymentSummary {
+  kind: RobotPushScope["kind"];
+  selectedNames: string[];
+  pathIds: string[];
+  addedNames: string[];
+  updatedNames: string[];
+  preservedPathCount: number;
   previousRoutine: string | null;
   routine: string | null;
   dependencyNames: string[];

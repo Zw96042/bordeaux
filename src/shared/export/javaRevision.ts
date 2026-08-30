@@ -47,7 +47,7 @@ function hash(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-function trajectoryMetadata(trajectory: BuiltJavaTrajectory): {
+function trajectoryMetadata(trajectory: Pick<BuiltJavaTrajectory, "contents" | "sha256">): {
   catalog: RevisionCatalog;
   field: FieldReference;
 } {
@@ -97,7 +97,7 @@ function trajectoryMetadata(trajectory: BuiltJavaTrajectory): {
   };
 }
 
-export function buildJavaRevision(trajectory: BuiltJavaTrajectory, request: JavaRevisionRequest): BuiltJavaRevision {
+export function buildJavaRevision(trajectory: Pick<BuiltJavaTrajectory, "contents" | "sha256">, request: JavaRevisionRequest): BuiltJavaRevision {
   if (!ACTIVATION_NONCE.test(request.nonce)) {
     throw new Error("Activation nonce must contain 1-256 letters, numbers, dots, underscores, colons, or hyphens");
   }

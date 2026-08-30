@@ -1,14 +1,16 @@
 import { createHash } from "node:crypto";
-import { buildBdxExport } from "./bdx";
+import { buildBdxExport, buildBdxExportWithPlannerResults } from "./bdx";
 import { DEFAULT_SAMPLES_PER_SEGMENT } from "../planners/limits";
 import { validateProjectJavaInvocations } from "../javaCommands";
 import { activeRoutine } from "../project/routines";
+import { orderedWaypointSampleIndices } from "../planners/waypointSamples";
 import type { BordeauxProject, CommandInvocation, FollowMode, JavaCommandCatalog, PathDoc, RoutineFallbackNode, RoutineNode, TrajectorySample } from "../types";
 
 const MAX_SAMPLE_COUNT = 100_000;
 const MAX_EVENT_COUNT = 2_000;
 const MAX_PATH_COUNT = 64;
 const MAX_ROUTINE_NODE_COUNT = 2_000;
+const MAX_JSON_NESTING_DEPTH = 40;
 const MAX_EXPORT_BYTES = 16 * 1024 * 1024;
 
 export interface JavaTrajectoryEvent {
@@ -79,30 +81,14 @@ export interface BuiltJavaTrajectory {
   sampleCount: number;
 }
 
-function followSections(path: PathDoc, samples: readonly TrajectorySample[]): JavaFollowSection[] {
-  const boundaries: number[] = [];
-  path.waypoints.forEach((waypoint, waypointIndex) => {
-    const start = waypointIndex === 0 ? 0 : boundaries[waypointIndex - 1];
-    let nearest = start;
-    let nearestDistanceSquared = Number.POSITIVE_INFINITY;
-    const remainingWaypoints = path.waypoints.length - waypointIndex - 1;
-    const finalSearchIndex = waypointIndex === path.waypoints.length - 1
-      ? samples.length - 1
-      : Math.max(start, samples.length - remainingWaypoints - 1);
-    for (let index = start; index <= finalSearchIndex; index += 1) {
-      const dx = samples[index].x - waypoint.x;
-      const dy = samples[index].y - waypoint.y;
-      const candidateDistanceSquared = dx * dx + dy * dy;
-      if (candidateDistanceSquared < nearestDistanceSquared) {
-        nearest = index;
-        nearestDistanceSquared = candidateDistanceSquared;
-      }
-      // Planners preserve authored waypoint boundaries. The first matching sample is
-      // the ordered arrival, including when the same coordinate is visited again.
-      if (candidateDistanceSquared <= 1e-18) break;
-    }
-    boundaries.push(nearest);
-  });
+function followSections(
+  path: PathDoc,
+  samples: readonly TrajectorySample[],
+  waypointSampleIndices?: readonly number[],
+): JavaFollowSection[] {
+  const boundaries = waypointSampleIndices?.length === path.waypoints.length
+    ? waypointSampleIndices
+    : orderedWaypointSampleIndices(path.waypoints, samples);
   const sections: JavaFollowSection[] = [];
   path.waypoints.slice(0, -1).forEach((waypoint, segmentIndex) => {
     const start = boundaries[segmentIndex];
@@ -169,13 +155,29 @@ function assertExportSize(value: unknown): void {
   }
 }
 
+function assertJsonNestingDepth(value: unknown): void {
+  const visit = (item: unknown, depth: number): void => {
+    if (item === null || typeof item !== "object") return;
+    const nextDepth = depth + 1;
+    if (nextDepth > MAX_JSON_NESTING_DEPTH) {
+      throw new Error(`Java trajectory export exceeds JSON nesting depth of ${MAX_JSON_NESTING_DEPTH}`);
+    }
+    const children = Array.isArray(item) ? item : Object.values(item as Record<string, unknown>);
+    children.forEach((child) => visit(child, nextDepth));
+  };
+  visit(value, 0);
+}
+
 function deployableRoutine(project: BordeauxProject, pathIds: Set<string>): JavaTrajectoryRoutine | null {
   const routine = activeRoutine(project);
   if (!routine) return null;
+  let nodeCount = 0;
   function nodes(source: RoutineFallbackNode[]): RoutineFallbackNode[];
   function nodes(source: RoutineNode[]): RoutineNode[];
   function nodes(source: RoutineNode[]): RoutineNode[] {
     return source.map((node) => {
+      nodeCount += 1;
+      if (nodeCount > MAX_ROUTINE_NODE_COUNT) throw new Error(`Java trajectory export exceeds ${MAX_ROUTINE_NODE_COUNT} routine nodes`);
       if (node.type === "path") {
         if (!pathIds.has(node.ref)) throw new Error(`Routine path ${node.ref} is not Java-exportable`);
         return { id: node.id, type: "path", ref: node.ref };
@@ -242,7 +244,10 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
   const invocationIssues = validateProjectJavaInvocations(project, catalog);
   if (invocationIssues.length > 0) throw new Error(invocationIssues.map((item) => `${item.path}: ${item.message}`).join("\n"));
   const sourcePaths = project.paths.filter((path) => path.exportable !== false);
-  if (sourcePaths.length > MAX_PATH_COUNT) throw new Error(`Java trajectory export exceeds ${MAX_PATH_COUNT} paths`);
+  if (sourcePaths.length === 0) throw new Error("Java trajectory export requires at least one exportable path");
+  if (sourcePaths.length > MAX_PATH_COUNT) {
+    throw new Error(`Java trajectory export exceeds ${MAX_PATH_COUNT} paths`);
+  }
   let baseSampleCount = 0;
   for (const path of sourcePaths) {
     baseSampleCount += Math.max(0, path.waypoints.length - 1) * DEFAULT_SAMPLES_PER_SEGMENT + 1;
@@ -260,7 +265,7 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
     throw new Error("Routine built-ins require generated catalog schema 1.2 or newer before export");
   }
   assertRoutineNodeCount(routine);
-  assertExportSize({
+  const preflightDocument = {
     catalog: {
       schemaVersion: catalog.generatedSchemaVersion,
       catalogId: catalog.catalogId,
@@ -279,12 +284,14 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
         schedule: marker.schedule,
       }] : []),
     })),
-  });
+  };
+  assertJsonNestingDepth(preflightDocument);
+  assertExportSize(preflightDocument);
 
   // Static planning has no geometry for runtime-dynamic nodes. Their separately
   // validated fallback is sufficient for the generic project validator here;
   // the exported routine below retains the generated node itself.
-  const native = buildBdxExport(projectForStaticPlanning(project));
+  const { document: native, plannerResults } = buildBdxExportWithPlannerResults(projectForStaticPlanning(project));
   let sampleCount = 0;
   const paths: JavaTrajectoryPath[] = [];
   native.paths.forEach((path, pathIndex) => {
@@ -318,7 +325,7 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
       totalTimeS: path.totalTimeS,
       totalDistanceM: path.totalDistanceM,
       samples: path.samples,
-      followSections: followSections(sourcePaths[pathIndex], path.samples),
+      followSections: followSections(sourcePaths[pathIndex], path.samples, plannerResults[pathIndex].waypointSampleIndices),
       events,
     });
   });
@@ -337,6 +344,7 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
     routine,
     paths,
   };
+  assertJsonNestingDepth(document);
   assertExportSize(document);
   const contents = `${JSON.stringify(document, null, 2)}\n`;
   if (Buffer.byteLength(contents, "utf8") > MAX_EXPORT_BYTES) throw new Error(`Java trajectory export exceeds ${MAX_EXPORT_BYTES} bytes`);
