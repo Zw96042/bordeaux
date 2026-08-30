@@ -198,9 +198,17 @@ import { PM } from "../lib/pathMath";
       clearInFlightTimer();
       inFlightTimer = setTimeout(() => recoverWorker(targetWorker, 'Path preview worker timed out.'), timeoutMs);
       try {
+        let path = job.path;
+        if (job.quality === 'interactive' && path?.optimization) {
+          // The interactive worker discards optimization artifacts. Drop them
+          // before postMessage to avoid cloning thousands of accepted samples
+          // on the main thread for every pointer edit.
+          const { optimization: _optimization, ...authored } = path;
+          path = authored;
+        }
         targetWorker.postMessage({
           id: job.revision,
-          path: job.path,
+          path,
           robot: job.robot,
           plannerId: job.plannerId,
           perSegment: job.perSegment,
