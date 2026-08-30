@@ -6,7 +6,6 @@ import { PM } from "../lib/pathMath";
 import { wheelZoomFactor } from "../lib/zoom";
 import { UI } from "./ui";
 
-// Bordeaux interactive field view (CAD-style).
   const { useRef, useState, useEffect, useMemo, useCallback } = React;
   const h = React.createElement;
 
@@ -27,13 +26,14 @@ import { UI } from "./ui";
   const forwardExtent = (robot) => Math.max(...localFootprint(robot).map((point) => point.x)) * SX;
 
   function FieldView(props) {
-    const { doc, derived, editStore, insertionPreview, proposalPreviews, sel, tool, view, setView, alliance, showGrid, robot, drive, accent, metric, playTime, actions, routine, routinePose } = props;
+    const { doc, derived, editStore, insertionPreview, proposalPreviews, sel, tool, brush, view, setView, alliance, showGrid, robot, drive, accent, metric, playTime, actions, routine, routinePose } = props;
     const interactionReady = props.interactionReady !== false;
     const showHandles = props.showHandles !== false;
     const svgRef = useRef(null);
     const [cw, setCw] = useState(1200);
     const [preview, setPreview] = useState(null);
     const [snap, setSnap] = useState(null);
+    const [brushCursor, setBrushCursor] = useState(null);
     const [visitFocus, setVisitFocus] = useState(null);
     const visitFocusRef = useRef(null);
     const actionsRef = useRef(actions);
@@ -77,6 +77,7 @@ import { UI } from "./ui";
     }, []);
 
     useEffect(() => updateVisitFocus(null), [doc.id, updateVisitFocus]);
+    useEffect(() => { if (tool !== 'brush') setBrushCursor(null); }, [tool]);
     useEffect(() => {
       if (!editStore || typeof editStore.getCancelRevision !== 'function') return undefined;
       let revision = editStore.getCancelRevision();
@@ -183,6 +184,7 @@ import { UI } from "./ui";
 
     useEffect(() => {
       const onVisitKey = (event) => {
+        if (event.defaultPrevented || document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')) return;
         const target = event.target;
         if (target && ((target.matches && target.matches('input, textarea, select')) || target.isContentEditable)) return;
         if (event.key === 'Escape' && visitFocusRef.current) { updateVisitFocus(null); return; }
@@ -202,7 +204,6 @@ import { UI } from "./ui";
       return () => window.removeEventListener('keydown', onVisitKey, true);
     }, [updateVisitFocus]);
 
-    // ---- pointer handling ----
     const startRangeDrag = (world, initialVisit) => {
       const visit = initialVisit || resolveVisit(world);
       const f0 = visit ? visit.f : PM.nearestFraction(world.x, world.y, pts);
@@ -255,6 +256,11 @@ import { UI } from "./ui";
         return;
       }
       const world = clientToWorld(e.clientX, e.clientY);
+      if (e.button === 0 && tool === 'brush' && brush && actions.applyBrush) {
+        setBrushCursor(world);
+        drag.current = { role: 'brush', origin: world, lastWorld: world, moved: false, historyStarted: false };
+        return;
+      }
       if (e.button === 0 && e.shiftKey) {
         const idx = parseInt(t.getAttribute && t.getAttribute('data-idx'), 10);
         let removed = false;
@@ -329,6 +335,16 @@ import { UI } from "./ui";
     const applyMove = (e) => {
       const d = drag.current; if (!d) return;
       const world = clientToWorld(e.clientX, e.clientY, d.role !== 'ct');
+      if (d.role === 'brush') {
+        const travel = Math.hypot(world.x - d.lastWorld.x, world.y - d.lastWorld.y);
+        setBrushCursor(world);
+        if (travel > 0.002) {
+          const changed = actions.applyBrush({ ...brush, center: world, previous: d.lastWorld, origin: d.origin });
+          if (changed) { d.historyStarted = true; d.moved = true; }
+          d.lastWorld = world;
+        }
+        return;
+      }
       if (d.role === 'inspect') {
         const dx = e.clientX - d.start.cx, dy = e.clientY - d.start.cy;
         if (Math.hypot(dx, dy) > 4) d.moved = true;
@@ -359,7 +375,7 @@ import { UI } from "./ui";
             if (best) { deg = best.deg; label = best.label; } else deg = Math.round(deg);
           }
           setSnap(label ? { idx: d.idx, label } : null);
-          actions.setWaypointHeading(d.idx, deg);
+          actions.setWaypointHeading(d.idx, deg - (d.idx === 0 && derived.rev ? 180 : 0));
         }
         d.moved = true; return;
       }
@@ -453,14 +469,29 @@ import { UI } from "./ui";
       if (!inspectTarget(e.target)) return;
       e.preventDefault(); e.stopPropagation();
     };
-    const onCtx = (e) => {
-      e.preventDefault();
-      if (routine) return;
-      const t = e.target; const role = t.getAttribute && t.getAttribute('data-role');
-      if (role === 'head' && actions.headingMenu) actions.headingMenu(parseInt(t.getAttribute('data-idx'), 10), e.clientX, e.clientY);
+    const openHeadingMenu = (target, x, y) => {
+      if (routine || !target || !actions.headingMenu) return;
+      const idx = Number(target.getAttribute('data-idx'));
+      if (!Number.isInteger(idx)) return;
+      target.focus();
+      actions.headingMenu(idx, x, y, target);
+    };
+    const onCtx = (event) => {
+      event.preventDefault();
+      const target = event.target.closest?.('[data-heading-control]');
+      if (target) openHeadingMenu(target, event.clientX, event.clientY);
+    };
+    const onFieldKeyDown = (event) => {
+      const direct = event.target.closest?.('[data-heading-control]');
+      const menuKey = event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10');
+      if (!menuKey && !(direct && (event.key === 'Enter' || event.key === ' '))) return;
+      const target = direct || (sel.kind === 'wp' && svgRef.current?.querySelector('[data-heading-control][data-idx="' + sel.idx + '"]'));
+      if (!target || routine) return;
+      event.preventDefault(); event.stopPropagation();
+      const bounds = target.getBoundingClientRect();
+      openHeadingMenu(target, bounds.left + bounds.width / 2, bounds.bottom);
     };
 
-    // ---------- STATIC LAYERS ----------
     const staticLayers = useMemo(() => {
       const els = [];
       const M = derived.metrics;
@@ -474,12 +505,25 @@ import { UI } from "./ui";
         const incomingMode = segmentMode(index - 1), outgoingMode = segmentMode(index);
         const continuityOwned = (incomingMode === 'tangent' || incomingMode === 'lookAt')
           && (outgoingMode === 'manual' || outgoingMode === 'targets');
-        return continuityOwned && ((((doc.waypoints[index].headingTransition || {}).placement) || 'after') === 'after');
+        return continuityOwned;
       };
       const targetActive = (target) => {
         const f = PM.featureFraction(target, derived.sample); let segment = 0;
         if (derived.wpFrac) for (let i = 0; i < derived.wpFrac.length - 1; i++) if (f >= derived.wpFrac[i] - 1e-6) segment = i;
         return segmentMode(segment) === 'targets';
+      };
+      const plannedHeadingAt = (fraction) => {
+        if (!Array.isArray(M.head) || M.head.length !== pts.length || pts.length === 0) {
+          return PM.headingAt(fraction, derived.anchors);
+        }
+        const distance = Math.max(0, Math.min(1, fraction)) * (derived.sample.length || 0);
+        let after = 1;
+        while (after < pts.length && pts[after].s < distance) after++;
+        if (after >= pts.length) return M.head[M.head.length - 1];
+        const before = Math.max(0, after - 1);
+        const span = pts[after].s - pts[before].s;
+        const progress = span > 1e-9 ? (distance - pts[before].s) / span : 1;
+        return M.head[before] + PM.angWrap(M.head[after] - M.head[before]) * progress;
       };
       const tanDeg = (i) => { const idx = derived.wpIdx ? derived.wpIdx[i] : 0; const p = pts[idx]; return p ? p.heading * 180 / Math.PI : 0; };
       const waypointHeadingDeg = (index) => {
@@ -530,7 +574,6 @@ import { UI } from "./ui";
           segEls.push(h('line', { key: 's' + i, x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: colAt(i), strokeWidth: P(2.6), strokeLinecap: 'butt' }));
         }
         els.push(h('g', { key: 'pathbody' }, segEls));
-        // selected-segment highlight (memo §3)
         if (sel.kind === 'seg' && derived.wpFrac && derived.wpFrac.length > sel.idx + 1) {
           const sd = FieldScene.pathData(pts, FieldScene.segmentRange(derived, sel.idx), W2P, 1);
           if (sd) els.push(h('path', { key: 'segsel', d: sd, fill: 'none', stroke: accent, strokeWidth: P(5.5), strokeOpacity: 0.92, strokeLinecap: 'round', strokeLinejoin: 'round', style: { pointerEvents: 'none' } }));
@@ -539,7 +582,7 @@ import { UI } from "./ui";
         if (derived.wpFrac) {
           for (let si = 0; si < doc.waypoints.length - 1; si++) {
             const sd = FieldScene.pathData(pts, FieldScene.segmentRange(derived, si), W2P, 1);
-            if (sd) els.push(h('path', { key: 'seghit' + si, d: sd, fill: 'none', stroke: 'transparent', strokeWidth: P(18), strokeLinecap: 'round', 'data-role': 'seg', 'data-idx': si, style: { cursor: tool === 'range' ? 'crosshair' : tool === 'waypoint' ? 'copy' : 'pointer' } }));
+            if (sd) els.push(h('path', { key: 'seghit' + si, d: sd, fill: 'none', stroke: 'transparent', strokeWidth: P(18), strokeLinecap: 'round', 'data-role': 'seg', 'data-idx': si, style: { cursor: tool === 'range' || tool === 'brush' ? 'crosshair' : tool === 'waypoint' ? 'copy' : 'pointer' } }));
           }
         }
         // Range labels share the canvas with handles, waypoints, targets, and warnings.
@@ -559,7 +602,7 @@ import { UI } from "./ui";
           const isStart = i === 0, isEnd = i === doc.waypoints.length - 1;
           const wpTangent = waypointTangent(i);
           if (!isTank && !waypointHeadingIgnored(i) && (wpTangent || isStart || isEnd || wp.thetaOn || (sel.kind === 'wp' && sel.idx === i))) {
-            const heading = waypointHeadingDeg(i);
+            const heading = waypointHeadingDeg(i) + (isStart && derived.rev ? 180 : 0);
             const deg = heading * Math.PI / 180;
             const end = { x: c.x + Math.cos(-deg) * P(35), y: c.y + Math.sin(-deg) * P(35) };
             reserveSegmentSpace(c, end, P(8));
@@ -685,7 +728,9 @@ import { UI } from "./ui";
       const headArrow = (cx, cy, deg, col, len, idx) => {
         const rot = deg;
         const interactive = idx != null;
-        return h('g', { transform: `translate(${cx} ${cy}) rotate(${-rot})`, style: interactive ? { cursor: 'grab' } : { pointerEvents: 'none' } },
+        return h('g', { transform: `translate(${cx} ${cy}) rotate(${-rot})`, style: interactive ? { cursor: 'grab' } : { pointerEvents: 'none' },
+          ...(interactive ? { 'data-heading-control': true, 'data-role': 'head', 'data-idx': idx, tabIndex: 0, role: 'button', 'aria-haspopup': 'menu', 'aria-label': idx === 0 ? 'Initial robot heading actions' : 'Waypoint ' + idx + ' heading actions' } : {}) },
+          interactive && h('title', null, idx === 0 ? 'Drag to change initial robot facing' : 'Drag to change robot facing'),
           h('line', { x1: 0, y1: 0, x2: len, y2: 0, stroke: col, strokeWidth: P(1.8), strokeLinecap: 'round' }),
           h('path', { d: `M ${len} ${-P(3.8)} L ${len + P(7)} 0 L ${len} ${P(3.8)} Z`, fill: col }),
           interactive && h('line', { x1: P(5), y1: 0, x2: len + P(8), y2: 0, stroke: 'transparent', strokeWidth: P(15), strokeLinecap: 'round', 'data-role': 'head', 'data-idx': idx }),
@@ -702,7 +747,7 @@ import { UI } from "./ui";
           const pf = PM.pointAtFraction(f, pts);
           let segment = 0;
           if (derived.wpFrac) for (let i = 0; i < derived.wpFrac.length - 1; i++) if (f >= derived.wpFrac[i] - 1e-6) segment = i;
-          const rad = segmentMode(segment) === 'tangent' ? pf.heading : PM.headingAt(f, derived.anchors);
+          const rad = segmentMode(segment) === 'tangent' ? pf.heading : plannedHeadingAt(f);
           const c = W2P(pf);
           const rot = rad * 180 / Math.PI;
           comb.push(h('g', { key: 'cb' + dl.toFixed(2), transform: `translate(${c.x} ${c.y}) rotate(${-rot})` },
@@ -742,7 +787,6 @@ import { UI } from "./ui";
         }
       }
 
-      // event markers — neutral diamond node + flag
       const markerOrder = doc.markers.map((mk, i) => ({ mk, i }));
       markerOrder.sort((a, b) => Number(sel.kind === 'em' && sel.idx === a.i) - Number(sel.kind === 'em' && sel.idx === b.i));
       markerOrder.forEach(({ mk, i }) => {
@@ -792,20 +836,19 @@ import { UI } from "./ui";
         }
       }
 
-      // waypoints — square CAD nodes + heading + control handles
       const waypointOrder = doc.waypoints.map((w, i) => ({ w, i }));
       waypointOrder.sort((a, b) => Number(sel.kind === 'wp' && sel.idx === a.i) - Number(sel.kind === 'wp' && sel.idx === b.i));
       waypointOrder.forEach(({ w, i }) => {
         const c = W2P(w);
         const isSel = sel.kind === 'wp' && sel.idx === i;
         const isStart = i === 0, isEnd = i === doc.waypoints.length - 1;
-        const baseCol = isStart ? C_START : isEnd ? C_END : C_NODE;
+          const baseCol = isStart ? C_START : isEnd ? C_END : tool === 'brush' ? accent : C_NODE;
         const col = isSel ? accent : baseCol;
         const group = [];
         const wpTangent = waypointTangent(i);
         const wpTracksPoint = waypointTracksPoint(i);
         if (!isTank && !waypointHeadingIgnored(i) && (wpTangent || isStart || isEnd || w.thetaOn || isSel)) {
-          group.push(h('g', { key: 'th' }, headArrow(c.x, c.y, waypointHeadingDeg(i), col, P(26), wpTangent || wpTracksPoint ? null : i)));
+          group.push(h('g', { key: 'th' }, headArrow(c.x, c.y, waypointHeadingDeg(i) + (isStart && derived.rev ? 180 : 0), col, P(26), isStart || (!wpTangent && !wpTracksPoint) ? i : null)));
         }
         if (isSel && showHandles) {
           [['prevC', 0], ['nextC', 1]].forEach(([key, b]) => {
@@ -992,12 +1035,22 @@ import { UI } from "./ui";
 
     const snapEl = (snap && doc.waypoints[snap.idx]) ? (function () { const c = W2P(doc.waypoints[snap.idx]); return h('g', { transform: `translate(${c.x} ${c.y - P(34)})`, style: { pointerEvents: 'none' } }, h('rect', { x: -P(37), y: -P(11), width: P(74), height: P(20), rx: P(4), fill: 'rgba(11,12,14,0.95)', stroke: accent, strokeWidth: P(1) }), h('text', { x: 0, y: P(4), fill: accent, fontSize: P(11), fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, textAnchor: 'middle' }, snap.label)); })() : null;
 
+    const brushEl = tool === 'brush' && brush && brushCursor ? (function () {
+      const center = W2P(brushCursor);
+      return h('g', { className: 'brush-cursor', style: { pointerEvents: 'none' } },
+        h('ellipse', { cx: center.x, cy: center.y, rx: brush.radius * SX, ry: brush.radius * SY, fill: accent, fillOpacity: 0.055, stroke: accent, strokeOpacity: 0.74, strokeWidth: P(1.4) }),
+        h('line', { x1: center.x - P(7), y1: center.y, x2: center.x + P(7), y2: center.y, stroke: '#ffffff', strokeWidth: P(1.3) }),
+        h('line', { x1: center.x, y1: center.y - P(7), x2: center.x, y2: center.y + P(7), stroke: '#ffffff', strokeWidth: P(1.3) }));
+    })() : null;
+
     const vb = `${view.x} ${view.y} ${view.w} ${view.h}`;
-    const cursor = drag.current && drag.current.moved && drag.current.role === 'bg' ? 'grabbing' : (tool === 'waypoint' || tool === 'rotation' || tool === 'marker' || tool === 'range') ? 'crosshair' : 'default';
+    const cursor = drag.current && drag.current.moved && drag.current.role === 'bg' ? 'grabbing' : (tool === 'waypoint' || tool === 'rotation' || tool === 'marker' || tool === 'range' || tool === 'brush') ? 'crosshair' : 'default';
 
     return h('svg', {
-      ref: svgRef, className: 'fieldsvg', viewBox: vb, preserveAspectRatio: 'xMidYMid meet',
-      onPointerDown: onDown, onWheel: onWheel, onDoubleClick: onDbl,
+      ref: svgRef, className: 'fieldsvg', tabIndex: routine ? undefined : 0, 'aria-label': 'Path field', onKeyDown: onFieldKeyDown, viewBox: vb, preserveAspectRatio: 'xMidYMid meet',
+      onPointerDown: onDown, onPointerMove: tool === 'brush' ? (event) => setBrushCursor(clientToWorld(event.clientX, event.clientY)) : undefined,
+      onPointerLeave: tool === 'brush' ? () => { if (!drag.current) setBrushCursor(null); } : undefined,
+      onWheel: onWheel, onDoubleClick: onDbl,
       style: { cursor, userSelect: 'none', WebkitUserSelect: 'none', touchAction: 'none' },
       onContextMenu: onCtx, onDragStart: (e) => e.preventDefault(), draggable: false,
     },
@@ -1006,12 +1059,21 @@ import { UI } from "./ui";
       h('foreignObject', { x: 0, y: 0, width: IMG_W, height: IMG_H, transform: flip ? `rotate(180 ${FIELD_CX} ${FIELD_CY})` : undefined, 'data-role': 'bg', style: { pointerEvents: 'none' } },
         h('img', { src: fieldImage, width: IMG_W, height: IMG_H, draggable: false, style: { width: IMG_W + 'px', height: IMG_H + 'px', display: 'block', opacity: 0.9, filter: 'brightness(0.38) saturate(0.32) contrast(1.06)', WebkitUserDrag: 'none', userSelect: 'none', pointerEvents: 'none' } })),
       h('rect', { x: X0 - 6, y: Y0 - 6, width: (X1 - X0) + 12, height: (Y1 - Y0) + 12, rx: 4, fill: 'none', stroke: '#ffffff', strokeOpacity: 0.07, strokeWidth: P(1), style: { pointerEvents: 'none' } }),
+      !routine && props.optimizationCorridor?.points?.length > 1 && h('polyline', {
+        className: 'optimization-corridor',
+        points: props.optimizationCorridor.points.map((point) => `${point.x},${point.y}`).join(' '),
+        fill: 'none', stroke: accent, strokeOpacity: 0.14,
+        strokeWidth: props.optimizationCorridor.widthM * 2, strokeLinecap: 'round', strokeLinejoin: 'round',
+        transform: `translate(${X0} ${Y1}) scale(${SX} ${-SY})`,
+        style: { pointerEvents: 'none' },
+      }),
       routine ? routineLayers : staticLayers,
       routine ? null : visitFocusEl,
       routine ? null : previewEl,
       routine ? null : insertionGhost,
       routine ? null : proposalGhosts,
       routine ? routineRobot : robotEl,
+      routine ? null : brushEl,
       routine ? null : snapEl,
     );
   }
