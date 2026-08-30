@@ -1,3 +1,4 @@
+import type { JavaDeploymentSummary } from "../shared/export/javaDeployment";
 import type { BuiltJavaRevision } from "../shared/export/javaRevision";
 import { buildJavaRevision } from "../shared/export/javaRevision";
 import type { BuiltJavaTrajectory } from "../shared/export/javaTrajectory";
@@ -12,6 +13,10 @@ import type {
 
 export interface RobotPushPreview {
   operationId: string;
+  summary?: JavaDeploymentSummary;
+  adoptionRequired?: boolean;
+  baselineRevision?: string | null;
+  receiptWarning?: string;
   state: "review";
   robot: string;
   project: string;
