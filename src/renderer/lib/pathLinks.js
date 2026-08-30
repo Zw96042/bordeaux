@@ -1,18 +1,28 @@
-// Project-local path endpoint links.
-  const clone = (value) => JSON.parse(JSON.stringify(value));
+// Project-local shared positions. Heading and tangent geometry belong to each waypoint.
+  const positionChanged = (before, after) => !!before && !!after && (before.x !== after.x || before.y !== after.y);
 
-  function changed(before, after) {
-    return !!before && !!after && ['x', 'y', 'theta', 'thetaOn'].some((key) => before[key] !== after[key]);
-  }
-
+  // Retain the existing API name for endpoint-link callers; only position is shared.
   function copyPose(target, source) {
-    const next = clone(target), dx = source.x - target.x, dy = source.y - target.y;
-    next.x = source.x; next.y = source.y; next.theta = source.theta; next.thetaOn = source.thetaOn;
+    const next = { ...target }, dx = source.x - target.x, dy = source.y - target.y;
+    next.x = source.x; next.y = source.y;
     if (next.prevC) next.prevC = { x: next.prevC.x + dx, y: next.prevC.y + dy };
     if (next.nextC) next.nextC = { x: next.nextC.x + dx, y: next.nextC.y + dy };
     return next;
   }
 
+  function positionGraph(project) {
+    const members = new Map(), adjacent = new Map(), groups = new Map();
+    const join = (a, b) => {
+      if (!members.has(a) || !members.has(b)) return;
+      if (!adjacent.has(a)) adjacent.set(a, new Set());
+      if (!adjacent.has(b)) adjacent.set(b, new Set());
+      adjacent.get(a).add(b); adjacent.get(b).add(a);
+    };
+    project.paths.forEach((path, pi) => path.waypoints.forEach((waypoint, wi) => {
+      const key = pi + ':' + wi;
+      members.set(key, { pi, wi, waypoint });
+      if (!waypoint.positionLink) return;
+      const group = groups.get(waypoint.positionLink) || [];
       if (group.length) join(group[0], key);
       group.push(key); groups.set(waypoint.positionLink, group);
     }));

@@ -1008,34 +1008,6 @@
         const a = oldToNew[oldSegment], b = oldToNew[oldSegment + 1];
         if (!Number.isInteger(a) || !Number.isInteger(b) || newCount < 2) {
           const fallback = Number.isInteger(a) ? a : Math.max(0, Math.min(last, oldSegment));
-          return { segment: Math.max(0, Math.min(Math.max(0, newCount - 2), fallback)), local: oldLocal };
-        }
-        const position = Math.max(0, Math.min(last, a + (b - a) * oldLocal));
-        const mappedSegment = Math.min(Math.max(0, newCount - 2), Math.floor(position));
-        return { segment: mappedSegment, local: position >= last ? 1 : position - mappedSegment };
-      };
-      let start = remapLocal(range.w0, range.t0), end = remapLocal(range.w1, range.t1);
-      if (start.segment + start.local > end.segment + end.local) { const swap = start; start = end; end = swap; }
-      next.w0 = start.segment; next.t0 = start.local; next.w1 = end.segment; next.t1 = end.local;
-      return next;
-    }
-    const oldStart = Number.isInteger(range.w0) ? range.w0 : 0;
-    const oldEnd = Number.isInteger(range.w1) ? range.w1 : oldToNew.length - 1;
-    const resolve = (value, start) => {
-      const mapped = oldToNew[value];
-      if (Number.isInteger(mapped)) return mapped;
-      if (value === removedIndex) return start ? Math.min(value, last) : Math.max(0, value - 1);
-      return Math.max(0, Math.min(last, value));
-    };
-    if (oldStart === removedIndex && oldEnd === removedIndex) {
-      next.w0 = next.w1 = Math.min(removedIndex, last);
-      return next;
-    }
-    const a = resolve(oldStart, true), b = resolve(oldEnd, false);
-    next.w0 = Math.min(a, b); next.w1 = Math.max(a, b);
-    return next;
-  }
-
   // ---- one-call derivation: everything the field + panels need for a path ----
   function derivePath(doc, robot, perSeg, plannerId) {
     perSeg = perSeg || 56;
@@ -1045,10 +1017,21 @@
       doc = { ...doc, constraints: effectiveConstraints(doc.constraints, robot) };
     }
     const smp = sample(doc.waypoints, perSeg);
-    const pts = smp.pts;
     const nWp = doc.waypoints.length;
+    const originalLast = Math.max(0, smp.pts.length - 1);
+    let wpIdx = (smp.wpIdx || doc.waypoints.map((_, k) => Math.min(originalLast, k * perSeg))).slice();
+    const initialWpFrac = wpIdx.map((index) => smp.pts.length ? smp.pts[index].s / (smp.length || 1) : 0);
+    const targetFractions = (doc.targets || []).map((target) => featureFraction(target, smp)).filter((fraction) => {
+      let segment = 0;
+      while (segment < nWp - 2 && fraction >= initialWpFrac[segment + 1] - 1e-9) segment++;
+      const mode = robot && robot.drive === 'tank'
+        ? 'tangent'
+        : ((doc.waypoints[segment] && doc.waypoints[segment].segmentHeadingMode) || doc.headingMode || 'targets');
+      return mode === 'targets';
+    });
+    wpIdx = insertHeadingTargetSamples(smp, targetFractions, wpIdx);
+    const pts = smp.pts;
     const lastI = Math.max(0, pts.length - 1);
-    const wpIdx = smp.wpIdx || doc.waypoints.map((_, k) => Math.min(lastI, k * perSeg));
     const total = smp.length || 1;
     const wpFrac = wpIdx.map((i) => (pts.length ? pts[i].s / total : 0));
     const stopIdx = [];
@@ -1069,13 +1052,9 @@
       const isEnd = k === 0 || k === nWp - 1;
       const incomingMode = segmentModes[k - 1];
       const outgoingMode = segmentModes[k];
-      const boundaryHeadingActive = !isEnd
-        && w.thetaOn
-        && ((incomingMode === 'tangent' || incomingMode === 'lookAt') && (outgoingMode === 'manual' || outgoingMode === 'targets'))
-        && (((w.headingTransition || {}).placement) || 'after') !== 'after';
       const entry = { f: wpFrac[k], rad: (w.theta || 0) * D2R };
-      if (isEnd || (w.thetaOn && (incomingMode === 'manual' || (w.turnInPlace && outgoingMode === 'manual'))) || (boundaryHeadingActive && outgoingMode === 'manual')) manualEntries.push(entry);
-      if (isEnd || (w.thetaOn && (incomingMode === 'targets' || (w.turnInPlace && outgoingMode === 'targets'))) || (boundaryHeadingActive && outgoingMode === 'targets')) targetEntries.push({ ...entry });
+      if (isEnd || (w.thetaOn && (incomingMode === 'manual' || (w.turnInPlace && outgoingMode === 'manual')))) manualEntries.push(entry);
+      if (isEnd || (w.thetaOn && (incomingMode === 'targets' || (w.turnInPlace && outgoingMode === 'targets')))) targetEntries.push({ ...entry });
     });
     (doc.targets || []).forEach((t) => targetEntries.push({ f: featureFraction(t, smp), rad: t.deg * D2R }));
     const manualAnchors = buildAnchors(manualEntries), targetAnchors = buildAnchors(targetEntries);
@@ -1095,10 +1074,10 @@
     });
     const segmentLaws = doc.waypoints.slice(0, -1).map((w, segment) => segmentModes[segment] === 'lookAt' ? 'lookAt:' + (w.segmentLookAt ? w.segmentLookAt.x : '') + ':' + (w.segmentLookAt ? w.segmentLookAt.y : '') : segmentModes[segment]);
     const transitionBreaks = doc.waypoints.slice(0, -1).map((w) => !!w.turnInPlace);
-    const headingTransitions = headingTransitionWindows(doc.waypoints, segmentLaws, transitionBreaks, wpFrac, total);
+    const headingTransitions = headingTransitionWindows(doc.waypoints, segmentLaws, transitionBreaks, wpFrac, total, "heading");
     const transitionGoals = headingTransitionGoals(segmentLaws, transitionBreaks, wpIdx, pts, {
-      manual: manualAnchors,
-      targets: targetAnchors,
+      manual: manualAnchors.map(({ f, rad }) => ({ f, heading: rad })),
+      targets: targetAnchors.map(({ f, rad }) => ({ f, heading: rad })),
     });
     const head = smoothHeadingTransitions(rawHead, segmentLaws, transitionBreaks, wpIdx, pts, doc.waypoints, transitionGoals);
     const allTangent = doc.waypoints.slice(0, -1).every((_, segment) => effectiveHeadingMode(segment) === 'tangent');
@@ -1118,12 +1097,13 @@
     }
     const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns, jiggles, freeSpeed: cap, motorMaxSpeed: hardLimits ? cap : 0 });
     const trackedHead = headingWithTranslationPriority(doc, robot, pts, prof, head, effRanges, headingTransitions);
+    prof.head = trackedHead;
     appendTerminalHeadingCatchup(doc, prof, trackedHead, head, effRanges);
     const anchors = mode === 'tank' ? [] : buildAnchors(pts.map((p, i) => ({ f: total > 1e-6 ? p.s / total : 0, rad: trackedHead[i] })));
     const mtr = metrics(pts, prof, anchors, mode);
     const checks = analyze(pts, prof, mtr, {
       constraints: doc.constraints,
-      plannerId,
+      plannerId: 'profiledSpline',
     });
     doc.waypoints.slice(0, -1).forEach((w, segment) => {
       if (w.segmentHeadingMode !== 'lookAt' || !w.segmentLookAt) return;
@@ -1143,7 +1123,15 @@
       if (run >= 0) consider(run, rl.length - 1);
       if (longest) {
         const mid = Math.floor((longest[0] + longest[1]) / 2);
-        checks.push({ f: pts[mid].s / total, kind: 'performance', level: 'note', text: 'Rotation limits speed through this stretch' });
+        const accelerationLimited = rl.slice(longest[0], longest[1] + 1).some((value) => value >= 2);
+        checks.push({
+          f: pts[mid].s / total,
+          kind: 'performance',
+          level: 'note',
+          text: accelerationLimited
+            ? 'Angular acceleration limits speed · add more distance between heading anchors'
+            : 'Angular velocity limits speed through this stretch',
+        });
       }
     }
     checks.forEach((check) => {
@@ -1151,7 +1139,7 @@
       for (let i = 0; i < wpFrac.length - 1; i++) { if (check.f >= wpFrac[i] - 1e-4) seg = i; }
       check.seg = Math.max(0, Math.min(doc.waypoints.length - 2, seg));
     });
-    return { sample: smp, prof, totalDistance: smp.length + (prof.actionDistance || 0), anchors, metrics: mtr, checks, wpFrac, wpIdx, mode, effRanges, headingMode, rev: !!doc.driveBackward };
+    return { sample: smp, prof, totalDistance: smp.length + (prof.actionDistance || 0), anchors, metrics: mtr, checks, wpFrac, wpIdx, mode, effRanges, headingMode, rev: !!doc.driveBackward, playback: null, markers: [], planner: 'profiledSpline' };
   }
 
   function jigglePositions(anchor, baseRad, options, bounds = { w: 17.548, h: 8.052 }) {
@@ -1172,4 +1160,6 @@
     return positions;
   }
 
-export const PM = { splitBezier, nearestPointOnSegment, poseAtTime, headingAt, metricColor, metricGradient, METRICS, SEGTYPES, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, derivePath, jigglePositions, featureFraction, remapWaypointRange, waypointFracs, robotHardLimits, effectiveConstraints };
+  function pathLength(waypoints, perSegment = 56) { return sample(waypoints, perSegment).length; }
+
+export const PM = { splitBezier, nearestPointOnSegment, poseAtTime, headingAt, metricColor, metricGradient, METRICS, SEGTYPES, pointAtFraction, nearestFraction, nearestVisits, autoHandles, angWrap, derivePath, jigglePositions, featureFraction, reversePathAnchors, pathLength, remapWaypointRange, waypointFracs, robotHardLimits, effectiveConstraints, indexIntervalPolicies };
