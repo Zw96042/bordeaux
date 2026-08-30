@@ -514,54 +514,21 @@
       while (lo < hi) { const mid = (lo + hi) >> 1; if (T[mid] < time) lo = mid + 1; else hi = mid; }
       i = lo;
     }
-    const t0 = T[i - 1], t1 = T[i];
+    }
     const u = t1 - t0 > 1e-6 ? Math.max(0, Math.min(1, (time - t0) / (t1 - t0))) : 0;
     const a = pts[i - 1], b = pts[i];
     const x = lerp(a.x, b.x, u), y = lerp(a.y, b.y, u);
     const s = lerp(a.s, b.s, u);
     const f = pts[n - 1].s > 1e-6 ? s / pts[n - 1].s : 0;
     let heading;
-    if (mode === 'tank') heading = Math.atan2(b.y - a.y, b.x - a.x);
+    if (prof.head && prof.head.length === n) {
+      const startHeading = departureHeading == null ? prof.head[i - 1] : departureHeading;
+      heading = startHeading + angWrap(prof.head[i] - startHeading) * u;
+    } else if (mode === 'tank') heading = Math.atan2(b.y - a.y, b.x - a.x);
     else heading = headingAt(f, anchors);
     if (rev) heading += Math.PI;
     const speed = lerp(prof.v[i - 1], prof.v[i], u);
     return { x, y, heading, speed, s, f };
-  }
-
-  // build heading anchors from a flat list of {f, rad} entries (waypoint thetas + rotation targets)
-  // ensures coverage of f=0 and f=1 so heading is defined across the whole path
-  function buildAnchors(entries) {
-    const arr = (entries || [])
-      .filter(e => e && isFinite(e.f) && isFinite(e.rad))
-      .map(e => ({ f: Math.max(0, Math.min(1, e.f)), rad: e.rad }))
-      .sort((a, b) => a.f - b.f);
-    if (!arr.length) return [{ f: 0, rad: 0 }, { f: 1, rad: 0 }];
-    if (arr[0].f > 1e-6) arr.unshift({ f: 0, rad: arr[0].rad });
-    if (arr[arr.length - 1].f < 1 - 1e-6) arr.push({ f: 1, rad: arr[arr.length - 1].rad });
-    return arr;
-  }
-
-  // point + fraction lookup by arclength fraction f (for placing markers/targets)
-  function pointAtFraction(f, pts) {
-    const n = pts.length; if (!n) return { x: 0, y: 0, heading: 0 };
-    const target = f * pts[n - 1].s;
-    let lo = 1, hi = n - 1;
-    if (target <= 0) return { ...pts[0] };
-    if (target >= pts[n - 1].s) return { ...pts[n - 1] };
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (pts[mid].s < target) lo = mid + 1; else hi = mid; }
-    const a = pts[lo - 1], b = pts[lo];
-    const u = (target - a.s) / Math.max(1e-6, b.s - a.s);
-    return { x: lerp(a.x, b.x, u), y: lerp(a.y, b.y, u), heading: angLerp(a.heading, b.heading, u) };
-  }
-
-  // nearest fraction on path to a world point (for placing markers by click)
-  function nearestFraction(wx, wy, pts) {
-    let best = 0, bd = Infinity;
-    for (let i = 0; i < pts.length; i++) {
-      const dx = pts[i].x - wx, dy = pts[i].y - wy; const d = dx * dx + dy * dy;
-      if (d < bd) { bd = d; best = i; }
-    }
-    return pts.length > 1 ? pts[best].s / pts[pts.length - 1].s : 0;
   }
 
   // Return distinct ordered visits near a field point. Unlike nearestFraction,
@@ -616,20 +583,6 @@
     return clusters.map((cluster) => cluster.best).sort((a, b) => a.s - b.s);
   }
 
-  // auto control handles for a fresh waypoint (smooth Catmull-Rom-ish)
-  function autoHandles(waypoints, i) {
-    const w = waypoints[i];
-    const prev = waypoints[i - 1] || w, next = waypoints[i + 1] || w;
-    let dx = next.x - prev.x, dy = next.y - prev.y;
-    const len = Math.hypot(dx, dy) || 1;
-    dx /= len; dy /= len;
-    const handle = Math.max(0.6, len * 0.28);
-    return {
-      prevC: { x: w.x - dx * handle, y: w.y - dy * handle },
-      nextC: { x: w.x + dx * handle, y: w.y + dy * handle },
-    };
-  }
-
   // ---- per-point engineering metrics aligned to the sampled path ----
   // returns arrays + maxima for velocity / acceleration / angular velocity / curvature
   function metrics(pts, prof, anchors, mode) {
@@ -656,38 +609,6 @@
     }
     return { v, accel, omega, curv, head, vMax, aMax, wMax, kMax };
   }
-
-  // ---- colour scales for the metric overlays ----
-  function hex2rgb(hx) { return [parseInt(hx.slice(1, 3), 16), parseInt(hx.slice(3, 5), 16), parseInt(hx.slice(5, 7), 16)]; }
-  const RAMPS_M = {
-    velocity:  [[0, '#3f6fd0'], [0.4, '#2fa36b'], [0.7, '#d28f37'], [1, '#cf4f4a']],
-    accel:     [[0, '#3f6fd0'], [0.5, '#4d535e'], [1, '#cf4f4a']],
-    angvel:    [[0, '#343d47'], [0.5, '#2f8fa6'], [1, '#5fcfe6']],
-    curvature: [[0, '#39342b'], [0.5, '#a87c30'], [1, '#edbf5c']],
-  };
-  function metricColor(mode, tt) {
-    const s = RAMPS_M[mode] || RAMPS_M.velocity;
-    let t = Math.max(0, Math.min(1, tt));
-    for (let i = 0; i < s.length - 1; i++) {
-      const a = s[i], b = s[i + 1];
-      if (t >= a[0] && t <= b[0]) {
-        const u = (t - a[0]) / Math.max(1e-6, b[0] - a[0]);
-        const ca = hex2rgb(a[1]), cb = hex2rgb(b[1]);
-        return `rgb(${Math.round(ca[0] + (cb[0] - ca[0]) * u)},${Math.round(ca[1] + (cb[1] - ca[1]) * u)},${Math.round(ca[2] + (cb[2] - ca[2]) * u)})`;
-      }
-    }
-    return s[s.length - 1][1];
-  }
-  function metricGradient(mode) {
-    const s = RAMPS_M[mode] || RAMPS_M.velocity;
-    return 'linear-gradient(90deg,' + s.map((x) => x[1] + ' ' + Math.round(x[0] * 100) + '%').join(',') + ')';
-  }
-  const METRICS = [
-    { id: 'velocity', label: 'Velocity', unit: 'm/s', kind: 'seq' },
-    { id: 'accel', label: 'Acceleration', unit: 'm/s\u00b2', kind: 'div' },
-    { id: 'angvel', label: 'Angular velocity', unit: '\u00b0/s', kind: 'div' },
-    { id: 'curvature', label: 'Curvature', unit: '1/m', kind: 'seq' },
-  ];
 
   // ---- path checks ----------------------------------------------------------
   // Only measured constraint violations are issues. Expected slowdowns are
@@ -728,19 +649,6 @@
     return checks;
   }
 
-  // Path type belongs to the SEGMENT between two waypoints. The list stays honest:
-  // only true geometry types live here, grouped Basic / Spline. Snapping, heading-hold,
-  // approach and auto-smooth are tooling/constraint behaviours and live elsewhere.
-  const SEGTYPES = [
-    { id: 'line', label: 'Straight', abbr: 'LIN', group: 'Basic', hint: 'Straight line \u2014 control handles ignored.' },
-    { id: 'arc', label: 'Arc', abbr: 'ARC', group: 'Basic', hint: 'Constant-radius turn, tangent to the out-handle.' },
-    { id: 'bezier', label: 'B\u00e9zier', abbr: 'BEZ', group: 'Spline', hint: 'Hand-shaped spline driven by the control handles.' },
-    { id: 'clothoid', label: 'Clothoid', abbr: 'CLO', group: 'Spline', hint: 'Euler spiral \u2014 curvature ramps smoothly (swerve-friendly).' },
-  ];
-
-  // ---- constraint-range anchoring -------------------------------------------
-  // A range can be anchored three ways. We resolve each to
-  // concrete arclength fractions [f0,f1] against the CURRENT path so the profile
   function headingWithTranslationPriority(doc, robot, pts, prof, desired, ranges, transitions) {
     transitions = transitions || [];
     if (!robot || robot.drive === 'tank' || (!ranges.some((range) => range.rotationPriority === 'translation') && !transitions.some((transition) => transition.rotationPriority === 'translation')) || desired.length < 2) return desired;
