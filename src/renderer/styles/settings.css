@@ -1,0 +1,6 @@
+
+.robotpage .fieldlabel{font-size:12px;font-weight:500;text-transform:none;letter-spacing:normal}
+.robotpage .rp-big{gap:8px}
+.robotpage .rp-big .u{flex-shrink:0}
+
+.robotpage .rp-controls .rp-drive-model{grid-template-columns:repeat(auto-fit,minmax(155px,1fr))}

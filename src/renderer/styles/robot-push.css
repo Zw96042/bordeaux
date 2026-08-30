@@ -1,16 +1,34 @@
 .robot-push-trigger {
-  height: 34px;
-  padding: 0 12px;
-  border: 1px solid rgba(122, 157, 235, 0.45);
-  border-radius: 8px;
-  background: linear-gradient(180deg, #4d78d8, #315bb8);
-  color: #fff;
-  font: 600 12px/1 var(--font-ui);
-  box-shadow: 0 4px 14px rgba(12, 22, 45, 0.24);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--txt-2);
+  font: 600 11px/1 var(--ui);
   cursor: pointer;
   white-space: nowrap;
+  transition: color 140ms ease-out, background-color 140ms ease-out, border-color 140ms ease-out, transform 80ms ease-out;
 }
 .robot-push-trigger:hover {
+  border-color: var(--line-2);
+  background: var(--bg-3);
+  color: var(--txt);
+}
+.robot-push-trigger:active {
+  transform: scale(0.96);
+}
+.robot-push-trigger-deploy svg {
+  color: var(--accent);
+}
+.robot-push-trigger-diagnostics {
+  width: 32px;
+  padding: 0;
+  color: var(--txt-3);
 }
 .robot-push-trigger:disabled {
   opacity: 0.45;
