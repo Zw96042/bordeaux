@@ -843,85 +843,27 @@
           const branchOffset = goalHeading + angWrap(raw[nextIndex] - goalHeading) - unwrappedRaw[nextIndex];
           for (let i = nextIndex; i <= transitionGoal.spanEndIndex; i++) out[i] = unwrappedRaw[i] + branchOffset;
         }
-        protectedAnchorIndices.add(goalIndex);
-        continue;
-      }
-      const outgoing = incoming + angWrap(raw[outgoingStart] - incoming), delta = outgoing - incoming;
-      const beforeDistance = Math.min(policy.distanceM * beforeShare, Math.max(0, pts[boundary].s - pts[previousBoundary].s));
-      if (beforeDistance > 1e-9) {
-        const startDistance = pts[boundary].s - beforeDistance;
-        for (let i = previousBoundary; i < boundary; i++) {
-          if (pts[i].s < startDistance - 1e-9) continue;
-          if (i <= protectedBefore) continue;
-          const t = Math.max(0, Math.min(1, (pts[i].s - startDistance) / beforeDistance));
-          const smooth = t * t * t * (t * (t * 6 - 15) + 10);
-          out[i] += delta * beforeShare * smooth;
-        }
-      }
-      const boundaryHeading = incoming + delta * beforeShare;
-      const afterDistance = Math.min(policy.distanceM * (1 - beforeShare), Math.max(0, pts[nextBoundary].s - pts[boundary].s));
-      let previous = boundaryHeading;
-      const afterStartIndex = boundaryProtected ? boundary + 1 : boundary;
-      for (let i = afterStartIndex; i <= nextBoundary; i++) {
-        const base = previous + angWrap(raw[i === boundary ? outgoingStart : i] - previous);
-        const t = afterDistance > 1e-9 ? Math.max(0, Math.min(1, (pts[i].s - pts[boundary].s) / afterDistance)) : 1;
-        const smooth = t * t * t * (t * (t * 6 - 15) + 10);
-        out[i] = base + (boundaryHeading - outgoing) * (1 - smooth);
-        previous = out[i];
-      }
-    }
-    return out;
-  }
-  function effectiveRanges(doc, smp) {
-    const ranges = doc.ranges || []; const total = smp.length || 1;
-    const wf = ranges.some((r) => r.anchor === 'wp') ? waypointFracs(doc, smp) : null;
-    return ranges.map((r) => {
-      let f0 = r.f0, f1 = r.f1;
-      if (r.anchor === 'dist') { f0 = (r.d0 != null ? r.d0 : (r.f0 || 0) * total) / total; f1 = (r.d1 != null ? r.d1 : (r.f1 || 0) * total) / total; }
-      else if (r.anchor === 'wp' && wf) {
-        const localFraction = (waypoint, local, fallback) => {
-          if (local == null) return wf[Math.max(0, Math.min(wf.length - 1, waypoint != null ? waypoint : fallback))];
-          const segment = Math.max(0, Math.min(wf.length - 2, Math.round(waypoint != null ? waypoint : 0)));
-          const t = Math.max(0, Math.min(1, local));
-          return wf[segment] + (wf[segment + 1] - wf[segment]) * t;
-        };
-        f0 = localFraction(r.w0, r.t0, 0); f1 = localFraction(r.w1, r.t1, wf.length - 1);
-      }
-      f0 = Math.max(0, Math.min(1, f0 || 0)); f1 = Math.max(0, Math.min(1, f1 || 0));
-      return { f0, f1, maxVel: r.maxVel, maxAccel: r.maxAccel, maxDecel: r.maxDecel, maxAngVel: r.maxAngVel, maxAngAccel: r.maxAngAccel, rotationPriority: r.rotationPriority, anchor: r.anchor || 'param', name: r.name };
-    });
-  }
-
   function headingWithTranslationPriority(doc, robot, pts, prof, desired, ranges, transitions) {
     transitions = transitions || [];
     if (!robot || robot.drive === 'tank' || (!ranges.some((range) => range.rotationPriority === 'translation') && !transitions.some((transition) => transition.rotationPriority === 'translation')) || desired.length < 2) return desired;
-    const activeAt = (f) => ranges.filter((range) => f >= Math.min(range.f0, range.f1) - 1e-9 && f <= Math.max(range.f0, range.f1) + 1e-9);
-    const translationForInterval = (before, after) => {
-      const start = Math.min(before, after), end = Math.max(before, after);
-      const overlaps = (lo, hi) => Math.min(end, hi) - Math.max(start, lo) >= -1e-9;
-      const active = ranges.filter((range) => overlaps(Math.min(range.f0, range.f1), Math.max(range.f0, range.f1)));
-      const activeTransitions = transitions.filter((transition) => overlaps(transition.start, transition.end));
-      return active.length + activeTransitions.length > 0
-        && active.every((range) => range.rotationPriority === 'translation')
-        && activeTransitions.every((transition) => transition.rotationPriority === 'translation');
-    };
     const out = desired.slice();
     let following = false, actual = desired[0], omega = 0;
     const total = pts[pts.length - 1].s || 1;
+    const intervalPolicies = indexIntervalPolicies(
+      pts.map((point) => point.s / total),
+      ranges.map((range) => ({ ...range, start: Math.min(range.f0, range.f1), end: Math.max(range.f0, range.f1) })),
+      transitions,
+    );
     for (let i = 1; i < desired.length; i++) {
-      const f = pts[i].s / total, previousF = pts[i - 1].s / total;
-      if (translationForInterval(previousF, f)) following = true;
       const dt = prof.t[i] - prof.t[i - 1];
+      const previousDt = i > 1 ? prof.t[i - 1] - prof.t[i - 2] : 0;
+      const plannedOmega = previousDt > 1e-9 ? angWrap(desired[i - 1] - desired[i - 2]) / previousDt : 0;
+      const caughtUp = Math.abs(desired[i - 1] - actual) <= 0.05 * D2R && Math.abs(plannedOmega - omega) <= 0.05 * D2R;
+      following = intervalPolicies.activeTranslationPriority[i] || (following && !caughtUp);
       if (!following || dt <= 1e-9) { actual = desired[i]; omega = dt > 1e-9 ? angWrap(desired[i] - desired[i - 1]) / dt : omega; out[i] = actual; continue; }
-      const active = activeAt(f).concat(activeAt(previousF));
-      let maxOmega = (doc.constraints.maxAngVel || 0) * D2R;
-      let maxAccel = (doc.constraints.maxAngAccel || 0) * D2R;
-      let maxDecel = (doc.constraints.maxAngDecel || doc.constraints.maxAngAccel || 0) * D2R;
-      active.forEach((range) => {
-        maxOmega = Math.min(maxOmega, range.maxAngVel * D2R);
-        maxAccel = Math.min(maxAccel, range.maxAngAccel * D2R);
-        maxDecel = Math.min(maxDecel, range.maxAngAccel * D2R);
-      });
+      const maxOmega = Math.min(doc.constraints.maxAngVel || 0, intervalPolicies.maxAngVel[i]) * D2R;
+      const maxAccel = Math.min(doc.constraints.maxAngAccel || 0, intervalPolicies.maxAngAccel[i]) * D2R;
+      const maxDecel = Math.min(doc.constraints.maxAngDecel || doc.constraints.maxAngAccel || 0, intervalPolicies.maxAngAccel[i]) * D2R;
       const error = desired[i] - actual;
       const desiredOmega = Math.max(-maxOmega, Math.min(maxOmega, (desired[i] - desired[i - 1]) / dt));
       const brakingOmega = Math.max(0, Math.sqrt(2 * Math.max(1e-9, maxDecel) * Math.abs(error)) - Math.max(1e-9, maxDecel) * dt);
@@ -988,26 +930,6 @@
     prof.headingCatchupDuration = duration;
   }
 
-  function featureFraction(feature, smp) {
-    const total = smp.length || 1;
-    const raw = feature && feature.anchor === 'dist'
-      ? (feature.d != null ? feature.d : (feature.f || 0) * total) / total
-      : (feature && feature.f) || 0;
-    return Math.max(0, Math.min(1, raw));
-  }
-
-  function remapWaypointRange(range, oldToNew, removedIndex, newCount) {
-    if (!range || range.anchor !== 'wp') return range;
-    const next = { ...range };
-    const last = Math.max(0, newCount - 1);
-    if (range.t0 != null || range.t1 != null) {
-      const remapLocal = (segment, local) => {
-        const authored = Number.isInteger(segment) ? segment : 0;
-        const oldSegment = Math.max(0, Math.min(oldToNew.length - 2, authored));
-        const oldLocal = Math.max(0, Math.min(1, local != null ? local : (authored >= oldToNew.length - 1 ? 1 : 0)));
-        const a = oldToNew[oldSegment], b = oldToNew[oldSegment + 1];
-        if (!Number.isInteger(a) || !Number.isInteger(b) || newCount < 2) {
-          const fallback = Number.isInteger(a) ? a : Math.max(0, Math.min(last, oldSegment));
   // ---- one-call derivation: everything the field + panels need for a path ----
   function derivePath(doc, robot, perSeg, plannerId) {
     perSeg = perSeg || 56;
