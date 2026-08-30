@@ -223,10 +223,18 @@ import { PM } from "./pathMath";
     return null;
   }
 
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      const end = steps[middle].t1 + 1e-6;
+      if (inclusive ? time <= end : time < end) high = middle;
+      else low = middle + 1;
+    }
+    return low < steps.length && time >= steps[low].t0 ? low : steps.length - 1;
+  }
+
   // ---- which step is current at a time (for highlighting) ----
   function stepAt(run, time) {
-    for (let i = 0; i < run.steps.length; i++) { const s = run.steps[i]; if (time >= s.t0 && time < s.t1 + 1e-6) return i; }
-    return run.steps.length - 1;
+    return stepIndexAt(run.steps, time, false);
   }
 
   // ---- field overlay descriptor for FieldView ----
@@ -249,9 +257,9 @@ import { PM } from "./pathMath";
     });
   }
 
-export const AUTO = { CATS, CAT_LIST, AUTHORABLE_STEPS, FUNCTIONS, TRIGGERS, pickerItems, authoritativeConditions, conditionPickerItems, hasWaitBuiltIn, authorableSteps, nodeDeploymentState, SEQ_OPS, seqOp, nodeTitle, newNode, walk, findNode, countSteps, branchCount,
+export const AUTO = { CATS, AUTHORABLE_STEPS, authoritativeConditions, conditionPickerItems, hasWaitBuiltIn, authorableSteps, nodeDeploymentState, nodeTitle, newNode, walk, findNode, countSteps, branchCount,
     buildRun, poseAt, stepAt, fieldOverlay,
-    update, remove, insertAfter, prepend, appendBranch, append, move, reorderRelative };
+    update, remove, insertAfter, prepend, appendBranch, append, move, siblingNodes, canReorderRelative, reorderRelative };
 
   // ---- immutable-ish routine edits (operate on a deep clone) ----
   function _clone(o) { return JSON.parse(JSON.stringify(o)); }
@@ -280,24 +288,35 @@ export const AUTO = { CATS, CAT_LIST, AUTHORABLE_STEPS, FUNCTIONS, TRIGGERS, pic
     };
     mv(r.nodes); return r;
   }
-  // drag-reorder: move `id` to sit immediately before/after `targetId` within the SAME sibling array
-  function reorderRelative(routine, id, targetId, before) {
-    if (id === targetId) return routine;
-    const r = _clone(routine);
-    const run = (arr) => {
-      const si = arr.findIndex((n) => n.id === id);
-      const ti = arr.findIndex((n) => n.id === targetId);
-      if (si >= 0 && ti >= 0) {
-        const [node] = arr.splice(si, 1);
-        const idx = arr.findIndex((n) => n.id === targetId);
-        arr.splice(before ? idx : idx + 1, 0, node);
-        return true;
+  function siblingNodes(routine, id) {
+    const find = (nodes) => {
+      if (nodes.some((node) => node.id === id)) return nodes;
+      for (const node of nodes) {
+        if (node.type !== 'decision') continue;
+        const siblings = find(node.then || []) || find(node.else || []);
+        if (siblings) return siblings;
       }
-      if (si >= 0 || ti >= 0) return true; // both must share an array; bail otherwise
-      for (const n of arr) { if (n.type === 'decision' && (run(n.then) || run(n.else))) return true; }
-      return false;
+      return null;
     };
-    run(r.nodes); return r;
+    return find(routine.nodes);
+  }
+  function canReorderRelative(routine, id, targetId, before) {
+    const siblings = siblingNodes(routine, id);
+    if (!siblings || id === targetId) return false;
+    const source = siblings.findIndex((node) => node.id === id);
+    const target = siblings.findIndex((node) => node.id === targetId);
+    if (target < 0) return false;
+    return before ? source !== target - 1 : source !== target + 1;
+  }
+  // Feedback and mutation share the same sibling-only, non-no-op rule.
+  function reorderRelative(routine, id, targetId, before) {
+    if (!canReorderRelative(routine, id, targetId, before)) return routine;
+    const r = _clone(routine);
+    const siblings = siblingNodes(r, id);
+    const [node] = siblings.splice(siblings.findIndex((item) => item.id === id), 1);
+    const target = siblings.findIndex((item) => item.id === targetId);
+    siblings.splice(before ? target : target + 1, 0, node);
+    return r;
   }
   // total step count inside a branch (recursive)
   function branchCount(nodes) { let c = 0; walk(nodes || [], () => c++); return c; }
