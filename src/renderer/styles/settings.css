@@ -1,3 +1,23 @@
+.settings-general{margin:20px 0 28px;border-block:1px solid var(--line)}
+.settings-row{display:flex;align-items:center;justify-content:space-between;gap:24px;min-height:70px;padding:14px 0;font-size:13px}
+.settings-row+.settings-row{border-top:1px solid var(--line)}
+.settings-row strong{font-weight:500}
+.settings-label{display:flex;flex-direction:column;gap:5px;min-width:0}
+.settings-label span{color:var(--txt-3);font-size:12px;overflow-wrap:anywhere}
+.settings-row>.seg{width:220px;flex-shrink:0}
+.settings-row>.qbtn{flex-shrink:0}
+.settings-robot-heading{font-size:16px;font-weight:600;margin:0}
+@media(max-width:500px){.settings-row{align-items:flex-start;flex-direction:column;gap:12px}.settings-row>.seg{width:100%}}
+
+.robotpage .rp-sech{font-size:13px;font-weight:600;text-transform:none;letter-spacing:normal;color:var(--txt-2)}
+.robotpage .rp-readout .rru{font-size:11px;text-transform:none;letter-spacing:normal;line-height:1.4}
+.robotpage .rp-vertexhead{font:11px/1.4 var(--ui);flex-wrap:wrap}
+.robotpage .rp-vertex{grid-template-columns:18px minmax(0,1fr) minmax(0,1fr) 28px}
+.robotpage .rp-vertex-coordinate{display:flex;align-items:center;gap:4px;min-width:0}
+.robotpage .rp-vertex .rp-big{height:36px;padding:0 6px;gap:3px;flex:1}
+.robotpage .rp-vertex .rp-big input{height:32px;padding:0;border:0;background:none;font-size:13px}
+.robotpage .rp-vertex .rp-big .u{font-size:10px}
+.robotpage .rp-vertex.selected .rp-big{border-color:var(--accent)}
 
 .robotpage .fieldlabel{font-size:12px;font-weight:500;text-transform:none;letter-spacing:normal}
 .robotpage .rp-big{gap:8px}

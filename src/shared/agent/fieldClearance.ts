@@ -23,6 +23,7 @@ const OBSTACLE_POLYGONS = REBUILT_2026_FIELD.solidObstacles.flatMap((item) => {
     max: { x: Math.max(first.x, second.x), y: Math.max(first.y, second.y) },
   })];
 });
+const OBSTACLE_BOUNDS = OBSTACLE_POLYGONS.map(polygonBounds);
 const BARRIER_X = new Map(REBUILT_2026_FIELD.crossingBarriers.map((barrier) => (
   [barrier, officialToAppPoint({ x: barrier.x, y: 0 }).x] as const
 )));
@@ -95,9 +96,10 @@ export function observeRobotFieldPortalSequence(
   };
 
   for (const sample of samples) {
+    const footprint = transformFootprint(localFootprint, sample);
     for (const barrier of REBUILT_2026_FIELD.crossingBarriers) {
       const barrierX = BARRIER_X.get(barrier)!;
-      const section = verticalLineSection(transformFootprint(localFootprint, sample), barrierX);
+      const section = verticalLineSection(footprint, barrierX);
       if (section && portalsForSection(barrier, section).length !== 1) valid = false;
     }
   }
@@ -152,7 +154,15 @@ export function measureRobotFieldClearance(robot: RobotConfig, samples: readonly
     const footprint = transformFootprint(localFootprint, sample);
     const footprintBounds = polygonBounds(footprint);
     let sampleMinimum = footprintBoundsClearance(footprint, FIELD_W, FIELD_H);
-    for (const obstacle of OBSTACLE_POLYGONS) sampleMinimum = Math.min(sampleMinimum, convexPolygonClearance(footprint, obstacle));
+    for (let index = 0; index < OBSTACLE_POLYGONS.length; index += 1) {
+      const bounds = OBSTACLE_BOUNDS[index];
+      const gap = Math.max(bounds.min.x - footprintBounds.max.x, footprintBounds.min.x - bounds.max.x,
+        bounds.min.y - footprintBounds.max.y, footprintBounds.min.y - bounds.max.y);
+      // An axis-aligned gap is a lower bound on polygon distance. Only prune
+      // strictly separated boxes; overlapping polygons still need signed SAT.
+      if (gap > Math.max(0, sampleMinimum)) continue;
+      sampleMinimum = Math.min(sampleMinimum, convexPolygonClearance(footprint, OBSTACLE_POLYGONS[index]));
+    }
     REBUILT_2026_FIELD.crossingBarriers.forEach((barrier) => {
       const barrierX = BARRIER_X.get(barrier)!;
       const section = verticalLineSection(footprint, barrierX);
