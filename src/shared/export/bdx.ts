@@ -1,11 +1,13 @@
 import { getPlanner } from "../planners";
-import { optimizeCorridorFinal } from "../planners/corridorFinal";
+import { authoredPath, getAcceptedTrajectory } from "../planners/acceptedTrajectory";
+import { isOptimizationOutdated } from "../planners/acceptedTrajectoryIdentity";
 import { clone } from "../project/defaults";
 import { activeRoutine } from "../project/routines";
 import type {
   BdxExport,
   BdxPath,
   BordeauxProject,
+  PlannerResult,
 } from "../types";
 import { validateProject } from "../validation";
 import { robotHardLimits } from "../robotLimits";
@@ -14,6 +16,7 @@ function exportablePaths(project: BordeauxProject) {
   return project.paths.filter((path) => path.exportable !== false);
 }
 
+export interface BuiltBdxExport {
   document: BdxExport;
   plannerResults: PlannerResult[];
 }
