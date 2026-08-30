@@ -345,43 +345,44 @@
       const ds = pts[i + 1].s - pts[i].s;
       v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i + 1] * v[i + 1] + 2 * aBack[i] * ds)));
     }
-    // Enforce angular acceleration in generated timing instead of manufacturing
-    // visible velocity constraint ranges around ordinary moving turns.
+    // local window scale changes omega linearly and alpha quadratically, which
+    // avoids the alternating zero-speed samples produced by point-wise caps.
     if (head && head.length === n && Aang > 1e-4) {
-      const angularBudget = Aang * 0.8;
-      const intervalDt = (index, candidate, candidateIndex) => {
-        const ds = pts[index].s - pts[index - 1].s;
-        const before = candidateIndex === index - 1 ? candidate : v[index - 1];
-        const after = candidateIndex === index ? candidate : v[index];
-        return 2 * ds / Math.max(1e-6, before + after);
-      };
-      const intervalOmega = (index, candidate, candidateIndex) => {
-        if (index <= 0 || index >= n) return 0;
-        const dt = intervalDt(index, candidate, candidateIndex);
-        return dt > 1e-9 ? Math.abs(angWrap(head[index] - head[index - 1])) / dt : 0;
-      };
-      const capInterval = (interval, referenceInterval, variableIndex, referenceDtInterval) => {
-        const referenceOmega = intervalOmega(referenceInterval, v[variableIndex], -1);
-        const allowed = (candidate) => intervalOmega(interval, candidate, variableIndex) <= referenceOmega + angularBudget * intervalDt(referenceDtInterval, candidate, variableIndex) + 1e-9;
-        if (allowed(v[variableIndex])) return false;
-        let low = 0, high = v[variableIndex];
-        for (let iteration = 0; iteration < 28; iteration++) {
-          const candidate = (low + high) / 2;
-          if (allowed(candidate)) low = candidate; else high = candidate;
-        }
-        v[variableIndex] = low;
-        return true;
-      };
       const stopped = new Set(opts.stopIdx || []);
+      const intervalDt = (index) => {
+        const ds = pts[index].s - pts[index - 1].s;
+        return 2 * ds / Math.max(1e-6, v[index - 1] + v[index]);
+      };
+      const intervalOmega = (index) => {
+        const dt = intervalDt(index);
+        return dt > 1e-9 ? angWrap(head[index] - head[index - 1]) / dt : 0;
+      };
       const translationInterval = (interval) => interval > 0 && interval < n && translationPriority[interval];
-      for (let pass = 0; pass < 20; pass++) {
+      for (let pass = 0; pass < 40; pass++) {
+        const caps = v.slice();
         let changed = false;
         for (let interval = 2; interval < n; interval++) {
-          if (!stopped.has(interval - 1) && !translationInterval(interval)) changed = capInterval(interval, interval - 1, interval, interval) || changed;
+          if (stopped.has(interval - 1) || translationInterval(interval - 1) || translationInterval(interval)) continue;
+          const beforeDt = intervalDt(interval - 1), afterDt = intervalDt(interval);
+          if (beforeDt <= 1e-9 || afterDt <= 1e-9) continue;
+          const beforeOmega = intervalOmega(interval - 1), afterOmega = intervalOmega(interval);
+          const omegaDirection = Math.sign(beforeOmega) || Math.sign(afterOmega);
+          const signedAcceleration = omegaDirection * (afterOmega - beforeOmega) / ((beforeDt + afterDt) / 2);
+          const measured = Math.abs(signedAcceleration);
+          const directionalLimit = beforeOmega * afterOmega < 0
+            ? Math.min(Aang, AangDecel)
+            : signedAcceleration < 0 ? AangDecel : Aang;
+          const localLimit = Math.min(directionalLimit, rangeAngA[interval - 2], rangeAngA[interval - 1], rangeAngA[interval]) * 0.8;
+          if (measured <= localLimit * 1.001 + 1e-9) continue;
+          const scale = Math.min(0.98, Math.sqrt(localLimit / measured) * 0.98);
+          for (let index = interval - 2; index <= interval; index++) {
+            if (stopped.has(index)) continue;
+            caps[index] = Math.min(caps[index], v[index] * scale);
+            rotLimited[index] = Math.max(rotLimited[index], 2);
+          }
+          changed = true;
         }
-        for (let interval = n - 2; interval >= 1; interval--) {
-          if (!stopped.has(interval) && !translationInterval(interval) && !translationInterval(interval + 1)) changed = capInterval(interval, interval + 1, interval - 1, interval + 1) || changed;
-        }
+        for (let i = 0; i < n; i++) v[i] = caps[i];
         for (let i = 1; i < n; i++) {
           const ds = pts[i].s - pts[i - 1].s;
           v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * aFwd[i] * ds)));
@@ -439,23 +440,6 @@
     return { v, t, totalTime: t[n - 1] + terminalDelay, holds, turns, jiggles, actionDistance: jiggleDistance, rotLimited };
   }
 
-  // heading anchors -> continuous heading along arclength fraction f in [0,1]
-  // anchors: [{f, rad}] must include f=0 and f=1, sorted
-  function headingAt(f, anchors) {
-    if (!anchors.length) return 0;
-    if (f <= anchors[0].f) return anchors[0].rad;
-    for (let i = 0; i < anchors.length - 1; i++) {
-      const a = anchors[i], b = anchors[i + 1];
-      if (f >= a.f && f <= b.f) {
-        const tt = (b.f - a.f) < 1e-6 ? 0 : (f - a.f) / (b.f - a.f);
-        // smoothstep for nicer rotation
-        const ss = tt * tt * (3 - 2 * tt);
-        return angLerp(a.rad, b.rad, ss);
-      }
-    }
-    return anchors[anchors.length - 1].rad;
-  }
-
   // pose at time given sampled pts, profile times, and heading anchors / mode
   function poseAtTime(time, pts, prof, anchors, mode, rev) {
     const n = pts.length;
@@ -467,7 +451,7 @@
         const hd = prof.holds[k];
         if (time >= hd.t0 - 1e-9 && time <= hd.t1 + 1e-9) {
           const p = pts[hd.idx]; const f = pts[n - 1].s > 1e-6 ? p.s / pts[n - 1].s : 0;
-          let heading = mode === 'tank' ? p.heading : headingAt(f, anchors); if (rev) heading += Math.PI;
+          let heading = Number.isFinite(hd.heading) ? hd.heading : mode === 'tank' ? p.heading : headingAt(f, anchors); if (rev) heading += Math.PI;
           return { x: p.x, y: p.y, heading, speed: 0, s: p.s, f, hold: true };
         }
       }
@@ -478,7 +462,16 @@
         if (time >= turn.t0 - 1e-9 && time <= turn.t1 + 1e-9) {
           const p = pts[turn.idx], u = Math.max(0, Math.min(1, (time - turn.t0) / Math.max(1e-9, turn.t1 - turn.t0)));
           const q = 10 * u ** 3 - 15 * u ** 4 + 6 * u ** 5, f = pts[n - 1].s > 1e-6 ? p.s / pts[n - 1].s : 0;
-          let heading = turn.start + turn.delta * q; if (rev) heading += Math.PI;
+          let heading;
+          if (turn.headingSamples && turn.headingSamples.length) {
+            let before = turn.headingSamples[0], after = turn.headingSamples[turn.headingSamples.length - 1];
+            for (let i = 1; i < turn.headingSamples.length; i++) {
+              if (turn.headingSamples[i].t >= time) { before = turn.headingSamples[i - 1]; after = turn.headingSamples[i]; break; }
+            }
+            const span = Math.max(1e-9, after.t - before.t);
+            heading = before.heading + angWrap(after.heading - before.heading) * Math.max(0, Math.min(1, (time - before.t) / span));
+          } else heading = turn.start + turn.delta * q;
+          if (rev) heading += Math.PI;
           return { x: p.x, y: p.y, heading, speed: 0, s: p.s, f, turn: true };
         }
       }
@@ -502,7 +495,7 @@
           heading,
           speed: Math.abs(phase.velocity) * config.distanceM / jiggle.strokeDuration,
           s: p.s + stroke * config.distanceM * 2 + config.distanceM * phase.travel,
-          f: 1,
+          f: Number.isFinite(p.f) ? p.f : jiggle.idx / Math.max(1, pts.length - 1),
           jiggle: true,
         };
       }
@@ -514,6 +507,17 @@
       while (lo < hi) { const mid = (lo + hi) >> 1; if (T[mid] < time) lo = mid + 1; else hi = mid; }
       i = lo;
     }
+    let t0 = T[i - 1], departureHeading = null; const t1 = T[i];
+    for (const actions of [prof.turns, prof.jiggles, prof.holds]) {
+      if (!actions) continue;
+      for (const action of actions) {
+        if (action.idx !== i - 1 || action.t1 <= t0) continue;
+        t0 = action.t1;
+        if (action.headingSamples && action.headingSamples.length) departureHeading = action.headingSamples[action.headingSamples.length - 1].heading;
+        else if (Number.isFinite(action.start) && Number.isFinite(action.delta)) departureHeading = action.start + action.delta;
+        else if (Number.isFinite(action.heading)) departureHeading = action.heading;
+        else if (Number.isFinite(action.baseRad)) departureHeading = action.baseRad;
+      }
     }
     const u = t1 - t0 > 1e-6 ? Math.max(0, Math.min(1, (time - t0) / (t1 - t0))) : 0;
     const a = pts[i - 1], b = pts[i];
