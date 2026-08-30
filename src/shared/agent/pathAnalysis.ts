@@ -3,6 +3,7 @@ import { FIELD_H } from "../math/fieldBounds";
 import { getPlanner } from "../planners";
 import { optimizeCorridorFinal } from "../planners/corridorFinal";
 import { clone } from "../project/defaults";
+import { effectivePathConstraints } from "../robotLimits";
 import type { BordeauxProject, PathDoc, TrajectorySample, ValidationIssue } from "../types";
 import { validateProject } from "../validation";
 import {
@@ -18,6 +19,8 @@ import type {
   PathAnalysisMetric,
   PathSampleReference,
 } from "./types";
+import { angularRateKind } from "../planners/angularConstraints";
+import { orderedWaypointSampleIndices } from "../planners/waypointSamples";
 
 const EPSILON = 1e-6;
 const BARRIER_EPSILON = 1e-4;
@@ -85,22 +88,6 @@ function metricLimit(path: PathDoc, sample: TrajectorySample, totalDistance: num
   return { limit, source };
 }
 
-function waypointArrivalIndices(path: PathDoc, samples: readonly TrajectorySample[]): number[] {
-  if (samples.length === 0) return [];
-  let cursor = 0;
-  return path.waypoints.map((waypoint, waypointIndex) => {
-    let best = cursor;
-    let distance = Number.POSITIVE_INFINITY;
-    const finalSearchIndex = waypointIndex === path.waypoints.length - 1 ? samples.length - 1 : Math.max(cursor, samples.length - (path.waypoints.length - waypointIndex));
-    for (let index = cursor; index <= finalSearchIndex; index += 1) {
-      const candidate = Math.hypot(samples[index].x - waypoint.x, samples[index].y - waypoint.y);
-      if (candidate < distance) { distance = candidate; best = index; }
-    }
-    cursor = best;
-    return best;
-  });
-}
-
 export interface AnalyzePathOptions {
   sampleLimit?: number;
   minimumClearanceM?: number;
@@ -112,6 +99,10 @@ export interface AnalyzePathOptions {
 
 function sampleReference(path: PathDoc, samples: readonly TrajectorySample[], index: number, arrivals: readonly number[]): PathSampleReference {
   const sample = samples[index];
+  let low = 0;
+  let high = arrivals.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
     if (arrivals[middle] < index) low = middle + 1;
     else high = middle;
   }

@@ -5,8 +5,8 @@ import { analyzePath } from "./pathAnalysis";
 import type { PathAnalysis, PathAnalysisFinding, RepairCandidate } from "./types";
 
 function findingRatio(finding: PathAnalysisFinding | undefined): number {
-  if (!finding?.measured) return finding ? 1 : 0;
-  if (finding.kind === "geometry" && finding.limit !== undefined) return Math.max(0, finding.limit - finding.measured);
+  if (finding?.measured === undefined) return finding ? 1 : 0;
+  if (finding.id === "geometry:field-obstacle-clearance" && finding.limit !== undefined) return Math.max(0, finding.limit - finding.measured);
   if (!finding.limit) return finding ? 1 : 0;
   return Math.max(0, finding.measured / finding.limit - 1);
 }

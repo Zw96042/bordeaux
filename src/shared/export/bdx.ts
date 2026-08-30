@@ -14,23 +14,33 @@ function exportablePaths(project: BordeauxProject) {
   return project.paths.filter((path) => path.exportable !== false);
 }
 
-export function buildBdxExport(project: BordeauxProject): BdxExport {
+  document: BdxExport;
+  plannerResults: PlannerResult[];
+}
+
+export function buildBdxExportWithPlannerResults(project: BordeauxProject): BuiltBdxExport {
   const validation = validateProject(project);
   if (!validation.ok) {
     throw new Error(validation.issues.map((x) => x.message).join("\n"));
   }
 
+  const plannerResults: PlannerResult[] = [];
   const paths: BdxPath[] = exportablePaths(project).map((path) => {
-    const input = { path, robot: project.robot };
-    const result = project.plannerId === "optimizedTrajectory"
-      ? optimizeCorridorFinal(input)
-      : getPlanner("profiledSpline").generate(input);
+    const accepted = getAcceptedTrajectory(path, project.robot, project.field);
+    if (path.optimization?.accepted && !accepted && !isOptimizationOutdated(path, project.robot, project.field)) {
+      throw new Error(`${path.name}: The applied optimization is invalid. Choose Use normal or optimize and apply again before exporting.`);
+    }
+    const result = accepted ?? getPlanner("profiledSpline").generate({ path: authoredPath(path), robot: project.robot });
     if (result.samples.length < 2) {
       throw new Error(`Path "${path.name}" generated fewer than two samples`);
     }
     const blockingDiagnostic = result.diagnostics.find((item) => item.severity === "error");
     if (blockingDiagnostic) throw new Error(`${path.name}: ${blockingDiagnostic.message}`);
+    if (result.optimization?.fallback) {
+      throw new Error(`${path.name}: ${result.optimization.fallbackReason ?? "Trajectory optimization fell back"}`);
+    }
     assertFinitePlannerResult(path.name, result);
+    plannerResults.push(result);
     return {
       id: path.id,
       name: path.name,
@@ -47,7 +57,7 @@ export function buildBdxExport(project: BordeauxProject): BdxExport {
   assertFiniteValue(routine, "routine");
 
   const hardLimits = robotHardLimits(project.robot);
-  return {
+  const document: BdxExport = {
     schemaVersion: "1.1",
     generator: "bordeaux",
     field: clone(project.field),
@@ -69,6 +79,11 @@ export function buildBdxExport(project: BordeauxProject): BdxExport {
     paths,
     routine: routine ?? null,
   };
+  return { document, plannerResults };
+}
+
+export function buildBdxExport(project: BordeauxProject): BdxExport {
+  return buildBdxExportWithPlannerResults(project).document;
 }
 
 function assertFiniteValue(value: unknown, valuePath: string): void {
