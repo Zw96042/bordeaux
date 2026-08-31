@@ -310,20 +310,96 @@
         if (!changed) break;
       }
     }
-    // time
-    const t = new Array(n).fill(0);
-    for (let i = 1; i < n; i++) {
-      const ds = pts[i].s - pts[i - 1].s;
-      const vm = (v[i] + v[i - 1]) / 2;
-      t[i] = t[i - 1] + (vm > 1e-4 ? ds / vm : 0);
+  for (let i = 0; i < n; i++) {
+    vMax = Math.max(vMax, v[i]); aMax = Math.max(aMax, Math.abs(accel[i]));
+    wMax = Math.max(wMax, Math.abs(omega[i])); kMax = Math.max(kMax, curv[i]);
+  }
+  return { v, accel, omega, curv, head, vMax, aMax, wMax, kMax };
+}
+
+// ---- safety analysis: flag tight curvature + sharp velocity dips ----
+function analyze(pts: readonly Pick<GeometryPoint, "s" | "curv">[], _prof: VelocityProfile, m: ReturnType<typeof metrics>, robot: Partial<Pick<RobotConfig, "maxSpeed">> | null) {
+  const n = pts.length; const out: PathWarning[] = [];
+  if (n < 3) return out;
+  const totalS = pts[n - 1].s || 1;
+  const vCap = (robot && robot.maxSpeed) || 5;
+  // tight curvature: radius below ~0.7 m is hard on a drivetrain
+  let cuf = -1, cuMax = 0, cuAt = 0;
+  for (let i = 1; i < n - 1; i++) {
+    const rad = pts[i].curv > 1e-4 ? 1 / pts[i].curv : Infinity;
+    if (rad < 0.7) { if (pts[i].curv > cuMax) { cuMax = pts[i].curv; cuAt = i; } if (cuf < 0) cuf = i; }
+    else if (cuf >= 0) { out.push({ f: pts[cuAt].s / totalS, kind: 'curv', sev: cuMax > 2.5 ? 'high' : 'med', text: 'Tight curvature \u00b7 R\u2248' + (1 / cuMax).toFixed(2) + ' m' }); cuf = -1; cuMax = 0; }
+  }
+  if (cuf >= 0) out.push({ f: pts[cuAt].s / totalS, kind: 'curv', sev: cuMax > 2.5 ? 'high' : 'med', text: 'Tight curvature \u00b7 R\u2248' + (1 / cuMax).toFixed(2) + ' m' });
+  // velocity dip: local minimum well below surrounding speed (slow-down the user may not intend)
+  const v = m.v;
+  for (let i = 6; i < n - 6; i++) {
+    const local = v[i];
+    const around = Math.max(v[i - 6], v[i + 6]);
+    if (around > 1.2 && local < around * 0.45 && local < vCap * 0.5) {
+      // ensure it's a genuine trough
+      if (v[i] <= v[i - 1] && v[i] <= v[i + 1]) { out.push({ f: pts[i].s / totalS, kind: 'vel', sev: local < around * 0.3 ? 'high' : 'med', text: 'Velocity dip \u00b7 ' + local.toFixed(1) + ' m/s' }); i += 10; }
     }
-    // Stationary turns happen after arrival and before any wait.
-    const turns = [], turnDelay = new Map(); let terminalDelay = 0;
-    (opts.turns || []).slice().sort((a, b) => a.idx - b.idx).forEach((turn) => {
-      if (turn.idx < 0 || turn.idx >= n) return;
-      let delta = angWrap(turn.end - turn.start);
-      if (turn.direction === 'clockwise' && delta > 0) delta -= Math.PI * 2;
-      if (turn.direction === 'counterclockwise' && delta < 0) delta += Math.PI * 2;
+  }
+  return out;
+}
+
+// ---- one-call derivation: everything the field + panels need for a path ----
+function derivePath(doc: PathDoc, robot: RobotConfig | null, perSeg?: number, options?: { skipStationaryActions?: boolean }) {
+  perSeg = perSeg || 56;
+  const smp = sample(doc.waypoints, perSeg, true);
+  const nWp = doc.waypoints.length;
+  const originalLast = Math.max(0, smp.pts.length - 1);
+  let wpIdx = smp.wpIdx ?? doc.waypoints.map((_, k) => Math.min(originalLast, k * perSeg));
+  const initialWpFrac = wpIdx.map((index) => smp.pts.length ? smp.pts[index].s / (smp.length || 1) : 0);
+  const targetFractions = (doc.targets || []).map((target) => featureFraction(target, smp)).filter((fraction) => {
+    let segment = 0;
+    while (segment < nWp - 2 && fraction >= initialWpFrac[segment + 1] - 1e-9) segment++;
+    const mode = robot && robot.drive === 'tank'
+      ? 'tangent'
+      : ((doc.waypoints[segment] && doc.waypoints[segment].segmentHeadingMode) || doc.headingMode || 'targets');
+    return mode === 'targets';
+  });
+  wpIdx = insertHeadingTargetSamples(smp, targetFractions, wpIdx);
+  const pts = smp.pts;
+  const total = smp.length || 1;
+  const wpFrac = wpIdx.map((i) => (pts.length ? pts[i].s / total : 0));
+  const stopIdx: number[] = [];
+  doc.waypoints.forEach((w, k) => { if (w.stop) stopIdx.push(wpIdx[k]); });
+  const cap = (robot && robot.maxSpeed) || doc.constraints.maxVel;
+  const vmax = Math.min(doc.constraints.maxVel, cap);
+  const sv = doc.waypoints[0] && doc.waypoints[0].stop ? 0 : doc.startVel;
+  const gv = doc.waypoints[nWp - 1] && doc.waypoints[nWp - 1].stop ? 0 : doc.goalVel;
+  const effRanges = effectiveRanges(doc, smp);
+  // Heading mode is owned by the outgoing segment; omitted overrides inherit the path default.
+  const headingMode = (robot && robot.drive === 'tank') ? 'tangent' : (doc.headingMode || 'targets');
+  const effectiveHeadingMode = (segment: number) => (robot && robot.drive === 'tank')
+    ? 'tangent'
+    : ((doc.waypoints[segment] && doc.waypoints[segment].segmentHeadingMode) || headingMode);
+  const segmentModes = doc.waypoints.slice(0, -1).map((_, segment) => effectiveHeadingMode(segment));
+  const manualEntries: HeadingAnchor[] = [], targetEntries: HeadingAnchor[] = [];
+  doc.waypoints.forEach((w, k) => {
+    const isEnd = k === 0 || k === nWp - 1;
+    const incomingMode = segmentModes[k - 1];
+    const outgoingMode = segmentModes[k];
+    const entry = { f: wpFrac[k], rad: (w.theta || 0) * D2R };
+    if (isEnd || (w.thetaOn && (incomingMode === 'manual' || (w.turnInPlace && outgoingMode === 'manual')))) manualEntries.push(entry);
+    if (isEnd || (w.thetaOn && (incomingMode === 'targets' || (w.turnInPlace && outgoingMode === 'targets')))) targetEntries.push({ ...entry });
+  });
+  (doc.targets || []).forEach((t) => targetEntries.push({ f: featureFraction(t, smp), rad: t.deg * D2R }));
+  const manualAnchors = buildAnchors(manualEntries), targetAnchors = buildAnchors(targetEntries);
+  const rawHead: number[] = [];
+  pts.forEach((p, pointIndex) => {
+    const f = total > 1e-6 ? p.s / total : 0;
+    let segment = 0;
+    while (segment < nWp - 2 && pointIndex >= wpIdx[segment + 1]) segment++;
+    const segmentMode = effectiveHeadingMode(segment);
+    if (segmentMode === 'lookAt') {
+      const target = doc.waypoints[segment] && doc.waypoints[segment].segmentLookAt;
+      const dx = target ? target.x - p.x : 0, dy = target ? target.y - p.y : 0;
+      rawHead.push(Math.hypot(dx, dy) > 1e-6 ? Math.atan2(dy, dx) : (rawHead.length ? rawHead[rawHead.length - 1] : p.heading));
+    } else {
+      rawHead.push(segmentMode === 'tangent' ? p.heading : headingAt(f, segmentMode === 'targets' ? targetAnchors : manualAnchors));
     }
   });
   const segmentLaws = doc.waypoints.slice(0, -1).map((w, segment) => segmentModes[segment] === 'lookAt' ? 'lookAt:' + (w.segmentLookAt ? w.segmentLookAt.x : '') + ':' + (w.segmentLookAt ? w.segmentLookAt.y : '') : segmentModes[segment]);
