@@ -1,3 +1,45 @@
+import { indexIntervalPolicies } from "../planners/intervalPolicies";
+import type { ConstraintRange, ControlPoint, DriveType, PathConstraints, PathDoc, RobotConfig, TurnInPlace } from "../types";
+import type { GeometryPoint } from "./geometry";
+import type { HeadingAnchor } from "./headingAnchors";
+import type { HeadingTransitionWindow } from "../planners/headingTransitions";
+import { lerp, bez, bezD, angWrap, angLerp, D2R, R2D, sample, pointAtFraction, nearestFraction, autoHandles, SEGTYPES } from "./geometry";
+import { headingAt, buildAnchors } from "./headingAnchors";
+import { waypointFracs, effectiveRanges, featureFraction, insertHeadingTargetSamples, remapWaypointRange } from "./pathRanges";
+import { metricColor, metricGradient, METRICS } from "./metricDisplay";
+import { headingTransitionWindows, headingTransitionGoals, smoothHeadingTransitions } from "../planners/headingTransitions";
+
+type ProfileConstraints = Omit<PathConstraints, "maxDecel"> & { maxDecel?: number };
+interface ProfileTurn {
+  idx: number;
+  start: number;
+  end: number;
+  direction?: TurnInPlace["direction"];
+  maxAngVel?: number;
+  maxAngAccel?: number;
+  maxAngJerk?: number;
+}
+interface ProfileOptions {
+  vmax?: number;
+  stopIdx?: readonly number[];
+  ranges?: readonly ConstraintRange[];
+  headingTransitions?: readonly HeadingTransitionWindow[];
+  heading?: readonly number[];
+  turns?: readonly ProfileTurn[];
+  dwell?: readonly { idx: number; wait: number }[];
+}
+interface TimedHold { idx: number; t0: number; t1: number }
+interface TimedTurn extends TimedHold { start: number; delta: number }
+interface VelocityProfile {
+  v: number[];
+  t: number[];
+  totalTime: number;
+  holds: TimedHold[];
+  turns?: TimedTurn[];
+  rotLimited: number[];
+}
+interface PathWarning {
+  f: number;
   kind: "curv" | "vel" | "rot" | "angaccel" | "lookAt";
   sev: "high" | "med";
   text: string;
