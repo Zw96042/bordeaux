@@ -283,29 +283,111 @@ export function optimizeCorridorFinal(input: PlannerInput, requested: CorridorFi
     maxDeviationM: 0,
     minimumClearanceM: minimumRobotFieldClearance(input.robot, baseline.samples),
   };
-  const starts: Evaluation[] = [];
+  const snapshot = (): PlannerResult => {
+    const gainS = baseline.totalTimeS - best.result.totalTimeS;
+    const improved = best.path !== authored && gainS >= Math.max(MIN_GAIN_S, baseline.totalTimeS * MIN_GAIN_FRACTION);
+    const retained = improved ? best.result : baseline;
+    return {
+      ...retained,
+      ...(improved ? { optimizedPath: clone(best.path) } : {}),
+      optimization: corridorDiagnostics(retained, diagnosticsOptions, {
+        status: improved ? "feasible" : "equivalent",
+        termination,
+        solveTimeMs: performance.now() - startedAt,
+        totalTimeS: retained.totalTimeS,
+        baselineTimeS: baseline.totalTimeS,
+        gainS: improved ? gainS : 0,
+        fallback: false,
+        fallbackReason: improved ? undefined : `No material improvement was found inside the ${corridorM.toFixed(2)} m corridor.`,
+        evaluations,
+        validatedCandidates,
+        rejectedCandidates,
+        rejectionReasons: [...rejectionReasons].map(([reason, count]) => ({ reason, count })),
+        maxDeviationM: improved ? best.maxDeviationM : 0,
+        minimumClearanceM: improved ? best.minimumClearanceM : baselineClearanceM,
+      }),
+    };
+  };
+  const reject = (reason: string): null => {
+    rejectedCandidates += 1;
+    // Bound payload size even when each rejection has a different error.
+    const key = rejectionReasons.has(reason) || rejectionReasons.size < 7 ? reason : "Other validation failures";
+    rejectionReasons.set(key, (rejectionReasons.get(key) ?? 0) + 1);
+    return null;
+  };
+  requested.onProgress?.(snapshot());
+  const evaluate = (path: PathDoc): Evaluation | null => {
+    if (!canEvaluate()) return null;
+    const evaluationStartedAt = performance.now();
+    evaluations += 1;
+    try {
+      const route = PM.sample(path.waypoints, Math.max(128, samplesPerSegment * 2)).pts as GeometryPoint[];
+      const maxDeviationM = routeDeviation(reference, route);
+      if (!Number.isFinite(maxDeviationM) || maxDeviationM > corridorM + EPSILON) return reject("Outside the authored corridor");
+      // Candidate generation already performs dense physical validation.
+      const result = getPlanner("optimizedTrajectory").generate({ ...input, path });
+      if (result.optimization?.fallback || result.diagnostics.some((issue) => issue.severity === "error")) {
+        return reject((result.optimization?.fallbackReason
+          ?? result.diagnostics.find((issue) => issue.severity === "error")?.message
+          ?? "Candidate generation failed").slice(0, 240));
+      }
+      const physicalPath = { ...path, constraints: effectivePathConstraints(path.constraints, physicalRobot) };
+      const validation = validateOptimizedTrajectory(
+        { ...input, path: physicalPath, robot: physicalRobot },
+        fixedPathSamples(result),
+        { angularKinematics: "sample" },
+      );
+      if (validation.violations.length > 0) return reject(validation.violations[0].message.slice(0, 240));
+      const topology = observeRobotFieldPortalSequence(input.robot, result.samples);
+      if (!topology.valid
+        || topology.visits.length !== baselineTopology.visits.length
+        || topology.visits.some((visit, index) => visit.id !== baselineTopology.visits[index].id)) return reject("Changed the authored portal sequence");
+      if (!passesGates(result.samples, requested.gates ?? [])) return reject("Missed a required gate");
+      if (!sweptFootprintInsideCorridor(input, result.samples, reference, corridorM)) return reject("Robot footprint leaves the corridor");
+      const clearanceM = minimumRobotFieldClearance(input.robot, result.samples);
+      if (clearanceM < minimumClearanceM - EPSILON) return reject("Insufficient field clearance");
+      validatedCandidates += 1;
+      const candidate = { path, result, maxDeviationM, minimumClearanceM: clearanceM };
+      if (result.totalTimeS < best.result.totalTimeS - EPSILON) best = candidate;
+      return candidate;
+    } catch (error) {
+      return reject((error instanceof Error ? error.message : "Candidate evaluation failed").slice(0, 240));
+    } finally {
+      longestEvaluationMs = Math.max(longestEvaluationMs, performance.now() - evaluationStartedAt);
+      requested.onProgress?.(snapshot());
+    }
+  };
+
   const patterns = [
-    (_index: number) => 1,
+    (index: number) => index % 2 ? 1.18 : 0.82,
     (_index: number) => 0.82,
     (_index: number) => 1.18,
     (index: number) => index % 2 ? 0.82 : 1.18,
-    (index: number) => index % 2 ? 1.18 : 0.82,
   ];
   for (let patternIndex = 0; patternIndex < patterns.length && canEvaluate(); patternIndex += 1) {
     const path = clone(authored);
-    if (patternIndex > 0) handles.forEach((handle, index) => {
+    handles.forEach((handle, index) => {
       const waypoint = authored.waypoints[handle.waypointIndex];
       const control = waypoint[handle.key]!;
       const originalM = distance(waypoint, control);
-      setHandleLength(path, handle, Math.max(0.05, Math.min(handle.chordM * 1.5, originalM * patterns[patternIndex](index))));
+      const requestedM = originalM * patterns[patternIndex](index);
+      const corridorLimitedM = Math.max(originalM - corridorM, Math.min(originalM + corridorM, requestedM));
+      setHandleLength(path, handle, Math.max(0.05, Math.min(handle.chordM * 1.5, corridorLimitedM)));
     });
-    const candidate = evaluate(path);
-    if (!candidate) continue;
-    starts.push(candidate);
-    if (candidate.result.totalTimeS < best.result.totalTimeS - EPSILON) best = candidate;
+    evaluate(path);
   }
-  if (budgetFailure) return failForBudget();
 
+  let local = best;
+  for (let pass = 0; pass < 3 && canEvaluate(); pass += 1) {
+    let improved = false;
+    for (const handle of handles) {
+      const waypoint = local.path.waypoints[handle.waypointIndex];
+      const control = waypoint[handle.key]!;
+      const currentM = distance(waypoint, control);
+      const relativeStep = Math.max(0.015, Math.min(0.4, corridorM / Math.max(0.05, currentM)));
+      let handleBest = local;
+      for (const factor of [1 - relativeStep, 1 + relativeStep]) {
+        if (!canEvaluate()) break;
         const path = clone(local.path);
         setHandleLength(path, handle, Math.max(0.05, Math.min(handle.chordM * 1.5, currentM * factor)));
         const candidate = evaluate(path);
