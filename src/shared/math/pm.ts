@@ -208,46 +208,78 @@
           if (f >= lo && f <= hi) {
             if (R.maxVel > 0) rv = Math.min(rv, R.maxVel);
             if (R.maxAccel > 0) ra = Math.min(ra, R.maxAccel);
-            if (R.maxDecel > 0) rd = Math.min(rd, R.maxDecel);
-            if (R.maxAngVel > 0) rw = Math.min(rw, R.maxAngVel);
-          }
         }
-        if (rv < Infinity) v[i] = Math.min(v[i], rv);
-        if (ra < Infinity) aFwd[i] = Math.min(accelG, ra);
-        if (rd < Infinity) aBack[i] = Math.min(decelG, rd);
-        if (rw < Infinity) rangeAngV[i] = rw * Math.PI / 180;
+        changed = true;
       }
-      let translationFollowing = false;
+      for (let i = 0; i < n; i++) v[i] = caps[i];
       for (let i = 1; i < n; i++) {
-        const start = pts[i - 1].s / totalS, end = pts[i].s / totalS;
-        const overlaps = (lo, hi) => Math.min(end, hi) - Math.max(start, lo) >= -1e-9;
-        const activeRanges = ranges.filter((R) => overlaps(Math.min(R.f0, R.f1), Math.max(R.f0, R.f1)));
-        const activeTransitions = headingTransitions.filter((policy) => overlaps(policy.start, policy.end));
-        const activePolicies = activeRanges.length + activeTransitions.length;
-        if (activePolicies > 0) {
-          translationFollowing = activeRanges.every((R) => R.rotationPriority === 'translation')
-            && activeTransitions.every((policy) => policy.rotationPriority === 'translation');
-        }
-        translationPriority[i] = translationFollowing;
+        const ds = pts[i].s - pts[i - 1].s;
+        v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * aFwd[i] * ds)));
+      }
+      for (let i = n - 2; i >= 0; i--) {
+        const ds = pts[i + 1].s - pts[i].s;
+        v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i + 1] * v[i + 1] + 2 * aBack[i] * ds)));
+      }
+      if (!changed) break;
+    }
+  }
+  // time
+  const t = new Array<number>(n).fill(0);
+  for (let i = 1; i < n; i++) {
+    const ds = pts[i].s - pts[i - 1].s;
+    const vm = (v[i] + v[i - 1]) / 2;
+    t[i] = t[i - 1] + (vm > 1e-4 ? ds / vm : 0);
+  }
+  // Stationary turns happen after arrival and before any wait.
+  const turns: TimedTurn[] = [], turnDelay = new Map<number, number>(); let terminalDelay = 0;
+  (opts.turns || []).slice().sort((a, b) => a.idx - b.idx).forEach((turn) => {
+    if (turn.idx < 0 || turn.idx >= n) return;
+    let delta = angWrap(turn.end - turn.start);
+    if (turn.direction === 'clockwise' && delta > 0) delta -= Math.PI * 2;
+    if (turn.direction === 'counterclockwise' && delta < 0) delta += Math.PI * 2;
+    if (Math.abs(delta) < 1e-9) return;
+    const wMax = Math.max(1e-6, (turn.maxAngVel || 540) * D2R), aMax = Math.max(1e-6, (turn.maxAngAccel || 720) * D2R), jMax = Math.max(0, (turn.maxAngJerk || 0) * D2R);
+    const duration = Math.max(Math.abs(delta) * 1.875 / wMax, Math.sqrt(Math.abs(delta) * 5.77351 / aMax), jMax > 1e-9 ? Math.cbrt(Math.abs(delta) * 60 / jMax) : 0);
+    const t0 = t[turn.idx]; turns.push({ idx: turn.idx, t0, t1: t0 + duration, start: turn.start, delta }); turnDelay.set(turn.idx, duration);
+    for (let j = turn.idx + 1; j < n; j++) t[j] += duration;
+    if (turn.idx === n - 1) terminalDelay += duration;
+  });
+  // dwell / wait-at-waypoint holds (memo §15) — only meaningful at stop points
+  const holds: TimedHold[] = [];
+  const dwell = (opts.dwell || []).slice().sort((a, b) => a.idx - b.idx);
+  for (let d = 0; d < dwell.length; d++) {
+    const dw = dwell[d]; if (!(dw.wait > 0) || dw.idx < 0 || dw.idx >= n) continue;
+    const t0 = t[dw.idx] + (turnDelay.get(dw.idx) || 0); holds.push({ idx: dw.idx, t0, t1: t0 + dw.wait });
+    for (let j = dw.idx + 1; j < n; j++) t[j] += dw.wait;
+    if (dw.idx === n - 1) terminalDelay += dw.wait;
+  }
+  return { v, t, totalTime: t[n - 1] + terminalDelay, holds, turns, rotLimited };
+}
+
+// pose at time given sampled pts, profile times, and heading anchors / mode
+function poseAtTime(time: number, pts: readonly Pick<GeometryPoint, "x" | "y" | "heading" | "s">[], prof: VelocityProfile, anchors: readonly HeadingAnchor[], mode: DriveType, rev = false) {
+  const n = pts.length;
+  if (n < 2) return null;
+  const T = prof.t;
+  // wait/dwell hold: robot is stationary at the stop point for the dwell window (memo §15)
+  if (prof.holds && prof.holds.length) {
+    for (let k = 0; k < prof.holds.length; k++) {
+      const hd = prof.holds[k];
+      if (time >= hd.t0 - 1e-9 && time <= hd.t1 + 1e-9) {
+        const p = pts[hd.idx]; const f = pts[n - 1].s > 1e-6 ? p.s / pts[n - 1].s : 0;
+        let heading = mode === 'tank' ? p.heading : headingAt(f, anchors); if (rev) heading += Math.PI;
+        return { x: p.x, y: p.y, heading, speed: 0, s: p.s, f, hold: true };
       }
     }
-    // ---- rotational limit: cap v so the commanded heading can actually be tracked ----
-    // omega = (dtheta/ds) * v ; enforce |omega| <= Wmax and |d omega/dt| <= Aang (memo §16)
-    const rotLimited = new Array(n).fill(0);
-    const head = opts.heading;
-    const Wmax = (c.maxAngVel || 0) * Math.PI / 180;
-    const Aang = (c.maxAngAccel || 0) * Math.PI / 180;
-    if (head && head.length === n && Wmax > 1e-4) {
-      const g = new Array(n).fill(0), dth = new Array(n).fill(0);
-      for (let i = 1; i < n; i++) { const ds = pts[i].s - pts[i - 1].s; const dd = angWrap(head[i] - head[i - 1]); dth[i] = Math.abs(dd); g[i] = ds > 1e-6 ? dd / ds : 0; }
-      g[0] = g[1] || 0;
-      const w = new Array(n);
-      for (let i = 0; i < n; i++) w[i] = Math.min(Wmax, rangeAngV[i]);
-      stopSet.forEach(idx => { if (idx >= 0 && idx < n) w[idx] = 0; });
-      if (Aang > 1e-4) {
-        for (let i = 1; i < n; i++) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i - 1] * w[i - 1] + 2 * Aang * dth[i])));
-        for (let i = n - 2; i >= 0; i--) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i + 1] * w[i + 1] + 2 * Aang * dth[i + 1])));
-      }
+  }
+  if (prof.turns && prof.turns.length) {
+    for (let k = 0; k < prof.turns.length; k++) {
+      const turn = prof.turns[k];
+      if (time >= turn.t0 - 1e-9 && time <= turn.t1 + 1e-9) {
+        const p = pts[turn.idx], u = Math.max(0, Math.min(1, (time - turn.t0) / Math.max(1e-9, turn.t1 - turn.t0)));
+        const q = 10 * u ** 3 - 15 * u ** 4 + 6 * u ** 5, f = pts[n - 1].s > 1e-6 ? p.s / pts[n - 1].s : 0;
+        let heading = turn.start + turn.delta * q; if (rev) heading += Math.PI;
+        return { x: p.x, y: p.y, heading, speed: 0, s: p.s, f, turn: true };
       }
     }
   }
