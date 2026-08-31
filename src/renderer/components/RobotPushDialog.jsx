@@ -1,310 +1,100 @@
-import * as React from "react";
-import { createPortal } from "react-dom";
+import * as React from 'react';
+import { useRobotPushController } from './useRobotPushController';
+export { useRobotPushController };
 
-const { useEffect, useRef, useState } = React;
 const h = React.createElement;
+const shortHash = (value) => !value ? 'None' : value.length > 28 ? value.slice(0, 18) + '…' + value.slice(-8) : value;
+const detail = (label, value) => h('div', { key: label }, h('dt', null, label), h('dd', null, value));
+const action = (label, onClick, props = {}) => h('button', { type: 'button', onClick, ...props }, label);
+const names = (items) => items?.length ? items.join(', ') : 'None';
 
-function message(error) {
-  return error && error.message ? error.message : String(error || 'The robot push failed');
-}
+export function RobotPushDialog({ controller: c }) {
+  const dialog = React.useRef(null);
+  React.useEffect(() => {
+    const element = dialog.current;
+    if (c.open && !element.open) element.showModal();
+    else if (!c.open && element.open) element.close();
+  }, [c.open]);
+  const summary = c.preview?.summary;
+  const review = c.phase === 'review' && c.preview;
+  const retentionReview = c.phase === 'retention-review' && c.retentionPreview;
+  const preparing = ['preparing', 'retention-preparing'].includes(c.phase);
+  const sending = ['uploading', 'uploaded', 'staged'].includes(c.phase) && !c.result;
+  const outcome = Boolean(c.result) || ['failed', 'cancelled'].includes(c.phase);
+  const title = review ? (summary?.kind === 'project' ? 'Replace robot content' : 'Review push')
+    : retentionReview ? (c.retentionPreview.action === 'pin' ? 'Pin revision' : 'Review rollback')
+    : preparing ? 'Preparing update' : sending ? 'Sending update' : outcome ? 'Robot update' : 'Robot connection';
+  const reviewingIdentity = ['pair-review', 'pairing'].includes(c.phase);
+  const accepted = c.phase === 'active' || c.phase === 'pinned';
 
-function shortHash(value) {
-  if (!value) return '—';
-  return value.length > 24 ? value.slice(0, 19) + '…' + value.slice(-8) : value;
-}
+  const connection = !c.pairing && !reviewingIdentity && !preparing && !sending && !outcome && h('section', { className: 'robot-push-section' },
+    h('p', null, 'Connect over USB, Ethernet, or a network where the robot exposes SSH. Saving your project never sends robot data.'),
+    h('div', { className: 'robot-push-endpoint' },
+      h('label', null, 'Robot host', h('input', { value: c.host, placeholder: 'roborio-2468-frc.local', autoComplete: 'off', spellCheck: false, onChange: (event) => c.setHost(event.target.value) })),
+      h('label', null, 'Port', h('input', { value: c.port, inputMode: 'numeric', onChange: (event) => c.setPort(event.target.value) }))),
+    h('div', { className: 'robot-push-actions' }, action(c.phase === 'probing' ? 'Connecting…' : 'Connect', c.probeRobot, { className: 'primary', disabled: c.busy || !c.host.trim() })));
 
-function revisionLabels(entry, status, localRevisionId) {
-  const labels = [];
-  if (entry.revisionId === status.activeRevisionId) labels.push('Active');
-  if (entry.pinned) labels.push('Pinned');
-  labels.push(entry.availability === 'retained' ? 'Retained on robot' : 'Missing on robot');
-  if (entry.revisionId === localRevisionId) labels.push('Local current');
-  return labels;
-}
+  const pairingReview = c.probe && reviewingIdentity && h('section', { className: 'robot-push-section', 'aria-busy': c.phase === 'pairing' },
+    h('h3', null, 'Verify robot identity'), h('p', null, 'Confirm these identities against the robot you intend to trust.'),
+    h('dl', { className: 'robot-push-details compact' }, detail('Team', c.probe.status.teamNumber), detail('SSH host key', c.probe.hostKeyFingerprint), detail('Runtime', c.probe.status.runtimeId)),
+    h('div', { className: 'robot-push-actions' }, action('Back', c.chooseAnotherRobot, { disabled: c.busy }), action(c.phase === 'pairing' ? 'Pairing…' : 'Trust and pair', c.confirmPairing, { className: 'primary', disabled: c.busy })));
 
-export function RobotPushDialog({ getProject }) {
-  const [open, setOpen] = useState(false);
-  const [pairing, setPairing] = useState(null);
-  const [probe, setProbe] = useState(null);
-  const [host, setHost] = useState('');
-  const [port, setPort] = useState('22');
-  const [phase, setPhase] = useState('idle');
-  const [preview, setPreview] = useState(null);
-  const [retentionStatus, setRetentionStatus] = useState(null);
-  const [localRevisionId, setLocalRevisionId] = useState(null);
-  const [retentionPreview, setRetentionPreview] = useState(null);
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState('');
-  const [toolbarTarget, setToolbarTarget] = useState(null);
-  const closeRef = useRef(null);
+  const history = c.pairing && !c.preview && !c.retentionPreview && !preparing && !sending && !outcome && h('section', { className: 'robot-push-section' },
+    h('dl', { className: 'robot-push-details compact' }, detail('Robot', 'Team ' + c.pairing.teamNumber), detail('Address', c.pairing.endpoint.host + ':' + c.pairing.endpoint.port),
+      detail('Last checked', c.inspection?.verifiedAt ? new Date(c.inspection.verifiedAt).toLocaleTimeString() : 'Not checked'),
+      detail('Active revision', c.status ? shortHash(c.status.activeRevisionId) : 'Unknown')),
+    h('div', { className: 'robot-push-actions split' }, action(c.refreshing ? 'Checking…' : 'Refresh robot', c.refreshStatus, { disabled: c.refreshing }), action('Pair another robot', c.chooseAnotherRobot)),
+    h('details', { className: 'robot-history' }, h('summary', null, 'Revision history and rollback'),
+      !c.status?.retention && h('p', null, 'Refresh to load history. Older runtimes may not support retained revisions.'),
+      c.status?.retention && h('ul', { className: 'robot-retention-list' }, c.status.retention.revisions.map((entry) => h('li', { key: entry.revisionId },
+        h('div', null, h('strong', { title: entry.revisionId }, shortHash(entry.revisionId)),
+          h('p', null, [entry.revisionId === c.status.activeRevisionId ? 'Active' : '', entry.pinned ? 'Pinned' : '', entry.availability === 'missing' ? 'Missing on robot' : 'Retained'].filter(Boolean).join(' · '))),
+        entry.availability === 'retained' && h('div', { className: 'robot-retention-actions' },
+          action(entry.pinned ? 'Pinned' : 'Pin', () => c.prepareRetention('pin', entry), { disabled: entry.pinned }),
+          action('Roll back', () => c.prepareRetention('rollback', entry), { disabled: entry.revisionId === c.status.activeRevisionId })))))),
+    h('details', { className: 'robot-history' }, h('summary', null, 'Replace all robot content'),
+      h('p', null, 'Recovery for a new robot configuration or an older runtime: replace the snapshot with all exportable paths and the routine currently selected in this project. Review lists the complete scope. Omitted robot content will be removed.'),
+      action('Review full-project replacement', () => c.requestPush({ kind: 'project' }))));
 
-  useEffect(() => {
-    setToolbarTarget(document.querySelector('.toolbar .tb-right'));
-  }, []);
+  const pushReview = review && h('section', { className: 'robot-push-section' },
+    h('p', { className: 'robot-push-selection' }, names(summary?.selectedNames)),
+    h('dl', { className: 'robot-push-details compact' }, detail('Send to', c.preview.robot),
+      detail('Adds', names(summary?.addedNames)), detail('Updates', names(summary?.updatedNames)),
+      detail('Other paths', summary?.kind === 'project' ? 'Replaced by this project’s exportable paths' : (summary?.preservedPathCount || 0) + ' preserved'),
+      detail('Routine', summary?.kind === 'paths' ? (summary.routine ? summary.routine + ' · graph preserved' : 'None added') : (summary?.routine || 'None')),
+      summary?.kind !== 'paths' && summary?.previousRoutine && detail('Replaces routine', summary.previousRoutine)),
+    summary?.kind === 'paths' && summary.routine && h('p', null, 'If this routine uses an updated path, its motion will use the new path.'),
+    Boolean(summary?.dependencyNames?.length) && h('p', null, 'Includes required paths: ' + names(summary.dependencyNames)),
+    c.preview.receiptWarning && h('p', null, c.preview.receiptWarning),
+    c.preview.adoptionRequired && h('label', { className: 'robot-baseline-confirm' },
+      h('input', { type: 'checkbox', checked: c.adoptBaseline, onChange: (event) => c.setAdoptBaseline(event.target.checked) }),
+      h('span', null, 'Use the robot’s current revision as this project’s baseline. Preserve its other content.')),
+    h('details', { className: 'robot-history' }, h('summary', null, 'Technical details'),
+      h('dl', { className: 'robot-push-details' }, detail('Project', c.preview.project), detail('Catalog', c.preview.catalog), detail('Revision', c.preview.revision), detail('Payload hash', c.preview.payloadHash), detail('Transfer', c.preview.size.toLocaleString() + ' bytes · SFTP over SSH'))),
+    h('p', null, 'This reviewed snapshot is fixed. Later edits stay local. The robot must remain disabled to accept it.'),
+    h('div', { className: 'robot-push-actions' }, action('Cancel', c.cancel), action(summary?.kind === 'project' ? 'Replace robot content' : summary?.kind === 'routine' ? 'Push routine' : 'Push ' + (summary?.pathIds?.length === 1 ? 'path' : (summary?.pathIds?.length || '') + ' paths'), c.confirmPush,
+      { className: 'primary', disabled: c.busy || (c.preview.adoptionRequired && !c.adoptBaseline) })));
 
-  useEffect(() => {
-    if (!window.bordeauxAPI || typeof window.bordeauxAPI.getRobotPairing !== 'function') return;
-    window.bordeauxAPI.getRobotPairing().then((saved) => {
-      setPairing(saved || null);
-      if (saved) {
-        setHost(saved.endpoint.host);
-        setPort(String(saved.endpoint.port));
-      }
-    }).catch(() => undefined);
-  }, []);
+  const retention = retentionReview && h('section', { className: 'robot-push-section' },
+    h('p', null, c.retentionPreview.action === 'pin' ? 'Keep this revision available in robot history.' : 'Restore this complete retained snapshot, including its paths and routine.'),
+    h('dl', { className: 'robot-push-details compact' }, detail('Robot', c.retentionPreview.robot), detail('Current', shortHash(c.retentionPreview.activeRevision)), detail('Target', shortHash(c.retentionPreview.targetRevision))),
+    h('p', null, 'The robot applies this change only while disabled.'),
+    h('div', { className: 'robot-push-actions' }, action('Cancel', c.cancel), action(c.retentionPreview.action === 'pin' ? 'Pin revision' : 'Roll back', c.confirmRetention, { className: 'primary', disabled: c.busy })));
 
-  useEffect(() => {
-    if (!window.bordeauxAPI || typeof window.bordeauxAPI.onRobotPushState !== 'function') return undefined;
-    return window.bordeauxAPI.onRobotPushState((progress) => {
-      if (!preview || progress.operationId !== preview.operationId) return;
-      setPhase(progress.state);
-      if (progress.state === 'rejected') setResult(progress);
-    });
-  }, [preview]);
+  const progress = (preparing || sending) && h('section', { className: 'robot-push-status', role: 'status' },
+    h('strong', null, preparing ? 'Validating the selected update…' : c.phase === 'staged' ? 'Waiting for robot acceptance…' : c.phase === 'uploaded' ? 'Upload verified; staging update…' : 'Uploading…'),
+    h('p', null, 'You can close this window and keep editing. The robot indicator keeps this operation available.'),
+    c.phase === 'uploading' && action('Cancel upload', c.cancel));
 
-  useEffect(() => {
-    if (!window.bordeauxAPI || typeof window.bordeauxAPI.onRobotRetentionState !== 'function') return undefined;
-    return window.bordeauxAPI.onRobotRetentionState((progress) => {
-      if (!retentionPreview || progress.operationId !== retentionPreview.operationId) return;
-      setPhase(progress.state);
-      if (progress.state === 'rejected') setResult(progress);
-    });
-  }, [retentionPreview]);
+  const finished = outcome && h('section', { className: 'robot-push-section robot-push-outcome ' + c.phase, role: accepted ? 'status' : 'alert' },
+    h('h3', null, c.phase === 'active' ? 'Accepted by robot' : c.phase === 'pinned' ? 'Revision pinned' : c.phase === 'staged' ? 'Acceptance unconfirmed' : c.phase === 'cancelled' ? 'Update cancelled' : c.phase === 'rejected' ? 'Update rejected' : 'Update failed'),
+    h('p', null, accepted ? (c.result?.reconciled ? 'Inspection confirms the reviewed revision is active on the robot.' : 'The robot acknowledged this exact update. Acceptance does not start execution.') : c.error || c.result?.message || 'No new acceptance was confirmed.'),
+    h('div', { className: 'robot-push-actions' }, action('Connection and history', c.connectionHome), c.phase === 'staged' && action('Check robot', c.refreshStatus, { disabled: c.refreshing }), !accepted && c.phase !== 'staged' && !c.retentionPreview && action('Review current edits', c.retry)));
 
-  useEffect(() => {
-    if (!open) return undefined;
-    closeRef.current && closeRef.current.focus();
-    const onKey = (event) => {
-      if (event.key === 'Escape' && !['preparing', 'retention-preparing', 'uploaded', 'staged'].includes(phase)) setOpen(false);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, phase]);
-
-  const desktopAvailable = Boolean(window.bordeauxAPI && typeof window.bordeauxAPI.prepareRobotPush === 'function');
-  const busy = ['probing', 'pairing', 'preparing', 'retention-preparing', 'uploading', 'uploaded', 'staged'].includes(phase);
-  const canClose = !busy;
-
-  const openDialog = () => {
-    setOpen(true);
-    setRetentionStatus(null); setLocalRevisionId(null);
-    setError('');
-    if (!pairing) setPhase('idle');
-  };
-
-  const probeRobot = async () => {
-    if (!window.bordeauxAPI || typeof window.bordeauxAPI.probeRobot !== 'function') return;
-    setPhase('probing'); setError(''); setProbe(null);
-    try {
-      const observed = await window.bordeauxAPI.probeRobot({ host: host.trim(), port: Number(port) });
-      setProbe(observed); setPhase('pair-review');
-    } catch (failure) {
-      setPhase('idle'); setError(message(failure));
-    }
-  };
-
-  const confirmPairing = async () => {
-    if (!probe || !window.bordeauxAPI || typeof window.bordeauxAPI.confirmRobotPairing !== 'function') return;
-    setPhase('pairing'); setError('');
-    try {
-      const saved = await window.bordeauxAPI.confirmRobotPairing(probe.hostKeyFingerprint, probe.status.runtimeId);
-      setPairing(saved); setProbe(null); setRetentionStatus(null); setLocalRevisionId(null); setPhase('ready');
-      inspectRetention(saved);
-    } catch (failure) {
-      setPhase('pair-review'); setError(message(failure));
-    }
-  };
-
-  const inspectRetention = async (knownPairing = pairing) => {
-    if (!knownPairing || !window.bordeauxAPI || typeof window.bordeauxAPI.inspectRobotRetention !== 'function') return;
-    try {
-      const inspected = await window.bordeauxAPI.inspectRobotRetention(getProject());
-      setRetentionStatus(inspected.status);
-      setLocalRevisionId(inspected.localRevisionId);
-    } catch (failure) {
-      setRetentionStatus(null); setLocalRevisionId(null); setError(message(failure));
-    }
-  };
-
-  useEffect(() => {
-    if (open && pairing) void inspectRetention();
-  }, [open, pairing]);
-
-  const preparePush = async () => {
-    if (!desktopAvailable) return;
-    setPhase('preparing'); setPreview(null); setResult(null); setError('');
-    try {
-      const reviewed = await window.bordeauxAPI.prepareRobotPush(getProject());
-      setPreview(reviewed); setPhase('review');
-    } catch (failure) {
-      setPhase('ready'); setError(message(failure));
-    }
-  };
-
-  const confirmPush = async () => {
-    if (!preview || !window.bordeauxAPI) return;
-    setPhase('uploading'); setResult(null); setError('');
-    try {
-      const finished = await window.bordeauxAPI.confirmRobotPush(preview.operationId);
-      setResult(finished); setPhase(finished.state);
-      if (finished.state === 'active') {
-        setRetentionStatus(null); setLocalRevisionId(null); inspectRetention();
-      }
-    } catch (failure) {
-      setPhase('failed'); setError(message(failure));
-    }
-  };
-
-  const cancelPush = async () => {
-    if (!preview || !window.bordeauxAPI || typeof window.bordeauxAPI.cancelRobotPush !== 'function') return;
-    await window.bordeauxAPI.cancelRobotPush(preview.operationId).catch(() => undefined);
-    setPhase('cancelled');
-  };
-
-  const prepareRetention = async (action, target) => {
-    if (!window.bordeauxAPI || typeof window.bordeauxAPI.prepareRobotRetention !== 'function') return;
-    setPhase('retention-preparing'); setRetentionPreview(null); setPreview(null); setResult(null); setError('');
-    try {
-      const reviewed = await window.bordeauxAPI.prepareRobotRetention(getProject(), action, target);
-      setRetentionPreview(reviewed); setPhase('retention-review');
-    } catch (failure) {
-      setPhase('ready'); setError(message(failure));
-    }
-  };
-
-  const confirmRetention = async () => {
-    if (!retentionPreview || !window.bordeauxAPI) return;
-    setPhase('uploading'); setResult(null); setError('');
-    try {
-      const finished = await window.bordeauxAPI.confirmRobotRetention(retentionPreview.operationId);
-      setResult(finished); setPhase(finished.state);
-      if (finished.state === 'active' || finished.state === 'pinned') {
-        setRetentionStatus(null); setLocalRevisionId(null); inspectRetention();
-      }
-    } catch (failure) {
-      setPhase('failed'); setError(message(failure));
-    }
-  };
-
-  const cancelRetention = async () => {
-    if (!retentionPreview || !window.bordeauxAPI || typeof window.bordeauxAPI.cancelRobotRetention !== 'function') return;
-    await window.bordeauxAPI.cancelRobotRetention(retentionPreview.operationId).catch(() => undefined);
-    setPhase('cancelled');
-  };
-
-  const chooseAnotherRobot = () => {
-    setPairing(null); setProbe(null); setPreview(null); setRetentionStatus(null); setLocalRevisionId(null); setRetentionPreview(null); setResult(null); setError(''); setPhase('idle');
-  };
-
-  const trigger = h('button', { className: 'robot-push-trigger', type: 'button', onClick: openDialog, disabled: !desktopAvailable },
-    h('span', { 'aria-hidden': true }, '⇧'), ' Push to Robot');
-
-  return h(React.Fragment, null,
-    toolbarTarget ? createPortal(trigger, toolbarTarget) : null,
-    open && h('div', { className: 'robot-push-backdrop', onMouseDown: (event) => {
-      if (event.target === event.currentTarget && canClose) setOpen(false);
-    } },
-      h('section', { className: 'robot-push-dialog', role: 'dialog', 'aria-modal': true, 'aria-labelledby': 'robot-push-title' },
-        h('header', null,
-          h('div', null, h('p', { className: 'robot-push-eyebrow' }, 'Explicit deployment'), h('h2', { id: 'robot-push-title' }, 'Push to Robot')),
-          h('button', { ref: closeRef, className: 'robot-push-close', type: 'button', 'aria-label': 'Close robot push', disabled: !canClose, onClick: () => setOpen(false) }, '×')),
-        h('p', { className: 'robot-push-intro' }, 'Saving never contacts the robot. This action reviews and sends one immutable revision over SFTP; the runtime activates it only while disabled.'),
-        error && h('div', { className: 'robot-push-alert', role: 'alert' }, error),
-
-        !pairing && phase !== 'pair-review' && h('div', { className: 'robot-push-section' },
-          h('h3', null, 'Connect to a robot'),
-          h('p', null, 'Use a pit USB or Ethernet connection, or another network where the robot exposes SSH/SFTP. Port 22 is unavailable on the FMS field network.'),
-          h('div', { className: 'robot-push-endpoint' },
-            h('label', null, h('span', null, 'Robot host'), h('input', { value: host, placeholder: 'roborio-2468-frc.local', autoComplete: 'off', spellCheck: false, onChange: (event) => setHost(event.target.value) })),
-            h('label', null, h('span', null, 'Port'), h('input', { value: port, inputMode: 'numeric', onChange: (event) => setPort(event.target.value) }))),
-          h('div', { className: 'robot-push-actions' }, h('button', { className: 'primary', type: 'button', disabled: phase === 'probing' || !host.trim(), onClick: probeRobot }, phase === 'probing' ? 'Probing…' : 'Probe Robot'))),
-
-        probe && phase === 'pair-review' && h('div', { className: 'robot-push-section' },
-          h('h3', null, 'Verify robot identity'),
-          h('p', null, 'Confirm these identities against the robot you intend to trust. A future change to either identity requires pairing again.'),
-          h('dl', { className: 'robot-push-details' },
-            h('div', null, h('dt', null, 'Team'), h('dd', null, String(probe.status.teamNumber))),
-            h('div', null, h('dt', null, 'SSH host key'), h('dd', { title: probe.hostKeyFingerprint }, probe.hostKeyFingerprint)),
-            h('div', null, h('dt', null, 'Runtime identity'), h('dd', null, probe.status.runtimeId))),
-          h('div', { className: 'robot-push-actions' },
-            h('button', { type: 'button', onClick: chooseAnotherRobot }, 'Back'),
-            h('button', { className: 'primary', type: 'button', disabled: phase === 'pairing', onClick: confirmPairing }, phase === 'pairing' ? 'Saving…' : 'Trust and Pair'))),
-
-        pairing && !preview && !retentionPreview && !['preparing', 'retention-preparing'].includes(phase) && h('div', { className: 'robot-push-section' },
-          h('h3', null, 'Paired robot'),
-          h('dl', { className: 'robot-push-details compact' },
-            h('div', null, h('dt', null, 'Robot'), h('dd', null, 'Team ' + pairing.teamNumber)),
-            h('div', null, h('dt', null, 'Endpoint'), h('dd', null, pairing.endpoint.host + ':' + pairing.endpoint.port)),
-            h('div', null, h('dt', null, 'Runtime'), h('dd', { title: pairing.runtimeId }, shortHash(pairing.runtimeId)))),
-          h('div', { className: 'robot-retention' },
-            h('h3', null, 'Revision history'),
-            !retentionStatus && h('p', null, 'Inspect the paired runtime to check whether it reports revision retention.'),
-            retentionStatus && !retentionStatus.retention && h('p', null, 'This paired runtime does not report revision retention support.'),
-            retentionStatus && retentionStatus.retention && h(React.Fragment, null,
-              h('p', null, 'The robot retains its five newest accepted revisions and may keep one older pinned revision.'),
-              h('ul', { className: 'robot-retention-list' }, retentionStatus.retention.revisions.map((entry) =>
-                h('li', { key: entry.revisionId, className: entry.availability === 'missing' ? 'missing' : '' },
-                  h('div', null,
-                    h('strong', { title: entry.revisionId }, shortHash(entry.revisionId)),
-                    h('span', { title: entry.payloadSha256 }, shortHash(entry.payloadSha256)),
-                    h('p', { className: 'robot-retention-labels' }, revisionLabels(entry, retentionStatus, localRevisionId).join(' · '))),
-                  entry.availability === 'retained' && h('div', { className: 'robot-retention-actions' },
-                    h('button', { type: 'button', onClick: () => prepareRetention('pin', entry) }, entry.pinned ? 'Pin Again' : 'Pin'),
-                    h('button', { type: 'button', disabled: entry.revisionId === retentionStatus.activeRevisionId, onClick: () => prepareRetention('rollback', entry) }, entry.revisionId === retentionStatus.activeRevisionId ? 'Active' : 'Roll Back')),
-                  entry.availability === 'missing' && h('span', { className: 'robot-retention-unavailable' }, 'Rollback unavailable')))),
-              !retentionStatus.retention.revisions.some((entry) => entry.revisionId === localRevisionId) && h('p', { className: 'robot-retention-local' }, 'Local only: ' + shortHash(localRevisionId)))),
-          h('div', { className: 'robot-push-actions split' },
-            h('button', { type: 'button', onClick: chooseAnotherRobot }, 'Pair Another Robot'),
-            h('button', { type: 'button', onClick: inspectRetention }, 'Refresh History'),
-            h('button', { className: 'primary', type: 'button', onClick: preparePush }, 'Prepare Push'))),
-
-        phase === 'preparing' && h('div', { className: 'robot-push-status', role: 'status' }, h('span', { className: 'robot-push-spinner' }), h('strong', null, 'Validating and building the reviewed revision…')),
-        phase === 'retention-preparing' && h('div', { className: 'robot-push-status', role: 'status' }, h('span', { className: 'robot-push-spinner' }), h('strong', null, 'Validating the reviewed revision retention change…')),
-
-        preview && phase === 'review' && h('div', { className: 'robot-push-section' },
-          h('h3', null, 'Review exact revision'),
-          h('dl', { className: 'robot-push-details' },
-            h('div', null, h('dt', null, 'Robot'), h('dd', null, preview.robot)),
-            h('div', null, h('dt', null, 'Project'), h('dd', null, preview.project)),
-            h('div', null, h('dt', null, 'Catalog'), h('dd', null, preview.catalog)),
-            h('div', null, h('dt', null, 'Revision'), h('dd', { title: preview.revision }, preview.revision)),
-            h('div', null, h('dt', null, 'Payload hash'), h('dd', { title: preview.payloadHash }, preview.payloadHash)),
-            h('div', null, h('dt', null, 'Envelope size'), h('dd', null, preview.size.toLocaleString() + ' bytes')),
-            h('div', null, h('dt', null, 'Transport'), h('dd', null, preview.transport))),
-          h('div', { className: 'robot-push-actions' },
-            h('button', { type: 'button', onClick: cancelPush }, 'Cancel'),
-            h('button', { className: 'primary', type: 'button', onClick: confirmPush }, 'Push This Revision'))),
-
-        retentionPreview && phase === 'retention-review' && h('div', { className: 'robot-push-section' },
-          h('h3', null, retentionPreview.action === 'rollback' ? 'Review rollback' : 'Review pin'),
-          h('p', null, 'This sends one immutable retention control over SFTP. The robot applies it only while disabled.'),
-          h('dl', { className: 'robot-push-details' },
-            h('div', null, h('dt', null, 'Robot'), h('dd', null, retentionPreview.robot)),
-            h('div', null, h('dt', null, 'Current active'), h('dd', { title: retentionPreview.activeRevision }, shortHash(retentionPreview.activeRevision))),
-            h('div', null, h('dt', null, 'Target revision'), h('dd', { title: retentionPreview.targetRevision }, retentionPreview.targetRevision)),
-            h('div', null, h('dt', null, 'Payload hash'), h('dd', { title: retentionPreview.payloadHash }, retentionPreview.payloadHash)),
-            h('div', null, h('dt', null, 'Catalog'), h('dd', null, retentionPreview.catalog)),
-            h('div', null, h('dt', null, 'Transport'), h('dd', null, retentionPreview.transport))),
-          h('div', { className: 'robot-push-actions' },
-            h('button', { type: 'button', onClick: cancelRetention }, 'Cancel'),
-            h('button', { className: 'primary', type: 'button', onClick: confirmRetention }, retentionPreview.action === 'rollback' ? 'Roll Back to This Revision' : 'Pin This Revision'))),
-
-        (preview || retentionPreview) && ['uploading', 'uploaded', 'staged'].includes(phase) && !result && h('div', { className: 'robot-push-status', role: 'status' },
-          h('span', { className: 'robot-push-spinner' }),
-          h('strong', null, phase === 'uploading' ? 'Uploading temporary control…' : phase === 'uploaded' ? 'Upload verified; committing the staged request…' : 'Staged; waiting for the disabled robot runtime acknowledgment…'),
-          h('p', null, phase === 'staged' ? 'The request has been committed. Keep the robot disabled while Bordeaux waits for its nonce-bound result.' : 'The current active revision remains selected until the runtime accepts this request.'),
-          phase !== 'staged' && h('button', { type: 'button', onClick: retentionPreview ? cancelRetention : cancelPush }, 'Cancel Upload')),
-
-        (preview || retentionPreview) && (['active', 'pinned', 'rejected', 'failed', 'cancelled'].includes(phase) || (phase === 'staged' && result)) && h('div', { className: 'robot-push-section robot-push-outcome ' + phase, role: ['active', 'pinned'].includes(phase) ? 'status' : 'alert' },
-          h('h3', null, phase === 'active' ? 'Revision active' : phase === 'pinned' ? 'Revision pinned' : phase === 'rejected' ? 'Activation rejected' : phase === 'cancelled' ? 'Operation cancelled' : phase === 'staged' ? 'Request staged; acknowledgment unconfirmed' : 'Operation failed'),
-          h('p', null, phase === 'active' || phase === 'pinned'
-            ? 'The robot acknowledged this exact nonce, revision, payload, catalog, and runtime identity.'
-            : result && result.message ? result.message : error || 'The prior active robot revision was preserved.'),
-          result && result.boundary && h('p', { className: 'robot-push-boundary' }, 'Failed boundary: ' + result.boundary),
-          h('div', { className: 'robot-push-actions' },
-            h('button', { type: 'button', onClick: () => setOpen(false) }, 'Close'),
-            !['active', 'pinned'].includes(phase) && h('button', { className: 'primary', type: 'button', onClick: retentionPreview ? inspectRetention : preparePush }, retentionPreview ? 'Refresh History' : 'Review a New Push'))),
-
-      )),
-  );
+  return h('dialog', { ref: dialog, className: 'robot-push-dialog robot-manager', 'aria-labelledby': 'robot-push-title',
+    onCancel: (event) => { event.preventDefault(); c.close(); }, onClick: (event) => { if (event.target === dialog.current) { const r = dialog.current.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) c.close(); } } },
+    h('header', null, h('h2', { id: 'robot-push-title' }, title), action('×', c.close, { className: 'robot-push-close', 'aria-label': 'Close robot connection' })),
+    c.error && (!outcome || accepted) && h('p', { className: 'robot-push-alert', role: 'alert' }, c.error),
+    connection, pairingReview, history, pushReview, retention, progress, finished,
+    !review && !retentionReview && !preparing && !sending && h('div', { className: 'robot-connection-diagnostics' }));
 }
