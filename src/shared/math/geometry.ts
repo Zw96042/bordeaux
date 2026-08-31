@@ -1,3 +1,19 @@
+import { wrapRadians } from "./angles";
+import type { ControlPoint, Waypoint } from "../types";
+
+export interface GeometryPoint extends ControlPoint {
+  seg: number;
+  t: number;
+  heading: number;
+  curv: number;
+  s: number;
+}
+
+export interface SampledPath {
+  pts: GeometryPoint[];
+  length: number;
+  segs: number;
+  wpIdx?: number[];
 }
 
 interface QuinticCurve { x: number[]; y: number[] }
