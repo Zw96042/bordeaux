@@ -1,3 +1,50 @@
+import { angWrap, D2R } from "./geometry";
+
+// heading anchors -> continuous heading along arclength fraction f in [0,1]
+// anchors: [{f, rad}] must include f=0 and f=1, sorted
+// A moving C2 heading law can reverse angular direction without forcing a
+// zero spatial rate at every anchor. Any authored flat span keeps the
+// shape-preserving law so hold-heading intent remains exact. Cache the
+// coefficients because every geometry sample reuses them.
+export interface HeadingAnchor { f: number; rad: number }
+type HeadingSpline = { headings: number[]; second: number[]; slopes?: never }
+  | { headings: number[]; slopes: number[]; second?: never };
+const headingSplineCache = new WeakMap<readonly HeadingAnchor[], HeadingSpline>();
+
+function headingSpline(anchors: readonly HeadingAnchor[]): HeadingSpline {
+  const cached = headingSplineCache.get(anchors);
+  if (cached) return cached;
+  const headings = [anchors[0].rad];
+  for (let i = 1; i < anchors.length; i++) {
+    headings.push(headings[i - 1] + angWrap(anchors[i].rad - headings[i - 1]));
+  }
+  const spans = anchors.slice(1).map((anchor, i) => anchor.f - anchors[i].f);
+  const secants = spans.map((span, i) => span > 1e-9 ? (headings[i + 1] - headings[i]) / span : 0);
+  if (anchors.length > 2 && spans.every((span) => span > 1e-9) && secants.every((slope) => Math.abs(slope) > 1e-9)) {
+    const second = new Array<number>(anchors.length).fill(0);
+    const diagonal = new Array<number>(anchors.length).fill(0), upper = new Array<number>(anchors.length).fill(0), rhs = new Array<number>(anchors.length).fill(0);
+    diagonal[0] = 2 * spans[0];
+    upper[0] = spans[0];
+    diagonal[anchors.length - 1] = 2 * spans[spans.length - 1];
+    for (let i = 1; i < anchors.length - 1; i++) {
+      diagonal[i] = 2 * (spans[i - 1] + spans[i]);
+      upper[i] = spans[i];
+      rhs[i] = 6 * (secants[i] - secants[i - 1]);
+    }
+    for (let i = 1; i < anchors.length; i++) {
+      const lower = spans[i - 1];
+      const scale = lower / diagonal[i - 1];
+      diagonal[i] -= scale * upper[i - 1];
+      rhs[i] -= scale * rhs[i - 1];
+    }
+    second[anchors.length - 1] = rhs[anchors.length - 1] / diagonal[anchors.length - 1];
+    for (let i = anchors.length - 2; i >= 0; i--) second[i] = (rhs[i] - upper[i] * second[i + 1]) / diagonal[i];
+    // The clamped C2 spline keeps angular velocity continuous through
+    // authored anchors, but very uneven spacing can otherwise manufacture a
+    // reverse turn. Monotonic spans may not overshoot at all; only a true
+    // direction reversal gets a small bound before monotone fallback.
+    const overshootLimit = 15 * D2R;
+    const bounded = spans.every((span, i) => {
       const c0 = headings[i];
       const c1 = headings[i + 1] - headings[i] - span * span * (2 * second[i] + second[i + 1]) / 6;
       const c2 = second[i] * span * span / 2;
