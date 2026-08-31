@@ -1,3 +1,105 @@
+}
+
+interface QuinticCurve { x: number[]; y: number[] }
+
+// ---- geometry helpers ----
+export const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+export function bez(p0: ControlPoint, c0: ControlPoint, c1: ControlPoint, p1: ControlPoint, t: number) {
+  const u = 1 - t, tt = t * t, uu = u * u;
+  const a = uu * u, b = 3 * uu * t, c = 3 * u * tt, d = tt * t;
+  return { x: a * p0.x + b * c0.x + c * c1.x + d * p1.x, y: a * p0.y + b * c0.y + c * c1.y + d * p1.y };
+}
+
+export function bezD(p0: ControlPoint, c0: ControlPoint, c1: ControlPoint, p1: ControlPoint, t: number) {
+  const u = 1 - t;
+  const a = 3 * u * u, b = 6 * u * t, c = 3 * t * t;
+  return { x: a * (c0.x - p0.x) + b * (c1.x - c0.x) + c * (p1.x - c1.x), y: a * (c0.y - p0.y) + b * (c1.y - c0.y) + c * (p1.y - c1.y) };
+}
+
+function bezDD(p0: ControlPoint, c0: ControlPoint, c1: ControlPoint, p1: ControlPoint, t: number) {
+  const u = 1 - t;
+  return { x: 6 * u * (c1.x - 2 * c0.x + p0.x) + 6 * t * (p1.x - 2 * c1.x + c0.x), y: 6 * u * (c1.y - 2 * c0.y + p0.y) + 6 * t * (p1.y - 2 * c1.y + c0.y) };
+}
+
+function signedCurvature(d: ControlPoint, dd: ControlPoint) {
+  const speed2 = d.x * d.x + d.y * d.y;
+  return speed2 > 1e-9 ? (d.x * dd.y - d.y * dd.x) / Math.pow(speed2, 1.5) : 0;
+}
+
+function accelerationAtCurvature(d: ControlPoint, dd: ControlPoint, curvature: number) {
+  const speed = Math.hypot(d.x, d.y);
+  if (speed < 1e-6) return dd;
+  const tx = d.x / speed, ty = d.y / speed;
+  const tangentAcceleration = dd.x * tx + dd.y * ty;
+  const normalAcceleration = curvature * speed * speed;
+  return {
+    x: tx * tangentAcceleration - ty * normalAcceleration,
+    y: ty * tangentAcceleration + tx * normalAcceleration,
+  };
+}
+
+function quinticHermite(p0: ControlPoint, d0: ControlPoint, dd0: ControlPoint, p1: ControlPoint, d1: ControlPoint, dd1: ControlPoint): QuinticCurve {
+  const coefficients = (start: number, startD: number, startDD: number, end: number, endD: number, endDD: number) => {
+    const delta = end - start;
+    return [
+      start,
+      startD,
+      startDD / 2,
+      10 * delta - 6 * startD - 4 * endD - 1.5 * startDD + 0.5 * endDD,
+      -15 * delta + 8 * startD + 7 * endD + 1.5 * startDD - endDD,
+      6 * delta - 3 * startD - 3 * endD - 0.5 * startDD + 0.5 * endDD,
+    ];
+  };
+  return {
+    x: coefficients(p0.x, d0.x, dd0.x, p1.x, d1.x, dd1.x),
+    y: coefficients(p0.y, d0.y, dd0.y, p1.y, d1.y, dd1.y),
+  };
+}
+
+function evalQuintic(curve: QuinticCurve, t: number) {
+  const evaluate = (c: number[]) => {
+    const t2 = t * t, t3 = t2 * t, t4 = t3 * t, t5 = t4 * t;
+    return {
+      value: c[0] + c[1] * t + c[2] * t2 + c[3] * t3 + c[4] * t4 + c[5] * t5,
+      derivative: c[1] + 2 * c[2] * t + 3 * c[3] * t2 + 4 * c[4] * t3 + 5 * c[5] * t4,
+      secondDerivative: 2 * c[2] + 6 * c[3] * t + 12 * c[4] * t2 + 20 * c[5] * t3,
+    };
+  };
+  const x = evaluate(curve.x), y = evaluate(curve.y);
+  return {
+    pos: { x: x.value, y: y.value },
+    derivative: { x: x.derivative, y: y.derivative },
+    secondDerivative: { x: x.secondDerivative, y: y.secondDerivative },
+  };
+}
+
+// shortest signed angle difference (radians)
+export const angWrap = wrapRadians;
+
+export function angLerp(a: number, b: number, t: number) { return a + angWrap(b - a) * t; }
+
+export const D2R = Math.PI / 180, R2D = 180 / Math.PI;
+
+// ---- arc primitive: circle tangent to the start handle, through the endpoint ----
+function arcSetup(p0: ControlPoint, p1: ControlPoint, c0: ControlPoint) {
+  let tx = c0.x - p0.x, ty = c0.y - p0.y; let tl = Math.hypot(tx, ty);
+  if (tl < 1e-6) { tx = p1.x - p0.x; ty = p1.y - p0.y; tl = Math.hypot(tx, ty); }
+  if (tl < 1e-6) return null;
+  tx /= tl; ty /= tl; const nx = -ty, ny = tx;
+  const dx = p1.x - p0.x, dy = p1.y - p0.y; const denom = 2 * (dx * nx + dy * ny);
+  if (Math.abs(denom) < 1e-3) return null; // effectively straight
+  const R = (dx * dx + dy * dy) / denom;
+  const Cx = p0.x + R * nx, Cy = p0.y + R * ny, rad = Math.abs(R);
+  const a0 = Math.atan2(p0.y - Cy, p0.x - Cx), a1 = Math.atan2(p1.y - Cy, p1.x - Cx);
+  let sweep = a1 - a0;
+  if (R > 0) { while (sweep <= 1e-6) sweep += 2 * Math.PI; while (sweep > 2 * Math.PI) sweep -= 2 * Math.PI; }
+  else { while (sweep >= -1e-6) sweep -= 2 * Math.PI; while (sweep < -2 * Math.PI) sweep += 2 * Math.PI; }
+  if (rad > 1e4) return null;
+  return { Cx, Cy, rad, a0, sweep };
+}
+
+// ---- clothoid (Euler spiral): G1 Hermite fit, linearly-varying curvature ----
 // single-clothoid from pose (p0,th0) to (p1,th1); returns dense table or null
 function clothoidTable(p0: ControlPoint, p1: ControlPoint, th0: number, th1: number, M: number) {
   const dx = p1.x - p0.x, dy = p1.y - p0.y; const r = Math.hypot(dx, dy);
