@@ -324,39 +324,79 @@
       let delta = angWrap(turn.end - turn.start);
       if (turn.direction === 'clockwise' && delta > 0) delta -= Math.PI * 2;
       if (turn.direction === 'counterclockwise' && delta < 0) delta += Math.PI * 2;
-      if (Math.abs(delta) < 1e-9) return;
-      const wMax = Math.max(1e-6, (turn.maxAngVel || 540) * D2R), aMax = Math.max(1e-6, (turn.maxAngAccel || 720) * D2R), jMax = Math.max(0, (turn.maxAngJerk || 0) * D2R);
-      const duration = Math.max(Math.abs(delta) * 1.875 / wMax, Math.sqrt(Math.abs(delta) * 5.77351 / aMax), jMax > 1e-9 ? Math.cbrt(Math.abs(delta) * 60 / jMax) : 0);
-      const t0 = t[turn.idx]; turns.push({ idx: turn.idx, t0, t1: t0 + duration, start: turn.start, delta }); turnDelay.set(turn.idx, duration);
-      for (let j = turn.idx + 1; j < n; j++) t[j] += duration;
-      if (turn.idx === n - 1) terminalDelay += duration;
-    });
-    // dwell / wait-at-waypoint holds (memo §15) — only meaningful at stop points
-    const holds = [];
-    const dwell = (opts.dwell || []).slice().sort((a, b) => a.idx - b.idx);
-    for (let d = 0; d < dwell.length; d++) {
-      const dw = dwell[d]; if (!(dw.wait > 0) || dw.idx < 0 || dw.idx >= n) continue;
-      const t0 = t[dw.idx] + (turnDelay.get(dw.idx) || 0); holds.push({ idx: dw.idx, t0, t1: t0 + dw.wait });
-      for (let j = dw.idx + 1; j < n; j++) t[j] += dw.wait;
-      if (dw.idx === n - 1) terminalDelay += dw.wait;
     }
-    return { v, t, totalTime: t[n - 1] + terminalDelay, holds, turns, rotLimited };
+  });
+  const segmentLaws = doc.waypoints.slice(0, -1).map((w, segment) => segmentModes[segment] === 'lookAt' ? 'lookAt:' + (w.segmentLookAt ? w.segmentLookAt.x : '') + ':' + (w.segmentLookAt ? w.segmentLookAt.y : '') : segmentModes[segment]);
+  const transitionBreaks = doc.waypoints.slice(0, -1).map((w) => !!w.turnInPlace);
+  const headingTransitions = headingTransitionWindows(doc.waypoints, segmentLaws, transitionBreaks, wpFrac, total, "heading");
+  const transitionGoals = headingTransitionGoals(segmentLaws, transitionBreaks, wpIdx, pts, {
+    manual: manualAnchors.map(({ f, rad }) => ({ f, heading: rad })),
+    targets: targetAnchors.map(({ f, rad }) => ({ f, heading: rad })),
+  });
+  const head = smoothHeadingTransitions(rawHead, segmentLaws, transitionBreaks, wpIdx, pts, doc.waypoints, transitionGoals);
+  const allTangent = doc.waypoints.slice(0, -1).every((_, segment) => effectiveHeadingMode(segment) === 'tangent');
+  const mode: DriveType = allTangent ? 'tank' : 'swerve';
+  const anchors = mode === 'tank' ? [] : buildAnchors(pts.map((p, i) => ({ f: total > 1e-6 ? p.s / total : 0, rad: head[i] })));
+  const dwell: { idx: number; wait: number }[] = [], turns: ProfileTurn[] = [];
+  doc.waypoints.forEach((w, k) => { if (w.stop && w.wait != null && w.wait > 0) dwell.push({ idx: wpIdx[k], wait: w.wait }); });
+  if (!(options && options.skipStationaryActions)) doc.waypoints.forEach((w, k) => { if (w.stop && w.turnInPlace) turns.push({ idx: wpIdx[k], start: k > 0 ? head[Math.max(0, wpIdx[k] - 1)] : head[0], end: w.turnInPlace.headingDeg * D2R, direction: w.turnInPlace.direction, maxAngVel: doc.constraints.maxAngVel, maxAngAccel: Math.min(doc.constraints.maxAngAccel, doc.constraints.maxAngDecel || doc.constraints.maxAngAccel), maxAngJerk: doc.constraints.maxAngJerk }); });
+  const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns });
+  const mtr = metrics(pts, prof, anchors, mode);
+  const warnings = analyze(pts, prof, mtr, robot || {});
+  doc.waypoints.slice(0, -1).forEach((w, segment) => {
+    if (w.segmentHeadingMode !== 'lookAt' || !w.segmentLookAt) return;
+    let nearest = Infinity;
+    for (let i = wpIdx[segment]; i <= wpIdx[segment + 1] && i < pts.length; i++) nearest = Math.min(nearest, Math.hypot(pts[i].x - w.segmentLookAt.x, pts[i].y - w.segmentLookAt.y));
+    if (nearest < 0.05) warnings.push({ f: wpFrac[segment], kind: 'lookAt', sev: 'high', text: 'Tracked field point lies on the driven segment' });
+  });
+  // rotational diagnostics: flag contiguous rotation-limited stretches (memo §16)
+  if (prof.rotLimited) {
+    const rl = prof.rotLimited;
+    const pushRun = (a: number, b: number) => {
+      const mid = Math.floor((a + b) / 2);
+      const accelerationLimited = rl.slice(a, b + 1).some((value) => value >= 2);
+      warnings.push({
+        f: pts[mid].s / total,
+        kind: accelerationLimited ? 'angaccel' : 'rot',
+        sev: 'med',
+        text: accelerationLimited
+          ? 'Angular acceleration-limited \u00b7 add more distance between heading anchors'
+          : 'Angular velocity-limited \u00b7 heading can\u2019t keep up at speed',
+      });
+    };
+    let run = -1;
+    for (let i = 0; i < rl.length; i++) { if (rl[i]) { if (run < 0) run = i; } else if (run >= 0) { if (i - run > 3) pushRun(run, i - 1); run = -1; } }
+    if (run >= 0 && rl.length - run > 3) pushRun(run, rl.length - 1);
   }
-
-  // heading anchors -> continuous heading along arclength fraction f in [0,1]
-  // anchors: [{f, rad}] must include f=0 and f=1, sorted
-  function headingAt(f, anchors) {
-    if (!anchors.length) return 0;
-    if (f <= anchors[0].f) return anchors[0].rad;
-    for (let i = 0; i < anchors.length - 1; i++) {
-      const a = anchors[i], b = anchors[i + 1];
-      if (f >= a.f && f <= b.f) {
-        const tt = (b.f - a.f) < 1e-6 ? 0 : (f - a.f) / (b.f - a.f);
-        // smoothstep for nicer rotation
-        const ss = tt * tt * (3 - 2 * tt);
-        return angLerp(a.rad, b.rad, ss);
-      }
-    }
+  // locate each warning to a segment + attach suggested fixes
+  warnings.forEach((wn) => {
+    let seg = 0;
+    for (let i = 0; i < wpFrac.length - 1; i++) { if (wn.f >= wpFrac[i] - 1e-4) seg = i; }
+    wn.seg = Math.max(0, Math.min(doc.waypoints.length - 2, seg));
+    wn.fixes = wn.kind === 'curv'
+      ? [{ id: 'clothoid', label: 'Convert segment to clothoid' }, { id: 'handles', label: 'Increase handle length' }, { id: 'cap', label: 'Cap velocity on this stretch' }, { id: 'insert', label: 'Insert a waypoint here' }]
+      : wn.kind === 'angaccel'
+      ? [{ id: 'angaccel', label: 'Raise max angular acceleration' }, { id: 'lead', label: 'Move rotation target earlier' }]
+      : wn.kind === 'rot'
+      ? [{ id: 'cap', label: 'Cap speed on this stretch' }, { id: 'angvel', label: 'Raise max angular velocity' }]
+      : [{ id: 'cap', label: 'Lower the speed cap around here' }, { id: 'handles', label: 'Lengthen handles to ease the curve' }, { id: 'insert', label: 'Insert a waypoint here' }];
+  });
+  return { sample: smp, prof, anchors, metrics: mtr, warnings, wpFrac, wpIdx, mode, effRanges, headingMode, rev: !!doc.driveBackward };
+}
+function jigglePositions(anchor: ControlPoint, baseRad: number, options: { distanceM?: number; distance?: number; strokes: number; startDeg: number; stepDeg: number }, bounds = { w: 17.548, h: 8.052 }) {
+  const distance = Number(options.distanceM ?? options.distance), strokes = Math.round(Number(options.strokes)), startDeg = Number(options.startDeg), stepDeg = Number(options.stepDeg);
+  if (!(distance >= 0.03) || strokes < 2 || strokes > 12 || !Number.isFinite(startDeg + stepDeg)) return null;
+  const directions = new Set<number>(), positions: ControlPoint[] = [];
+  for (let stroke = 0; stroke < strokes; stroke++) {
+    const relativeDeg = startDeg + stepDeg * stroke;
+    const key = ((relativeDeg % 360) + 360) % 360;
+    const roundedKey = Math.round(key * 1000) / 1000;
+    if (directions.has(roundedKey)) return null;
+    directions.add(roundedKey);
+    const angle = baseRad + relativeDeg * D2R;
+    const point = { x: anchor.x + Math.cos(angle) * distance, y: anchor.y + Math.sin(angle) * distance };
+    if (point.x < 0 || point.x > bounds.w || point.y < 0 || point.y > bounds.h) return null;
+    positions.push(point, { x: anchor.x, y: anchor.y });
   }
   return positions;
 }
