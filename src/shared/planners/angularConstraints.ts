@@ -1,3 +1,55 @@
+import type { PathDoc, PlannerResult, TrajectorySample } from "../types";
+import { indexIntervalPolicies } from "./intervalPolicies";
+import { effectiveRanges } from "./rotationPriority";
+import { orderedWaypointSampleIndices } from "./waypointSamples";
+
+const DEG = Math.PI / 180;
+const EPSILON = 1e-9;
+const SAFETY_SCALE = 1.005;
+
+export type AngularRateKind = "acceleration" | "deceleration" | "reversal";
+
+export function angularRateKind(previous: number, current: number): AngularRateKind {
+  if (Math.abs(previous) <= EPSILON) return "acceleration";
+  if (Math.abs(current) <= EPSILON) return "deceleration";
+  if (Math.sign(previous) !== Math.sign(current)) return "reversal";
+  return Math.abs(current) > Math.abs(previous) ? "acceleration" : "deceleration";
+}
+
+function indexedLimits(path: PathDoc, samples: readonly TrajectorySample[], waypointSampleIndices?: readonly number[]) {
+  const ranges = effectiveRanges(path, samples, samples.at(-1)?.s ?? 0, waypointSampleIndices);
+  const policies = indexIntervalPolicies(samples.map((sample) => sample.f), ranges);
+  return samples.map((_, index) => ({
+    velocity: Math.min(path.constraints.maxAngVel, policies.maxAngVel[index]) * DEG,
+    acceleration: Math.min(path.constraints.maxAngAccel, policies.maxAngAccel[index]) * DEG,
+    deceleration: Math.min(path.constraints.maxAngDecel ?? path.constraints.maxAngAccel, policies.maxAngAccel[index]) * DEG,
+  }));
+}
+
+function turnBoundaries(path: PathDoc, samples: readonly TrajectorySample[], waypointSampleIndices?: readonly number[]): Set<number> {
+  const boundaries = new Set<number>();
+  const arrivals = waypointSampleIndices?.length === path.waypoints.length
+    ? waypointSampleIndices
+    : orderedWaypointSampleIndices(path.waypoints, samples);
+  path.waypoints.forEach((waypoint, index) => {
+    if (waypoint.turnInPlace) boundaries.add(arrivals[index]);
+  });
+  return boundaries;
+}
+
+function requiredTimeScale(path: PathDoc, samples: readonly TrajectorySample[], waypointSampleIndices?: readonly number[]): number {
+  const boundaries = turnBoundaries(path, samples, waypointSampleIndices);
+  const limits = indexedLimits(path, samples, waypointSampleIndices);
+  let scale = 1;
+  for (let index = 1; index < samples.length; index += 1) {
+    // A stopped turn owns the heading discontinuity at its waypoint. Moving
+    // timing on either side is still checked; only the artificial boundary is skipped.
+    if (boundaries.has(index) || boundaries.has(index - 1)) continue;
+    const sample = samples[index];
+    const previous = samples[index - 1];
+    const dt = sample.t - previous.t;
+    if (dt <= EPSILON) continue;
+    const active = limits[index];
     if (active.velocity > EPSILON) scale = Math.max(scale, Math.abs(sample.angularVelocityRadps) / active.velocity);
     const kind = angularRateKind(previous.angularVelocityRadps, sample.angularVelocityRadps);
     const limit = kind === "acceleration" ? active.acceleration

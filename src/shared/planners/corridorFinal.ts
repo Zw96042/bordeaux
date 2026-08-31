@@ -306,50 +306,16 @@ export function optimizeCorridorFinal(input: PlannerInput, requested: CorridorFi
   }
   if (budgetFailure) return failForBudget();
 
-  const budgetPerStart = starts.length > 0 ? Math.max(1, Math.floor((maximumEvaluations - evaluations) / starts.length)) : 0;
-  for (const start of starts) {
-    let local = start;
-    const stopAt = Math.min(maximumEvaluations, evaluations + budgetPerStart);
-    for (let pass = 0; pass < 3 && evaluations < stopAt && canEvaluate(); pass += 1) {
-      let improved = false;
-      for (const handle of handles) {
-        const waypoint = local.path.waypoints[handle.waypointIndex];
-        const control = waypoint[handle.key]!;
-        const currentM = distance(waypoint, control);
-        const relativeStep = Math.max(0.015, Math.min(0.4, corridorM / Math.max(0.05, currentM)));
-        let handleBest = local;
-        for (const factor of [1 - relativeStep, 1 - relativeStep * 0.5, 1 + relativeStep * 0.5, 1 + relativeStep]) {
-          if (evaluations >= stopAt || !canEvaluate()) break;
-          const path = clone(local.path);
-          setHandleLength(path, handle, Math.max(0.05, Math.min(handle.chordM * 1.5, currentM * factor)));
-          const candidate = evaluate(path);
-          if (candidate && candidate.result.totalTimeS < handleBest.result.totalTimeS - EPSILON) handleBest = candidate;
-        }
-        if (handleBest !== local) { local = handleBest; improved = true; }
+        const path = clone(local.path);
+        setHandleLength(path, handle, Math.max(0.05, Math.min(handle.chordM * 1.5, currentM * factor)));
+        const candidate = evaluate(path);
+        if (candidate && candidate.result.totalTimeS < handleBest.result.totalTimeS - EPSILON) handleBest = candidate;
       }
-      if (!improved) break;
+      if (handleBest !== local) { local = handleBest; improved = true; }
     }
-    if (local.result.totalTimeS < best.result.totalTimeS - EPSILON) best = local;
+    if (!improved) break;
   }
-  if (budgetFailure) return failForBudget();
 
-  const gainS = baseline.totalTimeS - best.result.totalTimeS;
-  const requiredGainS = Math.max(MIN_GAIN_S, baseline.totalTimeS * MIN_GAIN_FRACTION);
-  if (best.path === authored || gainS < requiredGainS) {
-    return fallback(baseline, diagnosticsOptions, evaluations, "equivalent", `No material improvement was found inside the ${corridorM.toFixed(2)} m corridor.`);
-  }
-  return {
-    ...best.result,
-    optimizedPath: clone(best.path),
-    optimization: corridorDiagnostics(best.result, diagnosticsOptions, {
-      status: best.result.optimization?.status === "feasible" ? "feasible" : "optimal",
-      totalTimeS: best.result.totalTimeS,
-      constraintViolations: 0,
-      fallback: false,
-      fallbackReason: undefined,
-      evaluations,
-      maxDeviationM: best.maxDeviationM,
-      minimumClearanceM: best.minimumClearanceM,
-    }),
-  };
+  termination ??= evaluations >= maximumEvaluations ? "work-budget" : "completed";
+  return snapshot();
 }
