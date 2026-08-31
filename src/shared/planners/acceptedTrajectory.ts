@@ -1,3 +1,40 @@
+import { ACTIVE_FIELD_REFERENCE } from "../field/rebuilt2026";
+import { clone } from "../project/defaults";
+import { effectivePathConstraints, robotHardLimits } from "../robotLimits";
+import type { FieldReference, PathDoc, PlannerResult, RobotConfig } from "../types";
+import { validateCorridorCandidate } from "./corridorFinal";
+import { invariantFailure, validateFinal } from "./fixedGeometryFinal";
+import { getPlanner } from "./index";
+import { DEFAULT_SAMPLES_PER_SEGMENT } from "./limits";
+import { acceptedTrajectoryShapeError, authoredPath, optimizationInputKey, optimizationIntentKey } from "./acceptedTrajectoryIdentity";
+
+export { acceptedTrajectoryShapeError, authoredPath, optimizationInputKey } from "./acceptedTrajectoryIdentity";
+type AcceptedTrajectory = NonNullable<NonNullable<PathDoc["optimization"]>["accepted"]>;
+
+function markersMatch(path: PathDoc, result: PlannerResult): boolean {
+  if (result.markers.length !== path.markers.length) return false;
+  return path.markers.every((marker, index) => {
+    const saved = result.markers[index];
+    const fraction = marker.anchor === "dist" && result.totalDistanceM > 1e-9
+      ? Math.max(0, Math.min(1, (marker.d ?? marker.f * result.totalDistanceM) / result.totalDistanceM)) : marker.f;
+    if (saved.id !== marker.id || saved.name !== marker.name || saved.command !== (marker.cmd ?? null)
+      || saved.group !== (marker.group ?? null) || JSON.stringify(saved.invocation) !== JSON.stringify(marker.invocation)
+      || Math.abs(saved.fraction - fraction) > 1e-5) return false;
+    // Events at an arrival precede waits/turns, except terminal events, which follow them.
+    const after = fraction >= 1 ? result.samples.at(-1)! : result.samples.find((sample) => sample.f >= fraction)!;
+    const before = result.samples[Math.max(0, after.i - 1)];
+    const progress = after.f === before.f ? 0 : (fraction - before.f) / (after.f - before.f);
+    const expectedTime = fraction >= 1 ? after.t : before.t + (after.t - before.t) * progress;
+    return Math.abs(saved.timeS - expectedTime) < 0.002;
+  });
+}
+
+function stationaryActionsMatch(path: PathDoc, robot: RobotConfig, result: PlannerResult): boolean {
+  const actions = result.stationaryActions ?? [];
+  const physicalRobot = { ...robot, maxSpeed: robotHardLimits(robot)?.maxSpeedMps ?? robot.maxSpeed };
+  const limits = effectivePathConstraints(path.constraints, physicalRobot);
+  for (const action of actions) {
+    const waypoint = path.waypoints[action.waypointIndex];
     if (!waypoint || action.kind === "jiggle") return false;
     if (action.kind === "wait" && Math.abs(action.endTimeS - action.startTimeS - (waypoint.wait ?? 0)) > 0.021) return false;
     const stationary = result.samples.filter((sample) => sample.t >= action.startTimeS - 1e-6 && sample.t <= action.endTimeS + 1e-6);
