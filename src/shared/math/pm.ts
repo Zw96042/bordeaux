@@ -1,81 +1,29 @@
-// @ts-nocheck
-// Generated from Bordeaux (standalone).html. Do not edit by hand.
-  // ---- geometry helpers ----
-  const lerp = (a, b, t) => a + (b - a) * t;
-  function bez(p0, c0, c1, p1, t) {
-    const u = 1 - t, tt = t * t, uu = u * u;
-    const a = uu * u, b = 3 * uu * t, c = 3 * u * tt, d = tt * t;
-    return { x: a * p0.x + b * c0.x + c * c1.x + d * p1.x, y: a * p0.y + b * c0.y + c * c1.y + d * p1.y };
-  }
-  function bezD(p0, c0, c1, p1, t) {
-    const u = 1 - t;
-    const a = 3 * u * u, b = 6 * u * t, c = 3 * t * t;
-    return { x: a * (c0.x - p0.x) + b * (c1.x - c0.x) + c * (p1.x - c1.x), y: a * (c0.y - p0.y) + b * (c1.y - c0.y) + c * (p1.y - c1.y) };
-  }
-  function bezDD(p0, c0, c1, p1, t) {
-    const u = 1 - t;
-    return { x: 6 * u * (c1.x - 2 * c0.x + p0.x) + 6 * t * (p1.x - 2 * c1.x + c0.x), y: 6 * u * (c1.y - 2 * c0.y + p0.y) + 6 * t * (p1.y - 2 * c1.y + c0.y) };
-  }
+  kind: "curv" | "vel" | "rot" | "angaccel" | "lookAt";
+  sev: "high" | "med";
+  text: string;
+  seg?: number;
+  fixes?: { id: string; label: string }[];
+}
 
-  // shortest signed angle difference (radians)
-  function angWrap(a) { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; }
-  function angLerp(a, b, t) { return a + angWrap(b - a) * t; }
-  const D2R = Math.PI / 180, R2D = 180 / Math.PI;
-
-  // ---- arc primitive: circle tangent to the start handle, through the endpoint ----
-  function arcSetup(p0, p1, c0) {
-    let tx = c0.x - p0.x, ty = c0.y - p0.y; let tl = Math.hypot(tx, ty);
-    if (tl < 1e-6) { tx = p1.x - p0.x; ty = p1.y - p0.y; tl = Math.hypot(tx, ty); }
-    if (tl < 1e-6) return null;
-    tx /= tl; ty /= tl; const nx = -ty, ny = tx;
-    const dx = p1.x - p0.x, dy = p1.y - p0.y; const denom = 2 * (dx * nx + dy * ny);
-    if (Math.abs(denom) < 1e-3) return null; // effectively straight
-    const R = (dx * dx + dy * dy) / denom;
-    const Cx = p0.x + R * nx, Cy = p0.y + R * ny, rad = Math.abs(R);
-    const a0 = Math.atan2(p0.y - Cy, p0.x - Cx), a1 = Math.atan2(p1.y - Cy, p1.x - Cx);
-    let sweep = a1 - a0;
-    if (R > 0) { while (sweep <= 1e-6) sweep += 2 * Math.PI; while (sweep > 2 * Math.PI) sweep -= 2 * Math.PI; }
-    else { while (sweep >= -1e-6) sweep -= 2 * Math.PI; while (sweep < -2 * Math.PI) sweep += 2 * Math.PI; }
-    if (rad > 1e4) return null;
-    return { Cx, Cy, rad, a0, sweep };
+// ---- trapezoidal velocity profile with curvature (centripetal) limit ----
+// constraints: {maxVel, maxAccel, maxAngVel, maxAngAccel}, start/end vel
+function profile(pts: readonly Pick<GeometryPoint, "s" | "curv">[], c: ProfileConstraints, startV = 0, endV = 0, opts: ProfileOptions = {}): VelocityProfile {
+  const n = pts.length;
+  if (n < 2) return { v: [], t: [], totalTime: 0, holds: [], rotLimited: [] };
+  const vmax = opts.vmax != null ? Math.min(c.maxVel, opts.vmax) : c.maxVel;
+  const stopSet = new Set(opts.stopIdx || []);
+  const v = new Array<number>(n).fill(vmax);
+  // curvature cap: v <= sqrt(aLat / k)
+  const aLat = Math.max(0.1, c.maxCentripetalAccel ?? c.maxAccel);
+  for (let i = 0; i < n; i++) {
+    const k = pts[i].curv;
+    if (k > 1e-4) v[i] = Math.min(v[i], Math.sqrt(aLat / k));
   }
-
-  // ---- clothoid (Euler spiral): G1 Hermite fit, linearly-varying curvature ----
-  // single-clothoid from pose (p0,th0) to (p1,th1); returns dense table or null
-  function clothoidTable(p0, p1, th0, th1, M) {
-    const dx = p1.x - p0.x, dy = p1.y - p0.y; const r = Math.hypot(dx, dy);
-    if (r < 1e-6) return null;
-    const tau = Math.atan2(dy, dx);
-    const ph0 = angWrap(th0 - tau), ph1 = angWrap(th1 - tau);
-    const dphi = ph1 - ph0;
-    const Hsin = (b) => { let s = 0; const N = 24; for (let k = 0; k <= N; k++) { const t = k / N; const th = ph0 + (dphi - b) * t + b * t * t; const w = (k === 0 || k === N) ? 1 : (k % 2 ? 4 : 2); s += w * Math.sin(th); } return s / (3 * N); };
-    const Hcos = (b) => { let s = 0; const N = 24; for (let k = 0; k <= N; k++) { const t = k / N; const th = ph0 + (dphi - b) * t + b * t * t; const w = (k === 0 || k === N) ? 1 : (k % 2 ? 4 : 2); s += w * Math.cos(th); } return s / (3 * N); };
-    // root of Hsin(b)=0 with the smallest |b| (closest to a gentle spiral)
-    let best = null; const lo = -6 * Math.PI, hi = 6 * Math.PI, STEPS = 240; let pb = lo, pf = Hsin(lo);
-    for (let k = 1; k <= STEPS; k++) {
-      const b = lo + (hi - lo) * k / STEPS, f = Hsin(b);
-      if (pf * f < 0) { let a = pb, bb = b, fa = pf; for (let it = 0; it < 44; it++) { const m = (a + bb) / 2, fm = Hsin(m); if (fa * fm <= 0) bb = m; else { a = m; fa = fm; } } const root = (a + bb) / 2; if (best === null || Math.abs(root) < Math.abs(best)) best = root; }
-      pb = b; pf = f;
-    }
-    if (best === null) return null;
-    const b = best, denom = Hcos(b); if (denom <= 1e-3) return null; // path would double back
-    const L = r / denom; if (!isFinite(L) || L <= 0 || L > r * 30) return null;
-    const thAbs = (t) => tau + ph0 + (dphi - b) * t + b * t * t;
-    const xs = new Array(M + 1), ys = new Array(M + 1), hs = new Array(M + 1), ks = new Array(M + 1);
-    xs[0] = p0.x; ys[0] = p0.y; hs[0] = thAbs(0); ks[0] = (dphi - b) / L;
-    let cx = 0, cy = 0; const dt = 1 / M;
-    for (let m = 1; m <= M; m++) { const tm = (m - 0.5) / M; const a = thAbs(tm); cx += Math.cos(a) * L * dt; cy += Math.sin(a) * L * dt; const t = m / M; xs[m] = p0.x + cx; ys[m] = p0.y + cy; hs[m] = thAbs(t); ks[m] = ((dphi - b) + 2 * b * t) / L; }
-    return { xs, ys, hs, ks };
-  }
-
-  // ---- sample the whole path into dense points with arclength + curvature ----
-  // waypoints: [{x,y, prevC, nextC, segType?}]  segType: bezier | line | arc | clothoid
-  function sample(waypoints, perSeg = 60) {
-    const pts = [];
-    const segs = waypoints.length - 1;
-    if (segs < 1) return { pts: [], length: 0, segs: 0 };
-    const steps = perSeg;
-
+  v[0] = Math.min(v[0], startV);
+  v[n - 1] = Math.min(v[n - 1], endV);
+  // hard stops: velocity pinned to 0
+  stopSet.forEach(idx => { if (idx >= 0 && idx < n) v[idx] = 0; });
+    // Per-interval limits, tightened by any overlapping constraint range (tightest wins).
     const ranges = opts.ranges || [];
     const totalS = pts[n - 1].s || 1;
     const accelG = Math.max(0.1, c.maxAccel);
