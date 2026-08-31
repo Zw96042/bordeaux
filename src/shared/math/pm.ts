@@ -866,9 +866,5 @@
       const angle = baseRad + relativeDeg * D2R;
       const point = { x: anchor.x + Math.cos(angle) * distance, y: anchor.y + Math.sin(angle) * distance };
       if (point.x < 0 || point.x > bounds.w || point.y < 0 || point.y > bounds.h) return null;
-      positions.push(point, { x: anchor.x, y: anchor.y });
-    }
-    return positions;
-  }
 export const PM = { bez, bezD, sample, profile, poseAtTime, headingAt, metrics, analyze, metricColor, metricGradient, METRICS, SEGTYPES, buildAnchors, pointAtFraction, nearestFraction, autoHandles, angWrap, angLerp, D2R, R2D, lerp, derivePath, jigglePositions, effectiveRanges, featureFraction, remapWaypointRange, waypointFracs };
 export default PM;
