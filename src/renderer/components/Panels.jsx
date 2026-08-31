@@ -5,305 +5,96 @@ import { AUTO } from "../lib/routineModel";
 import { UnitPrefs } from "../lib/unitPreferences";
 import { UI } from "./ui";
 
-// Bordeaux — chrome: top bar, path switcher, tool rail, outline, constraint chip bar,
-// metric overlay, telemetry/transport, view controls.
   const { useRef, useState, useEffect, useMemo } = React;
   const h = React.createElement;
-  const { Icon, IconBtn, Dropdown, Section, Seg, constraintRangeSummary } = UI;
+  const { Icon, IconBtn, Dropdown, Section, constraintRangeSummary } = UI;
   const R2D = 180 / Math.PI;
 
-  // ---------------- path manager ----------------
-  function PathLibrary({ project, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times }) {
-    const [open, setOpen] = useState(false);
-    const [query, setQuery] = useState('');
-    const [collapsed, setCollapsed] = useState({});
-    const [editing, setEditing] = useState(null);
-    const [menu, setMenu] = useState(null);
-    const [draft, setDraft] = useState('');
-    const [error, setError] = useState('');
-    const triggerRef = useRef(null), panelRef = useRef(null), searchRef = useRef(null), editRef = useRef(null), editOriginRef = useRef(null);
-    const cur = project.paths[activeIdx], folders = project.pathFolders || [];
-    const close = () => {
-      setOpen(false); setMenu(null); setEditing(null); setError('');
-      editOriginRef.current = null;
-      requestAnimationFrame(() => triggerRef.current && triggerRef.current.focus());
-    };
-    const finishEdit = () => {
-      setEditing(null); setError('');
-    };
-    useEffect(() => {
-      if (open) requestAnimationFrame(() => searchRef.current && searchRef.current.focus());
-    }, [open]);
-    useEffect(() => {
-      if (!open) return;
-      const onKey = (e) => {
-        if (e.key === '/' && !editing) { e.preventDefault(); searchRef.current && searchRef.current.focus(); }
-        if (e.key !== 'Escape') return;
-        e.preventDefault();
-        if (editing) finishEdit();
-        else if (menu) setMenu(null);
-        else if (query) setQuery('');
-        else close();
-      };
-      window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
-    }, [open, editing, menu, query]);
-    useEffect(() => {
-      if (!menu) return;
-      const actionId = (menu.kind === 'path' ? 'path-actions-' : 'folder-actions-') + menu.id;
-      requestAnimationFrame(() => {
-        const action = document.getElementById(actionId);
-        if (action) action.scrollIntoView({ block: 'nearest' });
-      });
-      const away = (e) => {
-        if (!(e.target instanceof Element) || !e.target.closest('.pathlib-actionmenu,.pathlib-more')) setMenu(null);
-      };
-      window.addEventListener('pointerdown', away); return () => window.removeEventListener('pointerdown', away);
-    }, [menu]);
-    const trapFocus = (e) => {
-      if (e.key !== 'Tab' || !panelRef.current) return;
-      const focusable = Array.from(panelRef.current.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex]:not([tabindex="-1"])'));
-      if (!focusable.length) return;
-      const first = focusable[0], last = focusable[focusable.length - 1];
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-    };
-    useEffect(() => { if (editing) requestAnimationFrame(() => { if (editRef.current) { editRef.current.focus(); editRef.current.select(); } }); }, [editing]);
-    useEffect(() => { if (open && !editing) requestAnimationFrame(() => { if (panelRef.current) panelRef.current.focus({ preventScroll: true }); }); }, [open]);
-    useEffect(() => {
-      if (!open || editing || !editOriginRef.current) return;
-      const origin = editOriginRef.current;
-      const controlId = (origin.kind === 'path' ? 'path-actions-' : 'folder-actions-') + origin.id;
-      const trigger = panelRef.current && Array.from(panelRef.current.querySelectorAll('[aria-controls]')).find((node) => node.getAttribute('aria-controls') === controlId);
-      editOriginRef.current = null;
-      const target = trigger || searchRef.current;
-      if (target) target.focus();
-    }, [open, editing]);
-    const folderName = (id) => (folders.find((folder) => folder.id === id) || {}).name || 'Unfiled';
-    const beginEdit = (kind, id, name) => { editOriginRef.current = { kind, id }; setMenu(null); setEditing({ kind, id }); setDraft(name); setError(''); };
-    const submitEdit = (e) => {
-      e.preventDefault(); const clean = draft.trim(); if (!clean) { setError('Enter a name.'); return; }
-      if (editing.kind === 'path') renamePath(project.paths.findIndex((path) => path.id === editing.id), clean);
-      else renamePathFolder(editing.id, clean);
-      finishEdit();
-    };
-    const editForm = () => h('form', { className: 'pathlib-rename', onSubmit: submitEdit },
-      h('label', { className: 'sr-only', htmlFor: 'path-library-name' }, 'Name'),
-      h('input', { id: 'path-library-name', ref: editRef, value: draft, autoComplete: 'off', spellCheck: false, 'aria-invalid': !!error, 'aria-describedby': error ? 'path-library-name-error' : undefined, onChange: (e) => { setDraft(e.target.value); setError(''); } }),
-      h('button', { type: 'submit' }, 'Save'), h('button', { type: 'button', onClick: finishEdit }, 'Cancel'),
-      error && h('span', { id: 'path-library-name-error', className: 'pathlib-error', role: 'status' }, error));
-    const pathActions = (path, index) => {
-      const outgoing = (project.pathLinks || []).find((link) => link.fromPathId === path.id);
-      const incoming = (project.pathLinks || []).find((link) => link.toPathId === path.id);
-      const source = incoming && project.paths.find((candidate) => candidate.id === incoming.fromPathId);
-      return h('div', { id: 'path-actions-' + path.id, className: 'pathlib-actionmenu', role: 'group', 'aria-label': path.name + ' actions' },
-      h('div', { className: 'pathlib-actionrow' },
-        h('button', { type: 'button', onClick: () => beginEdit('path', path.id, path.name) }, h(Icon, { name: 'edit', size: 13 }), h('span', null, 'Rename')),
-        h('button', { type: 'button', onClick: () => { dupPath(index); setMenu(null); } }, h(Icon, { name: 'copy', size: 13 }), h('span', null, 'Duplicate')),
-        h('button', { className: 'danger', type: 'button', disabled: project.paths.length <= 1, onClick: () => { if (delPath(index)) setMenu(null); } }, h(Icon, { name: 'trash', size: 13 }), h('span', null, 'Delete'))),
-      h('div', { className: 'pathlib-move' }, h(Icon, { name: 'folder', size: 14 }), h('span', null, 'Move to'),
-        h(Dropdown, { id: 'move-path-' + path.id, ariaLabel: 'Move ' + path.name + ' to folder', compact: true,
-          className: 'pathlib-folder-dropdown', value: path.folderId || '',
-          items: [{ value: '', label: 'Unfiled' }, ...folders.map((folder) => ({ value: folder.id, label: folder.name }))],
-          onChange: (value) => { movePathToFolder(index, value); setMenu(null); } })),
-      h('div', { className: 'pathlib-move' }, h(Icon, { name: 'route', size: 14 }), h('span', null, 'End to'),
-        h(Dropdown, { id: 'link-path-' + path.id, ariaLabel: 'Link end of ' + path.name, compact: true,
-          className: 'pathlib-folder-dropdown', value: outgoing ? outgoing.toPathId : '',
-          items: [{ value: '', label: 'Not linked' }, ...project.paths.filter((candidate) => candidate.id !== path.id).map((candidate) => ({ value: candidate.id, label: candidate.name }))],
-          onChange: (value) => setPathLink(path.id, value) })),
-      incoming && h('div', { className: 'pathlib-linknote' }, h(Icon, { name: 'route', size: 13 }), 'Start from ' + (source ? source.name : 'another path'),
-        h('button', { type: 'button', onClick: () => setPathLink(incoming.fromPathId, '') }, 'Unlink')));
-    };
-    const pathRow = (path, index, showFolder) => editing && editing.kind === 'path' && editing.id === path.id
-      ? h('div', { key: path.id, className: 'pathlib-editrow' }, editForm())
-      : h('div', { key: path.id, className: 'pathlib-item' },
-          h('div', { className: 'pathlib-path' + (index === activeIdx ? ' on' : '') },
-            h('button', { type: 'button', className: 'pathlib-pick', 'aria-current': index === activeIdx ? 'true' : undefined, onClick: () => { setMenu(null); setActive(index); } },
-              h(Icon, { name: index === activeIdx ? 'check' : 'route', size: 14 }),
-              h('span', { className: 'pathlib-copy' },
-                h('span', { className: 'pathlib-name' }, path.name),
-                showFolder && h('span', { className: 'pathlib-foldername' }, folderName(path.folderId))),
-              h('span', { className: 'pathlib-time' }, times[path.id] == null ? '\u2014' : times[path.id].toFixed(2) + 's')),
-            h('button', { className: 'pathlib-more', type: 'button', title: 'Path actions', 'aria-label': 'Actions for ' + path.name, 'aria-controls': 'path-actions-' + path.id, 'aria-expanded': !!(menu && menu.kind === 'path' && menu.id === path.id), onClick: () => setMenu((current) => current && current.kind === 'path' && current.id === path.id ? null : { kind: 'path', id: path.id }) }, '\u2026')),
-          menu && menu.kind === 'path' && menu.id === path.id && pathActions(path, index));
-    const group = (folder) => {
-      const id = folder ? folder.id : '', label = folder ? folder.name : 'Unfiled';
-      const members = project.paths.map((path, index) => ({ path, index })).filter((row) => (row.path.folderId || '') === id);
-      if (!folder && !members.length) return null;
-      const key = id || '_unfiled', shut = !!collapsed[key];
-      return h('section', { key, className: 'pathlib-group' },
-        editing && editing.kind === 'folder' && editing.id === id ? editForm() : h('div', { className: 'pathlib-folderwrap' },
-          h('div', { className: 'pathlib-folder' },
-            h('button', { type: 'button', className: 'pathlib-foldertoggle', 'aria-expanded': !shut, onClick: () => setCollapsed((state) => ({ ...state, [key]: !shut })) }, h(Icon, { name: 'chevron', size: 13 }), h('span', null, label), h('small', null, members.length)),
-            folder && h('button', { className: 'pathlib-more', type: 'button', title: 'Folder actions', 'aria-label': 'Actions for folder ' + label, 'aria-controls': 'folder-actions-' + id, 'aria-expanded': !!(menu && menu.kind === 'folder' && menu.id === id), onClick: () => setMenu((current) => current && current.kind === 'folder' && current.id === id ? null : { kind: 'folder', id }) }, '\u2026')),
-          folder && menu && menu.kind === 'folder' && menu.id === id && h('div', { id: 'folder-actions-' + id, className: 'pathlib-actionmenu', role: 'group', 'aria-label': label + ' folder actions' },
-            h('div', { className: 'pathlib-actionrow' },
-              h('button', { type: 'button', 'aria-label': 'New path in ' + label, onClick: () => { addPath(id); setMenu(null); } }, h(Icon, { name: 'plus', size: 13 }), h('span', null, 'New path')),
-              h('button', { type: 'button', 'aria-label': 'Rename folder ' + label, onClick: () => beginEdit('folder', id, label) }, h(Icon, { name: 'edit', size: 13 }), h('span', null, 'Rename')),
-              h('button', { className: 'danger', type: 'button', 'aria-label': 'Delete folder ' + label, onClick: () => { if (deletePathFolder(id)) setMenu(null); } }, h(Icon, { name: 'trash', size: 13 }), h('span', null, 'Delete'))))),
-        !shut && h('div', { className: 'pathlib-children' }, members.length ? members.map((row) => pathRow(row.path, row.index, false)) : h('div', { className: 'pathlib-empty' }, 'No paths')));
-    };
-    const needle = query.trim().toLowerCase();
-    const results = project.paths.map((path, index) => ({ path, index })).filter((row) => (row.path.name + ' ' + folderName(row.path.folderId)).toLowerCase().includes(needle));
-    return h('div', { className: 'pathsw pathlib' },
-      h('button', { ref: triggerRef, className: 'pathsw-btn' + (open ? ' open' : ''), type: 'button', title: cur ? cur.name : 'No path', 'aria-haspopup': 'dialog', 'aria-expanded': open, onClick: () => open ? close() : setOpen(true) },
-        h('span', { className: 'pathsw-ic' }, h(Icon, { name: 'route', size: 15 })), h('span', { className: 'pathsw-nm' }, cur ? cur.name : 'No path'), h('span', { className: 'pathsw-t' }, (cur && times[cur.id] != null ? times[cur.id].toFixed(2) : '--') + 's'), h(Icon, { name: 'chevron', size: 14 })),
-      open && h(React.Fragment, null,
-        h('button', { className: 'pathlib-scrim', type: 'button', tabIndex: -1, 'aria-label': 'Close path library', onClick: close }),
-        h('aside', { ref: panelRef, className: 'pathlib-panel', role: 'dialog', 'aria-modal': true, 'aria-label': 'Path library', tabIndex: -1, onKeyDown: trapFocus },
-          h('div', { className: 'pathlib-head' }, h('div', null, h(Icon, { name: 'folder', size: 15 }), h('strong', null, 'Path library'), h('span', null, project.paths.length)), h('button', { type: 'button', 'aria-label': 'Close path library', onClick: close }, h(Icon, { name: 'x', size: 15 }))),
-          h('div', { className: 'pathlib-create' },
-            h('button', { className: 'primary', type: 'button', onClick: () => addPath() }, h(Icon, { name: 'plus', size: 14 }), 'New path'),
-            h('button', { type: 'button', onClick: appendPath }, h(Icon, { name: 'route', size: 14 }), 'Append'),
-            h('button', { type: 'button', onClick: () => { const folder = addPathFolder(); if (folder) beginEdit('folder', folder.id, folder.name); } }, h(Icon, { name: 'folder', size: 14 }), 'Folder')),
-          h('label', { className: 'sr-only', htmlFor: 'path-library-search' }, 'Search paths and folders'),
-          h('div', { className: 'pathlib-searchwrap' }, h(Icon, { name: 'search', size: 14 }), h('input', { id: 'path-library-search', ref: searchRef, className: 'pathlib-search', type: 'search', 'aria-label': 'Search paths and folders', autoComplete: 'off', spellCheck: false, placeholder: 'Search paths and folders', value: query, onChange: (e) => { setMenu(null); setQuery(e.target.value); } })),
-          h('div', { className: 'pathlib-scroll' }, needle ? (results.length ? results.map((row) => pathRow(row.path, row.index, true)) : h('div', { className: 'pathlib-empty pathlib-emptysearch' }, h('strong', null, 'No matching paths'), h('span', null, 'Try a different name or folder.'))) : [folders.map(group), group(null)]))));
-  }
-
-  function RoutineLibrary({ routines, activeRoutineId, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine }) {
-    const [open, setOpen] = useState(false);
-    const [query, setQuery] = useState('');
-    const [menuId, setMenuId] = useState(null);
-    const [editingId, setEditingId] = useState(null);
-    const [draft, setDraft] = useState('');
-    const triggerRef = useRef(null), panelRef = useRef(null), searchRef = useRef(null), editRef = useRef(null);
-    const active = routines.find((routine) => routine.id === activeRoutineId) || routines[0];
-    const close = () => {
-      setOpen(false); setMenuId(null); setEditingId(null); setQuery('');
-      requestAnimationFrame(() => triggerRef.current && triggerRef.current.focus());
-    };
-    const beginRename = (routine) => { setMenuId(null); setEditingId(routine.id); setDraft(routine.name); };
-    const submitRename = (event) => {
-      event.preventDefault();
-      if (renameRoutine(editingId, draft)) setEditingId(null);
-    };
-    useEffect(() => { if (open) requestAnimationFrame(() => searchRef.current && searchRef.current.focus()); }, [open]);
-    useEffect(() => { if (editingId) requestAnimationFrame(() => { editRef.current && editRef.current.focus(); editRef.current && editRef.current.select(); }); }, [editingId]);
-    useEffect(() => {
-      if (!open) return undefined;
-      const onKey = (event) => {
-        if (event.key !== 'Escape') return;
-        event.preventDefault();
-        if (editingId) setEditingId(null); else if (menuId) setMenuId(null); else close();
-      };
-      window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
-    }, [open, editingId, menuId]);
-    const trapFocus = (event) => {
-      if (event.key !== 'Tab' || !panelRef.current) return;
-      const focusable = Array.from(panelRef.current.querySelectorAll('button:not(:disabled),input:not(:disabled),[tabindex]:not([tabindex="-1"])'));
-      if (!focusable.length) return;
-      const first = focusable[0], last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    };
-    const needle = query.trim().toLowerCase();
-    const visible = routines.filter((routine) => routine.name.toLowerCase().includes(needle));
-    const row = (routine) => editingId === routine.id
-      ? h('div', { key: routine.id, className: 'pathlib-editrow' },
-          h('form', { className: 'pathlib-rename', onSubmit: submitRename },
-            h('input', { ref: editRef, value: draft, 'aria-label': 'Routine name', autoComplete: 'off', spellCheck: false, onChange: (event) => setDraft(event.target.value) }),
-            h('button', { type: 'submit' }, 'Save'),
-            h('button', { type: 'button', onClick: () => setEditingId(null) }, 'Cancel')))
-      : h('div', { key: routine.id, className: 'pathlib-item' },
-          h('div', { className: 'pathlib-path' + (routine.id === activeRoutineId ? ' on' : '') },
-            h('button', { type: 'button', className: 'pathlib-pick', 'aria-current': routine.id === activeRoutineId ? 'true' : undefined, onClick: () => { setActiveRoutine(routine.id); close(); } },
-              h(Icon, { name: routine.id === activeRoutineId ? 'check' : 'layers', size: 14 }),
-              h('span', { className: 'pathlib-copy' }, h('span', { className: 'pathlib-name' }, routine.name)),
-              h('span', { className: 'pathlib-time' }, AUTO.countSteps(routine) + ' steps')),
-            h('button', { className: 'pathlib-more', type: 'button', title: 'Routine actions', 'aria-label': 'Actions for ' + routine.name, 'aria-expanded': menuId === routine.id, onClick: () => setMenuId((current) => current === routine.id ? null : routine.id) }, '\u2026')),
-          menuId === routine.id && h('div', { className: 'pathlib-actionmenu', role: 'group', 'aria-label': routine.name + ' actions' },
-            h('div', { className: 'pathlib-actionrow' },
-              h('button', { type: 'button', onClick: () => beginRename(routine) }, h(Icon, { name: 'edit', size: 13 }), 'Rename'),
-              h('button', { type: 'button', onClick: () => { duplicateRoutine(routine.id); close(); } }, h(Icon, { name: 'copy', size: 13 }), 'Duplicate'),
-              h('button', { className: 'danger', type: 'button', disabled: routines.length <= 1, onClick: () => { if (deleteRoutine(routine.id)) close(); } }, h(Icon, { name: 'trash', size: 13 }), 'Delete'))));
-    return h('div', { className: 'pathsw routinelib' },
-      h('button', { ref: triggerRef, className: 'pathsw-btn' + (open ? ' open' : ''), type: 'button', title: active.name, 'aria-haspopup': 'dialog', 'aria-expanded': open, onClick: () => open ? close() : setOpen(true) },
-        h('span', { className: 'pathsw-ic' }, h(Icon, { name: 'layers', size: 15 })), h('span', { className: 'pathsw-nm' }, active.name), h('span', { className: 'pathsw-t' }, AUTO.countSteps(active) + ' steps'), h(Icon, { name: 'chevron', size: 14 })),
-      open && h(React.Fragment, null,
-        h('button', { className: 'pathlib-scrim', type: 'button', tabIndex: -1, 'aria-label': 'Close routine library', onClick: close }),
-        h('aside', { ref: panelRef, className: 'pathlib-panel', role: 'dialog', 'aria-modal': true, 'aria-label': 'Routine library', tabIndex: -1, onKeyDown: trapFocus },
-          h('div', { className: 'pathlib-head' }, h('div', null, h(Icon, { name: 'layers', size: 15 }), h('strong', null, 'Routine library'), h('span', null, routines.length)), h('button', { type: 'button', 'aria-label': 'Close routine library', onClick: close }, h(Icon, { name: 'x', size: 15 }))),
-          h('div', { className: 'pathlib-create routinelib-create' }, h('button', { className: 'primary', type: 'button', onClick: () => { addRoutine(); close(); } }, h(Icon, { name: 'plus', size: 14 }), 'New routine')),
-          h('div', { className: 'pathlib-searchwrap' }, h(Icon, { name: 'search', size: 14 }), h('input', { ref: searchRef, className: 'pathlib-search', type: 'search', 'aria-label': 'Search routines', autoComplete: 'off', spellCheck: false, placeholder: 'Search routines', value: query, onChange: (event) => { setMenuId(null); setQuery(event.target.value); } })),
-          h('div', { className: 'pathlib-scroll' }, visible.length ? visible.map(row) : h('div', { className: 'pathlib-empty pathlib-emptysearch' }, h('strong', null, 'No matching routines'), h('span', null, 'Try a different name.'))))));
-  }
-
-  // ---------------- top bar ----------------
-  function PlannerFamily({ plannerId, onChange }) {
-    const value = plannerId === 'optimizedTrajectory' ? 'optimizedTrajectory' : 'profiledSpline';
-    return h(Seg, { className: 'planner-family', value, ariaLabel: 'Trajectory planner', options: [
-      { v: 'profiledSpline', label: 'Profiled' },
-      { v: 'optimizedTrajectory', label: 'Optimized' },
-    ], onChange });
-  }
-
   function Toolbar(props) {
-    const { project, page, setPage, alliance, setAlliance, exportError, unitSystem, setUnitSystem,
-      onUndo, onRedo, onExportJava, javaProject, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times, plannerId, setPlannerFamily,
-      routines, activeRoutineId, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine } = props;
+    const { page, setPage, alliance, setAlliance, onUndo, onRedo,
+      optimizationOpen, toggleOptimization, optimizationApplied, editorPage } = props;
     const plan = page === 'plan';
-    const javaReady = !!(javaProject && javaProject.catalog && javaProject.catalog.authoritative && javaProject.integration && javaProject.integration.installed && javaProject.integration.supportVersion === javaProject.catalog.supportVersion);
     return h('header', { className: 'toolbar' },
       h('div', { className: 'tb-left' },
         h('div', { className: 'brand' }, h('span', { className: 'brand-name' }, 'Bordeaux')),
         h('nav', { className: 'pageswitch', 'aria-label': 'Workspace' },
-          h('button', { className: plan ? 'on' : '', type: 'button', 'aria-current': plan ? 'page' : undefined, onClick: () => setPage('plan') }, h(Icon, { name: 'route', size: 15 }), 'Plan'),
-          h('button', { className: page === 'auto' ? 'on' : '', type: 'button', 'aria-current': page === 'auto' ? 'page' : undefined, onClick: () => setPage('auto') }, h(Icon, { name: 'layers', size: 15 }), 'Aquitaine'),
-          h('button', { className: page === 'robot' ? 'on' : '', type: 'button', 'aria-current': page === 'robot' ? 'page' : undefined, onClick: () => setPage('robot') }, h(Icon, { name: 'car', size: 15 }), 'Robot')),
-        plan && h(PathLibrary, { project, activeIdx, setActive, addPath, appendPath, setPathLink, dupPath, delPath, renamePath, addPathFolder, renamePathFolder, deletePathFolder, movePathToFolder, times }),
-        page === 'auto' && h(RoutineLibrary, { routines, activeRoutineId, setActiveRoutine, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine })),
+          h('button', { className: page !== 'robot' ? 'on' : '', type: 'button', 'aria-current': page !== 'robot' ? 'page' : undefined, onClick: () => setPage(editorPage) }, h(Icon, { name: 'route', size: 15 }), 'Editor'),
+          h('button', { className: page === 'robot' ? 'on' : '', type: 'button', 'aria-current': page === 'robot' ? 'page' : undefined, onClick: () => setPage('robot') }, h(Icon, { name: 'gear', size: 15 }), 'Settings'))),
 
       h('div', { className: 'tb-right' },
-        h('button', { className: 'alliance unit-toggle', type: 'button', onClick: () => setUnitSystem(unitSystem === 'metric' ? 'imperial' : 'metric'), title: 'Switch display units; project data remains SI', 'aria-label': 'Display units: ' + unitSystem + '. Switch to ' + (unitSystem === 'metric' ? 'imperial' : 'metric') }, unitSystem === 'metric' ? 'Metric' : 'Imperial'),
         plan && h(React.Fragment, null,
+          h('div', { className: 'tbdiv' }),
+          h('button', { type: 'button', className: 'qbtn optimizer-toggle', 'aria-expanded': optimizationOpen, onClick: toggleOptimization }, optimizationApplied ? 'Optimized' : 'Optimize')),
+        h(React.Fragment, null,
           h('button', { className: 'qbtn tb-file', type: 'button', title: 'Open project', 'aria-label': 'Open project', onClick: props.onOpen }, 'Open'),
           h('button', { className: 'qbtn tb-file', type: 'button', title: 'Save project (⌘S)', 'aria-label': 'Save project', onClick: () => props.onSave(false) }, 'Save')),
         (plan || page === 'auto') && h(React.Fragment, null,
           h(IconBtn, { icon: 'undo', onClick: onUndo, title: 'Undo  (\u2318Z)' }),
           h(IconBtn, { icon: 'redo', onClick: onRedo, title: 'Redo  (\u21e7\u2318Z)' })),
-        plan && h(React.Fragment, null,
-          h('div', { className: 'tbdiv' }),
-          h(PlannerFamily, { plannerId, onChange: setPlannerFamily })),
         (plan || page === 'auto') && h(React.Fragment, null,
           h('button', { className: 'alliance field-flip', type: 'button', 'aria-pressed': alliance === 'red', onClick: () => setAlliance(alliance === 'blue' ? 'red' : 'blue'), title: 'Flip the field 180° without changing the path', 'aria-label': 'Flip field 180 degrees' },
-            h(Icon, { name: 'shuffle', size: 14 }), h('span', null, 'Flip'))),
-        plan && h('button', { className: 'exportbtn exportjava' + (javaReady ? ' ready' : '') + (exportError ? ' error' : ''), type: 'button', disabled: !javaReady || !!(javaProject && javaProject.operation), title: exportError || (javaReady ? 'Export Java trajectory JSON to the linked robot project' : 'Link a Java project, install support, and build its command catalog first'), 'aria-label': exportError ? 'Java JSON export failed: ' + exportError : javaReady ? 'Export Java JSON' : 'Java JSON export unavailable until Java support is ready', onClick: onExportJava }, h(Icon, { name: 'share', size: 15 }), javaProject && javaProject.operation === 'export' ? 'Exporting…' : 'Export JSON')));
+            h(Icon, { name: 'flip', size: 14 }), h('span', null, 'Flip')))));
   }
 
-  // ---------------- canvas tool rail (left edge) — spatial creation (memo §2) ----------------
   const TOOLS = [
     { id: 'select', icon: 'select', label: 'Select / move', key: '1', alternateKey: 'V' },
     { id: 'waypoint', icon: 'waypoint', label: 'Place waypoint', key: '2', alternateKey: 'W' },
+    { id: 'brush', icon: 'brush', label: 'Sculpt path', key: '6', alternateKey: 'B' },
     { id: 'rotation', icon: 'rotation', label: 'Rotation target', key: '3', alternateKey: 'R' },
     { id: 'marker', icon: 'flag2', label: 'Event marker', key: '4', alternateKey: 'M' },
     { id: 'range', icon: 'gauge', label: 'Constraint range', key: '5', alternateKey: 'C' },
   ];
-  function ToolRail({ tool, setTool }) {
+  const BRUSHES = [
+    { id: 'push', icon: 'brushPush', label: 'Push', detail: 'Move the curve with the pointer' },
+    { id: 'smooth', icon: 'brushSmooth', label: 'Smooth', detail: 'Relax bends while keeping authored waypoints' },
+    { id: 'twirl', icon: 'brushTwirl', label: 'Twirl', detail: 'Rotate the curve through the radius' },
+  ];
+  function ToolRail({ tool, setTool, brush, setBrush, waypointCount }) {
+    const [brushOpen, setBrushOpen] = useState(false);
+    useEffect(() => setBrushOpen(tool === 'brush'), [tool]);
     return h('div', { className: 'toolrail' }, TOOLS.map((t) =>
-      h('button', { key: t.id, className: 'toolrail-b' + (tool === t.id ? ' on' : ''), type: 'button', 'aria-label': t.label, 'aria-pressed': tool === t.id, title: t.label + '  (' + t.key + ' or ' + t.alternateKey + ')', onClick: () => setTool(t.id) },
-        h(Icon, { name: t.icon, size: 18 }), h('span', { className: 'toolrail-k' }, t.key))));
+      h('button', { key: t.id, className: 'toolrail-b' + (tool === t.id ? ' on' : ''), type: 'button', 'aria-label': t.label, 'aria-pressed': tool === t.id, 'aria-expanded': t.id === 'brush' ? brushOpen : undefined, title: t.label + '  (' + t.key + ' or ' + t.alternateKey + ')', onClick: () => {
+        if (t.id === 'brush') {
+          setBrushOpen((open) => tool === 'brush' ? !open : true);
+          setTool('brush');
+        } else setTool(t.id);
+      } },
+        h(Icon, { name: t.icon, size: 18 }), h('span', { className: 'toolrail-k' }, t.key))),
+      tool === 'brush' && brushOpen && h('section', { className: 'brush-panel', 'aria-label': 'Path brush settings' },
+        h('div', { className: 'brush-panel-head' },
+          h('span', null, 'Brush'),
+          h('span', { className: 'brush-waypoint-count' }, waypointCount + ' pts'),
+          h('button', { className: 'brush-panel-close', type: 'button', 'aria-label': 'Close brush settings', onClick: () => setBrushOpen(false) }, h(Icon, { name: 'x', size: 13 }))),
+        h('div', { className: 'brush-modes', role: 'radiogroup', 'aria-label': 'Brush type' },
+          BRUSHES.map((option) => h('button', { key: option.id, className: 'brush-mode' + (brush.kind === option.id ? ' on' : ''), type: 'button', role: 'radio', 'aria-checked': brush.kind === option.id, title: option.detail, onClick: () => setBrush({ ...brush, kind: option.id }) },
+            h(Icon, { name: option.icon, size: 21 }), h('span', null, option.label)))),
+        h('label', { className: 'brush-setting' },
+          h('span', null, 'Radius'),
+          h('input', { type: 'range', min: 0.3, max: 2.4, step: 0.1, value: brush.radius, onChange: (event) => setBrush({ ...brush, radius: Number(event.target.value) }) }),
+          h('output', null, brush.radius.toFixed(1) + ' m')),
+        h('label', { className: 'brush-setting' },
+          h('span', null, 'Strength'),
+          h('input', { type: 'range', min: 0.1, max: 1, step: 0.05, value: brush.strength, onChange: (event) => setBrush({ ...brush, strength: Number(event.target.value) }) }),
+          h('output', null, Math.round(brush.strength * 100) + '%'))));
   }
 
-  // ---------------- global-constraint chip bar (top of canvas) — memo §6 ----------------
   function ConstraintBar({ c, robot, onOpen }) {
     const limits = PM.effectiveConstraints(c, robot);
-    const physical = limits !== c;
     const chips = [
       { k: 'Max V', v: UnitPrefs.fromCanonical(Math.min(limits.maxVel, robot.maxSpeed), 'm/s').toFixed(1), u: UnitPrefs.label('m/s') },
       { k: 'Max A', v: UnitPrefs.fromCanonical(limits.maxAccel, 'm/s²').toFixed(1), u: UnitPrefs.label('m/s²') },
       { k: 'Decel', v: UnitPrefs.fromCanonical(limits.maxDecel != null ? limits.maxDecel : limits.maxAccel, 'm/s²').toFixed(1), u: UnitPrefs.label('m/s²') },
       { k: 'Max \u03c9', v: (limits.maxAngVel || 0).toFixed(0), u: '\u00b0/s' },
     ];
-    return h('button', { className: 'cbar', type: 'button', title: physical ? 'View robot limits' : 'Edit global constraints', onClick: onOpen },
+    return h('button', { className: 'cbar', type: 'button', title: 'Edit global constraints', onClick: onOpen },
       h('span', { className: 'cbar-ic' }, h(Icon, { name: 'gauge', size: 14 })),
       chips.map((ch, i) => h('span', { key: i, className: 'cbar-chip' },
         h('span', { className: 'cbar-k' }, ch.k),
         h('span', { className: 'cbar-v' }, ch.v),
         h('span', { className: 'cbar-u' }, ch.u))),
-      h('span', { className: 'cbar-edit' }, physical ? 'Robot' : 'Edit'));
+      h('span', { className: 'cbar-edit' }, 'Edit'));
   }
 
-  // ---------------- outline: document STRUCTURE only (memo §5 / §7) ----------------
   const behPill = (w) => w.stop ? { t: w.wait ? 'stop ' + (w.wait) + 's' : 'stop', c: 'r' } : w.corner ? { t: 'corner', c: 'n' } : null;
   const inspectItem = (actions, kind, index, event) => {
     event.preventDefault(); event.stopPropagation();
@@ -311,9 +102,18 @@ import { UI } from "./ui";
     if (actions.openInspector) actions.openInspector();
   };
 
-  function WaypointList({ wps, sel, actions }) {
+  function WaypointList({ wps, sel, actions, ready }) {
     const [drag, setDrag] = useState(null);
     const rows = useRef([]);
+    const reorderFocus = useRef(null);
+    React.useLayoutEffect(() => {
+      const pending = reorderFocus.current;
+      if (!pending || !ready || pending.wps === wps) return;
+      reorderFocus.current = null;
+      if (document.activeElement === pending.trigger || document.activeElement === document.body) {
+        rows.current[pending.target]?.querySelector('.featgrip')?.focus();
+      }
+    }, [wps, ready]);
     const pointerDrag = PointerDrag.useController();
     const startDrag = (i) => (e) => {
       e.preventDefault(); e.stopPropagation();
@@ -335,14 +135,21 @@ import { UI } from "./ui";
       const bp = behPill(w);
       const cls = 'featrow wpfeatrow' + (sel.kind === 'wp' && sel.idx === i ? ' sel' : '') + (drag && drag.from === i ? ' dragging' : '') + (drag && drag.over === i && drag.from !== i ? ' over' : '');
       return h('div', { key: i, ref: (el) => (rows.current[i] = el), className: cls },
-        h('button', { className: 'featgrip', type: 'button', 'aria-label': 'Drag ' + label + ' to reorder', title: 'Drag to reorder', onPointerDown: startDrag(i) }, h(Icon, { name: 'drag', size: 13 })),
-        h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'wp' && sel.idx === i, onClick: (e) => { if (e.shiftKey && wps.length > 2) actions.delWp(i); else actions.select('wp', i); }, onDoubleClick: (e) => inspectItem(actions, 'wp', i, e) },
+        h('button', { className: 'featgrip', type: 'button', 'aria-label': 'Reorder ' + label, title: 'Drag to reorder, or use the up and down arrow keys', 'aria-keyshortcuts': 'ArrowUp ArrowDown', onPointerDown: startDrag(i), onKeyDown: (event) => {
+          if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+          event.preventDefault(); event.stopPropagation();
+          const target = i + (event.key === 'ArrowUp' ? -1 : 1);
+          if (target < 0 || target >= wps.length) return;
+          reorderFocus.current = { wps, target, trigger: event.currentTarget };
+          actions.reorderWp(i, target);
+        } }, h(Icon, { name: 'drag', size: 13 })),
+        h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'wp' && sel.idx === i, onClick: () => actions.select('wp', i), onDoubleClick: (e) => inspectItem(actions, 'wp', i, e) },
           h('span', { className: 'featdot ' + (w.stop ? 'r sq' : i === 0 ? 'g' : i === wps.length - 1 ? 'r' : 'b') }),
           h('span', { className: 'featnm', title: label }, label),
-          mid && w.thetaOn && h('span', { className: 'pill th' }, (w.theta || 0).toFixed(0) + '\u00b0'),
-          bp ? h('span', { className: 'pill ' + bp.c }, bp.t) : h('span', { className: 'featmeta' }, w.x.toFixed(1) + ', ' + w.y.toFixed(1))),
-        i > 0 && h('button', { className: 'featmove', type: 'button', 'aria-label': 'Move ' + label + ' up', onClick: () => actions.reorderWp(i, i - 1) }, '\u2191'),
-        i < wps.length - 1 && h('button', { className: 'featmove', type: 'button', 'aria-label': 'Move ' + label + ' down', onClick: () => actions.reorderWp(i, i + 1) }, '\u2193'),
+          h('span', { className: 'featdetails' },
+            h('span', { className: 'featmeta' }, UnitPrefs.fromCanonical(w.x, 'm').toFixed(1) + ', ' + UnitPrefs.format(w.y, 'm', 1)),
+            mid && w.thetaOn && h('span', { className: 'pill th' }, (w.theta || 0).toFixed(0) + '\u00b0'),
+            bp && h('span', { className: 'pill ' + bp.c }, bp.t))),
         wps.length > 2 && h('button', { className: 'featdel', 'aria-label': 'Delete ' + label, title: 'Delete', onClick: () => actions.delWp(i) }, h(Icon, { name: 'trash', size: 12 })));
     }));
   }
@@ -360,7 +167,7 @@ import { UI } from "./ui";
           h('span', { className: 'featmeta' }, typeName(w.segType))))));
   }
 
-  function Outline({ open, setOpen, doc, derived, sel, actions, secOpen, setSecOpen, robot }) {
+  function Outline({ open, setOpen, doc, derived, sel, actions, secOpen, setSecOpen, robot, ready }) {
     const tog = (k) => setSecOpen((o) => ({ ...o, [k]: !o[k] }));
     const wps = doc.waypoints;
     if (!open) {
@@ -372,32 +179,27 @@ import { UI } from "./ui";
         h('span', { className: 'outline-t' }, 'Outline'),
         h('button', { className: 'mini', type: 'button', title: 'Hide outline', 'aria-label': 'Hide outline', onClick: () => setOpen(false) }, h('span', { className: 'rot90' }, h(Icon, { name: 'chevron', size: 15 })))),
       h('div', { className: 'outline-scroll' },
-        h(Section, { icon: 'waypoint', title: 'Waypoints', count: wps.length, open: secOpen.wp, onToggle: () => tog('wp'),
-          right: h('button', { className: 'mini', type: 'button', title: 'Place waypoint', 'aria-label': 'Place waypoint', onClick: (e) => { e.stopPropagation(); actions.select(null, -1); actions.setTool('waypoint'); } }, h(Icon, { name: 'plus', size: 13 })) },
-          h(WaypointList, { wps, sel, actions })),
+        h(Section, { icon: 'waypoint', title: 'Waypoints', count: wps.length, open: secOpen.wp, onToggle: () => tog('wp') },
+          h(WaypointList, { key: doc.id, wps, sel, actions, ready })),
         h(Section, { icon: 'route', title: 'Segments', count: Math.max(0, wps.length - 1), open: !!secOpen.sg, onToggle: () => tog('sg') },
           h(SegmentList, { wps, sel, actions })),
-        h(Section, { icon: 'rotation', title: 'Rotation Targets', count: doc.targets.length, open: secOpen.rt, onToggle: () => tog('rt'),
-          right: h('button', { className: 'mini', type: 'button', title: 'Add rotation target', 'aria-label': 'Add rotation target', onClick: (e) => { e.stopPropagation(); actions.addTargetMid(); } }, h(Icon, { name: 'plus', size: 13 })) },
+        h(Section, { icon: 'rotation', title: 'Rotation Targets', count: doc.targets.length, open: secOpen.rt, onToggle: () => tog('rt') },
           doc.targets.length === 0 ? h('div', { className: 'featempty' }, 'Press R, then click the path') :
             doc.targets.map((t, i) => h('div', { key: i, className: 'featrow' + (sel.kind === 'rt' && sel.idx === i ? ' sel' : '') },
               h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'rt' && sel.idx === i, onClick: () => actions.select('rt', i), onDoubleClick: (e) => inspectItem(actions, 'rt', i, e) }, h('span', { className: 'featdot n' }), h('span', { className: 'featnm' }, t.deg.toFixed(0) + '\u00b0'), h('span', { className: 'featmeta' }, t.anchor === 'dist' ? UnitPrefs.format(t.d != null ? t.d : PM.featureFraction(t, derived.sample) * derived.sample.length, 'm', 1) : (PM.featureFraction(t, derived.sample) * 100).toFixed(0) + '%')),
               h('button', { className: 'featdel', 'aria-label': 'Delete rotation target', title: 'Delete', onClick: () => actions.delTarget(i) }, h(Icon, { name: 'trash', size: 12 }))))),
-        h(Section, { icon: 'flag2', title: 'Event Markers', count: doc.markers.length, open: secOpen.em, onToggle: () => tog('em'),
-          right: h('button', { className: 'mini', type: 'button', title: 'Add event marker', 'aria-label': 'Add event marker', onClick: (e) => { e.stopPropagation(); actions.addMarkerMid(); } }, h(Icon, { name: 'plus', size: 13 })) },
+        h(Section, { icon: 'flag2', title: 'Event Markers', count: doc.markers.length, open: secOpen.em, onToggle: () => tog('em') },
           doc.markers.length === 0 ? h('div', { className: 'featempty' }, 'Press M, then click the path') :
             doc.markers.map((m, i) => h('div', { key: i, className: 'featrow' + (sel.kind === 'em' && sel.idx === i ? ' sel' : '') },
               h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'em' && sel.idx === i, onClick: () => actions.select('em', i), onDoubleClick: (e) => inspectItem(actions, 'em', i, e) }, h('span', { className: 'featdot n' }), h('span', { className: 'featnm', title: m.name }, m.name), h('span', { className: 'featmeta' }, m.anchor === 'dist' ? UnitPrefs.format(m.d != null ? m.d : PM.featureFraction(m, derived.sample) * derived.sample.length, 'm', 1) : (PM.featureFraction(m, derived.sample) * 100).toFixed(0) + '%')),
               h('button', { className: 'featdel', 'aria-label': 'Delete event marker ' + m.name, title: 'Delete', onClick: () => actions.delMarker(i) }, h(Icon, { name: 'trash', size: 12 }))))),
-        h(Section, { icon: 'gauge', title: 'Constraint Ranges', count: (doc.ranges || []).length, open: secOpen.cr !== false, onToggle: () => tog('cr'),
-          right: h('button', { className: 'mini', type: 'button', title: 'Add constraint range', 'aria-label': 'Add constraint range', onClick: (e) => { e.stopPropagation(); actions.addRangeMid(); } }, h(Icon, { name: 'plus', size: 13 })) },
+        h(Section, { icon: 'gauge', title: 'Constraint Ranges', count: (doc.ranges || []).length, open: secOpen.cr !== false, onToggle: () => tog('cr') },
           (doc.ranges || []).length === 0 ? h('div', { className: 'featempty' }, 'Press C, then drag the path') :
             doc.ranges.map((rg, i) => { const effective = (derived.effRanges && derived.effRanges[i]) || rg; const summary = constraintRangeSummary(rg, doc.constraints, robot); const rangeLabel = summary ? summary.text : (rg.name || 'Constraint range'); const rangeMeta = rg.anchor === 'dist' ? UnitPrefs.fromCanonical(Math.min(effective.f0, effective.f1) * derived.sample.length, 'm').toFixed(1) + '\u2013' + UnitPrefs.format(Math.max(effective.f0, effective.f1) * derived.sample.length, 'm', 1) : rg.anchor === 'wp' && rg.t0 != null && rg.t1 != null ? 'S' + ((rg.w0 || 0) + 1) + ' ' + Math.round(rg.t0 * 100) + '% \u2013 S' + ((rg.w1 || 0) + 1) + ' ' + Math.round(rg.t1 * 100) + '%' : rg.anchor === 'wp' ? 'Waypoint ' + Math.min(rg.w0 || 0, rg.w1 || 0) + '\u2013' + Math.max(rg.w0 || 0, rg.w1 || 0) : (Math.min(effective.f0, effective.f1) * 100).toFixed(0) + '\u2013' + (Math.max(effective.f0, effective.f1) * 100).toFixed(0) + '%'; return h('div', { key: i, className: 'featrow' + (sel.kind === 'cr' && sel.idx === i ? ' sel' : '') },
               h('button', { className: 'featselect', type: 'button', 'aria-label': 'Constraint range, ' + (summary ? summary.ariaLabel : rangeLabel) + ', ' + rangeMeta, 'aria-pressed': sel.kind === 'cr' && sel.idx === i, onClick: () => actions.select('cr', i), onDoubleClick: (e) => inspectItem(actions, 'cr', i, e) }, h('span', { className: 'featdot w' }), h('span', { className: 'featnm' }, rangeLabel), h('span', { className: 'featmeta' }, rangeMeta)),
               h('button', { className: 'featdel', 'aria-label': 'Delete constraint range', title: 'Delete', onClick: () => actions.delRange(i) }, h(Icon, { name: 'trash', size: 12 }))); }))));
   }
 
-  // ---------------- compact metric control for the timeline toolbar ----------------
   function MetricControl({ metric, setMetric, derived }) {
     const M = derived.metrics || {};
     const grad = PM.metricGradient(metric);
@@ -417,7 +219,6 @@ import { UI } from "./ui";
       h('span', { className: 'metric-range', 'aria-hidden': true }, lo + '\u2013' + hi + ' ' + UnitPrefs.label(displayUnit)));
   }
 
-  // ---------------- telemetry graph + transport ----------------
   function Transport({ derived, doc, metric, setMetric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen }) {
     const total = derived.prof.totalTime || 0.001;
     const pct = Math.max(0, Math.min(1, playTime / total));
@@ -476,39 +277,41 @@ import { UI } from "./ui";
     const GW = 1000, GH = 132, padL = 0, padR = 0, padT = 10, padB = 20;
     const unitSystem = UnitPrefs.current();
     const graphModel = useMemo(() => {
-      let arr = graphOpen ? M.v.map((value) => UnitPrefs.fromCanonical(value, 'm/s')) : null;
+      const finalSamples = derived.finalTrajectory?.samples || [];
+      const authoritative = finalSamples.length >= 2;
+      const graphTimes = authoritative ? finalSamples.map((sample) => sample.t) : prof.t;
+      let arr = graphOpen
+        ? (authoritative
+          ? finalSamples.map((sample) => UnitPrefs.fromCanonical(sample.velocityMps, 'm/s'))
+          : M.v.map((value) => UnitPrefs.fromCanonical(value, 'm/s')))
+        : null;
       let vmin = 0, vmax = UnitPrefs.fromCanonical(M.vMax || 1, 'm/s'), signed = false;
       let unit = UnitPrefs.label('m/s'), title = 'Velocity';
-      if (graphOpen && metric === 'accel') { arr = M.accel.map((value) => UnitPrefs.fromCanonical(value, 'm/s²')); vmax = UnitPrefs.fromCanonical(M.aMax || 1, 'm/s²'); vmin = -vmax; signed = true; unit = UnitPrefs.label('m/s²'); title = 'Acceleration'; }
-      else if (graphOpen && metric === 'angvel') { arr = (M.omega || []).map((o) => o * R2D); vmax = (M.wMax || 0.01) * R2D; vmin = -vmax; signed = true; unit = '\u00b0/s'; title = 'Angular velocity'; }
-      else if (graphOpen && metric === 'curvature') { arr = M.curv.map((value) => UnitPrefs.fromCanonical(value, '1/m')); vmin = 0; vmax = UnitPrefs.fromCanonical(M.kMax || 0.01, '1/m'); unit = UnitPrefs.label('1/m'); title = 'Curvature'; }
+      if (graphOpen && metric === 'accel') { arr = authoritative ? finalSamples.map((sample) => UnitPrefs.fromCanonical(sample.accelerationMps2, 'm/s²')) : M.accel.map((value) => UnitPrefs.fromCanonical(value, 'm/s²')); vmax = UnitPrefs.fromCanonical(M.aMax || 1, 'm/s²'); vmin = -vmax; signed = true; unit = UnitPrefs.label('m/s²'); title = 'Acceleration'; }
+      else if (graphOpen && metric === 'angvel') { arr = authoritative ? finalSamples.map((sample) => sample.angularVelocityRadps * R2D) : (M.omega || []).map((o) => o * R2D); vmax = (M.wMax || 0.01) * R2D; vmin = -vmax; signed = true; unit = '\u00b0/s'; title = 'Angular velocity'; }
+      else if (graphOpen && metric === 'curvature') { arr = authoritative ? finalSamples.map((sample) => UnitPrefs.fromCanonical(sample.curvatureInvM, '1/m')) : M.curv.map((value) => UnitPrefs.fromCanonical(value, '1/m')); vmin = 0; vmax = UnitPrefs.fromCanonical(M.kMax || 0.01, '1/m'); unit = UnitPrefs.label('1/m'); title = 'Curvature'; }
 
       const jigglePeak = graphOpen && metric === 'velocity' && prof.jiggles
         ? UnitPrefs.fromCanonical(prof.jiggles.reduce((value, action) => Math.max(value, 4 * action.config.distanceM / action.strokeDuration), 0), 'm/s')
         : 0;
-      const peak = Math.max(vmax, jigglePeak);
+      const seriesPeak = arr ? arr.reduce((maximum, value) => Math.max(maximum, Math.abs(value)), 0) : 0;
+      const peak = Math.max(vmax, jigglePeak, seriesPeak);
       vmax = Math.max(0.01, peak * 1.1);
       if (signed) vmin = -vmax;
       const span = Math.max(1e-6, vmax - vmin);
       const yOf = (value) => padT + (1 - (value - vmin) / span) * (GH - padT - padB);
       const zeroY = yOf(0);
       const valueAtTime = (time) => {
-        if (!arr || !arr.length || !prof.t.length) return 0;
+        if (!arr || !arr.length || !graphTimes.length) return 0;
         if (time <= 0) return arr[0] || 0;
-        if (time >= total) return arr[arr.length - 1] || 0;
-        const geometryEnd = prof.t[prof.t.length - 1];
-        if (time > geometryEnd + 1e-9) {
-          if (metric !== 'velocity') return 0;
-          const pose = PM.poseAtTime(time, pts, prof, derived.anchors, derived.mode, derived.rev);
-          return pose ? UnitPrefs.fromCanonical(pose.speed, 'm/s') : 0;
-        }
-        let lo = 1, hi = prof.t.length - 1;
-        while (lo < hi) { const mid = (lo + hi) >> 1; if (prof.t[mid] < time) lo = mid + 1; else hi = mid; }
-        const t0 = prof.t[lo - 1], t1 = prof.t[lo], u = t1 - t0 > 1e-6 ? (time - t0) / (t1 - t0) : 0;
+        if (time >= graphTimes[graphTimes.length - 1]) return arr[arr.length - 1] || 0;
+        let lo = 1, hi = graphTimes.length - 1;
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (graphTimes[mid] < time) lo = mid + 1; else hi = mid; }
+        const t0 = graphTimes[lo - 1], t1 = graphTimes[lo], u = t1 - t0 > 1e-6 ? (time - t0) / (t1 - t0) : 0;
         return arr[lo - 1] + (arr[lo] - arr[lo - 1]) * u;
       };
       let poly = '';
-      if (pts.length > 1 && arr && arr.length) {
+      if (graphTimes.length > 1 && arr && arr.length) {
         const N = 170;
         for (let k = 0; k <= N; k++) {
           const time = (k / N) * total;
@@ -517,9 +320,12 @@ import { UI } from "./ui";
           poly += (k === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + yOf(value).toFixed(1) + ' ';
         }
       }
-      return { baseY: signed ? zeroY : GH - padB, peak, poly, signed, title, unit, valueAtTime, yOf, zeroY };
+      const rotationLimiter = metric === 'velocity' && prof.rotLimited && prof.rotLimited.some(Boolean)
+        ? 'Angular limits active'
+        : null;
+      return { baseY: signed ? zeroY : GH - padB, peak, poly, rotationLimiter, signed, title, unit, valueAtTime, yOf, zeroY };
     }, [derived, graphOpen, metric, total, unitSystem]);
-    const { baseY, peak, poly, signed, title, unit, valueAtTime, yOf, zeroY } = graphModel;
+    const { baseY, peak, poly, rotationLimiter, signed, title, unit, valueAtTime, yOf, zeroY } = graphModel;
     const playX = padL + pct * (GW - padL - padR);
     const currentValue = valueAtTime(playTime), playY = yOf(currentValue);
     const pointerDrag = PointerDrag.useController();
@@ -534,6 +340,7 @@ import { UI } from "./ui";
       graphOpen && h('div', { className: 'velgraph open' },
         h('div', { className: 'velgraph-top' },
           h('span', { className: 'velgraph-ttl' }, title + ' profile'),
+          rotationLimiter && h('span', { className: 'velgraph-limit', title: 'Rotation timing is limiting speed somewhere on this path. Spread heading changes over more distance or inspect the rotation limits.' }, rotationLimiter),
           h('span', { className: 'velgraph-readout' },
             h('b', null, currentValue.toFixed(metric === 'angvel' ? 0 : metric === 'curvature' ? 2 : 1) + ' ' + unit),
             h('span', null, 'Peak ' + peak.toFixed(metric === 'angvel' ? 0 : metric === 'curvature' ? 2 : 1) + ' ' + unit))),
@@ -596,7 +403,6 @@ import { UI } from "./ui";
               h('span', { id: 'trajectory-feature-summary', className: 'sr-only' }, featureSummary || 'No authored timeline features'))))));
   }
 
-  // ---------------- zoom / view controls ----------------
   function ViewControls({ zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen }) {
     return h('div', { className: 'viewctl' + (graphOpen ? ' graph-open' : '') },
       h('button', { className: 'vc-btn', type: 'button', title: 'Zoom out', 'aria-label': 'Zoom out', onClick: () => zoomBy(1.18) }, h(Icon, { name: 'zoomout', size: 16 })),
