@@ -3,6 +3,7 @@ import { PointerDrag } from "../hooks/usePointerDrag";
 import { PM } from "../lib/pathMath";
 import { UnitPrefs } from "../lib/unitPreferences";
 import { UI } from "./ui";
+import "../styles/settings.css";
 
 // Bordeaux Robot config page (project-global).
   const { useRef, useState, useEffect } = React;
@@ -50,6 +51,7 @@ import { UI } from "./ui";
     const unitSystem = UnitPrefs.current();
     useEffect(() => setEdit(null), [unitSystem]);
     const commitEdit = (raw) => {
+      if (!raw.trim()) return;
       let next = UnitPrefs.toCanonical(Number(raw), unit, imperialUnit);
       if (!Number.isFinite(next)) return;
       if (min != null) next = Math.max(min, next);
@@ -79,7 +81,7 @@ import { UI } from "./ui";
       unit && h('span', { className: 'u' }, UnitPrefs.label(unit, imperialUnit)));
   }
 
-  function RobotPage({ robot, setRobot, mcpEnabled, agentProposal, onApplyProposal, onRejectProposal }) {
+  function RobotPage({ robot, setRobot, unitSystem, setUnitSystem, pushController, mcpEnabled, agentProposal, onApplyProposal, onRejectProposal }) {
     const isSwerve = robot.drive === 'swerve';
     const [customEditing, setCustomEditing] = useState(false);
     const [selectedVertex, setSelectedVertex] = useState(0);
@@ -248,8 +250,8 @@ import { UI } from "./ui";
       h('div', { className: 'rp-vertexhead' }, h('span', null, 'Custom convex vertices'), h('span', null, '+X forward · +Y left')),
       footprint.map((point, index) => h('div', { className: 'rp-vertex' + (selectedVertex === index ? ' selected' : ''), key: index, onClick: () => setSelectedVertex(index) },
         h('span', null, index + 1),
-        h('label', null, 'X', h('input', { type: 'number', step: 0.01, value: point.x, 'aria-label': `Vertex ${index + 1} X`, onChange: (event) => updateVertex(index, 'x', Number(event.target.value)) })),
-        h('label', null, 'Y', h('input', { type: 'number', step: 0.01, value: point.y, 'aria-label': `Vertex ${index + 1} Y`, onChange: (event) => updateVertex(index, 'y', Number(event.target.value)) })),
+        h('div', { className: 'rp-vertex-coordinate' }, h('span', null, 'X'), h(BigNum, { label: `Vertex ${index + 1} X`, unit: 'm', value: point.x, precision: 3, onChange: (value) => updateVertex(index, 'x', value) })),
+        h('div', { className: 'rp-vertex-coordinate' }, h('span', null, 'Y'), h(BigNum, { label: `Vertex ${index + 1} Y`, unit: 'm', value: point.y, precision: 3, onChange: (value) => updateVertex(index, 'y', value) })),
         h('button', { type: 'button', disabled: footprint.length <= 3, 'aria-label': `Remove vertex ${index + 1}`, onClick: () => setVertices(footprint.filter((_, pointIndex) => pointIndex !== index)) }, '\u00d7'))),
       h('button', { className: 'rp-addvertex', type: 'button', disabled: footprint.length >= 16, onClick: () => addVertex() }, 'Add vertex on longest edge'),
       h('div', { className: 'rp-note' + (footprintValid ? '' : ' invalid'), role: footprintValid ? undefined : 'status' }, footprintValid
@@ -258,7 +260,17 @@ import { UI } from "./ui";
 
     return h('div', { className: 'robotpage' },
       h('div', { className: 'rp-wrap' },
-        h('div', { className: 'rp-title' }, 'Robot'),
+        h('div', { className: 'rp-title' }, 'Settings'),
+        h('section', { className: 'settings-general', 'aria-label': 'General settings' },
+          h('div', { className: 'settings-row' },
+            h('div', { className: 'settings-label' }, h('strong', null, 'Robot connection'),
+              h('span', null, pushController.pairing || pushController.busy ? pushController.connectionLabel : 'Not connected')),
+            h('button', { className: 'qbtn library-connection', type: 'button', onClick: pushController.openConnection },
+              pushController.busy ? 'Push progress' : pushController.pairing ? 'Manage connection' : 'Connect robot')),
+          h('div', { className: 'settings-row' },
+            h('strong', null, 'Display units'),
+            h(UI.Seg, { ariaLabel: 'Display units', value: unitSystem, options: [{ v: 'metric', label: 'Metric' }, { v: 'imperial', label: 'Imperial' }], onChange: setUnitSystem }))),
+        h('h2', { className: 'settings-robot-heading' }, 'Robot'),
         h('div', { className: 'rp-sub' }, 'Project-wide dimensions and drivetrain limits.'),
         h('div', { className: 'rp-grid' },
           // ---- left column: controls ----
