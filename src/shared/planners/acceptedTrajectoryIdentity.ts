@@ -1,3 +1,32 @@
+import { ACTIVE_FIELD_REFERENCE } from "../field/rebuilt2026";
+import { normalizeProject } from "../project/normalize";
+import type { FieldReference, PathDoc, RobotConfig } from "../types";
+import { MAX_TRAJECTORY_SAMPLES } from "./limits";
+
+const PLANNER_VERSION = "corridor-selection/1";
+const record = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+
+/** Stable across JSON object ordering; do not round trajectory-affecting numbers. */
+function stable(value: unknown): string {
+  return JSON.stringify(value, (_key, item) => record(item)
+    ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, item[key]]))
+    : item);
+}
+
+export function authoredPath(path: PathDoc): PathDoc {
+  const { optimization: _optimization, ...authored } = path;
+  return authored;
+}
+
+function physicalPath(path: PathDoc) {
+  const normalized = normalizeProject({ paths: [authoredPath(path)] }) as { paths: PathDoc[] };
+  const { id: _id, name: _name, folderId: _folder, exportable: _exportable, ...physical } = normalized.paths[0];
+  for (const key of ["_selAfter", "_selT", "_selM", "_selR"]) delete (physical as Record<string, unknown>)[key];
+  return physical;
+}
+
+export function optimizationInputKey(path: PathDoc, robot: RobotConfig, field: FieldReference = ACTIVE_FIELD_REFERENCE): string {
   const { planning: _planning, footprintPreset: _preset, ...physicalRobot } = robot;
   return stable({ version: PLANNER_VERSION, field, path: physicalPath(path), robot: physicalRobot, corridorM: path.optimization?.corridorM ?? 0.15 });
 }
