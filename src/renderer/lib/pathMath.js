@@ -1,16 +1,10 @@
-// Bordeaux path math engine. Kept renderer-local until the shared planner reaches API parity.
-  // ---- geometry helpers ----
-  const lerp = (a, b, t) => a + (b - a) * t;
-  function bez(p0, c0, c1, p1, t) {
-    const u = 1 - t, tt = t * t, uu = u * u;
-    const a = uu * u, b = 3 * uu * t, c = 3 * u * tt, d = tt * t;
-    return { x: a * p0.x + b * c0.x + c * c1.x + d * p1.x, y: a * p0.y + b * c0.y + c * c1.y + d * p1.y };
-  }
-  function bezD(p0, c0, c1, p1, t) {
-    const u = 1 - t;
-    const a = 3 * u * u, b = 6 * u * t, c = 3 * t * t;
-    return { x: a * (c0.x - p0.x) + b * (c1.x - c0.x) + c * (p1.x - c1.x), y: a * (c0.y - p0.y) + b * (c1.y - c0.y) + c * (p1.y - c1.y) };
-  }
+import { lerp, angWrap, angLerp, D2R, R2D, sample as sampleGeometry, pointAtFraction, nearestFraction, autoHandles, SEGTYPES } from "../../shared/math/geometry";
+import { headingAt, buildAnchors } from "../../shared/math/headingAnchors";
+import { waypointFracs, effectiveRanges, featureFraction, insertHeadingTargetSamples, remapWaypointRange } from "../../shared/math/pathRanges";
+import { metricColor, metricGradient, METRICS } from "../../shared/math/metricDisplay";
+import { headingTransitionWindows, headingTransitionGoals, smoothHeadingTransitions } from "../../shared/planners/headingTransitions";
+  function sample(waypoints, perSeg = 60) { return sampleGeometry(waypoints, perSeg, true); }
+
   function splitBezier(p0, c0, c1, p1, t) {
     t = Math.max(0, Math.min(1, t));
     const mix = (a, b) => ({ x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) });
@@ -41,15 +35,6 @@
     });
     return best;
   }
-  function bezDD(p0, c0, c1, p1, t) {
-    const u = 1 - t;
-    return { x: 6 * u * (c1.x - 2 * c0.x + p0.x) + 6 * t * (p1.x - 2 * c1.x + c0.x), y: 6 * u * (c1.y - 2 * c0.y + p0.y) + 6 * t * (p1.y - 2 * c1.y + c0.y) };
-  }
-
-  // shortest signed angle difference (radians)
-  function angWrap(a) { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; }
-  function angLerp(a, b, t) { return a + angWrap(b - a) * t; }
-  const D2R = Math.PI / 180, R2D = 180 / Math.PI;
   function robotHardLimits(robot) {
     const m = robot && robot.driveModel;
     if (!m) return null;
@@ -73,156 +58,16 @@
   }
   function effectiveConstraints(constraints, robot) {
     const limits = robotHardLimits(robot);
-    return limits ? { ...constraints, maxVel: limits.maxSpeed, maxAccel: limits.maxAccel, maxDecel: limits.maxAccel, maxCentripetalAccel: limits.maxCornerAccel, maxAngVel: limits.maxAngVel, maxAngAccel: limits.maxAngAccel, maxAngDecel: limits.maxAngAccel } : constraints;
-  }
-
-  // ---- arc primitive: circle tangent to the start handle, through the endpoint ----
-  function arcSetup(p0, p1, c0) {
-    let tx = c0.x - p0.x, ty = c0.y - p0.y; let tl = Math.hypot(tx, ty);
-    if (tl < 1e-6) { tx = p1.x - p0.x; ty = p1.y - p0.y; tl = Math.hypot(tx, ty); }
-    if (tl < 1e-6) return null;
-    tx /= tl; ty /= tl; const nx = -ty, ny = tx;
-    const dx = p1.x - p0.x, dy = p1.y - p0.y; const denom = 2 * (dx * nx + dy * ny);
-    if (Math.abs(denom) < 1e-3) return null; // effectively straight
-    const R = (dx * dx + dy * dy) / denom;
-    const Cx = p0.x + R * nx, Cy = p0.y + R * ny, rad = Math.abs(R);
-    const a0 = Math.atan2(p0.y - Cy, p0.x - Cx), a1 = Math.atan2(p1.y - Cy, p1.x - Cx);
-    let sweep = a1 - a0;
-    if (R > 0) { while (sweep <= 1e-6) sweep += 2 * Math.PI; while (sweep > 2 * Math.PI) sweep -= 2 * Math.PI; }
-    else { while (sweep >= -1e-6) sweep -= 2 * Math.PI; while (sweep < -2 * Math.PI) sweep += 2 * Math.PI; }
-    if (rad > 1e4) return null;
-    return { Cx, Cy, rad, a0, sweep };
-  }
-
-  // ---- clothoid (Euler spiral): G1 Hermite fit, linearly-varying curvature ----
-  // single-clothoid from pose (p0,th0) to (p1,th1); returns dense table or null
-  function clothoidTable(p0, p1, th0, th1, M) {
-    const dx = p1.x - p0.x, dy = p1.y - p0.y; const r = Math.hypot(dx, dy);
-    if (r < 1e-6) return null;
-    const tau = Math.atan2(dy, dx);
-    const ph0 = angWrap(th0 - tau), ph1 = angWrap(th1 - tau);
-    const dphi = ph1 - ph0;
-    const Hsin = (b) => { let s = 0; const N = 24; for (let k = 0; k <= N; k++) { const t = k / N; const th = ph0 + (dphi - b) * t + b * t * t; const w = (k === 0 || k === N) ? 1 : (k % 2 ? 4 : 2); s += w * Math.sin(th); } return s / (3 * N); };
-    const Hcos = (b) => { let s = 0; const N = 24; for (let k = 0; k <= N; k++) { const t = k / N; const th = ph0 + (dphi - b) * t + b * t * t; const w = (k === 0 || k === N) ? 1 : (k % 2 ? 4 : 2); s += w * Math.cos(th); } return s / (3 * N); };
-    // root of Hsin(b)=0 with the smallest |b| (closest to a gentle spiral)
-    let best = null; const lo = -6 * Math.PI, hi = 6 * Math.PI, STEPS = 240; let pb = lo, pf = Hsin(lo);
-    for (let k = 1; k <= STEPS; k++) {
-      const b = lo + (hi - lo) * k / STEPS, f = Hsin(b);
-      if (pf * f < 0) { let a = pb, bb = b, fa = pf; for (let it = 0; it < 44; it++) { const m = (a + bb) / 2, fm = Hsin(m); if (fa * fm <= 0) bb = m; else { a = m; fa = fm; } } const root = (a + bb) / 2; if (best === null || Math.abs(root) < Math.abs(best)) best = root; }
-      pb = b; pf = f;
-    }
-    if (best === null) return null;
-    const b = best, denom = Hcos(b); if (denom <= 1e-3) return null; // path would double back
-    const L = r / denom; if (!isFinite(L) || L <= 0 || L > r * 30) return null;
-    const thAbs = (t) => tau + ph0 + (dphi - b) * t + b * t * t;
-    const xs = new Array(M + 1), ys = new Array(M + 1), hs = new Array(M + 1), ks = new Array(M + 1);
-    xs[0] = p0.x; ys[0] = p0.y; hs[0] = thAbs(0); ks[0] = (dphi - b) / L;
-    let cx = 0, cy = 0; const dt = 1 / M;
-    for (let m = 1; m <= M; m++) { const tm = (m - 0.5) / M; const a = thAbs(tm); cx += Math.cos(a) * L * dt; cy += Math.sin(a) * L * dt; const t = m / M; xs[m] = p0.x + cx; ys[m] = p0.y + cy; hs[m] = thAbs(t); ks[m] = ((dphi - b) + 2 * b * t) / L; }
-    return { xs, ys, hs, ks };
-  }
-
-  // ---- sample the whole path into dense points with arclength + curvature ----
-  // waypoints: [{x,y, prevC, nextC, segType?}]  segType: bezier | line | arc | clothoid
-  function sample(waypoints, perSeg = 60) {
-    const pts = [];
-    const segs = waypoints.length - 1;
-    if (segs < 1) return { pts: [], length: 0, segs: 0, wpIdx: [] };
-    const steps = perSeg;
-
-    const segTypeAt = (i) => (waypoints[i] && waypoints[i].segType) || 'bezier';
-    const pointOf = (w) => ({ x: w.x, y: w.y });
-    const chordHeading = (a, b) => Math.atan2(b.y - a.y, b.x - a.x);
-    const outHeading = (i) => {
-      const w0 = waypoints[i], w1 = waypoints[i + 1];
-      const p0 = pointOf(w0), p1 = pointOf(w1), c0 = w0.nextC || p1;
-      return Math.hypot(c0.x - p0.x, c0.y - p0.y) > 1e-6 ? Math.atan2(c0.y - p0.y, c0.x - p0.x) : chordHeading(p0, p1);
-    };
-    const inHeading = (i) => {
-      const w0 = waypoints[i - 1], w1 = waypoints[i];
-      const p0 = pointOf(w0), p1 = pointOf(w1), c1 = w1.prevC || p0;
-      return Math.hypot(p1.x - c1.x, p1.y - c1.y) > 1e-6 ? Math.atan2(p1.y - c1.y, p1.x - c1.x) : chordHeading(p0, p1);
-    };
-    const blendedJointHeading = (i) => {
-      const prevIsClothoid = i > 0 && segTypeAt(i - 1) === 'clothoid';
-      const nextIsClothoid = i < segs && segTypeAt(i) === 'clothoid';
-      if (prevIsClothoid && nextIsClothoid) {
-        const a = inHeading(i), b = outHeading(i);
-        return a + 0.5 * angWrap(b - a);
-      }
-      if (prevIsClothoid) return inHeading(i);
-      if (nextIsClothoid) return outHeading(i);
-      return 0;
-    };
-    const jointHeading = waypoints.map((_, i) => blendedJointHeading(i));
-    const clothoidSegments = new Set();
-    const wpIdx = [0];
-
-    for (let i = 0; i < segs; i++) {
-      const w0 = waypoints[i], w1 = waypoints[i + 1];
-      const p0 = { x: w0.x, y: w0.y }, p1 = { x: w1.x, y: w1.y };
-      const c0 = w0.nextC, c1 = w1.prevC;
-      let type = w0.segType || 'bezier';
-      let arc = null, cloth = null, effType = type;
-      if (type === 'arc') { arc = arcSetup(p0, p1, c0); if (!arc) effType = 'line'; }
-      else if (type === 'clothoid') {
-        const th0 = (i > 0 && segTypeAt(i - 1) === 'clothoid') ? jointHeading[i] : outHeading(i);
-        const th1 = (i + 1 < segs && segTypeAt(i + 1) === 'clothoid') ? jointHeading[i + 1] : inHeading(i + 1);
-        cloth = clothoidTable(p0, p1, th0, th1, steps); if (!cloth) effType = 'bezier';
-      }
-      if (effType === 'clothoid') clothoidSegments.add(i);
-      for (let k = 0; k <= steps; k++) {
-        if (i > 0 && k === 0) continue; // avoid dup at seg joints
-        const t = k / steps;
-        let pos, head, curv;
-        if (effType === 'line') {
-          pos = { x: lerp(p0.x, p1.x, t), y: lerp(p0.y, p1.y, t) };
-          head = Math.atan2(p1.y - p0.y, p1.x - p0.x); curv = 0;
-        } else if (effType === 'arc') {
-          const ang = arc.a0 + arc.sweep * t;
-          pos = { x: arc.Cx + arc.rad * Math.cos(ang), y: arc.Cy + arc.rad * Math.sin(ang) };
-          head = ang + (arc.sweep >= 0 ? Math.PI / 2 : -Math.PI / 2);
-          curv = arc.rad > 1e-6 ? 1 / arc.rad : 0;
-        } else if (effType === 'clothoid') {
-          pos = { x: cloth.xs[k], y: cloth.ys[k] }; head = cloth.hs[k]; curv = Math.abs(cloth.ks[k]);
-        } else {
-          pos = bez(p0, c0, c1, p1, t);
-          const d = bezD(p0, c0, c1, p1, t), dd = bezDD(p0, c0, c1, p1, t);
-          const speed2 = d.x * d.x + d.y * d.y, cross = d.x * dd.y - d.y * dd.x;
-          head = Math.atan2(d.y, d.x); curv = speed2 > 1e-9 ? Math.abs(cross) / Math.pow(speed2, 1.5) : 0;
-        }
-        pts.push({ x: pos.x, y: pos.y, seg: i, t, heading: head, curv, s: 0 });
-      }
-      wpIdx.push(pts.length - 1);
-    }
-
-    // Blend curvature across adjacent clothoid joints. Position/heading already use a shared
-    // tangent; this removes artificial velocity dips from independent curvature estimates.
-    for (let j = 1; j < segs; j++) {
-      if (!clothoidSegments.has(j - 1) || !clothoidSegments.has(j)) continue;
-      const center = wpIdx[j];
-      if (center < 0) continue;
-      const next = Math.min(pts.length - 1, center + 1);
-      const jointK = 0.5 * ((pts[center].curv || 0) + (pts[next].curv || 0));
-      const span = Math.max(2, Math.round(steps * 0.16));
-      for (let off = -span; off <= span; off++) {
-        const idx = center + off;
-        if (idx < 0 || idx >= pts.length) continue;
-        if (!clothoidSegments.has(pts[idx].seg)) continue;
-        const u = 1 - Math.min(1, Math.abs(off) / span);
-        const w = u * u * (3 - 2 * u);
-        pts[idx].curv = lerp(pts[idx].curv || 0, jointK, w);
-      }
-    }
-
-    // arclength
-    let s = 0;
-    for (let i = 1; i < pts.length; i++) {
-      const dx = pts[i].x - pts[i - 1].x, dy = pts[i].y - pts[i - 1].y;
-      s += Math.hypot(dx, dy);
-      pts[i].s = s;
-    }
-    return { pts, length: s, segs, wpIdx };
+    return limits ? {
+      ...constraints,
+      maxVel: Math.min(constraints.maxVel, limits.maxSpeed),
+      maxAccel: Math.min(constraints.maxAccel, limits.maxAccel),
+      maxDecel: Math.min(constraints.maxDecel ?? constraints.maxAccel, limits.maxAccel),
+      maxCentripetalAccel: Math.min(constraints.maxCentripetalAccel ?? constraints.maxAccel, limits.maxCornerAccel),
+      maxAngVel: Math.min(constraints.maxAngVel, limits.maxAngVel),
+      maxAngAccel: Math.min(constraints.maxAngAccel, limits.maxAngAccel),
+      maxAngDecel: Math.min(constraints.maxAngDecel || constraints.maxAngAccel, limits.maxAngAccel),
+    } : constraints;
   }
 
   // ---- trapezoidal velocity profile with curvature (centripetal) limit ----
@@ -275,7 +120,7 @@
     const accelG = Math.max(0.1, c.maxAccel);
     const decelG = (c.maxDecel != null && c.maxDecel > 0) ? c.maxDecel : accelG;
     const aFwd = new Array(n).fill(accelG), aBack = new Array(n).fill(decelG);
-    const rangeAngV = new Array(n).fill(Infinity);
+    const rangeAngV = new Array(n).fill(Infinity), rangeAngA = new Array(n).fill(Infinity);
     // Index i describes the interval (i - 1, i). Evaluating overlap instead of
     // requiring both endpoints to be inside a policy preserves very short
     // transition windows that fall between geometry samples.
@@ -284,7 +129,7 @@
     if (ranges.length || headingTransitions.length) {
       for (let i = 0; i < n; i++) {
         const f = pts[i].s / totalS;
-        let rv = Infinity, ra = Infinity, rd = Infinity, rw = Infinity;
+        let rv = Infinity, ra = Infinity, rd = Infinity, rw = Infinity, rwa = Infinity;
         for (let r = 0; r < ranges.length; r++) {
           const R = ranges[r]; const lo = Math.min(R.f0, R.f1), hi = Math.max(R.f0, R.f1);
           if (f >= lo && f <= hi) {
@@ -292,19 +137,23 @@
             if (R.maxAccel > 0) ra = Math.min(ra, R.maxAccel);
             if (R.maxDecel > 0) rd = Math.min(rd, R.maxDecel);
             if (R.maxAngVel > 0) rw = Math.min(rw, R.maxAngVel);
+            if (R.maxAngAccel > 0) rwa = Math.min(rwa, R.maxAngAccel);
           }
         }
         if (rv < Infinity) { v[i] = Math.min(v[i], rv); vLimit[i] = Math.min(vLimit[i], rv); }
         if (ra < Infinity) aFwd[i] = Math.min(accelG, ra);
         if (rd < Infinity) aBack[i] = Math.min(decelG, rd);
         if (rw < Infinity) rangeAngV[i] = rw * Math.PI / 180;
+        if (rwa < Infinity) rangeAngA[i] = rwa * Math.PI / 180;
       }
       let translationFollowing = false;
       for (let i = 1; i < n; i++) {
         const start = pts[i - 1].s / totalS, end = pts[i].s / totalS;
         const overlaps = (lo, hi) => Math.min(end, hi) - Math.max(start, lo) >= -1e-9;
         const activeRanges = ranges.filter((R) => overlaps(Math.min(R.f0, R.f1), Math.max(R.f0, R.f1)));
-        const activeTransitions = headingTransitions.filter((policy) => overlaps(policy.start, policy.end));
+        const activeTransitions = headingTransitions.filter((policy) => (
+          Math.min(end, policy.end) - Math.max(start, policy.start) > 1e-9
+        ));
         const activePolicies = activeRanges.length + activeTransitions.length;
         if (activePolicies > 0) {
           translationFollowing = activeRanges.every((R) => R.rotationPriority === 'translation')
@@ -319,6 +168,7 @@
     const head = opts.heading;
     const Wmax = (c.maxAngVel || 0) * Math.PI / 180;
     const Aang = (c.maxAngAccel || 0) * Math.PI / 180;
+    const AangDecel = (c.maxAngDecel || c.maxAngAccel || 0) * Math.PI / 180;
     if (head && head.length === n && Wmax > 1e-4) {
       const g = new Array(n).fill(0), dth = new Array(n).fill(0);
       for (let i = 1; i < n; i++) { const ds = pts[i].s - pts[i - 1].s; const dd = angWrap(head[i] - head[i - 1]); dth[i] = Math.abs(dd); g[i] = ds > 1e-6 ? dd / ds : 0; }
@@ -328,7 +178,7 @@
       stopSet.forEach(idx => { if (idx >= 0 && idx < n) w[idx] = 0; });
       if (Aang > 1e-4) {
         for (let i = 1; i < n; i++) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i - 1] * w[i - 1] + 2 * Aang * dth[i])));
-        for (let i = n - 2; i >= 0; i--) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i + 1] * w[i + 1] + 2 * Aang * dth[i + 1])));
+        for (let i = n - 2; i >= 0; i--) w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i + 1] * w[i + 1] + 2 * AangDecel * dth[i + 1])));
       }
       for (let i = 0; i < n; i++) { const gi = Math.abs(g[i]); const translationInterval = i > 0 && translationPriority[i]; if (!translationInterval && gi > 1e-4) { const vr = w[i] / gi; if (vr < v[i] - 0.05) rotLimited[i] = 1; v[i] = Math.min(v[i], vr); } }
     }
@@ -345,43 +195,45 @@
       const ds = pts[i + 1].s - pts[i].s;
       v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i + 1] * v[i + 1] + 2 * aBack[i] * ds)));
     }
-    // Enforce angular acceleration in generated timing instead of manufacturing
-    // visible velocity constraint ranges around ordinary moving turns.
+    // Enforce signed angular acceleration in the generated timing itself. A
+    // local window scale changes omega linearly and alpha quadratically, which
+    // avoids the alternating zero-speed samples produced by point-wise caps.
     if (head && head.length === n && Aang > 1e-4) {
-      const angularBudget = Aang * 0.8;
-      const intervalDt = (index, candidate, candidateIndex) => {
-        const ds = pts[index].s - pts[index - 1].s;
-        const before = candidateIndex === index - 1 ? candidate : v[index - 1];
-        const after = candidateIndex === index ? candidate : v[index];
-        return 2 * ds / Math.max(1e-6, before + after);
-      };
-      const intervalOmega = (index, candidate, candidateIndex) => {
-        if (index <= 0 || index >= n) return 0;
-        const dt = intervalDt(index, candidate, candidateIndex);
-        return dt > 1e-9 ? Math.abs(angWrap(head[index] - head[index - 1])) / dt : 0;
-      };
-      const capInterval = (interval, referenceInterval, variableIndex, referenceDtInterval) => {
-        const referenceOmega = intervalOmega(referenceInterval, v[variableIndex], -1);
-        const allowed = (candidate) => intervalOmega(interval, candidate, variableIndex) <= referenceOmega + angularBudget * intervalDt(referenceDtInterval, candidate, variableIndex) + 1e-9;
-        if (allowed(v[variableIndex])) return false;
-        let low = 0, high = v[variableIndex];
-        for (let iteration = 0; iteration < 28; iteration++) {
-          const candidate = (low + high) / 2;
-          if (allowed(candidate)) low = candidate; else high = candidate;
-        }
-        v[variableIndex] = low;
-        return true;
-      };
       const stopped = new Set(opts.stopIdx || []);
+      const intervalDt = (index) => {
+        const ds = pts[index].s - pts[index - 1].s;
+        return 2 * ds / Math.max(1e-6, v[index - 1] + v[index]);
+      };
+      const intervalOmega = (index) => {
+        const dt = intervalDt(index);
+        return dt > 1e-9 ? angWrap(head[index] - head[index - 1]) / dt : 0;
+      };
       const translationInterval = (interval) => interval > 0 && interval < n && translationPriority[interval];
-      for (let pass = 0; pass < 20; pass++) {
+      for (let pass = 0; pass < 40; pass++) {
+        const caps = v.slice();
         let changed = false;
         for (let interval = 2; interval < n; interval++) {
-          if (!stopped.has(interval - 1) && !translationInterval(interval)) changed = capInterval(interval, interval - 1, interval, interval) || changed;
+          if (stopped.has(interval - 1) || translationInterval(interval - 1) || translationInterval(interval)) continue;
+          const beforeDt = intervalDt(interval - 1), afterDt = intervalDt(interval);
+          if (beforeDt <= 1e-9 || afterDt <= 1e-9) continue;
+          const beforeOmega = intervalOmega(interval - 1), afterOmega = intervalOmega(interval);
+          const omegaDirection = Math.sign(beforeOmega) || Math.sign(afterOmega);
+          const signedAcceleration = omegaDirection * (afterOmega - beforeOmega) / ((beforeDt + afterDt) / 2);
+          const measured = Math.abs(signedAcceleration);
+          const directionalLimit = beforeOmega * afterOmega < 0
+            ? Math.min(Aang, AangDecel)
+            : signedAcceleration < 0 ? AangDecel : Aang;
+          const localLimit = Math.min(directionalLimit, rangeAngA[interval - 2], rangeAngA[interval - 1], rangeAngA[interval]) * 0.8;
+          if (measured <= localLimit * 1.001 + 1e-9) continue;
+          const scale = Math.min(0.98, Math.sqrt(localLimit / measured) * 0.98);
+          for (let index = interval - 2; index <= interval; index++) {
+            if (stopped.has(index)) continue;
+            caps[index] = Math.min(caps[index], v[index] * scale);
+            rotLimited[index] = Math.max(rotLimited[index], 2);
+          }
+          changed = true;
         }
-        for (let interval = n - 2; interval >= 1; interval--) {
-          if (!stopped.has(interval) && !translationInterval(interval) && !translationInterval(interval + 1)) changed = capInterval(interval, interval + 1, interval - 1, interval + 1) || changed;
-        }
+        for (let i = 0; i < n; i++) v[i] = caps[i];
         for (let i = 1; i < n; i++) {
           const ds = pts[i].s - pts[i - 1].s;
           v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * aFwd[i] * ds)));
@@ -439,23 +291,6 @@
     return { v, t, totalTime: t[n - 1] + terminalDelay, holds, turns, jiggles, actionDistance: jiggleDistance, rotLimited };
   }
 
-  // heading anchors -> continuous heading along arclength fraction f in [0,1]
-  // anchors: [{f, rad}] must include f=0 and f=1, sorted
-  function headingAt(f, anchors) {
-    if (!anchors.length) return 0;
-    if (f <= anchors[0].f) return anchors[0].rad;
-    for (let i = 0; i < anchors.length - 1; i++) {
-      const a = anchors[i], b = anchors[i + 1];
-      if (f >= a.f && f <= b.f) {
-        const tt = (b.f - a.f) < 1e-6 ? 0 : (f - a.f) / (b.f - a.f);
-        // smoothstep for nicer rotation
-        const ss = tt * tt * (3 - 2 * tt);
-        return angLerp(a.rad, b.rad, ss);
-      }
-    }
-    return anchors[anchors.length - 1].rad;
-  }
-
   // pose at time given sampled pts, profile times, and heading anchors / mode
   function poseAtTime(time, pts, prof, anchors, mode, rev) {
     const n = pts.length;
@@ -467,7 +302,7 @@
         const hd = prof.holds[k];
         if (time >= hd.t0 - 1e-9 && time <= hd.t1 + 1e-9) {
           const p = pts[hd.idx]; const f = pts[n - 1].s > 1e-6 ? p.s / pts[n - 1].s : 0;
-          let heading = mode === 'tank' ? p.heading : headingAt(f, anchors); if (rev) heading += Math.PI;
+          let heading = Number.isFinite(hd.heading) ? hd.heading : mode === 'tank' ? p.heading : headingAt(f, anchors); if (rev) heading += Math.PI;
           return { x: p.x, y: p.y, heading, speed: 0, s: p.s, f, hold: true };
         }
       }
@@ -478,7 +313,16 @@
         if (time >= turn.t0 - 1e-9 && time <= turn.t1 + 1e-9) {
           const p = pts[turn.idx], u = Math.max(0, Math.min(1, (time - turn.t0) / Math.max(1e-9, turn.t1 - turn.t0)));
           const q = 10 * u ** 3 - 15 * u ** 4 + 6 * u ** 5, f = pts[n - 1].s > 1e-6 ? p.s / pts[n - 1].s : 0;
-          let heading = turn.start + turn.delta * q; if (rev) heading += Math.PI;
+          let heading;
+          if (turn.headingSamples && turn.headingSamples.length) {
+            let before = turn.headingSamples[0], after = turn.headingSamples[turn.headingSamples.length - 1];
+            for (let i = 1; i < turn.headingSamples.length; i++) {
+              if (turn.headingSamples[i].t >= time) { before = turn.headingSamples[i - 1]; after = turn.headingSamples[i]; break; }
+            }
+            const span = Math.max(1e-9, after.t - before.t);
+            heading = before.heading + angWrap(after.heading - before.heading) * Math.max(0, Math.min(1, (time - before.t) / span));
+          } else heading = turn.start + turn.delta * q;
+          if (rev) heading += Math.PI;
           return { x: p.x, y: p.y, heading, speed: 0, s: p.s, f, turn: true };
         }
       }
@@ -502,7 +346,7 @@
           heading,
           speed: Math.abs(phase.velocity) * config.distanceM / jiggle.strokeDuration,
           s: p.s + stroke * config.distanceM * 2 + config.distanceM * phase.travel,
-          f: 1,
+          f: Number.isFinite(p.f) ? p.f : jiggle.idx / Math.max(1, pts.length - 1),
           jiggle: true,
         };
       }
@@ -514,54 +358,32 @@
       while (lo < hi) { const mid = (lo + hi) >> 1; if (T[mid] < time) lo = mid + 1; else hi = mid; }
       i = lo;
     }
-    const t0 = T[i - 1], t1 = T[i];
+    let t0 = T[i - 1], departureHeading = null; const t1 = T[i];
+    for (const actions of [prof.turns, prof.jiggles, prof.holds]) {
+      if (!actions) continue;
+      for (const action of actions) {
+        if (action.idx !== i - 1 || action.t1 <= t0) continue;
+        t0 = action.t1;
+        if (action.headingSamples && action.headingSamples.length) departureHeading = action.headingSamples[action.headingSamples.length - 1].heading;
+        else if (Number.isFinite(action.start) && Number.isFinite(action.delta)) departureHeading = action.start + action.delta;
+        else if (Number.isFinite(action.heading)) departureHeading = action.heading;
+        else if (Number.isFinite(action.baseRad)) departureHeading = action.baseRad;
+      }
+    }
     const u = t1 - t0 > 1e-6 ? Math.max(0, Math.min(1, (time - t0) / (t1 - t0))) : 0;
     const a = pts[i - 1], b = pts[i];
     const x = lerp(a.x, b.x, u), y = lerp(a.y, b.y, u);
     const s = lerp(a.s, b.s, u);
     const f = pts[n - 1].s > 1e-6 ? s / pts[n - 1].s : 0;
     let heading;
-    if (mode === 'tank') heading = Math.atan2(b.y - a.y, b.x - a.x);
+    if (prof.head && prof.head.length === n) {
+      const startHeading = departureHeading == null ? prof.head[i - 1] : departureHeading;
+      heading = startHeading + angWrap(prof.head[i] - startHeading) * u;
+    } else if (mode === 'tank') heading = Math.atan2(b.y - a.y, b.x - a.x);
     else heading = headingAt(f, anchors);
     if (rev) heading += Math.PI;
     const speed = lerp(prof.v[i - 1], prof.v[i], u);
     return { x, y, heading, speed, s, f };
-  }
-
-  // build heading anchors from a flat list of {f, rad} entries (waypoint thetas + rotation targets)
-  // ensures coverage of f=0 and f=1 so heading is defined across the whole path
-  function buildAnchors(entries) {
-    const arr = (entries || [])
-      .filter(e => e && isFinite(e.f) && isFinite(e.rad))
-      .map(e => ({ f: Math.max(0, Math.min(1, e.f)), rad: e.rad }))
-      .sort((a, b) => a.f - b.f);
-    if (!arr.length) return [{ f: 0, rad: 0 }, { f: 1, rad: 0 }];
-    if (arr[0].f > 1e-6) arr.unshift({ f: 0, rad: arr[0].rad });
-    if (arr[arr.length - 1].f < 1 - 1e-6) arr.push({ f: 1, rad: arr[arr.length - 1].rad });
-    return arr;
-  }
-
-  // point + fraction lookup by arclength fraction f (for placing markers/targets)
-  function pointAtFraction(f, pts) {
-    const n = pts.length; if (!n) return { x: 0, y: 0, heading: 0 };
-    const target = f * pts[n - 1].s;
-    let lo = 1, hi = n - 1;
-    if (target <= 0) return { ...pts[0] };
-    if (target >= pts[n - 1].s) return { ...pts[n - 1] };
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (pts[mid].s < target) lo = mid + 1; else hi = mid; }
-    const a = pts[lo - 1], b = pts[lo];
-    const u = (target - a.s) / Math.max(1e-6, b.s - a.s);
-    return { x: lerp(a.x, b.x, u), y: lerp(a.y, b.y, u), heading: angLerp(a.heading, b.heading, u) };
-  }
-
-  // nearest fraction on path to a world point (for placing markers by click)
-  function nearestFraction(wx, wy, pts) {
-    let best = 0, bd = Infinity;
-    for (let i = 0; i < pts.length; i++) {
-      const dx = pts[i].x - wx, dy = pts[i].y - wy; const d = dx * dx + dy * dy;
-      if (d < bd) { bd = d; best = i; }
-    }
-    return pts.length > 1 ? pts[best].s / pts[pts.length - 1].s : 0;
   }
 
   // Return distinct ordered visits near a field point. Unlike nearestFraction,
@@ -616,20 +438,6 @@
     return clusters.map((cluster) => cluster.best).sort((a, b) => a.s - b.s);
   }
 
-  // auto control handles for a fresh waypoint (smooth Catmull-Rom-ish)
-  function autoHandles(waypoints, i) {
-    const w = waypoints[i];
-    const prev = waypoints[i - 1] || w, next = waypoints[i + 1] || w;
-    let dx = next.x - prev.x, dy = next.y - prev.y;
-    const len = Math.hypot(dx, dy) || 1;
-    dx /= len; dy /= len;
-    const handle = Math.max(0.6, len * 0.28);
-    return {
-      prevC: { x: w.x - dx * handle, y: w.y - dy * handle },
-      nextC: { x: w.x + dx * handle, y: w.y + dy * handle },
-    };
-  }
-
   // ---- per-point engineering metrics aligned to the sampled path ----
   // returns arrays + maxima for velocity / acceleration / angular velocity / curvature
   function metrics(pts, prof, anchors, mode) {
@@ -656,38 +464,6 @@
     }
     return { v, accel, omega, curv, head, vMax, aMax, wMax, kMax };
   }
-
-  // ---- colour scales for the metric overlays ----
-  function hex2rgb(hx) { return [parseInt(hx.slice(1, 3), 16), parseInt(hx.slice(3, 5), 16), parseInt(hx.slice(5, 7), 16)]; }
-  const RAMPS_M = {
-    velocity:  [[0, '#3f6fd0'], [0.4, '#2fa36b'], [0.7, '#d28f37'], [1, '#cf4f4a']],
-    accel:     [[0, '#3f6fd0'], [0.5, '#4d535e'], [1, '#cf4f4a']],
-    angvel:    [[0, '#343d47'], [0.5, '#2f8fa6'], [1, '#5fcfe6']],
-    curvature: [[0, '#39342b'], [0.5, '#a87c30'], [1, '#edbf5c']],
-  };
-  function metricColor(mode, tt) {
-    const s = RAMPS_M[mode] || RAMPS_M.velocity;
-    let t = Math.max(0, Math.min(1, tt));
-    for (let i = 0; i < s.length - 1; i++) {
-      const a = s[i], b = s[i + 1];
-      if (t >= a[0] && t <= b[0]) {
-        const u = (t - a[0]) / Math.max(1e-6, b[0] - a[0]);
-        const ca = hex2rgb(a[1]), cb = hex2rgb(b[1]);
-        return `rgb(${Math.round(ca[0] + (cb[0] - ca[0]) * u)},${Math.round(ca[1] + (cb[1] - ca[1]) * u)},${Math.round(ca[2] + (cb[2] - ca[2]) * u)})`;
-      }
-    }
-    return s[s.length - 1][1];
-  }
-  function metricGradient(mode) {
-    const s = RAMPS_M[mode] || RAMPS_M.velocity;
-    return 'linear-gradient(90deg,' + s.map((x) => x[1] + ' ' + Math.round(x[0] * 100) + '%').join(',') + ')';
-  }
-  const METRICS = [
-    { id: 'velocity', label: 'Velocity', unit: 'm/s', kind: 'seq' },
-    { id: 'accel', label: 'Acceleration', unit: 'm/s\u00b2', kind: 'div' },
-    { id: 'angvel', label: 'Angular velocity', unit: '\u00b0/s', kind: 'div' },
-    { id: 'curvature', label: 'Curvature', unit: '1/m', kind: 'seq' },
-  ];
 
   // ---- path checks ----------------------------------------------------------
   // Only measured constraint violations are issues. Expected slowdowns are
@@ -728,170 +504,6 @@
     return checks;
   }
 
-  // Path type belongs to the SEGMENT between two waypoints. The list stays honest:
-  // only true geometry types live here, grouped Basic / Spline. Snapping, heading-hold,
-  // approach and auto-smooth are tooling/constraint behaviours and live elsewhere.
-  const SEGTYPES = [
-    { id: 'line', label: 'Straight', abbr: 'LIN', group: 'Basic', hint: 'Straight line \u2014 control handles ignored.' },
-    { id: 'arc', label: 'Arc', abbr: 'ARC', group: 'Basic', hint: 'Constant-radius turn, tangent to the out-handle.' },
-    { id: 'bezier', label: 'B\u00e9zier', abbr: 'BEZ', group: 'Spline', hint: 'Hand-shaped spline driven by the control handles.' },
-    { id: 'clothoid', label: 'Clothoid', abbr: 'CLO', group: 'Spline', hint: 'Euler spiral \u2014 curvature ramps smoothly (swerve-friendly).' },
-  ];
-
-  // ---- constraint-range anchoring -------------------------------------------
-  // A range can be anchored three ways. We resolve each to
-  // concrete arclength fractions [f0,f1] against the CURRENT path so the profile
-  // engine + overlays stay simple, while the stored anchor keeps the range
-  // attached the way the user intends as the path is edited.
-  //   param : fixed percent of the path        {f0,f1}
-  //   dist  : fixed metres of travel           {d0,d1}
-  //   wp    : local positions within segments  {w0,t0,w1,t1}; omitted t values
-  //           preserve whole-waypoint spans from older project files
-  function waypointFracs(doc, smp) {
-    const pts = smp.pts; const total = smp.length || 1; const n = doc.waypoints.length;
-    if (!pts.length) return doc.waypoints.map(() => 0);
-    if (Array.isArray(smp.wpIdx) && smp.wpIdx.length === n) return smp.wpIdx.map((index) => pts[Math.max(0, Math.min(pts.length - 1, index))].s / total);
-    const perSeg = (pts.length - 1) / Math.max(1, n - 1);
-    return doc.waypoints.map((_, k) => { const i = Math.min(pts.length - 1, Math.round(k * perSeg)); return pts[i].s / total; });
-  }
-  function resolvedHeadingTransition(waypoint) {
-    const value = (waypoint && waypoint.headingTransition) || {};
-    return { placement: value.placement || 'after', rotationPriority: value.rotationPriority || 'heading', distanceM: value.distanceM != null ? value.distanceM : 0.75 };
-  }
-  function headingTransitionWindows(waypoints, modes, breaks, wpFrac, totalDistance) {
-    const total = Math.max(totalDistance || 0, 1e-9), windows = [];
-    for (let segment = 1; segment < modes.length; segment++) {
-      if (modes[segment] === modes[segment - 1] || breaks[segment]) continue;
-      const policy = resolvedHeadingTransition(waypoints[segment]);
-      const boundary = Math.max(0, Math.min(1, wpFrac[segment] != null ? wpFrac[segment] : 0));
-      const beforeShare = policy.placement === 'before' ? 1 : policy.placement === 'split' ? 0.5 : 0;
-      const previousValue = wpFrac[segment - 1] != null ? wpFrac[segment - 1] : boundary;
-      const nextValue = wpFrac[segment + 1] != null ? wpFrac[segment + 1] : boundary;
-      const previousLength = Math.max(0, boundary - Math.max(0, Math.min(1, previousValue)));
-      const nextLength = Math.max(0, Math.max(0, Math.min(1, nextValue)) - boundary);
-      const before = Math.min(previousLength, policy.distanceM * beforeShare / total);
-      const after = Math.min(nextLength, policy.distanceM * (1 - beforeShare) / total);
-      windows.push({ ...policy, waypointIndex: segment, start: boundary - before, end: boundary + after });
-    }
-    return windows;
-  }
-  function headingTransitionGoals(modes, breaks, wpIdx, pts, anchorsByLaw) {
-    const totalDistance = pts.length ? pts[pts.length - 1].s : 0, goals = [];
-    for (let segment = 1; segment < modes.length; segment++) {
-      const law = modes[segment];
-      if ((law !== 'manual' && law !== 'targets') || modes[segment - 1] === law || breaks[segment]) continue;
-      let spanEndSegment = segment;
-      while (spanEndSegment + 1 < modes.length && modes[spanEndSegment + 1] === law && !breaks[spanEndSegment + 1]) spanEndSegment++;
-      const boundaryIndex = Math.max(0, Math.min(pts.length - 1, wpIdx[segment]));
-      const spanEndIndex = Math.max(boundaryIndex, Math.min(pts.length - 1, wpIdx[spanEndSegment + 1]));
-      const boundaryDistance = pts[boundaryIndex].s, spanEndDistance = pts[spanEndIndex].s;
-      const anchor = anchorsByLaw[law].find((candidate) => {
-        const distance = Math.max(0, Math.min(1, candidate.f)) * totalDistance;
-        return distance >= boundaryDistance - 1e-9 && distance <= spanEndDistance + 1e-9;
-      });
-      if (anchor) goals.push({ segmentIndex: segment, distanceM: Math.max(boundaryDistance, Math.max(0, Math.min(1, anchor.f)) * totalDistance), heading: anchor.rad, spanEndIndex });
-    }
-    return goals;
-  }
-  function smoothHeadingTransitions(raw, modes, breaks, wpIdx, pts, waypoints, transitionGoals) {
-    if (!raw.length) return [];
-    transitionGoals = transitionGoals || [];
-    const unwrappedRaw = [raw[0]];
-    for (let i = 1; i < raw.length; i++) unwrappedRaw.push(unwrappedRaw[i - 1] + angWrap(raw[i] - unwrappedRaw[i - 1]));
-    const out = unwrappedRaw.slice();
-    const protectedAnchorIndices = new Set();
-    for (let segment = 1; segment < modes.length; segment++) {
-      if (modes[segment] === modes[segment - 1] || breaks[segment]) continue;
-      const boundary = Math.max(1, Math.min(out.length - 1, wpIdx[segment]));
-      const previousBoundary = Math.max(0, Math.min(boundary - 1, wpIdx[segment - 1]));
-      const nextBoundary = Math.max(boundary, Math.min(out.length - 1, wpIdx[segment + 1]));
-      let outgoingStart = Math.min(boundary + 1, nextBoundary);
-      while (outgoingStart < nextBoundary && pts[outgoingStart].s - pts[boundary].s <= 1e-9) outgoingStart++;
-      const policy = resolvedHeadingTransition(waypoints[segment]);
-      let protectedBefore = -1;
-      protectedAnchorIndices.forEach((index) => { if (index <= boundary) protectedBefore = Math.max(protectedBefore, index); });
-      const boundaryProtected = protectedBefore === boundary;
-      const authoredBeforeShare = policy.placement === 'before' ? 1 : policy.placement === 'split' ? 0.5 : 0;
-      const beforeShare = boundaryProtected ? 0 : authoredBeforeShare;
-      const incoming = boundaryProtected ? out[boundary] : out[boundary - 1];
-      const transitionGoal = transitionGoals.find((goal) => goal.segmentIndex === segment);
-      if (transitionGoal) {
-        const boundaryDistance = pts[boundary].s;
-        const beforeDistance = Math.min(policy.distanceM * beforeShare, Math.max(0, boundaryDistance - pts[previousBoundary].s));
-        const goalAtBoundary = transitionGoal.distanceM <= boundaryDistance + 1e-9;
-        const afterDistance = Math.min(policy.distanceM * (1 - beforeShare), Math.max(0, (goalAtBoundary ? pts[transitionGoal.spanEndIndex].s : transitionGoal.distanceM) - boundaryDistance));
-        const requestedStart = boundaryDistance - beforeDistance;
-        const requestedEnd = goalAtBoundary ? boundaryDistance + afterDistance : Math.min(transitionGoal.distanceM, boundaryDistance + afterDistance);
-        let startIndex = previousBoundary;
-        while (startIndex < boundary && pts[startIndex].s < requestedStart - 1e-9) startIndex++;
-        if (protectedBefore >= startIndex && protectedBefore < boundary) startIndex = protectedBefore + 1;
-        let anchorIndex = boundary;
-        while (anchorIndex < transitionGoal.spanEndIndex && pts[anchorIndex].s < transitionGoal.distanceM - 1e-9) anchorIndex++;
-        let endIndex = startIndex;
-        while (endIndex < transitionGoal.spanEndIndex && pts[endIndex].s < requestedEnd - 1e-9) endIndex++;
-        const goalIndex = goalAtBoundary ? endIndex : anchorIndex;
-        const startHeading = startIndex < boundary ? out[startIndex] : incoming;
-        const goalHeading = startHeading + angWrap(transitionGoal.heading - startHeading);
-        const startDistance = pts[startIndex].s, endDistance = pts[endIndex].s;
-        for (let i = startIndex; i <= goalIndex; i++) {
-          const t = endDistance > startDistance + 1e-9 ? Math.max(0, Math.min(1, (pts[i].s - startDistance) / (endDistance - startDistance))) : 1;
-          const smooth = t * t * t * (t * (t * 6 - 15) + 10);
-          out[i] = startHeading + (goalHeading - startHeading) * smooth;
-        }
-        if (goalIndex < transitionGoal.spanEndIndex) {
-          const nextIndex = goalIndex + 1;
-          const branchOffset = goalHeading + angWrap(raw[nextIndex] - goalHeading) - unwrappedRaw[nextIndex];
-          for (let i = nextIndex; i <= transitionGoal.spanEndIndex; i++) out[i] = unwrappedRaw[i] + branchOffset;
-        }
-        protectedAnchorIndices.add(goalIndex);
-        continue;
-      }
-      const outgoing = incoming + angWrap(raw[outgoingStart] - incoming), delta = outgoing - incoming;
-      const beforeDistance = Math.min(policy.distanceM * beforeShare, Math.max(0, pts[boundary].s - pts[previousBoundary].s));
-      if (beforeDistance > 1e-9) {
-        const startDistance = pts[boundary].s - beforeDistance;
-        for (let i = previousBoundary; i < boundary; i++) {
-          if (pts[i].s < startDistance - 1e-9) continue;
-          if (i <= protectedBefore) continue;
-          const t = Math.max(0, Math.min(1, (pts[i].s - startDistance) / beforeDistance));
-          const smooth = t * t * t * (t * (t * 6 - 15) + 10);
-          out[i] += delta * beforeShare * smooth;
-        }
-      }
-      const boundaryHeading = incoming + delta * beforeShare;
-      const afterDistance = Math.min(policy.distanceM * (1 - beforeShare), Math.max(0, pts[nextBoundary].s - pts[boundary].s));
-      let previous = boundaryHeading;
-      const afterStartIndex = boundaryProtected ? boundary + 1 : boundary;
-      for (let i = afterStartIndex; i <= nextBoundary; i++) {
-        const base = previous + angWrap(raw[i === boundary ? outgoingStart : i] - previous);
-        const t = afterDistance > 1e-9 ? Math.max(0, Math.min(1, (pts[i].s - pts[boundary].s) / afterDistance)) : 1;
-        const smooth = t * t * t * (t * (t * 6 - 15) + 10);
-        out[i] = base + (boundaryHeading - outgoing) * (1 - smooth);
-        previous = out[i];
-      }
-    }
-    return out;
-  }
-  function effectiveRanges(doc, smp) {
-    const ranges = doc.ranges || []; const total = smp.length || 1;
-    const wf = ranges.some((r) => r.anchor === 'wp') ? waypointFracs(doc, smp) : null;
-    return ranges.map((r) => {
-      let f0 = r.f0, f1 = r.f1;
-      if (r.anchor === 'dist') { f0 = (r.d0 != null ? r.d0 : (r.f0 || 0) * total) / total; f1 = (r.d1 != null ? r.d1 : (r.f1 || 0) * total) / total; }
-      else if (r.anchor === 'wp' && wf) {
-        const localFraction = (waypoint, local, fallback) => {
-          if (local == null) return wf[Math.max(0, Math.min(wf.length - 1, waypoint != null ? waypoint : fallback))];
-          const segment = Math.max(0, Math.min(wf.length - 2, Math.round(waypoint != null ? waypoint : 0)));
-          const t = Math.max(0, Math.min(1, local));
-          return wf[segment] + (wf[segment + 1] - wf[segment]) * t;
-        };
-        f0 = localFraction(r.w0, r.t0, 0); f1 = localFraction(r.w1, r.t1, wf.length - 1);
-      }
-      f0 = Math.max(0, Math.min(1, f0 || 0)); f1 = Math.max(0, Math.min(1, f1 || 0));
-      return { f0, f1, maxVel: r.maxVel, maxAccel: r.maxAccel, maxDecel: r.maxDecel, maxAngVel: r.maxAngVel, maxAngAccel: r.maxAngAccel, rotationPriority: r.rotationPriority, anchor: r.anchor || 'param', name: r.name };
-    });
-  }
-
   function headingWithTranslationPriority(doc, robot, pts, prof, desired, ranges, transitions) {
     transitions = transitions || [];
     if (!robot || robot.drive === 'tank' || (!ranges.some((range) => range.rotationPriority === 'translation') && !transitions.some((transition) => transition.rotationPriority === 'translation')) || desired.length < 2) return desired;
@@ -900,7 +512,9 @@
       const start = Math.min(before, after), end = Math.max(before, after);
       const overlaps = (lo, hi) => Math.min(end, hi) - Math.max(start, lo) >= -1e-9;
       const active = ranges.filter((range) => overlaps(Math.min(range.f0, range.f1), Math.max(range.f0, range.f1)));
-      const activeTransitions = transitions.filter((transition) => overlaps(transition.start, transition.end));
+      const activeTransitions = transitions.filter((transition) => (
+        Math.min(end, transition.end) - Math.max(start, transition.start) > 1e-9
+      ));
       return active.length + activeTransitions.length > 0
         && active.every((range) => range.rotationPriority === 'translation')
         && activeTransitions.every((transition) => transition.rotationPriority === 'translation');
@@ -988,54 +602,6 @@
     prof.headingCatchupDuration = duration;
   }
 
-  function featureFraction(feature, smp) {
-    const total = smp.length || 1;
-    const raw = feature && feature.anchor === 'dist'
-      ? (feature.d != null ? feature.d : (feature.f || 0) * total) / total
-      : (feature && feature.f) || 0;
-    return Math.max(0, Math.min(1, raw));
-  }
-
-  function remapWaypointRange(range, oldToNew, removedIndex, newCount) {
-    if (!range || range.anchor !== 'wp') return range;
-    const next = { ...range };
-    const last = Math.max(0, newCount - 1);
-    if (range.t0 != null || range.t1 != null) {
-      const remapLocal = (segment, local) => {
-        const authored = Number.isInteger(segment) ? segment : 0;
-        const oldSegment = Math.max(0, Math.min(oldToNew.length - 2, authored));
-        const oldLocal = Math.max(0, Math.min(1, local != null ? local : (authored >= oldToNew.length - 1 ? 1 : 0)));
-        const a = oldToNew[oldSegment], b = oldToNew[oldSegment + 1];
-        if (!Number.isInteger(a) || !Number.isInteger(b) || newCount < 2) {
-          const fallback = Number.isInteger(a) ? a : Math.max(0, Math.min(last, oldSegment));
-          return { segment: Math.max(0, Math.min(Math.max(0, newCount - 2), fallback)), local: oldLocal };
-        }
-        const position = Math.max(0, Math.min(last, a + (b - a) * oldLocal));
-        const mappedSegment = Math.min(Math.max(0, newCount - 2), Math.floor(position));
-        return { segment: mappedSegment, local: position >= last ? 1 : position - mappedSegment };
-      };
-      let start = remapLocal(range.w0, range.t0), end = remapLocal(range.w1, range.t1);
-      if (start.segment + start.local > end.segment + end.local) { const swap = start; start = end; end = swap; }
-      next.w0 = start.segment; next.t0 = start.local; next.w1 = end.segment; next.t1 = end.local;
-      return next;
-    }
-    const oldStart = Number.isInteger(range.w0) ? range.w0 : 0;
-    const oldEnd = Number.isInteger(range.w1) ? range.w1 : oldToNew.length - 1;
-    const resolve = (value, start) => {
-      const mapped = oldToNew[value];
-      if (Number.isInteger(mapped)) return mapped;
-      if (value === removedIndex) return start ? Math.min(value, last) : Math.max(0, value - 1);
-      return Math.max(0, Math.min(last, value));
-    };
-    if (oldStart === removedIndex && oldEnd === removedIndex) {
-      next.w0 = next.w1 = Math.min(removedIndex, last);
-      return next;
-    }
-    const a = resolve(oldStart, true), b = resolve(oldEnd, false);
-    next.w0 = Math.min(a, b); next.w1 = Math.max(a, b);
-    return next;
-  }
-
   // ---- one-call derivation: everything the field + panels need for a path ----
   function derivePath(doc, robot, perSeg, plannerId) {
     perSeg = perSeg || 56;
@@ -1045,10 +611,21 @@
       doc = { ...doc, constraints: effectiveConstraints(doc.constraints, robot) };
     }
     const smp = sample(doc.waypoints, perSeg);
-    const pts = smp.pts;
     const nWp = doc.waypoints.length;
+    const originalLast = Math.max(0, smp.pts.length - 1);
+    let wpIdx = (smp.wpIdx || doc.waypoints.map((_, k) => Math.min(originalLast, k * perSeg))).slice();
+    const initialWpFrac = wpIdx.map((index) => smp.pts.length ? smp.pts[index].s / (smp.length || 1) : 0);
+    const targetFractions = (doc.targets || []).map((target) => featureFraction(target, smp)).filter((fraction) => {
+      let segment = 0;
+      while (segment < nWp - 2 && fraction >= initialWpFrac[segment + 1] - 1e-9) segment++;
+      const mode = robot && robot.drive === 'tank'
+        ? 'tangent'
+        : ((doc.waypoints[segment] && doc.waypoints[segment].segmentHeadingMode) || doc.headingMode || 'targets');
+      return mode === 'targets';
+    });
+    wpIdx = insertHeadingTargetSamples(smp, targetFractions, wpIdx);
+    const pts = smp.pts;
     const lastI = Math.max(0, pts.length - 1);
-    const wpIdx = smp.wpIdx || doc.waypoints.map((_, k) => Math.min(lastI, k * perSeg));
     const total = smp.length || 1;
     const wpFrac = wpIdx.map((i) => (pts.length ? pts[i].s / total : 0));
     const stopIdx = [];
@@ -1069,13 +646,9 @@
       const isEnd = k === 0 || k === nWp - 1;
       const incomingMode = segmentModes[k - 1];
       const outgoingMode = segmentModes[k];
-      const boundaryHeadingActive = !isEnd
-        && w.thetaOn
-        && ((incomingMode === 'tangent' || incomingMode === 'lookAt') && (outgoingMode === 'manual' || outgoingMode === 'targets'))
-        && (((w.headingTransition || {}).placement) || 'after') !== 'after';
       const entry = { f: wpFrac[k], rad: (w.theta || 0) * D2R };
-      if (isEnd || (w.thetaOn && (incomingMode === 'manual' || (w.turnInPlace && outgoingMode === 'manual'))) || (boundaryHeadingActive && outgoingMode === 'manual')) manualEntries.push(entry);
-      if (isEnd || (w.thetaOn && (incomingMode === 'targets' || (w.turnInPlace && outgoingMode === 'targets'))) || (boundaryHeadingActive && outgoingMode === 'targets')) targetEntries.push({ ...entry });
+      if (isEnd || (w.thetaOn && (incomingMode === 'manual' || (w.turnInPlace && outgoingMode === 'manual')))) manualEntries.push(entry);
+      if (isEnd || (w.thetaOn && (incomingMode === 'targets' || (w.turnInPlace && outgoingMode === 'targets')))) targetEntries.push({ ...entry });
     });
     (doc.targets || []).forEach((t) => targetEntries.push({ f: featureFraction(t, smp), rad: t.deg * D2R }));
     const manualAnchors = buildAnchors(manualEntries), targetAnchors = buildAnchors(targetEntries);
@@ -1095,10 +668,10 @@
     });
     const segmentLaws = doc.waypoints.slice(0, -1).map((w, segment) => segmentModes[segment] === 'lookAt' ? 'lookAt:' + (w.segmentLookAt ? w.segmentLookAt.x : '') + ':' + (w.segmentLookAt ? w.segmentLookAt.y : '') : segmentModes[segment]);
     const transitionBreaks = doc.waypoints.slice(0, -1).map((w) => !!w.turnInPlace);
-    const headingTransitions = headingTransitionWindows(doc.waypoints, segmentLaws, transitionBreaks, wpFrac, total);
+    const headingTransitions = headingTransitionWindows(doc.waypoints, segmentLaws, transitionBreaks, wpFrac, total, "heading");
     const transitionGoals = headingTransitionGoals(segmentLaws, transitionBreaks, wpIdx, pts, {
-      manual: manualAnchors,
-      targets: targetAnchors,
+      manual: manualAnchors.map(({ f, rad }) => ({ f, heading: rad })),
+      targets: targetAnchors.map(({ f, rad }) => ({ f, heading: rad })),
     });
     const head = smoothHeadingTransitions(rawHead, segmentLaws, transitionBreaks, wpIdx, pts, doc.waypoints, transitionGoals);
     const allTangent = doc.waypoints.slice(0, -1).every((_, segment) => effectiveHeadingMode(segment) === 'tangent');
@@ -1118,6 +691,7 @@
     }
     const prof = profile(pts, doc.constraints, sv, gv, { stopIdx, vmax, ranges: effRanges, headingTransitions, heading: head, dwell, turns, jiggles, freeSpeed: cap, motorMaxSpeed: hardLimits ? cap : 0 });
     const trackedHead = headingWithTranslationPriority(doc, robot, pts, prof, head, effRanges, headingTransitions);
+    prof.head = trackedHead;
     appendTerminalHeadingCatchup(doc, prof, trackedHead, head, effRanges);
     const anchors = mode === 'tank' ? [] : buildAnchors(pts.map((p, i) => ({ f: total > 1e-6 ? p.s / total : 0, rad: trackedHead[i] })));
     const mtr = metrics(pts, prof, anchors, mode);
@@ -1143,7 +717,15 @@
       if (run >= 0) consider(run, rl.length - 1);
       if (longest) {
         const mid = Math.floor((longest[0] + longest[1]) / 2);
-        checks.push({ f: pts[mid].s / total, kind: 'performance', level: 'note', text: 'Rotation limits speed through this stretch' });
+        const accelerationLimited = rl.slice(longest[0], longest[1] + 1).some((value) => value >= 2);
+        checks.push({
+          f: pts[mid].s / total,
+          kind: 'performance',
+          level: 'note',
+          text: accelerationLimited
+            ? 'Angular acceleration limits speed · add more distance between heading anchors'
+            : 'Angular velocity limits speed through this stretch',
+        });
       }
     }
     checks.forEach((check) => {
