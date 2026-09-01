@@ -1,0 +1,62 @@
+.routine-workspace{display:flex;flex:1;flex-direction:column;min-width:0;min-height:0;background:var(--bg);container:routine-workspace / inline-size}
+.routine-workspace-head{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-shrink:0;min-height:54px;padding:0 24px;border-bottom:1px solid var(--line);background:var(--bg-1)}
+.routine-workspace-title{display:flex;align-items:baseline;gap:10px;min-width:0}
+.routine-workspace-title>span{color:var(--txt-3);font-size:11px}
+.routine-workspace-title>strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:550}
+.routine-workspace-views{display:flex;align-self:stretch;gap:20px;flex-shrink:0}
+.routine-workspace-views button{padding:0;border-bottom:2px solid transparent;background:none;color:var(--txt-3);font-size:12px}
+.routine-workspace-views button[aria-pressed=true]{border-bottom-color:var(--txt);color:var(--txt)}
+.routine-workspace-views button:hover{color:var(--txt)}
+.routine-workspace-body{display:flex;flex:1;min-height:0;min-width:0;position:relative}
+.routine-workspace-flow,.routine-workspace-field{flex:1;min-width:0;min-height:0}
+.routine-workspace [hidden]{display:none!important}
+.routine-workspace .rt-panel{width:100%;border:0;background:transparent}
+.routine-workspace .rt-scroll{overflow:auto;padding:26px 32px 40px}
+.routine-workspace .rt-list{width:100%;max-width:1000px;min-width:380px;margin:0 auto}
+.routine-workspace .rt-step-wrap.fnwrap{margin-left:0}
+.routine-workspace .rt-step-wrap.fnwrap::before{display:none}
+.routine-workspace .rt-step{min-height:58px;padding:10px 12px;border:1px solid var(--line-2);border-radius:4px;background:var(--bg-1);box-shadow:none}
+.routine-workspace .rt-step:hover{background:var(--bg-2)}
+.routine-workspace .rt-step.sel{border-color:var(--txt-3);background:var(--bg-2);box-shadow:none}
+.routine-workspace .rt-step.active{border-color:var(--accent);box-shadow:none}
+.routine-workspace .rt-step.fn{border-left-width:1px}
+.routine-workspace .rt-step.fn .rt-step-title{font-size:12.5px;font-weight:600}
+.routine-workspace .rt-step-tag{border:0;text-transform:none;letter-spacing:0;font-size:10px}
+.routine-workspace .rt-step-meta{font-family:var(--ui);font-size:11px}
+.routine-workspace .rt-branches{display:grid;grid-template-columns:repeat(2,minmax(280px,1fr));gap:20px;margin:18px 0 20px;padding:0;border:0}
+.routine-workspace .rt-branch{border:0;border-top:1px solid var(--line-3);border-radius:0;background:none;padding:0;overflow:visible}
+.routine-workspace .rt-branch.live{border-color:var(--txt-3)}
+.routine-workspace .rt-brlbl{padding:10px 2px;border:0}
+.routine-workspace .rt-brbody{padding:0}
+.routine-workspace .rt-branches .rt-branches{grid-template-columns:1fr;margin-left:12px;padding-left:12px;border-left:1px solid var(--line-2)}
+.routine-workspace .rt-gap{height:28px}
+.routine-workspace .rt-gap.open{height:auto;min-height:28px}
+.routine-workspace .rt-gap::before{content:'';position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line-3)}
+.routine-workspace .rt-gap-btn{position:relative;opacity:1;border-radius:4px;width:20px;height:20px;background:var(--bg)}
+.routine-workspace .rt-gap.open::before{display:none}
+.routine-workspace .rt-chooser{width:100%;max-width:520px;align-self:center;border-radius:4px}
+.routine-workspace .rt-add{height:34px;border-radius:4px;border-style:solid}
+.routine-workspace .rt-empty{max-width:430px;margin:40px auto 0;padding:30px 0}
+.routine-workspace .rt-empty-ic{display:none}
+.routine-workspace .rt-empty p{max-width:42ch;font-size:12px;line-height:1.6;margin:8px 0 22px}
+.routine-workspace .rt-empty .rt-addwrap{max-width:320px}
+.routine-workspace-transport{position:relative;flex-shrink:0}
+.routine-workspace-transport .rt-transport{position:relative;box-shadow:none;backdrop-filter:none}
+.routine-workspace .routine-status{position:static;transform:none;margin:0;border-radius:0;flex-shrink:0}
+.routine-workspace .viewctl{bottom:16px}
+@container routine-workspace (max-width:640px){.routine-workspace .rt-branches{grid-template-columns:1fr;gap:16px;margin-left:12px;padding-left:12px;border-left:1px solid var(--line-2)}}
+@media(max-width:1180px){.routine-workspace-head{padding-inline:18px;gap:12px}.routine-workspace .rt-scroll{padding:22px 20px 36px}.routine-workspace-title>span{display:none}}
+
+/* Reserve actions and wrap authored names in both full-width and nested flows. */
+.routine-workspace .rt-step{display:grid;grid-template-columns:15px 18px minmax(0,1fr) 71px;gap:8px}
+.routine-workspace .rt-step-title,.routine-workspace .rt-step-meta,.routine-workspace .rt-brname,.routine-workspace-title>strong{white-space:normal;overflow:visible;overflow-wrap:anywhere;text-overflow:clip;line-height:1.45}
+.routine-workspace .rt-step .rt-step-tools{display:flex;margin:0}
+.routine-workspace .rt-tool.danger{opacity:1}
+.routine-workspace .rt-tool:disabled{opacity:.3;cursor:default}
+.routine-workspace .rt-step .rt-step-tag{display:block;padding:0;margin-top:4px;white-space:normal}
+.routine-workspace .rt-step-live{display:inline-block;margin-top:4px;text-transform:none;letter-spacing:0}
+.routine-workspace .rt-brlbl{display:grid;grid-template-columns:7px auto minmax(0,1fr) auto;gap:8px;text-align:left}
+.routine-workspace .rt-brlive{grid-column:3;text-transform:none;letter-spacing:0;justify-self:start}
+.routine-workspace .rt-brkey,.rt-stat-k,.routine-workspace .rt-timeline-title{text-transform:none;letter-spacing:0;font-family:var(--ui);font-size:11px}
+.routine-workspace-head{padding-block:12px}
+@media(pointer:coarse){.routine-workspace .rt-step{grid-template-columns:44px 44px minmax(0,1fr)}.routine-workspace .rt-step-tools{grid-column:3;justify-self:end}}
