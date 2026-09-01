@@ -44,13 +44,17 @@ export function robotFootprintAt(robot: RobotConfig, pose: FootprintPose): Contr
 }
 
 export function polygonBounds(vertices: readonly ControlPoint[]): Bounds2d {
-  return vertices.reduce<Bounds2d>((bounds, point) => ({
-    min: { x: Math.min(bounds.min.x, point.x), y: Math.min(bounds.min.y, point.y) },
-    max: { x: Math.max(bounds.max.x, point.x), y: Math.max(bounds.max.y, point.y) },
-  }), {
+  const bounds = {
     min: { x: Number.POSITIVE_INFINITY, y: Number.POSITIVE_INFINITY },
     max: { x: Number.NEGATIVE_INFINITY, y: Number.NEGATIVE_INFINITY },
-  });
+  };
+  for (const point of vertices) {
+    bounds.min.x = Math.min(bounds.min.x, point.x);
+    bounds.min.y = Math.min(bounds.min.y, point.y);
+    bounds.max.x = Math.max(bounds.max.x, point.x);
+    bounds.max.y = Math.max(bounds.max.y, point.y);
+  }
+  return bounds;
 }
 
 export function verticalLineSection(vertices: readonly ControlPoint[], x: number): { minY: number; maxY: number } | null {
@@ -97,10 +101,14 @@ function axes(vertices: readonly ControlPoint[]): ControlPoint[] {
 }
 
 function projection(vertices: readonly ControlPoint[], axis: ControlPoint): { min: number; max: number } {
-  return vertices.reduce((range, point) => {
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  for (const point of vertices) {
     const value = point.x * axis.x + point.y * axis.y;
-    return { min: Math.min(range.min, value), max: Math.max(range.max, value) };
-  }, { min: Number.POSITIVE_INFINITY, max: Number.NEGATIVE_INFINITY });
+    min = Math.min(min, value);
+    max = Math.max(max, value);
+  }
+  return { min, max };
 }
 
 /** Signed convex-polygon clearance: positive when separate, negative when overlapping. */
@@ -108,13 +116,13 @@ export function convexPolygonClearance(first: readonly ControlPoint[], second: r
   const separatingAxes = [...axes(first), ...axes(second)];
   let minimumOverlap = Number.POSITIVE_INFINITY;
   let separated = false;
-  separatingAxes.forEach((axis) => {
+  for (const axis of separatingAxes) {
     const a = projection(first, axis);
     const b = projection(second, axis);
     const overlap = Math.min(a.max, b.max) - Math.max(a.min, b.min);
-    if (overlap < -EPSILON) separated = true;
+    if (overlap < -EPSILON) { separated = true; break; }
     else minimumOverlap = Math.min(minimumOverlap, Math.max(0, overlap));
-  });
+  }
   if (!separated) return -minimumOverlap;
 
   let minimumDistance = Number.POSITIVE_INFINITY;

@@ -3,6 +3,7 @@ import { FIELD_H } from "../math/fieldBounds";
 import { getPlanner } from "../planners";
 import { optimizeCorridorFinal } from "../planners/corridorFinal";
 import { clone } from "../project/defaults";
+import { effectivePathConstraints } from "../robotLimits";
 import type { BordeauxProject, PathDoc, TrajectorySample, ValidationIssue } from "../types";
 import { validateProject } from "../validation";
 import {
@@ -141,6 +142,22 @@ function maxBy(values: readonly MeasuredValue[], metric: PathAnalysisMetric, abs
 
 function measuredValues(samples: readonly TrajectorySample[]): MeasuredValue[] {
   const values: MeasuredValue[] = [];
+  const intervalAngularVelocities = samples.slice(1).map((sample, index) => {
+    const previous = samples[index];
+    const dt = Math.max(EPSILON, sample.t - previous.t);
+    return Math.atan2(
+      Math.sin(sample.headingRad - previous.headingRad),
+      Math.cos(sample.headingRad - previous.headingRad),
+    ) / dt;
+  });
+  const angularAccelerations = intervalAngularVelocities.map((omega, index) => {
+    if (index === 0) {
+      return 2 * (omega - samples[0].angularVelocityRadps)
+        / Math.max(EPSILON, samples[1].t - samples[0].t);
+    }
+    return (omega - intervalAngularVelocities[index - 1])
+      / Math.max(EPSILON, (samples[index + 1].t - samples[index - 1].t) * 0.5);
+  });
   samples.forEach((sample, index) => {
     values.push({ metric: "velocity", value: Math.abs(sample.velocityMps), unit: "m/s", sampleIndex: index });
     values.push({ metric: "acceleration", value: Math.max(0, sample.accelerationMps2), unit: "m/s²", sampleIndex: index });
@@ -151,15 +168,19 @@ function measuredValues(samples: readonly TrajectorySample[]): MeasuredValue[] {
     const previous = samples[index - 1];
     const dt = sample.t - previous.t;
     if (dt <= EPSILON) return;
-    const angularAcceleration = (sample.angularVelocityRadps - previous.angularVelocityRadps) / dt;
-    const angularSpeedChange = (Math.abs(sample.angularVelocityRadps) - Math.abs(previous.angularVelocityRadps)) / dt;
+    const angularAcceleration = angularAccelerations[index - 1];
+    const previousAngularVelocity = index === 1
+      ? samples[0].angularVelocityRadps
+      : intervalAngularVelocities[index - 2];
+    const angularSpeedChange = Math.sign(intervalAngularVelocities[index - 1] || previousAngularVelocity || 1)
+      * angularAcceleration;
     values.push({ metric: "angularAcceleration", value: Math.max(0, angularSpeedChange), unit: "rad/s²", sampleIndex: index });
     values.push({ metric: "angularDeceleration", value: Math.max(0, -angularSpeedChange), unit: "rad/s²", sampleIndex: index });
     if (index < 2) return;
     const before = samples[index - 2];
     const previousDt = previous.t - before.t;
     if (previousDt <= EPSILON) return;
-    const previousAngularAcceleration = (previous.angularVelocityRadps - before.angularVelocityRadps) / previousDt;
+    const previousAngularAcceleration = angularAccelerations[index - 2];
     values.push({ metric: "jerk", value: Math.abs((sample.accelerationMps2 - previous.accelerationMps2) / dt), unit: "m/s³", sampleIndex: index });
     values.push({ metric: "angularJerk", value: Math.abs((angularAcceleration - previousAngularAcceleration) / dt), unit: "rad/s³", sampleIndex: index });
   });
@@ -347,7 +368,7 @@ function analyzeGeneratedPath(
       unit: measured.unit,
       sample: sampleReferenceAt(measured.sampleIndex),
       sourcePath: source,
-      message: `${metric} reaches ${measured.value.toFixed(3)} ${measured.unit}, above the authored ${limit.toFixed(3)} ${measured.unit} limit.`,
+      message: `${metric} reaches ${measured.value.toFixed(3)} ${measured.unit}, above the effective ${limit.toFixed(3)} ${measured.unit} limit.`,
     });
   });
 
@@ -428,9 +449,13 @@ export function analyzePath(project: BordeauxProject, pathId: string, options: A
       plannerDiagnostics: [],
     };
   }
+  const analyzedPath = {
+    ...path,
+    constraints: effectivePathConstraints(path.constraints, project.robot),
+  };
   const measured = analyzeGeneratedPath(
     project,
-    path,
+    analyzedPath,
     generated.samples,
     generated.diagnostics,
     Math.max(50, Math.min(2_000, options.sampleLimit ?? DEFAULT_SAMPLE_LIMIT)),
