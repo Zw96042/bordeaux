@@ -4,12 +4,7 @@ const EPSILON = 1e-9;
 export const DEFAULT_HEADING_TRANSITION_DISTANCE_M = 0.75;
 
 export interface ResolvedHeadingTransition {
-  placement: "before" | "split" | "after";
   rotationPriority: "heading" | "translation";
-  distanceM: number;
-}
-
-export interface HeadingTransitionWindow extends ResolvedHeadingTransition {
   waypointIndex: number;
   start: number;
   end: number;
@@ -27,15 +22,80 @@ export interface HeadingTransitionGoal {
   spanEndIndex: number;
 }
 
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.max(minimum, Math.min(maximum, value));
+const TANGENT_JOINT_BLEND_DISTANCE_M = 0.18;
+
+function smoothSwerveTangentJoints(
+  headings: number[],
+  segmentLaws: readonly string[],
+  transitionBreaks: readonly boolean[],
+  waypointIndices: readonly number[],
+  points: readonly { s: number; heading?: number }[],
+): void {
+  // An all-tangent path uses tank-style facing and must retain the exact path tangent.
+  // Mixed laws are swerve-facing, so a linked C1 Bézier joint may smooth its facing
+  // derivative instead of manufacturing an implicit stop at the authored waypoint.
+  if (!segmentLaws.some((law) => law !== "tangent")) return;
+  const slope = (first: number, second: number) => {
+    const distance = points[second].s - points[first].s;
+    return Math.abs(distance) > EPSILON ? (headings[second] - headings[first]) / distance : 0;
+  };
+
+  for (let segment = 1; segment < segmentLaws.length; segment += 1) {
+    if (segmentLaws[segment - 1] !== "tangent"
+      || segmentLaws[segment] !== "tangent"
+      || transitionBreaks[segment]) continue;
+    const boundary = clamp(waypointIndices[segment], 1, headings.length - 2);
+    const previousBoundary = clamp(waypointIndices[segment - 1], 0, boundary - 1);
+    const nextBoundary = clamp(waypointIndices[segment + 1], boundary + 1, headings.length - 1);
+    const startDistance = Math.max(points[previousBoundary].s, points[boundary].s - TANGENT_JOINT_BLEND_DISTANCE_M);
+    const endDistance = Math.min(points[nextBoundary].s, points[boundary].s + TANGENT_JOINT_BLEND_DISTANCE_M);
+    let start = previousBoundary;
+    while (start < boundary && points[start].s < startDistance - EPSILON) start += 1;
+    let end = boundary;
+    while (end < nextBoundary && points[end].s < endDistance - EPSILON) end += 1;
+    const span = points[end].s - points[start].s;
+    if (start >= boundary || end <= boundary || span <= EPSILON) continue;
+    const startNeighbor = start > previousBoundary ? start - 1 : start + 1;
+    const endNeighbor = end < nextBoundary ? end + 1 : end - 1;
+    const startSlope = slope(startNeighbor, start);
+    const endSlope = slope(end, endNeighbor);
+    const startHeading = headings[start];
+    const endHeading = headings[end];
+    for (let index = start; index <= end; index += 1) {
+      const t = clamp((points[index].s - points[start].s) / span, 0, 1);
+      const t2 = t * t;
+      const t3 = t2 * t;
+      headings[index] = (2 * t3 - 3 * t2 + 1) * startHeading
+        + (t3 - 2 * t2 + t) * span * startSlope
+        + (-2 * t3 + 3 * t2) * endHeading
+        + (t3 - t2) * span * endSlope;
+    }
+  }
 }
 
-function wrapRadians(value: number): number {
-  let wrapped = value;
-  while (wrapped > Math.PI) wrapped -= Math.PI * 2;
-  while (wrapped < -Math.PI) wrapped += Math.PI * 2;
-  return wrapped;
+export function firstHeadingAnchorInDistanceRange<T extends { f: number }>(
+  anchors: readonly T[],
+  totalDistanceM: number,
+  startDistanceM: number,
+  endDistanceM: number,
+): T | undefined {
+  let low = 0;
+  let high = anchors.length;
+  const minimum = startDistanceM - EPSILON;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    const distance = clamp(anchors[middle].f, 0, 1) * totalDistanceM;
+    if (distance < minimum) low = middle + 1;
+    else high = middle;
+  }
+  const anchor = anchors[low];
+  return anchor && clamp(anchor.f, 0, 1) * totalDistanceM <= endDistanceM + EPSILON
+    ? anchor
+    : undefined;
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.max(minimum, Math.min(maximum, value));
 }
 
 function unwrapFrom(previous: number, next: number): number {
@@ -44,15 +104,7 @@ function unwrapFrom(previous: number, next: number): number {
 
 function smootherStep(value: number): number {
   const t = clamp(value, 0, 1);
-  return t * t * t * (t * (t * 6 - 15) + 10);
-}
-
-export function resolveHeadingTransition(value?: HeadingTransition): ResolvedHeadingTransition {
-  return {
-    placement: value?.placement ?? "after",
-    rotationPriority: value?.rotationPriority ?? "heading",
-    distanceM: value?.distanceM ?? DEFAULT_HEADING_TRANSITION_DISTANCE_M,
-  };
+  return t * t * (3 - 2 * t);
 }
 
 export function segmentHeadingLaws(path: PathDoc, tankDrive: boolean): string[] {
@@ -64,17 +116,17 @@ export function segmentHeadingLaws(path: PathDoc, tankDrive: boolean): string[] 
 }
 
 export function headingTransitionWindows(
-  waypoints: readonly Waypoint[],
+  _waypoints: readonly Waypoint[],
   segmentLaws: readonly string[],
   transitionBreaks: readonly boolean[],
   waypointFractions: readonly number[],
-  totalDistanceM: number,
+  _totalDistanceM: number,
+  rotationPriority: HeadingTransitionWindow["rotationPriority"] = "translation",
 ): HeadingTransitionWindow[] {
-  const total = Math.max(totalDistanceM, EPSILON);
   const windows: HeadingTransitionWindow[] = [];
+  let previousEnd = 0;
   for (let segment = 1; segment < segmentLaws.length; segment += 1) {
     if (segmentLaws[segment] === segmentLaws[segment - 1] || transitionBreaks[segment]) continue;
-    const policy = resolveHeadingTransition(waypoints[segment]?.headingTransition);
     const boundary = clamp(waypointFractions[segment] ?? 0, 0, 1);
     // The outgoing heading law owns the path beginning at its waypoint. Legacy
     // priority metadata is ignored; translation and heading are planned as one
