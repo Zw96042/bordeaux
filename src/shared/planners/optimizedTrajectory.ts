@@ -9,14 +9,30 @@ import type {
 import { buildReachabilityInput, countLinearConstraintViolations, insertOptimizationBoundaries } from "./optimizationConstraints";
 import { DEFAULT_SAMPLES_PER_SEGMENT, MAX_TRAJECTORY_SAMPLES } from "./limits";
 import { profiledSplineOptimizationSeed, profiledSplinePlanner } from "./profiledSpline";
-import { solveReachabilityProfile, type ReachabilityStatus } from "./reachability";
-import { translationPriorityStartIndex } from "./rotationPriority";
+import { solveReachabilityProfile, type ReachabilityInput, type ReachabilityStatus } from "./reachability";
 import { validateOptimizedTrajectory, type TrajectoryValidationResult } from "./trajectoryValidation";
+import { buildCanonicalPathState, isStationaryHeadingTransition } from "./pathState";
 
 const R = (value: number, places = 4) => Number(value.toFixed(places));
 const MAX_REFINEMENT_PASSES = 2;
 
-function remapTiming(samples: TrajectorySample[], velocities: number[]): TrajectorySample[] {
+/** Retain authored boundaries when constraint knots are inserted into a refined seed. */
+function remapWaypointIndices(base: PlannerResult, samples: readonly TrajectorySample[]): number[] | undefined {
+  if (!base.waypointSampleIndices) return undefined;
+  const remapped = new Map<number, number>();
+  const boundaries = new Set(base.waypointSampleIndices);
+  let cursor = 0;
+  base.samples.forEach((source, index) => {
+    while (cursor < samples.length && (samples[cursor].s !== source.s
+      || samples[cursor].x !== source.x || samples[cursor].y !== source.y)) cursor += 1;
+    if (cursor === samples.length) throw new Error("Optimization lost a source geometry sample");
+    if (boundaries.has(index)) remapped.set(index, cursor);
+    cursor += 1;
+  });
+  return base.waypointSampleIndices.map((index) => remapped.get(index)!);
+}
+
+function remapTiming(samples: TrajectorySample[], velocities: number[], fullPrecision = false): TrajectorySample[] {
   if (samples.length < 2) return samples;
 
   const times = new Array(samples.length).fill(0);
@@ -25,6 +41,7 @@ function remapTiming(samples: TrajectorySample[], velocities: number[]): Traject
     const avgV = Math.max(1e-6, (velocities[i] + velocities[i - 1]) * 0.5);
     times[i] = times[i - 1] + ds / avgV;
   }
+
   const intervalAngularVelocities = samples.slice(1).map((sample, index) => {
     const headingDelta = Math.atan2(
       Math.sin(sample.headingRad - samples[index].headingRad),
