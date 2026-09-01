@@ -15,34 +15,12 @@ import { PM } from "./pathMath";
     generate:  { id: 'generate',  label: 'Generate',  icon: 'compass',  color: '#cf962f', blurb: 'Invoke a runtime path function' },
     velocity:  { id: 'velocity',  label: 'Velocity',  icon: 'gauge',    color: '#2bb3c4', blurb: 'Scale drive velocities live' },
   };
-  const CAT_LIST = ['command', 'terminate', 'sequence', 'generate', 'velocity'];
   const AUTHORABLE_STEPS = [
     { id: 'path', type: 'path', label: 'Path', description: 'Follow a planned trajectory', icon: 'route', color: 'var(--accent)' },
     { id: 'decision', type: 'decision', label: 'Decision', description: 'Branch the routine on a condition', icon: 'branch', color: '#9aa3b0' },
     { id: 'command', type: 'function', cat: 'command', label: 'Command', description: 'Run a generated robot command between paths', icon: 'bolt', color: '#4fbf78' },
     { id: 'wait', type: 'builtin', cat: 'wait', label: 'Wait', description: 'Pause the routine before its next step', icon: 'pause', color: '#cf962f' },
   ];
-
-  const FUNCTIONS = [
-    { value: 'GeneratePath', label: 'Generate path', meta: 'Runtime trajectory function' },
-    { value: 'GenerateNearestGamePiece', label: 'Nearest game piece', meta: 'Runtime trajectory function' },
-    { value: 'GenerateParkingPath', label: 'Parking path', meta: 'Runtime trajectory function' },
-  ];
-  const TRIGGERS = [
-    { value: 'On entry', label: 'On entry', meta: 'When this step becomes active' },
-    { value: 'On branch entry', label: 'On branch entry', meta: 'When its decision branch is chosen' },
-    { value: 'On path complete', label: 'On path complete', meta: 'After the current path settles' },
-    { value: 'Routine end', label: 'Routine end', meta: 'After the final authored step' },
-    { value: 'When condition is true', label: 'When condition is true', meta: 'Uses a registered condition' },
-  ];
-
-  function pickerItems(items, value, empty) {
-    const out = empty ? [{ value: '', label: empty, meta: 'No runtime reference' }, ...items] : [...items];
-    if (value && !out.some((item) => item.value === value)) {
-      out.unshift({ value, label: value, meta: 'Exact project reference', badge: 'custom' });
-    }
-    return out;
-  }
 
   function authoritativeConditions(catalog) {
     if (!catalog || catalog.authoritative !== true || !['1.1', '1.2', '1.3'].includes(catalog.generatedSchemaVersion)) return [];
@@ -143,19 +121,78 @@ import { PM } from "./pathMath";
   function countSteps(routine) { let n = 0; walk(routine.nodes, () => n++); return n; }
 
   // ---- derive a path-bearing node into a field trajectory ----
-  function derivePathNode(node, paths, robot, plannerId) {
+  function derivePathNode(node, pathsById, robot, plannerId, plannedPaths, derivedPaths) {
     let doc = null;
-    if (node.type === 'path') doc = paths.find((path) => path.id === node.ref);
+    if (node.type === 'path') doc = pathsById.get(node.ref);
     else if (node.type === 'function' && node.cat === 'generate' && node.preview) doc = node.preview;
     if (!doc) return null;
-    const d = PM.derivePath(doc, robot, 56, plannerId);
-    return { doc, deriv: d, pts: d.sample.pts, total: d.prof.totalTime || 0 };
+    if (derivedPaths.has(doc)) return derivedPaths.get(doc);
+    const planned = plannedPaths && plannedPaths[doc.id];
+    if (plannedPaths && !planned) return null;
+    const d = planned || PM.derivePath(doc, robot, 56, plannerId);
+    const trajectory = d.finalTrajectory || null;
+    const result = {
+      doc,
+      deriv: d,
+      trajectory,
+      pts: trajectory ? trajectory.samples : d.sample.pts,
+      total: trajectory ? trajectory.totalTimeS : d.prof.totalTime || 0,
+    };
+    derivedPaths.set(doc, result);
+    return result;
+  }
+
+  function trajectoryPoseAt(trajectory, time) {
+    const samples = trajectory && trajectory.samples;
+    if (!samples || !samples.length) return null;
+    if (samples.length === 1 || time <= samples[0].t) {
+      const sample = samples[0];
+      return { x: sample.x, y: sample.y, heading: sample.headingRad, speed: sample.velocityMps, s: sample.s, f: sample.f };
+    }
+    if (time >= samples[samples.length - 1].t) {
+      const sample = samples[samples.length - 1];
+      return { x: sample.x, y: sample.y, heading: sample.headingRad, speed: sample.velocityMps, s: sample.s, f: sample.f };
+    }
+    let low = 1, high = samples.length - 1;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (samples[middle].t < time) low = middle + 1;
+      else high = middle;
+    }
+    const after = samples[low], before = samples[low - 1];
+    const ratio = Math.max(0, Math.min(1, (time - before.t) / Math.max(1e-9, after.t - before.t)));
+    const headingDelta = Math.atan2(
+      Math.sin(after.headingRad - before.headingRad),
+      Math.cos(after.headingRad - before.headingRad),
+    );
+    const lerp = (first, second) => first + (second - first) * ratio;
+    return {
+      x: lerp(before.x, after.x),
+      y: lerp(before.y, after.y),
+      heading: before.headingRad + headingDelta * ratio,
+      speed: lerp(before.velocityMps, after.velocityMps),
+      s: lerp(before.s, after.s),
+      f: lerp(before.f, after.f),
+    };
   }
 
   const EVENT_DWELL = 0.45; // seconds a non-driving function holds for, in the run
 
   // ---- flatten a routine into an executed step list given decision outcomes ----
-  function buildRun(routine, paths, robot, outcomes, plannerId, catalog) {
+  function buildRun(routine, paths, robot, outcomes, plannerId, catalog, plannedPaths) {
+    if (plannedPaths?.status && plannedPaths.status !== 'ready') {
+      return {
+        steps: [], segs: [], total: 0, blocked: true,
+        planningStatus: plannedPaths.status,
+        planningError: plannedPaths.error || '',
+      };
+    }
+    const plannedValues = plannedPaths?.values || plannedPaths;
+    const pathsById = new Map();
+    for (const path of paths) if (!pathsById.has(path.id)) pathsById.set(path.id, path);
+    // Repeated routine steps share geometry within this build. Keep the cache
+    // local so path, robot, or authoritative-plan changes cannot go stale.
+    const derivedPaths = new Map();
     outcomes = outcomes || {};
     const flat = [];
     const collect = (nodes) => {
@@ -182,15 +219,17 @@ import { PM } from "./pathMath";
     let t = 0, pIdx = 0; const steps = []; const segs = []; let lastPose = null;
     flat.forEach((it) => {
       if (it.kind === 'path' || it.kind === 'gen') {
-        const dp = derivePathNode(it.node, paths, robot, plannerId);
+        const dp = derivePathNode(it.node, pathsById, robot, plannerId, plannedValues, derivedPaths);
         if (!dp || dp.pts.length < 2) { steps.push({ ...it, t0: t, t1: t, dur: 0 }); return; }
         const t0 = t, dur = dp.total, t1 = t + dur;
         pIdx += 1;
         const idxLabel = String(pIdx).padStart(2, '0');
         const label = it.node.type === 'path' ? dp.doc.name : (it.node.funcRef || 'Generated');
-        segs.push({ nodeId: it.node.id, kind: it.kind, label, idxLabel, pts: dp.pts, t0, t1, deriv: dp.deriv, doc: dp.doc });
-        steps.push({ ...it, t0, t1, dur, segIdx: segs.length - 1, idxLabel, label, dist: dp.deriv.sample.length });
-        lastPose = dp.pts[dp.pts.length - 1];
+        segs.push({ nodeId: it.node.id, kind: it.kind, label, idxLabel, pts: dp.pts, t0, t1, deriv: dp.deriv, trajectory: dp.trajectory, doc: dp.doc });
+        steps.push({ ...it, t0, t1, dur, segIdx: segs.length - 1, idxLabel, label, dist: dp.trajectory ? dp.trajectory.totalDistanceM : dp.deriv.sample.length });
+        lastPose = dp.trajectory
+          ? trajectoryPoseAt(dp.trajectory, dp.total)
+          : PM.poseAtTime(dp.total, dp.pts, dp.deriv.prof, dp.deriv.anchors, dp.deriv.mode, dp.deriv.rev);
         t = t1;
       } else if (it.kind === 'dynamic') {
         steps.push({ ...it, t0: t, t1: t, dur: 0, dynamic: true, pose: lastPose });
@@ -211,22 +250,33 @@ import { PM } from "./pathMath";
   // ---- pose along the run at time ----
   function poseAt(run, time, robot) {
     if (!run.steps.length) return null;
-    const mode = (robot && robot.drive === 'tank') ? 'tank' : 'swerve';
-    let cur = null;
-    for (const s of run.steps) { if (time >= s.t0 && time <= s.t1 + 1e-6) { cur = s; break; } cur = s; }
-    if (!cur) cur = run.steps[run.steps.length - 1];
+    const cur = run.steps[stepIndexAt(run.steps, time, true)];
     if (cur.segIdx != null) {
       const seg = run.segs[cur.segIdx];
-      return PM.poseAtTime(time - cur.t0, seg.pts, seg.deriv.prof, seg.deriv.anchors, mode);
+      return seg.trajectory
+        ? trajectoryPoseAt(seg.trajectory, time - cur.t0)
+        : PM.poseAtTime(time - cur.t0, seg.pts, seg.deriv.prof, seg.deriv.anchors, seg.deriv.mode, seg.deriv.rev);
     }
     if (cur.pose) return { x: cur.pose.x, y: cur.pose.y, heading: cur.pose.heading || 0, speed: 0 };
     return null;
   }
 
+  // Steps are emitted in time order, including zero-duration decisions. Find
+  // the first matching end so boundary ties retain the previous step's pose.
+  function stepIndexAt(steps, time, inclusive) {
+    let low = 0, high = steps.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      const end = steps[middle].t1 + 1e-6;
+      if (inclusive ? time <= end : time < end) high = middle;
+      else low = middle + 1;
+    }
+    return low < steps.length && time >= steps[low].t0 ? low : steps.length - 1;
+  }
+
   // ---- which step is current at a time (for highlighting) ----
   function stepAt(run, time) {
-    for (let i = 0; i < run.steps.length; i++) { const s = run.steps[i]; if (time >= s.t0 && time < s.t1 + 1e-6) return i; }
-    return run.steps.length - 1;
+    return stepIndexAt(run.steps, time, false);
   }
 
   // ---- field overlay descriptor for FieldView ----
@@ -249,9 +299,9 @@ import { PM } from "./pathMath";
     });
   }
 
-export const AUTO = { CATS, CAT_LIST, AUTHORABLE_STEPS, FUNCTIONS, TRIGGERS, pickerItems, authoritativeConditions, conditionPickerItems, hasWaitBuiltIn, authorableSteps, nodeDeploymentState, SEQ_OPS, seqOp, nodeTitle, newNode, walk, findNode, countSteps, branchCount,
+export const AUTO = { CATS, AUTHORABLE_STEPS, authoritativeConditions, conditionPickerItems, hasWaitBuiltIn, authorableSteps, nodeDeploymentState, nodeTitle, newNode, walk, findNode, countSteps, branchCount,
     buildRun, poseAt, stepAt, fieldOverlay,
-    update, remove, insertAfter, prepend, appendBranch, append, move, reorderRelative };
+    update, remove, insertAfter, prepend, appendBranch, append, move, siblingNodes, canReorderRelative, reorderRelative };
 
   // ---- immutable-ish routine edits (operate on a deep clone) ----
   function _clone(o) { return JSON.parse(JSON.stringify(o)); }
@@ -280,24 +330,35 @@ export const AUTO = { CATS, CAT_LIST, AUTHORABLE_STEPS, FUNCTIONS, TRIGGERS, pic
     };
     mv(r.nodes); return r;
   }
-  // drag-reorder: move `id` to sit immediately before/after `targetId` within the SAME sibling array
-  function reorderRelative(routine, id, targetId, before) {
-    if (id === targetId) return routine;
-    const r = _clone(routine);
-    const run = (arr) => {
-      const si = arr.findIndex((n) => n.id === id);
-      const ti = arr.findIndex((n) => n.id === targetId);
-      if (si >= 0 && ti >= 0) {
-        const [node] = arr.splice(si, 1);
-        const idx = arr.findIndex((n) => n.id === targetId);
-        arr.splice(before ? idx : idx + 1, 0, node);
-        return true;
+  function siblingNodes(routine, id) {
+    const find = (nodes) => {
+      if (nodes.some((node) => node.id === id)) return nodes;
+      for (const node of nodes) {
+        if (node.type !== 'decision') continue;
+        const siblings = find(node.then || []) || find(node.else || []);
+        if (siblings) return siblings;
       }
-      if (si >= 0 || ti >= 0) return true; // both must share an array; bail otherwise
-      for (const n of arr) { if (n.type === 'decision' && (run(n.then) || run(n.else))) return true; }
-      return false;
+      return null;
     };
-    run(r.nodes); return r;
+    return find(routine.nodes);
+  }
+  function canReorderRelative(routine, id, targetId, before) {
+    const siblings = siblingNodes(routine, id);
+    if (!siblings || id === targetId) return false;
+    const source = siblings.findIndex((node) => node.id === id);
+    const target = siblings.findIndex((node) => node.id === targetId);
+    if (target < 0) return false;
+    return before ? source !== target - 1 : source !== target + 1;
+  }
+  // Feedback and mutation share the same sibling-only, non-no-op rule.
+  function reorderRelative(routine, id, targetId, before) {
+    if (!canReorderRelative(routine, id, targetId, before)) return routine;
+    const r = _clone(routine);
+    const siblings = siblingNodes(r, id);
+    const [node] = siblings.splice(siblings.findIndex((item) => item.id === id), 1);
+    const target = siblings.findIndex((item) => item.id === targetId);
+    siblings.splice(before ? target : target + 1, 0, node);
+    return r;
   }
   // total step count inside a branch (recursive)
   function branchCount(nodes) { let c = 0; walk(nodes || [], () => c++); return c; }
