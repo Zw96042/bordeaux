@@ -25,6 +25,24 @@ function remapTiming(samples: TrajectorySample[], velocities: number[]): Traject
     const avgV = Math.max(1e-6, (velocities[i] + velocities[i - 1]) * 0.5);
     times[i] = times[i - 1] + ds / avgV;
   }
+  const intervalAngularVelocities = samples.slice(1).map((sample, index) => {
+    const headingDelta = Math.atan2(
+      Math.sin(sample.headingRad - samples[index].headingRad),
+      Math.cos(sample.headingRad - samples[index].headingRad),
+    );
+    return headingDelta / Math.max(1e-6, times[index + 1] - times[index]);
+  });
+  const angularVelocities = samples.map((_sample, index) => {
+    if (Math.abs(velocities[index]) <= 1e-6) return 0;
+    if (index === 0) return intervalAngularVelocities[0];
+    if (index === samples.length - 1) return intervalAngularVelocities.at(-1)!;
+    if (Math.abs(velocities[index - 1]) <= 1e-6) return intervalAngularVelocities[index];
+    if (Math.abs(velocities[index + 1]) <= 1e-6) return intervalAngularVelocities[index - 1];
+    const beforeDt = Math.max(1e-6, times[index] - times[index - 1]);
+    const afterDt = Math.max(1e-6, times[index + 1] - times[index]);
+    return (intervalAngularVelocities[index - 1] * afterDt
+      + intervalAngularVelocities[index] * beforeDt) / (beforeDt + afterDt);
+  });
 
   return samples.map((sample, i) => {
     const dtPrev = i > 0 ? Math.max(1e-6, times[i] - times[i - 1]) : 0;
@@ -35,26 +53,90 @@ function remapTiming(samples: TrajectorySample[], velocities: number[]): Traject
         : i === samples.length - 1
           ? 0
           : (velocities[i + 1] - velocities[i - 1]) / Math.max(1e-6, dtPrev + dtNext);
-    const headingDelta = i === 0
-      ? 0
-      : Math.atan2(
-          Math.sin(sample.headingRad - samples[i - 1].headingRad),
-          Math.cos(sample.headingRad - samples[i - 1].headingRad),
-        );
     return {
       ...sample,
-      t: R(times[i], 6),
-      velocityMps: R(velocities[i], 6),
-      accelerationMps2: R(accel, 6),
-      angularVelocityRadps: R(i === 0 ? 0 : headingDelta / dtPrev, 7),
+      t: fullPrecision ? times[i] : R(times[i], 6),
+      velocityMps: fullPrecision ? velocities[i] : R(velocities[i], 6),
+      accelerationMps2: fullPrecision ? accel : R(accel, 6),
+      angularVelocityRadps: fullPrecision ? angularVelocities[i] : R(angularVelocities[i], 7),
     };
   });
 }
 
+export function retimeTrajectoryWithVelocityLimits(
+  input: PlannerInput,
+  result: PlannerResult,
+  requestedVelocityLimits: readonly number[],
+): PlannerResult | null {
+  if (requestedVelocityLimits.length !== result.samples.length) return null;
+  const reachabilityInput = buildReachabilityInput(input, result.samples);
+  const reachability = solveReachabilityProfile({
+    ...reachabilityInput,
+    velocityLimits: reachabilityInput.velocityLimits.map((limit, index) => (
+      Math.min(limit, requestedVelocityLimits[index] ?? Number.POSITIVE_INFINITY)
+    )),
+  });
+  if (reachability.status !== "optimal") return null;
+  const samples = remapTiming(result.samples, reachability.velocities);
+  const totalTimeS = samples.at(-1)?.t ?? result.totalTimeS;
+  return {
+    ...result,
+    samples,
+    totalTimeS,
+    markers: result.markers.map((marker) => ({ ...marker, timeS: timeAtFraction(samples, marker.fraction) })),
+    optimization: result.optimization ? {
+      ...result.optimization,
+      iterations: (result.optimization.iterations ?? 0) + reachability.iterations,
+      totalTimeS,
+      maxVelocityMps: Math.max(0, ...samples.map((sample) => Math.abs(sample.velocityMps))),
+      maxAccelerationMps2: Math.max(0, ...samples.map((sample) => Math.abs(sample.accelerationMps2))),
+    } : result.optimization,
+  };
+}
+
+export function scaleTrajectoryTiming(result: PlannerResult, scale: number): PlannerResult {
+  const safeScale = Math.max(Number.EPSILON, Math.min(1, scale));
+  const lastIndex = result.samples.length - 1;
+  const startVelocity = Math.abs(result.samples[0]?.velocityMps ?? 0);
+  const goalVelocity = Math.abs(result.samples[lastIndex]?.velocityMps ?? 0);
+  const totalDistance = Math.max(1e-9, result.samples[lastIndex]?.s ?? result.totalDistanceM);
+  const velocities = result.samples.map((sample, index) => {
+    if (index === 0 || index === lastIndex) return sample.velocityMps;
+    const fraction = Math.max(0, Math.min(1, sample.s / totalDistance));
+    const boundaryFloor = Math.max(startVelocity * (1 - fraction), goalVelocity * fraction);
+    return Math.max(Math.abs(sample.velocityMps) * safeScale, boundaryFloor);
+  });
+  const samples = remapTiming(result.samples, velocities);
+  const totalTimeS = samples.at(-1)?.t ?? result.totalTimeS;
+  const maxVelocityMps = Math.max(0, ...samples.map((sample) => Math.abs(sample.velocityMps)));
+  const maxAccelerationMps2 = Math.max(0, ...samples.map((sample) => Math.abs(sample.accelerationMps2)));
+  return {
+    ...result,
+    totalTimeS,
+    samples,
+    markers: result.markers.map((marker) => ({ ...marker, timeS: timeAtFraction(samples, marker.fraction) })),
+    optimization: result.optimization ? {
+      ...result.optimization,
+      totalTimeS,
+      maxVelocityMps,
+      maxAccelerationMps2,
+    } : result.optimization,
+  };
+}
+
 function remapProfileForValidation(
+  input: PlannerInput,
   geometrySamples: TrajectorySample[],
   timedSamples: TrajectorySample[],
 ): TrajectorySample[] {
+  const timedState = buildCanonicalPathState(input.path, timedSamples);
+  const stationaryTurnAt = (index: number) => (
+    isStationaryHeadingTransition(
+      input.path,
+      timedState.points[index],
+      timedState.points[index + 1]?.headingRad,
+    )
+  );
   let sourceIndex = 0;
   const profile = geometrySamples.map((sample) => {
     // Integrated geometry (for example clothoids) can shift slightly with
