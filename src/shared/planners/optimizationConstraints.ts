@@ -261,14 +261,12 @@ export function buildReachabilityInput(
     return [{
       u: direction * midpoint.headingDerivativeRadPerM,
       x: direction * midpoint.headingSecondDerivativeRadPerM2,
-      minimum: -limits.deceleration * NUMERICAL_SAFETY,
-      maximum: limits.acceleration * NUMERICAL_SAFETY,
       label: "angular-acceleration",
     }];
   });
   return {
     positions: samples.map((sample) => sample.s),
-    velocityLimits: samples.map((sample, index) => Math.min(
+    velocityLimits: samples.map((_, index) => Math.min(
       profile.points[index].velocity,
       profile.intervals[index - 1]?.velocity ?? Number.POSITIVE_INFINITY,
       profile.intervals[index]?.velocity ?? Number.POSITIVE_INFINITY,
@@ -281,7 +279,6 @@ export function buildReachabilityInput(
       angularIntervalVelocityLimits[index - 1] ?? Number.POSITIVE_INFINITY,
       angularIntervalVelocityLimits[index] ?? Number.POSITIVE_INFINITY,
       state.points[index].stop ? 0 : Number.POSITIVE_INFINITY,
-      dynamicHeadingStops.has(index) ? 0 : Number.POSITIVE_INFINITY,
     )),
     // Keep the rounded trajectory inside the independently checked authored
     // envelope without weakening the limits used by final validation.
@@ -290,10 +287,7 @@ export function buildReachabilityInput(
     freeSpeeds: profile.intervals.map((limits) => limits.freeSpeed),
     motorAccelerationLimits: profile.intervals.map((limits) => limits.motorAcceleration),
     accelerationConstraints: drivetrain.intervalAccelerationConstraints,
-    scalarAccelerationConstraints: angularAccelerationConstraints.map((constraints, index) => [
-      ...constraints,
-      ...drivetrain.intervalMotorAccelerationConstraints[index],
-    ]),
+    scalarAccelerationConstraints: angularAccelerationConstraints,
     startVelocity,
     goalVelocity,
   };
