@@ -259,24 +259,72 @@ export function applyRotationPriority(path: PathDoc, result: PlannerResult, robo
       continue;
     }
 
-    const limits = intervalAngularLimits(path, ranges, samples[index - 1].f, samples[index].f);
-    const nextDt = index + 1 < samples.length ? samples[index + 1].t - samples[index].t : dt;
-    ({ actual, omega } = trackedStep(actual, omega, desired[index], limits, dt, Math.max(dt, nextDt)));
+      if ((transitionHeadingMustMatch || headingRangeMustMatch) && (
+        Math.abs(targetHeading - actual) > 0.05 * DEG
+        || (headingRangeMustMatch && Math.abs(targetOmega - omega) > 0.5 * DEG)
+      )) missedHeadingPriority = true;
+      if (transitionEndsHere
+        && transitionHeadingMustMatch
+        && Math.abs(targetHeading - actual) <= 0.05 * DEG) {
+        following = false;
+        resetAtRangeEnd = false;
+      }
+    }
 
     samples[index].headingRad = actual;
     samples[index].angularVelocityRadps = omega;
   }
 
   const diagnostics = [...result.diagnostics];
+  if (missedHeadingPriority) {
+    diagnostics.push({
+      severity: "error",
+      path: `paths.${path.name}.waypoints`,
+      message: "The coupled trajectory could not meet the authored heading within the available motion",
+    });
+  }
   const target = desired.at(-1)!;
-  const period = samplePeriod(samples);
   const last = samples.at(-1)!;
-  if (Math.abs(last.velocityMps) <= 1e-3) {
-    const limits = angularLimits(path, ranges, 1);
+  const needsHeadingReacquisition = following
+    || missedHeadingPriority
+    || Math.abs(target - actual) > 0.05 * DEG;
+  const needsCatchup = needsHeadingReacquisition || Math.abs(omega) > 0.05 * DEG;
+  const endpointHasTranslationPriority = rotationPriorityForInterval(
+    ranges,
+    transitions,
+    samples.at(-2)!.f,
+    last.f,
+  ) === "translation";
+  // A translation-priority transition owns translational timing. Settle any
+  // residual heading after a stopped endpoint instead of stretching the moving
+  // profile to reacquire it.
+  // A stopped endpoint may use a short physical settle for residual angular
+  // velocity. The coupled planner then retimes the moving portion when that
+  // reduces total completion time; this is independent of removed legacy
+  // priority metadata.
+  const transitionAllowsTerminalCatchup = !missedHeadingPriority && transitions.length > 0;
+  const translationPriorityAllowsCatchup = endpointHasTranslationPriority || transitionAllowsTerminalCatchup;
+  if (needsCatchup
+    && translationPriorityAllowsCatchup
+    && Math.abs(last.velocityMps) <= 1e-3
+    && !path.waypoints.at(-1)?.turnInPlace) {
+    const period = samplePeriod(samples);
+    const point = pathState.points.at(-1)!;
     while (Math.abs(target - actual) > 0.05 * DEG || Math.abs(omega) > 0.05 * DEG) {
       if (samples.length >= MAX_TRAJECTORY_SAMPLES) {
         throw new Error(`Heading catch-up requires more than ${MAX_TRAJECTORY_SAMPLES} samples`);
       }
+      const authoredLimits = angularLimits(path, ranges, 1);
+      const accelerationLimits = drivetrainForceAngularAccelerationLimits(
+        point, robot, 0, 0, omega, actual,
+        Math.max(authoredLimits.acceleration, authoredLimits.deceleration),
+      );
+      const limits = {
+        ...authoredLimits,
+        velocity: drivetrainAngularVelocityLimit(point, robot, 0, 0, actual, authoredLimits.velocity),
+        positiveAcceleration: accelerationLimits.positive,
+        negativeAcceleration: accelerationLimits.negative,
+      };
       ({ actual, omega } = trackedStep(actual, omega, target, limits, period));
       samples.push({
         ...samples.at(-1)!,
@@ -288,11 +336,14 @@ export function applyRotationPriority(path: PathDoc, result: PlannerResult, robo
         angularVelocityRadps: omega,
       });
     }
-  } else if (Math.abs(target - actual) > 1 * DEG) {
+  } else if (needsHeadingReacquisition
+    && !missedHeadingPriority
+    && !transitionAllowsTerminalCatchup
+    && !path.waypoints.at(-1)?.turnInPlace) {
     diagnostics.push({
       severity: "error",
       path: `paths.${path.name}.waypoints`,
-      message: "Translation timing priority reaches the endpoint before the final heading; stop at the endpoint or extend the path",
+      message: "The coupled trajectory could not reacquire the authored heading in the available path",
     });
   }
 
@@ -300,7 +351,7 @@ export function applyRotationPriority(path: PathDoc, result: PlannerResult, robo
     diagnostics.push({
       severity: "error",
       path: `paths.${path.name}.waypoints`,
-      message: "Translation timing priority could not satisfy the configured angular limits",
+      message: "Heading tracking could not satisfy the configured angular limits",
     });
   }
 
