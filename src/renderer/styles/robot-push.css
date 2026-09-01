@@ -1,29 +1,44 @@
 .robot-push-trigger {
-  height: 34px;
-  padding: 0 12px;
-  border: 1px solid rgba(122, 157, 235, 0.45);
-  border-radius: 8px;
-  background: linear-gradient(180deg, #4d78d8, #315bb8);
-  color: #fff;
-  font: 600 12px/1 var(--font-ui);
-  box-shadow: 0 4px 14px rgba(12, 22, 45, 0.24);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--txt-2);
+  font: 600 11px/1 var(--ui);
   cursor: pointer;
   white-space: nowrap;
+  transition: color 140ms ease-out, background-color 140ms ease-out, border-color 140ms ease-out, transform 80ms ease-out;
 }
 .robot-push-trigger:hover {
-  filter: brightness(1.08);
+  border-color: var(--line-2);
+  background: var(--bg-3);
+  color: var(--txt);
+}
+.robot-push-trigger:active {
+  transform: scale(0.96);
+}
+.robot-push-trigger-deploy svg {
+  color: var(--accent);
+}
+.robot-push-trigger-diagnostics {
+  width: 32px;
+  padding: 0;
+  color: var(--txt-3);
 }
 .robot-push-trigger:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
-.robot-push-backdrop {
-  position: fixed;
-  z-index: 500;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 28px;
+dialog.robot-diagnostics {
+  margin: auto;
+  padding: 0;
+}
+dialog.robot-diagnostics::backdrop {
   background: rgba(5, 8, 13, 0.72);
   backdrop-filter: blur(5px);
 }
@@ -60,10 +75,9 @@
 .robot-push-eyebrow {
   margin-bottom: 5px !important;
   color: #8facf2;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
 }
 .robot-push-close {
   width: 30px;
@@ -121,7 +135,7 @@
   border-radius: 7px;
   background: #10141b;
   color: #f4f6fa;
-  font: 12px var(--font-mono);
+  font: 12px var(--mono);
 }
 .robot-push-endpoint input:focus {
   border-color: #638ce8;
@@ -145,20 +159,19 @@
 }
 .robot-push-details dt {
   color: #8793a7;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
 }
 .robot-push-details dd {
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
   color: #e8edf7;
-  font: 11px/1.45 var(--font-mono);
+  font: 11px/1.45 var(--mono);
 }
 .robot-push-details.compact dd {
-  font-family: var(--font-ui);
+  font-family: var(--ui);
 }
 .robot-push-actions {
   display: flex;
@@ -177,7 +190,7 @@
   border-radius: 7px;
   background: #222a37;
   color: #dce3ef;
-  font: 600 11px var(--font-ui);
+  font: 600 11px var(--ui);
   cursor: pointer;
 }
 .robot-push-actions button:hover,
@@ -243,7 +256,7 @@
   background: rgba(151, 49, 49, 0.12);
 }
 .robot-push-boundary {
-  font-family: var(--font-mono);
+  font-family: var(--mono);
   color: #d9a4a4 !important;
 }
 .robot-retention {
@@ -252,7 +265,7 @@
   padding-top: 16px;
 }
 .robot-retention > p {
-  color: var(--text-secondary);
+  color: var(--txt-2);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -279,14 +292,14 @@
 .robot-retention-list strong,
 .robot-retention-list span {
   display: block;
-  font-family: var(--font-mono);
+  font-family: var(--mono);
   font-size: 11px;
 }
 .robot-retention-list span,
 .robot-retention-labels,
 .robot-retention-unavailable,
 .robot-retention-local {
-  color: var(--text-secondary);
+  color: var(--txt-2);
 }
 .robot-retention-labels {
   font-size: 11px;
@@ -318,22 +331,21 @@
   }
 }
 @media (max-width: 1180px) {
-  .robot-push-trigger {
-    width: 40px;
+  .robot-push-trigger-deploy {
+    width: 32px;
     padding: 0;
-    font-size: 0;
   }
-  .robot-push-trigger span {
-    font-size: 14px;
+  .robot-push-trigger-label {
+    display: none;
   }
 }
 @media (max-width: 700px) {
-  .robot-push-backdrop {
-    padding: 10px;
-  }
   .robot-push-dialog {
     width: 100%;
     max-height: calc(100vh - 20px);
+  }
+  dialog.robot-diagnostics {
+    width: calc(100vw - 20px);
   }
   .robot-push-details > div {
     grid-template-columns: 1fr;
@@ -343,3 +355,24 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* The shared robot surface stays secondary to the selected-item push action. */
+dialog.robot-manager, dialog.robot-diagnostics { margin: auto; padding: 0; background: var(--bg-1); color: var(--txt); border-color: var(--line-2); border-radius: 10px; }
+dialog.robot-manager::backdrop, dialog.robot-diagnostics::backdrop { background: rgb(0 0 0 / .5); }
+.robot-manager > header { align-items: center; padding: 16px 20px; margin-bottom: 18px; }
+.robot-manager h2 { font-size: 17px; font-weight: 600; }
+.robot-manager .robot-push-section { padding: 0 20px 20px; gap: 12px; }
+.robot-manager .robot-push-details > div { background: var(--bg-2); }
+.robot-manager .robot-push-selection { color: var(--txt); font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+.robot-history { font-size: 12px; color: var(--txt-2); border-top: 1px solid var(--line); padding-top: 12px; }
+.robot-history > summary { cursor: pointer; color: var(--txt); padding: 3px 0; }
+.robot-history > p, .robot-history > dl, .robot-history > button, .robot-history > ul { margin-top: 12px; }
+.robot-baseline-confirm { display: flex; align-items: flex-start; gap: 9px; font-size: 12px; line-height: 1.5; }
+.robot-baseline-confirm input { margin-top: 3px; flex-shrink: 0; }
+.robot-manager .robot-push-alert { margin: 0 20px 18px; }
+.robot-manager .robot-push-actions { flex-wrap: wrap; }
+.robot-manager .robot-push-status { padding: 0 20px 24px; }
+.robot-manager .robot-push-outcome { padding: 16px; }
+.robot-manager button:focus-visible, .robot-manager summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.robot-manager > .robot-connection-diagnostics { padding: 0 20px 20px; }
