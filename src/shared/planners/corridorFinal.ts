@@ -2,9 +2,10 @@ import { minimumRobotFieldClearance, observeRobotFieldPortalSequence } from "../
 import { robotFootprintAt, robotFootprintRadius } from "../agent/robotFootprint";
 import { PM } from "../math/pm";
 import { clone } from "../project/defaults";
+import { effectivePathConstraints, robotHardLimits } from "../robotLimits";
 import type { ControlPoint, PathDoc, PlannerInput, PlannerOptimizationDiagnostics, PlannerResult } from "../types";
 import { optimizeFixedGeometryFinal } from "./fixedGeometryFinal";
-import { fixedPathSamples } from "./index";
+import { fixedPathSamples, getPlanner } from "./index";
 import { validateOptimizedTrajectory } from "./trajectoryValidation";
 
 const DEFAULT_CORRIDOR_M = 0.15;
@@ -12,6 +13,7 @@ const MIN_CORRIDOR_M = 0.03;
 const MAX_CORRIDOR_M = 1.5;
 const MAX_SEGMENTS = 40;
 const MAX_EVALUATIONS = 72;
+const DEFAULT_EVALUATIONS = Object.freeze({ common: 24, stress: 48, hard: 72 });
 const MIN_GAIN_S = 0.02;
 const MIN_GAIN_FRACTION = 0.005;
 const EPSILON = 1e-6;
@@ -27,8 +29,9 @@ export interface CorridorFinalOptions {
   budgetTier?: "common" | "stress" | "hard";
   budgetMs?: number;
   maximumEvaluations?: number;
-  now?: () => number;
   isCancelled?: () => boolean;
+  /** Emits validated incumbents; completion never implicitly applies them. */
+  onProgress?: (result: PlannerResult) => void;
 }
 
 interface Handle {
@@ -129,6 +132,21 @@ function passesGates(samples: PlannerResult["samples"], gates: readonly Corridor
   return true;
 }
 
+/** Revalidates saved geometry against the current authored corridor and field. */
+export function validateCorridorCandidate(
+  input: PlannerInput,
+  result: PlannerResult,
+  options: CorridorFinalOptions = {},
+  baseline: PlannerResult = optimizeFixedGeometryFinal(input),
+): boolean {
+  const corridorM = Math.max(MIN_CORRIDOR_M, Math.min(MAX_CORRIDOR_M, options.corridorM ?? DEFAULT_CORRIDOR_M));
+  const resolution = Math.max(128, (input.samplesPerSegment ?? 56) * 2);
+  const reference = PM.sample(input.path.waypoints, resolution).pts as GeometryPoint[];
+  const candidate = PM.sample((result.optimizedPath ?? input.path).waypoints, resolution).pts as GeometryPoint[];
+  const deviationM = routeDeviation(reference, candidate);
+  const authoredTopology = observeRobotFieldPortalSequence(input.robot, baseline.samples);
+  const topology = observeRobotFieldPortalSequence(input.robot, result.samples);
+  return Number.isFinite(deviationM) && deviationM <= corridorM + EPSILON
     && authoredTopology.valid && topology.valid
     && topology.visits.length === authoredTopology.visits.length
     && topology.visits.every((visit, index) => visit.id === authoredTopology.visits[index].id)
