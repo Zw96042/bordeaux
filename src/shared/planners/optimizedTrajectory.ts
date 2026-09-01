@@ -56,33 +56,82 @@ function remapProfileForValidation(
   timedSamples: TrajectorySample[],
 ): TrajectorySample[] {
   let sourceIndex = 0;
-  const velocities = geometrySamples.map((sample) => {
+  const profile = geometrySamples.map((sample) => {
+    // Integrated geometry (for example clothoids) can shift slightly with
+    // resolution. Endpoint speeds are authored boundaries, not projections.
+    const endpoint = sample.f <= 0 ? timedSamples[0] : sample.f >= 1 ? timedSamples.at(-1) : undefined;
+    if (endpoint) return {
+      sample: { ...sample, headingRad: endpoint.headingRad },
+      velocity: Math.abs(endpoint.velocityMps),
+    };
     while (sourceIndex < timedSamples.length - 2 && timedSamples[sourceIndex + 1].f < sample.f) sourceIndex += 1;
     for (let candidate = Math.max(0, sourceIndex - 2); candidate <= Math.min(timedSamples.length - 1, sourceIndex + 3); candidate += 1) {
       if (Math.hypot(timedSamples[candidate].x - sample.x, timedSamples[candidate].y - sample.y) <= 1e-8) {
         sourceIndex = candidate;
-        return Math.abs(timedSamples[candidate].velocityMps);
+        return {
+          sample: { ...sample, headingRad: timedSamples[candidate].headingRad },
+          velocity: Math.abs(timedSamples[candidate].velocityMps),
+        };
       }
     }
     const before = timedSamples[sourceIndex];
     const after = timedSamples[Math.min(timedSamples.length - 1, sourceIndex + 1)];
-    const span = Math.max(1e-9, after.f - before.f);
-    const ratio = Math.max(0, Math.min(1, (sample.f - before.f) / span));
+    const dx = after.x - before.x, dy = after.y - before.y;
+    const chordSquared = dx * dx + dy * dy;
+    // Coarse and dense geometry have slightly different integrated lengths.
+    // Use the local chord so interpolation meets coincident knots continuously.
+    const ratio = chordSquared > 1e-12
+      ? Math.max(0, Math.min(1, ((sample.x - before.x) * dx + (sample.y - before.y) * dy) / chordSquared))
+      : Math.max(0, Math.min(1, (sample.f - before.f) / Math.max(1e-9, after.f - before.f)));
     const speedSquared = before.velocityMps ** 2
       + (after.velocityMps ** 2 - before.velocityMps ** 2) * ratio;
-    return Math.sqrt(Math.max(0, speedSquared));
+    const headingDelta = stationaryTurnAt(sourceIndex) || stationaryTurnAt(sourceIndex + 1)
+      ? 0
+      : Math.atan2(
+          Math.sin(after.headingRad - before.headingRad),
+          Math.cos(after.headingRad - before.headingRad),
+        );
+    const distance = after.s - before.s;
+    const startSlope = timedState.points[sourceIndex].headingDerivativeRadPerM;
+    const endSlope = timedState.points[Math.min(timedState.points.length - 1, sourceIndex + 1)].headingDerivativeRadPerM;
+    const t2 = ratio * ratio, t3 = t2 * ratio;
+    // Preserve heading rate through sample boundaries. Linear densification
+    // creates artificial rate jumps which validation mistakes for acceleration.
+    const headingRad = stationaryTurnAt(sourceIndex + 1)
+      ? before.headingRad
+      : stationaryTurnAt(sourceIndex)
+        ? after.headingRad
+        : (2 * t3 - 3 * t2 + 1) * before.headingRad
+          + (t3 - 2 * t2 + ratio) * distance * startSlope
+          + (-2 * t3 + 3 * t2) * (before.headingRad + headingDelta)
+          + (t3 - t2) * distance * endSlope;
+    return {
+      sample: { ...sample, headingRad },
+      velocity: Math.sqrt(Math.max(0, speedSquared)),
+    };
   });
-  return remapTiming(geometrySamples, velocities);
+  return remapTiming(
+    profile.map((entry) => entry.sample),
+    profile.map((entry) => entry.velocity),
+    // Microsecond rounding before differentiation creates acceleration noise
+    // as validation intervals become shorter. Round only returned trajectories.
+    true,
+  );
 }
 
 export function buildDenseValidationSamples(
   input: PlannerInput,
   timedSamples: TrajectorySample[],
   samplesPerSegment = input.samplesPerSegment ?? DEFAULT_SAMPLES_PER_SEGMENT,
-  validationMultiplier = 2,
+  validationMultiplier?: number,
 ): TrajectorySample[] {
   const segmentCount = Math.max(0, input.path.waypoints.length - 1);
-  const denseSamplesPerSegment = samplesPerSegment * validationMultiplier;
+  // Prefer a fine validation grid without shrinking the existing 2x input
+  // budget. Explicit requests still fail rather than silently losing density.
+  const multiplier = validationMultiplier ?? Math.max(2, Math.min(8,
+    Math.floor((MAX_TRAJECTORY_SAMPLES - 1) / Math.max(1, segmentCount) / samplesPerSegment),
+  ));
+  const denseSamplesPerSegment = samplesPerSegment * multiplier;
   if (segmentCount > Math.floor((MAX_TRAJECTORY_SAMPLES - 1) / denseSamplesPerSegment)) {
     throw new Error(`Dense validation requires more than ${MAX_TRAJECTORY_SAMPLES} trajectory samples`);
   }
@@ -90,7 +139,7 @@ export function buildDenseValidationSamples(
     input,
     profiledSplineOptimizationSeed({ ...input, samplesPerSegment: denseSamplesPerSegment }).samples,
   );
-  return remapProfileForValidation(denseGeometry, timedSamples);
+  return remapProfileForValidation(input, denseGeometry, timedSamples);
 }
 
 function timeAtFraction(samples: TrajectorySample[], fraction: number): number {
@@ -106,6 +155,41 @@ function timeAtFraction(samples: TrajectorySample[], fraction: number): number {
     }
   }
   return samples[samples.length - 1].t;
+}
+
+function nearestFractionIndex(samples: readonly TrajectorySample[], fraction: number): number {
+  let low = 0;
+  let high = samples.length - 1;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (samples[middle].f < fraction) low = middle + 1;
+    else high = middle;
+  }
+  if (low > 0 && Math.abs(samples[low - 1].f - fraction) < Math.abs(samples[low].f - fraction)) return low - 1;
+  return low;
+}
+
+function locallyRetimeViolations(
+  input: PlannerInput,
+  geometrySamples: TrajectorySample[],
+  initialSamples: TrajectorySample[],
+  reachabilityInput: ReachabilityInput,
+  samplesPerSegment: number,
+  initialValidationSamples: TrajectorySample[],
+  initialValidation: TrajectoryValidationResult,
+): { samples: TrajectorySample[]; validation: TrajectoryValidationResult; iterations: number } | null {
+  const velocityLimits = [...reachabilityInput.velocityLimits];
+  let samples = initialSamples;
+  let validationSamples = initialValidationSamples;
+  let validation = initialValidation;
+  let iterations = 0;
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    let changed = false;
+    for (const violation of validation.violations) {
+      if (!violation.refinable || violation.measured <= violation.limit + 1e-9) continue;
+      const fraction = validationSamples[violation.sampleIndex]?.f;
+      if (fraction === undefined) continue;
       const center = nearestFractionIndex(geometrySamples, fraction);
       const ratio = Math.max(0.05, Math.min(0.95, violation.limit / violation.measured));
       const centerLimit = Math.abs(samples[center].velocityMps) * Math.sqrt(ratio) * 0.97;
