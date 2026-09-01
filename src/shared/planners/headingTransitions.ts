@@ -203,7 +203,11 @@ export function smoothHeadingTransitions(
         const progress = endDistance > startDistance + EPSILON
           ? (points[index].s - startDistance) / (endDistance - startDistance)
           : 1;
-        headings[index] = startHeading + (goalHeading - startHeading) * smootherStep(progress);
+        const t3 = t2 * t;
+        headings[index] = (2 * t3 - 3 * t2 + 1) * startHeading
+          + (t3 - 2 * t2 + t) * span * startSlope
+          + (-2 * t3 + 3 * t2) * goalHeading
+          + (t3 - t2) * span * endSlope;
       }
 
       if (goalIndex < transitionGoal.spanEndIndex) {
@@ -217,22 +221,23 @@ export function smoothHeadingTransitions(
       continue;
     }
 
-    const outgoing = unwrapFrom(incoming, rawHeadings[outgoingStart]);
-    const delta = outgoing - incoming;
-
-    const beforeDistance = Math.min(policy.distanceM * beforeShare, Math.max(0, points[boundaryIndex].s - points[previousBoundary].s));
-    if (beforeDistance > EPSILON) {
-      const startDistance = points[boundaryIndex].s - beforeDistance;
-      for (let index = previousBoundary; index < boundaryIndex; index += 1) {
-        if (points[index].s < startDistance - EPSILON) continue;
-        if (index <= protectedBefore) continue;
-        const progress = (points[index].s - startDistance) / beforeDistance;
-        headings[index] += delta * beforeShare * smootherStep(progress);
+    const outgoingLaw = segmentLaws[segment];
+    if (outgoingLaw === "tangent" || outgoingLaw.startsWith("lookAt:")) {
+      // Tangent and LookAt are continuous heading laws, not a single terminal
+      // angle. The incoming law owns the waypoint sample; every moving sample
+      // after it follows the outgoing law on the nearest unwrapped branch.
+      headings[boundaryIndex] = incoming;
+      let previous = incoming;
+      for (let index = boundaryIndex + 1; index <= nextBoundary; index += 1) {
+        headings[index] = unwrapFrom(previous, rawHeadings[index]);
+        previous = headings[index];
       }
+      continue;
     }
 
-    const boundaryHeading = incoming + delta * beforeShare;
-    const afterDistance = Math.min(policy.distanceM * afterShare, Math.max(0, points[nextBoundary].s - points[boundaryIndex].s));
+    const outgoing = unwrapFrom(incoming, rawHeadings[outgoingStart]);
+    const boundaryHeading = incoming;
+    const afterDistance = Math.max(0, points[nextBoundary].s - points[boundaryIndex].s);
     let previous = boundaryHeading;
     const afterStartIndex = boundaryProtected ? boundaryIndex + 1 : boundaryIndex;
     for (let index = afterStartIndex; index <= nextBoundary; index += 1) {

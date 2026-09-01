@@ -1,5 +1,12 @@
 import type { PlannerInput, PlannerOptimizationDiagnostics, PlannerResult } from "../types";
-import { getPlanner } from "./index";
+import { effectivePathConstraints, robotHardLimits } from "../robotLimits";
+import { fixedPathSamples, getPlanner } from "./index";
+import { DEFAULT_SAMPLES_PER_SEGMENT } from "./limits";
+import { insertOptimizationBoundaries } from "./optimizationConstraints";
+import { buildDenseValidationSamples } from "./optimizedTrajectory";
+import { profiledSplineOptimizationSeed } from "./profiledSpline";
+import { applyRotationPriority } from "./rotationPriority";
+import { validateOptimizedTrajectory } from "./trajectoryValidation";
 
 const EPSILON = 1e-4;
 
@@ -29,9 +36,8 @@ function referenceSample(samples: PlannerResult["samples"], fraction: number) {
 
 function optimizerFailure(candidate: PlannerResult): string | null {
   if (candidate.samples.length < 2) return "The optimizer returned fewer than two trajectory samples.";
-  if (candidate.diagnostics.some((issue) => issue.severity === "error")) {
-    return candidate.diagnostics.find((issue) => issue.severity === "error")!.message;
-  }
+  const error = candidate.diagnostics.find((issue) => issue.severity === "error");
+  if (error) return error.message;
   if (!candidate.optimization
     || !["optimal", "feasible", "equivalent"].includes(candidate.optimization.status ?? "")
     || candidate.optimization.constraintViolations !== 0) {
@@ -40,14 +46,67 @@ function optimizerFailure(candidate: PlannerResult): string | null {
   return null;
 }
 
-function invariantFailure(input: PlannerInput, interactive: PlannerResult, candidate: PlannerResult): string | null {
+export function invariantFailure(input: PlannerInput, interactive: PlannerResult, candidate: PlannerResult): string | null {
   if (Math.abs(candidate.totalDistanceM - interactive.totalDistanceM) > 0.001) {
     return "The optimizer changed the fixed path distance.";
   }
+  const samplesPerSegment = (input.samplesPerSegment ?? DEFAULT_SAMPLES_PER_SEGMENT)
+    * (2 ** (candidate.optimization?.refinementPasses ?? 0));
+  const hardLimits = robotHardLimits(input.robot);
+  const robot = hardLimits ? { ...input.robot, maxSpeed: hardLimits.maxSpeedMps } : input.robot;
+  const constraints = effectivePathConstraints(input.path.constraints, robot);
+  const path = constraints === input.path.constraints ? input.path : { ...input.path, constraints };
+  const physicalInput = { ...input, path, robot, samplesPerSegment };
+  const referenceSeed = profiledSplineOptimizationSeed(physicalInput);
+  const fixedGeometryReference = {
+    ...referenceSeed,
+    samples: insertOptimizationBoundaries(physicalInput, referenceSeed.samples),
+  };
+  const movingCandidateSamples = fixedPathSamples(candidate).filter((sample) => (
+    !candidate.stationaryActions?.some((action) => (
+      sample.t > action.startTimeS + EPSILON && sample.t <= action.endTimeS + EPSILON
+    ))
+  ));
+  const desiredTimedSamples = movingCandidateSamples.map((sample) => ({
+    ...sample,
+    headingRad: referenceSample(fixedGeometryReference.samples, sample.f).headingRad,
+  }));
+  for (let index = 0; index < desiredTimedSamples.length; index += 1) {
+    if (index === 0) {
+      desiredTimedSamples[index].angularVelocityRadps = 0;
+      continue;
+    }
+    const before = desiredTimedSamples[index - 1];
+    const sample = desiredTimedSamples[index];
+    const dt = Math.max(1e-9, sample.t - before.t);
+    const headingDelta = Math.atan2(
+      Math.sin(sample.headingRad - before.headingRad),
+      Math.cos(sample.headingRad - before.headingRad),
+    );
+    sample.angularVelocityRadps = headingDelta / dt;
+  }
+  const coupledHeadingReference = applyRotationPriority(path, {
+    ...candidate,
+    samples: desiredTimedSamples,
+    totalTimeS: desiredTimedSamples.at(-1)?.t ?? candidate.totalTimeS,
+    stationaryActions: undefined,
+  }, robot);
+  let maximumCheckedFraction = Number.NEGATIVE_INFINITY;
   for (const sample of candidate.samples) {
     if (![sample.t, sample.s, sample.f, sample.x, sample.y, sample.headingRad, sample.velocityMps].every(Number.isFinite)) {
       return "The optimizer returned a non-finite trajectory sample.";
     }
+    const stationary = candidate.stationaryActions?.some((action) => (
+      sample.t > action.startTimeS + EPSILON && sample.t <= action.endTimeS + EPSILON
+    ));
+    if (stationary || sample.f <= maximumCheckedFraction + EPSILON) continue;
+    maximumCheckedFraction = sample.f;
+    const authoredTurnBoundary = candidate.stationaryActions?.some((action) => (
+      action.kind === "turn"
+      && Math.abs(sample.t - action.startTimeS) <= EPSILON
+      && Math.abs(sample.f - action.fraction) <= EPSILON
+    ));
+    const expectedGeometry = referenceSample(fixedGeometryReference.samples, sample.f);
     const expectedHeading = referenceSample(coupledHeadingReference.samples, sample.f).headingRad;
     const headingDelta = Math.atan2(
       Math.sin(sample.headingRad - expectedHeading),
