@@ -1,9 +1,9 @@
-import type { HeadingTransition, PathDoc, Waypoint } from "../types";
+import type { PathDoc, Waypoint } from "../types";
+import { wrapRadians } from "../math/angles";
 
 const EPSILON = 1e-9;
-export const DEFAULT_HEADING_TRANSITION_DISTANCE_M = 0.75;
 
-export interface ResolvedHeadingTransition {
+export interface HeadingTransitionWindow {
   rotationPriority: "heading" | "translation";
   waypointIndex: number;
   start: number;
