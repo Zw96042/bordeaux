@@ -1,3 +1,50 @@
+import type {
+  PlannerInput,
+  PlannerOptimizationDiagnostics,
+  PlannerResult,
+  TrajectorySample,
+  ValidationIssue,
+} from "../types";
+import { enforceAngularTiming } from "./angularConstraints";
+import { indexIntervalPolicies, indexPointPolicies } from "./intervalPolicies";
+import { effectiveRanges } from "./rotationPriority";
+import { optimizeVelocities, remapTrajectoryTiming } from "./velocityOptimization";
+
+const R = (value: number, places = 4) => Number(value.toFixed(places));
+const EPSILON = 1e-9;
+
+function linearLimits(input: PlannerInput) {
+  const freeSpeed = Math.max(0.01, input.robot.maxSpeed || input.path.constraints.maxVel || 0.01);
+  return {
+    freeSpeed,
+    velocity: Math.max(0.01, Math.min(freeSpeed, input.path.constraints.maxVel || freeSpeed)),
+    acceleration: Math.max(0.01, input.path.constraints.maxAccel || 0.01),
+    deceleration: Math.max(0.01, input.path.constraints.maxDecel ?? input.path.constraints.maxAccel ?? 0.01),
+  };
+}
+
+function linearLimitProfile(
+  input: PlannerInput,
+  samples: readonly TrajectorySample[],
+  waypointSampleIndices?: readonly number[],
+) {
+  const base = linearLimits(input);
+  const ranges = effectiveRanges(input.path, samples, samples.at(-1)?.s ?? 0, waypointSampleIndices);
+  const fractions = samples.map((sample) => sample.f);
+  const policies = ranges.map((range) => ({ ...range, maxDecel: range.maxDecel ?? range.maxAccel }));
+  const pointIndex = indexPointPolicies(fractions, policies);
+  const intervalIndex = indexIntervalPolicies(fractions, policies);
+  const limitsAt = (index: typeof pointIndex, sampleIndex: number) => ({
+    ...base,
+    velocity: Math.min(base.velocity, index.maxVel[sampleIndex]),
+    acceleration: Math.min(base.acceleration, index.maxAccel[sampleIndex]),
+    deceleration: Math.min(base.deceleration, index.maxDecel[sampleIndex]),
+  });
+  return {
+    points: samples.map((_, index) => limitsAt(pointIndex, index)),
+    intervals: samples.map((_, index) => index === 0 ? limitsAt(pointIndex, 0) : limitsAt(intervalIndex, index)),
+  };
+}
 
 function countConstraintViolations(
   input: PlannerInput,

@@ -262,6 +262,61 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
           samplesPerSegment = nextSamplesPerSegment;
           candidateBase = profiledSplineOptimizationSeed({ ...input, samplesPerSegment });
           continue;
+          violation.refinable && [
+            "angular-velocity",
+            "angular-acceleration",
+            "centripetal-acceleration",
+            "drivetrain-velocity",
+            "drivetrain-acceleration",
+          ].includes(violation.kind)
+        ));
+        if (uniformlyRetimable) {
+          for (let timingScale = 0.9; timingScale >= 0.35; timingScale *= 0.9) {
+            const slowedSamples = scaleTrajectoryTiming({
+              ...candidateBase,
+              samples,
+              totalTimeS: samples.at(-1)?.t ?? candidateBase.totalTimeS,
+            }, timingScale).samples;
+            const slowedValidationSamples = scaleTrajectoryTiming({
+              ...candidateBase,
+              samples: validationSamples,
+              totalTimeS: validationSamples.at(-1)?.t ?? candidateBase.totalTimeS,
+            }, timingScale).samples;
+            const slowedValidation = validateOptimizedTrajectory(input, slowedValidationSamples, {
+              angularKinematics: "sample",
+            });
+            const acceptedSamples = slowedValidation.violations.length === 0
+              ? slowedSamples
+              : undefined;
+            const acceptedValidation = slowedValidation.violations.length === 0
+              ? slowedValidation
+              : undefined;
+            if (acceptedSamples && acceptedValidation) {
+              const totalTimeS = acceptedSamples.at(-1)?.t ?? candidateBase.totalTimeS;
+              return {
+                planner: "optimizedTrajectory",
+                totalTimeS,
+                totalDistanceM: candidateBase.totalDistanceM,
+                waypointSampleIndices,
+                samples: acceptedSamples,
+                markers: candidateBase.markers.map((marker) => ({
+                  ...marker,
+                  timeS: R(timeAtFraction(acceptedSamples, marker.fraction), 6),
+                })),
+                diagnostics: candidateBase.diagnostics,
+                optimization: diagnostics(
+                  input,
+                  acceptedSamples,
+                  performance.now() - started,
+                  "optimal",
+                  totalIterations,
+                  undefined,
+                  acceptedValidation,
+                  refinementPasses,
+                ),
+              };
+            }
+          }
         }
 
         const firstViolation = validation.violations[0];
