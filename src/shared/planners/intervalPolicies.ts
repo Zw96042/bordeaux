@@ -1,3 +1,103 @@
+const EPSILON = 1e-9;
+
+export interface IntervalPolicy {
+  start: number;
+  end: number;
+  maxVel?: number;
+  maxAccel?: number;
+  maxDecel?: number;
+  maxAngVel?: number;
+  maxAngAccel?: number;
+  rotationPriority?: "heading" | "translation";
+}
+
+interface IndexedPolicy extends IntervalPolicy {
+  first: number;
+  last: number;
+}
+
+interface HeapEntry {
+  value: number;
+  last: number;
+}
+
+function lowerBound(values: readonly number[], target: number): number {
+  let low = 0;
+  let high = values.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (values[middle] < target) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+function upperBound(values: readonly number[], target: number): number {
+  let low = 0;
+  let high = values.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (values[middle] <= target) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+function pushHeap(heap: HeapEntry[], entry: HeapEntry): void {
+  let index = heap.length;
+  heap.push(entry);
+  while (index > 0) {
+    const parent = (index - 1) >>> 1;
+    if (heap[parent].value <= entry.value) break;
+    heap[index] = heap[parent];
+    index = parent;
+  }
+  heap[index] = entry;
+}
+
+function popHeap(heap: HeapEntry[]): void {
+  const tail = heap.pop();
+  if (heap.length === 0 || tail == null) return;
+  let index = 0;
+  while (true) {
+    const left = index * 2 + 1;
+    if (left >= heap.length) break;
+    const right = left + 1;
+    const child = right < heap.length && heap[right].value < heap[left].value ? right : left;
+    if (heap[child].value >= tail.value) break;
+    heap[index] = heap[child];
+    index = child;
+  }
+  heap[index] = tail;
+}
+
+function minimums(policies: readonly IndexedPolicy[], count: number, key: keyof IntervalPolicy, offset: number): Float64Array {
+  const result = new Float64Array(count + offset).fill(Infinity);
+  const heap: HeapEntry[] = [];
+  let policyIndex = 0;
+  for (let interval = 0; interval < count; interval += 1) {
+    while (policyIndex < policies.length && policies[policyIndex].first <= interval) {
+      const policy = policies[policyIndex];
+      const value = policy[key];
+      if (typeof value === "number" && value > 0) pushHeap(heap, { value, last: policy.last });
+      policyIndex += 1;
+    }
+    while (heap[0]?.last < interval) popHeap(heap);
+    if (heap.length > 0) result[interval + offset] = heap[0].value;
+  }
+  return result;
+}
+
+/** Indexes inclusive interval overlap and heading-priority policy in O((samples + policies) log policies). */
+export function indexIntervalPolicies(
+  fractions: readonly number[],
+  ranges: readonly IntervalPolicy[],
+  transitions: readonly IntervalPolicy[] = [],
+) {
+  const count = Math.max(0, fractions.length - 1);
+  const toIndexed = (policy: IntervalPolicy): IndexedPolicy | null => {
+    const start = Math.min(policy.start, policy.end);
+    const end = Math.max(policy.start, policy.end);
     const first = Math.max(0, lowerBound(fractions, start - EPSILON) - 1);
     const last = Math.min(count - 1, upperBound(fractions, end + EPSILON) - 1);
     return first <= last ? { ...policy, first, last } : null;
