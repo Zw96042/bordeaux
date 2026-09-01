@@ -75,9 +75,13 @@ export function projectDrivetrainAtPoint(
   const sinHeading = Math.sin(point.headingRad);
   const offsets = moduleOffsets(robot);
   const hardLimits = robotHardLimits(robot);
-  if (offsets.length === 0) {
-    return { velocityLimitMps, velocityConstraints, accelerationConstraints, motorAccelerationConstraints };
-  }
+    : 0;
+  const tractionForceLimitN = hardLimits && model
+    ? hardLimits.tractionAccelMps2 * model.massKg! / moduleCount * forceSafety
+    : 0;
+  const stallForceLimitN = hardLimits && model
+    ? hardLimits.motorAccelMps2 * model.massKg! / moduleCount * forceSafety
+    : 0;
 
   for (const module of offsets) {
     const offsetX = cosHeading * module.x - sinHeading * module.y;
@@ -87,50 +91,49 @@ export function projectDrivetrainAtPoint(
     const headingDerivative = point.headingDerivativeRadPerM;
     const uX = point.tangentX + headingDerivative * perpendicularX;
     const uY = point.tangentY + headingDerivative * perpendicularY;
-    const xX = point.curvatureInvM * point.normalX
-      + point.headingSecondDerivativeRadPerM2 * perpendicularX
-      - headingDerivative ** 2 * offsetX;
-    const xY = point.curvatureInvM * point.normalY
-      + point.headingSecondDerivativeRadPerM2 * perpendicularY
-      - headingDerivative ** 2 * offsetY;
     const velocityCoefficient = Math.hypot(uX, uY);
     const moduleVelocityLimit = velocityCoefficient > EPSILON
       ? freeSpeed / velocityCoefficient
       : Number.POSITIVE_INFINITY;
     velocityLimitMps = Math.min(velocityLimitMps, moduleVelocityLimit);
     velocityConstraints.push({ coefficient: velocityCoefficient, limitMps: freeSpeed, label: module.label });
-    accelerationConstraints.push({
-      uX,
-      uY,
-      xX,
-      xY,
-      limit: Math.max(0.01, accelerationLimitMps2),
-      label: module.label,
-    });
-    if (hardLimits && velocityCoefficient > EPSILON) {
-      const motorAcceleration = hardLimits.motorAccelMps2 * motorSafety;
-      motorAccelerationConstraints.push({
-        u: velocityCoefficient,
-        x: (uX * xX + uY * xY) / velocityCoefficient,
-        minimum: -motorAcceleration,
-        maximum: motorAcceleration,
-        velocityCoefficient,
-        freeSpeed: hardLimits.maxSpeedMps,
-        motorAcceleration,
-        label: module.label,
+
+    if (hardLimits && tractionForceLimitN > EPSILON) {
+      const forceUX = massPerModule * point.tangentX
+        + yawForceCoefficient * headingDerivative * perpendicularX;
+      const forceUY = massPerModule * point.tangentY
+        + yawForceCoefficient * headingDerivative * perpendicularY;
+      const forceXX = massPerModule * point.curvatureInvM * point.normalX
+        + yawForceCoefficient * point.headingSecondDerivativeRadPerM2 * perpendicularX;
+      const forceXY = massPerModule * point.curvatureInvM * point.normalY
+        + yawForceCoefficient * point.headingSecondDerivativeRadPerM2 * perpendicularY;
+      accelerationConstraints.push({
+        uX: forceUX,
+        uY: forceUY,
+        xX: forceXX,
+        xY: forceXY,
+        limit: tractionForceLimitN,
+        label: `${module.label}-traction-force`,
       });
+      if (velocityCoefficient > EPSILON && stallForceLimitN > EPSILON) {
+        const velocityDirectionX = uX / velocityCoefficient;
+        const velocityDirectionY = uY / velocityCoefficient;
+        scalarAccelerationConstraints.push({
+          u: forceUX * velocityDirectionX + forceUY * velocityDirectionY,
+          x: forceXX * velocityDirectionX + forceXY * velocityDirectionY,
+          minimum: -stallForceLimitN,
+          maximum: stallForceLimitN,
+          velocityCoefficient,
+          freeSpeed: hardLimits.maxSpeedMps,
+          motorAcceleration: stallForceLimitN,
+          label: `${module.label}-motor-force`,
+        });
+      }
     }
 
-    const constantSpeedCoefficient = Math.hypot(xX, xY);
-    if (constantSpeedCoefficient > EPSILON) {
-      velocityLimitMps = Math.min(
-        velocityLimitMps,
-        Math.sqrt(Math.max(0, accelerationLimitMps2) / constantSpeedCoefficient),
-      );
-    }
   }
 
-  return { velocityLimitMps, velocityConstraints, accelerationConstraints, motorAccelerationConstraints };
+  return { velocityLimitMps, velocityConstraints, accelerationConstraints, scalarAccelerationConstraints };
 }
 
 export function evaluateDrivetrainKinematics(
@@ -176,6 +179,33 @@ export function evaluateDrivetrainKinematics(
   });
 }
 
+/**
+ * Allocates the requested chassis wrench across the module force contacts.
+ * Alternating projections redistribute force in the wrench nullspace while
+ * preserving ΣF=m*a and Σ(r×F)=I*alpha, closely matching the force-contact
+ * feasibility model used by Choreo without adding an optimization dependency.
+ */
+export function evaluateDrivetrainForces(
+  point: CanonicalPathPoint,
+  robot: RobotConfig,
+  velocityMps: number,
+  accelerationMps2: number,
+  _angularVelocityRadps: number,
+  angularAccelerationRadps2: number,
+): DrivetrainForceValue[] {
+  const model = robot.driveModel;
+  const hardLimits = robotHardLimits(robot);
+  const offsets = moduleOffsets(robot);
+  if (!model || !hardLimits || offsets.length === 0) return [];
+
+  const massKg = model.massKg!;
+  const moiKgM2 = model.moiKgM2!;
+  const moduleCount = offsets.length;
+  const radiusSquaredSum = offsets.reduce((sum, module) => sum + module.x ** 2 + module.y ** 2, 0);
+  if (radiusSquaredSum <= EPSILON) return [];
+
+  const cosHeading = Math.cos(point.headingRad);
+  const sinHeading = Math.sin(point.headingRad);
   const comAccelerationX = point.tangentX * accelerationMps2
     + point.curvatureInvM * point.normalX * velocityMps ** 2;
   const comAccelerationY = point.tangentY * accelerationMps2
