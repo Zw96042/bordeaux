@@ -48,13 +48,13 @@ function invariantFailure(input: PlannerInput, interactive: PlannerResult, candi
     if (![sample.t, sample.s, sample.f, sample.x, sample.y, sample.headingRad, sample.velocityMps].every(Number.isFinite)) {
       return "The optimizer returned a non-finite trajectory sample.";
     }
-    const expected = referenceSample(interactive.samples, sample.f);
+    const expectedHeading = referenceSample(coupledHeadingReference.samples, sample.f).headingRad;
     const headingDelta = Math.atan2(
-      Math.sin(sample.headingRad - expected.headingRad),
-      Math.cos(sample.headingRad - expected.headingRad),
+      Math.sin(sample.headingRad - expectedHeading),
+      Math.cos(sample.headingRad - expectedHeading),
     );
-    if (Math.hypot(sample.x - expected.x, sample.y - expected.y) > 0.001
-      || Math.abs(headingDelta) > 0.001) {
+    if (Math.hypot(sample.x - expectedGeometry.x, sample.y - expectedGeometry.y) > 0.001
+      || (!authoredTurnBoundary && Math.abs(headingDelta) > 0.001)) {
       return "The optimizer changed the fixed geometry or heading law.";
     }
   }
@@ -88,14 +88,94 @@ function invariantFailure(input: PlannerInput, interactive: PlannerResult, candi
   return null;
 }
 
-function fallbackDiagnostics(
-  interactive: PlannerResult,
-  candidate: PlannerResult,
-  status: "equivalent" | "internal-error",
+interface FinalValidation {
+  failure?: string;
+  constraintViolations: number;
+  validatedPoints: number;
+  activeConstraints: string[];
+}
+
+export function validateFinal(input: PlannerInput, result: PlannerResult): FinalValidation {
+  const errors = result.diagnostics.filter((issue) => issue.severity === "error");
+  const invalidSamples = result.samples.length < 2
+    || !Number.isFinite(result.totalTimeS) || !Number.isFinite(result.totalDistanceM)
+    || result.totalTimeS < 0 || result.totalDistanceM < 0
+    || result.samples.some((sample, index) => (
+      ![sample.t, sample.s, sample.f, sample.x, sample.y, sample.headingRad,
+        sample.velocityMps, sample.accelerationMps2, sample.angularVelocityRadps].every(Number.isFinite)
+      || sample.t < 0 || (index > 0 && sample.t < result.samples[index - 1].t)
+    ));
+  if (invalidSamples || errors.length > 0 || result.optimization?.fallback) {
+    return {
+      failure: errors[0]?.message ?? result.optimization?.fallbackReason ?? "The trajectory has missing or non-finite samples.",
+      constraintViolations: Math.max(1, errors.length, result.optimization?.constraintViolations ?? 0),
+      validatedPoints: result.optimization?.validatedPoints ?? 0,
+      activeConstraints: result.optimization?.activeConstraints ?? [],
+    };
+  }
+  try {
+    const movingResult = result.stationaryActions?.length
+      ? {
+          ...result,
+          samples: result.samples.filter((sample) => !result.stationaryActions!.some((action) => (
+            sample.t > action.startTimeS + EPSILON && sample.t <= action.endTimeS + EPSILON
+          ))),
+        }
+      : result;
+    const timedSamples = fixedPathSamples(movingResult);
+    const samplesPerSegment = (input.samplesPerSegment ?? DEFAULT_SAMPLES_PER_SEGMENT)
+      * (2 ** (result.optimization?.refinementPasses ?? 0));
+    const hardLimits = robotHardLimits(input.robot);
+    const robot = hardLimits ? { ...input.robot, maxSpeed: hardLimits.maxSpeedMps } : input.robot;
+    const path = { ...input.path, constraints: effectivePathConstraints(input.path.constraints, robot) };
+    const physicalInput = { ...input, path, robot };
+    const samples = buildDenseValidationSamples(physicalInput, timedSamples, samplesPerSegment);
+    const validation = validateOptimizedTrajectory(physicalInput, samples, { angularKinematics: "sample" });
+    return {
+      failure: validation.violations[0]?.message,
+      constraintViolations: validation.violations.length,
+      validatedPoints: validation.checkedPoints,
+      activeConstraints: validation.activeConstraints,
+    };
+  } catch (error) {
+    return {
+      failure: error instanceof Error ? error.message : "Final trajectory validation failed.",
+      constraintViolations: Math.max(1, result.optimization?.constraintViolations ?? 0),
+      validatedPoints: result.optimization?.validatedPoints ?? 0,
+      activeConstraints: result.optimization?.activeConstraints ?? [],
+    };
+  }
+}
+
+function retainedBaseline(
+  input: PlannerInput,
+  baseline: PlannerResult,
   reason?: string,
-): PlannerOptimizationDiagnostics {
+): PlannerResult {
+  const validation = validateFinal(input, baseline);
+  const failure = validation.failure;
+  const optimization: PlannerOptimizationDiagnostics = {
+    ...(baseline.optimization ?? { solveTimeMs: 0 }),
+    constraintViolations: validation.constraintViolations,
+    validatedPoints: validation.validatedPoints,
+    activeConstraints: validation.activeConstraints,
+    plannerUsed: baseline.planner,
+    status: failure ? "invalid-input" : "equivalent",
+    totalTimeS: baseline.totalTimeS,
+    maxVelocityMps: Math.max(0, ...baseline.samples.map((sample) => Math.abs(sample.velocityMps))),
+    maxAccelerationMps2: Math.max(0, ...baseline.samples.map((sample) => Math.abs(sample.accelerationMps2))),
+    fallback: Boolean(failure),
+    fallbackReason: failure ?? reason,
+  };
+  // Diagnostics describe the trajectory actually returned, never a rejected candidate.
   return {
-    ...(candidate.optimization ?? {
+    ...baseline,
+    diagnostics: failure ? [...baseline.diagnostics, {
+      severity: "error",
+      path: `paths.${input.path.name}.planner`,
+      message: `Normal trajectory could not be validated: ${failure}`,
+    }] : baseline.diagnostics,
+    optimization,
   };
 }
 
