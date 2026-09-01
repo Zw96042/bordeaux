@@ -106,6 +106,39 @@ function timeAtFraction(samples: TrajectorySample[], fraction: number): number {
     }
   }
   return samples[samples.length - 1].t;
+      const center = nearestFractionIndex(geometrySamples, fraction);
+      const ratio = Math.max(0.05, Math.min(0.95, violation.limit / violation.measured));
+      const centerLimit = Math.abs(samples[center].velocityMps) * Math.sqrt(ratio) * 0.97;
+      // A heading-law seam is spatial, so its repair window must not shrink
+      // when dense validation raises the samples-per-segment count.
+      const radius = violation.kind === "angular-acceleration"
+        ? Math.max(8, Math.ceil(samplesPerSegment * 0.1))
+        : 3;
+      for (let offset = -radius; offset <= radius; offset += 1) {
+        const index = center + offset;
+        if (index <= 0 || index >= velocityLimits.length - 1) continue;
+        const blend = Math.abs(offset) / (radius + 1);
+        const localLimit = centerLimit + (Math.abs(samples[index].velocityMps) - centerLimit) * blend;
+        const next = Math.max(0, localLimit);
+        if (next < velocityLimits[index] - 1e-6) {
+          velocityLimits[index] = next;
+          changed = true;
+        }
+      }
+    }
+    if (!changed) return null;
+
+    const reachability = solveReachabilityProfile({ ...reachabilityInput, velocityLimits });
+    if (reachability.status !== "optimal") return null;
+    iterations += reachability.iterations;
+    samples = remapTiming(geometrySamples, reachability.velocities);
+    validationSamples = buildDenseValidationSamples(input, samples, samplesPerSegment);
+    validation = validateOptimizedTrajectory(input, validationSamples, {
+      angularKinematics: "sample",
+    });
+    if (validation.violations.length === 0) return { samples, validation, iterations };
+  }
+  return null;
 }
 
 function diagnostics(
@@ -140,7 +173,7 @@ function diagnostics(
 
 export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
   id: "optimizedTrajectory",
-  generate(input: PlannerInput): PlannerResult {
+  generate(input): PlannerResult {
     const started = performance.now();
     const base = profiledSplinePlanner.generate(input);
     const optimizationSeed = profiledSplineOptimizationSeed(input);
@@ -159,18 +192,6 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
         diagnostics: [...base.diagnostics, issue],
         optimization: {
           ...diagnostics(input, base.samples, solveTimeMs, "invalid-input", 0, fallbackReason),
-          plannerUsed: "profiledSpline",
-        },
-      };
-    }
-
-    const translationPriority = input.path.ranges?.some((range) => range.rotationPriority === "translation")
-      || input.path.waypoints.some((waypoint) => waypoint.headingTransition?.rotationPriority === "translation");
-    if (translationPriority) {
-      return {
-        ...base,
-        optimization: {
-          ...diagnostics(input, base.samples, performance.now() - started, "equivalent", 0),
           plannerUsed: "profiledSpline",
         },
       };
@@ -196,7 +217,9 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
       let totalIterations = 0;
       for (let refinementPasses = 0; refinementPasses <= MAX_REFINEMENT_PASSES; refinementPasses += 1) {
         const optimizationSamples = insertOptimizationBoundaries(input, candidateBase.samples);
-        const reachability = solveReachabilityProfile(buildReachabilityInput(input, optimizationSamples));
+        const waypointSampleIndices = remapWaypointIndices(candidateBase, optimizationSamples);
+        const reachabilityInput = buildReachabilityInput(input, optimizationSamples);
+        const reachability = solveReachabilityProfile(reachabilityInput);
         totalIterations += reachability.iterations;
         if (reachability.status !== "optimal") {
           const reason = reachability.reason ?? "The fixed-path optimizer could not produce a trajectory.";
@@ -225,20 +248,16 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
         const samples = remapTiming(optimizationSamples, reachability.velocities);
         const segmentCount = Math.max(0, input.path.waypoints.length - 1);
         const validationSamples = buildDenseValidationSamples(input, samples, samplesPerSegment);
-        const translationPriorityStart = translationPriorityStartIndex(
-          input.path,
-          validationSamples,
-          validationSamples.at(-1)?.s ?? candidateBase.totalDistanceM,
-        );
         const validation = validateOptimizedTrajectory(input, validationSamples, {
-          skipAngularFromIndex: translationPriorityStart ?? undefined,
+          angularKinematics: "sample",
         });
         if (validation.violations.length === 0) {
-          const totalTimeS = R(samples[samples.length - 1]?.t ?? candidateBase.totalTimeS, 4);
+          const totalTimeS = samples[samples.length - 1]?.t ?? candidateBase.totalTimeS;
           return {
             planner: "optimizedTrajectory",
             totalTimeS,
             totalDistanceM: candidateBase.totalDistanceM,
+            waypointSampleIndices,
             samples,
             markers: candidateBase.markers.map((marker) => ({ ...marker, timeS: R(timeAtFraction(samples, marker.fraction), 6) })),
             diagnostics: candidateBase.diagnostics,
@@ -246,7 +265,7 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
               input,
               samples,
               performance.now() - started,
-              translationPriorityStart !== null ? "feasible" : "optimal",
+              "optimal",
               totalIterations,
               undefined,
               validation,
@@ -262,6 +281,45 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
           samplesPerSegment = nextSamplesPerSegment;
           candidateBase = profiledSplineOptimizationSeed({ ...input, samplesPerSegment });
           continue;
+        }
+
+        const locallyRetimed = locallyRetimeViolations(
+          input,
+          optimizationSamples,
+          samples,
+          reachabilityInput,
+          samplesPerSegment,
+          validationSamples,
+          validation,
+        );
+        if (locallyRetimed) {
+          totalIterations += locallyRetimed.iterations;
+          const totalTimeS = locallyRetimed.samples.at(-1)?.t ?? candidateBase.totalTimeS;
+          return {
+            planner: "optimizedTrajectory",
+            totalTimeS,
+            totalDistanceM: candidateBase.totalDistanceM,
+            waypointSampleIndices,
+            samples: locallyRetimed.samples,
+            markers: candidateBase.markers.map((marker) => ({
+              ...marker,
+              timeS: R(timeAtFraction(locallyRetimed.samples, marker.fraction), 6),
+            })),
+            diagnostics: candidateBase.diagnostics,
+            optimization: diagnostics(
+              input,
+              locallyRetimed.samples,
+              performance.now() - started,
+              "optimal",
+              totalIterations,
+              undefined,
+              locallyRetimed.validation,
+              refinementPasses,
+            ),
+          };
+        }
+
+        const uniformlyRetimable = validation.violations.every((violation) => (
           violation.refinable && [
             "angular-velocity",
             "angular-acceleration",
