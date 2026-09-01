@@ -3,11 +3,14 @@ import { robotHardLimits } from "../robotLimits";
 import { headingTransitionWindows, segmentHeadingLaws } from "./headingTransitions";
 import { MAX_TRAJECTORY_SAMPLES } from "./limits";
 import { buildDrivetrainProjection } from "./drivetrainProjection";
-import { buildCanonicalPathState, findDynamicHeadingStops, interpolatePathPoint } from "./pathState";
+import {
+  buildCanonicalPathState,
+  interpolatePathPoint,
+  isStationaryHeadingTransition,
+} from "./pathState";
 import {
   activeRanges,
   effectiveRanges,
-  translationPriorityStartIndex,
   type EffectiveRange,
 } from "./rotationPriority";
 import type { AffineScalarAccelerationConstraint, ReachabilityInput } from "./reachability";
@@ -15,8 +18,9 @@ import type { AffineScalarAccelerationConstraint, ReachabilityInput } from "./re
 const EPSILON = 1e-9;
 const NUMERICAL_SAFETY = 0.99;
 const DRIVETRAIN_SAFETY = 0.95;
-const MODULE_MOTOR_SAFETY = 0.95;
+const ANGULAR_ACCELERATION_SAFETY = 0.85;
 const DEG = Math.PI / 180;
+const OPTIMIZATION_BOUNDARY_POSITION_TOLERANCE_M = 1e-4;
 
 export interface LinearLimits {
   freeSpeed: number;
@@ -37,7 +41,10 @@ function baseLinearLimits(input: PlannerInput): LinearLimits {
   const acceleration = Math.max(0.01, input.path.constraints.maxAccel || 0.01);
   return {
     freeSpeed: velocityCap,
-    motorAcceleration: Math.min(acceleration, hardLimits?.motorAccelMps2 ?? acceleration),
+    // Keep the motor torque-speed envelope independent from traction. The
+    // reachability solve applies both, so the active limit is their minimum at
+    // each speed rather than a traction limit that incorrectly falls with RPM.
+    motorAcceleration: hardLimits?.motorAccelMps2 ?? acceleration,
     velocity: Math.max(0.01, Math.min(velocityCap, input.path.constraints.maxVel || velocityCap)),
     acceleration,
     deceleration: Math.max(0.01, input.path.constraints.maxDecel ?? input.path.constraints.maxAccel ?? 0.01),
@@ -54,7 +61,7 @@ function tightenLinearLimits(limits: LinearLimits, ranges: readonly EffectiveRan
     const rangeDeceleration = range.maxDecel ?? range.maxAccel;
     if (rangeDeceleration > 0) deceleration = Math.min(deceleration, rangeDeceleration);
   });
-  return { ...limits, velocity, acceleration, deceleration, motorAcceleration: Math.min(limits.motorAcceleration, acceleration) };
+  return { ...limits, velocity, acceleration, deceleration };
 }
 
 function intervalRanges(ranges: readonly EffectiveRange[], before: number, after: number): EffectiveRange[] {
@@ -104,11 +111,38 @@ export function insertOptimizationBoundaries(
     waypointFractions,
     totalDistance,
   );
-  const boundaries = [...ranges.flatMap((range) => [range.start, range.end]), ...transitions.flatMap((transition) => [transition.start, transition.end])]
+  const targetBoundaries = (input.path.targets ?? []).map((target) => ({
+    fraction: target.anchor === "dist"
+      ? (target.d ?? target.f * totalDistance) / Math.max(totalDistance, EPSILON)
+      : target.f,
+    headingRad: target.deg * DEG,
+  })).flatMap((target) => {
+    const segmentIndex = laws.findIndex((law, segment) => (
+      law === "targets"
+      && target.fraction >= (waypointFractions[segment] ?? 0) - EPSILON
+      && target.fraction <= (waypointFractions[segment + 1] ?? 1) + EPSILON
+    ));
+    return segmentIndex >= 0 ? [{ ...target, segmentIndex }] : [];
+  });
+  const boundaries = [
+    ...ranges.flatMap((range) => [range.start, range.end]),
+    ...transitions.flatMap((transition) => [transition.start, transition.end]),
+    ...targetBoundaries.map((target) => target.fraction),
+  ]
     .filter((fraction) => fraction > EPSILON && fraction < 1 - EPSILON)
     .sort((left, right) => left - right)
     .filter((fraction, index, values) => index === 0 || Math.abs(fraction - values[index - 1]) > EPSILON);
-  const missing = boundaries.filter((fraction) => !samples.some((sample) => Math.abs(sample.f - fraction) <= EPSILON));
+  const missing = boundaries.filter((fraction) => {
+    const boundaryDistance = fraction * totalDistance;
+    const hardHeadingBoundary = targetBoundaries.some((target) => (
+      Math.abs(target.fraction - fraction) <= EPSILON
+    ));
+    return !samples.some((sample) => (
+      Math.abs(sample.f - fraction) <= EPSILON
+      || (!hardHeadingBoundary
+        && Math.abs(sample.s - boundaryDistance) <= OPTIMIZATION_BOUNDARY_POSITION_TOLERANCE_M)
+    ));
+  });
   if (samples.length + missing.length > MAX_TRAJECTORY_SAMPLES) {
     throw new Error(`Optimization boundaries require more than ${MAX_TRAJECTORY_SAMPLES} trajectory samples`);
   }
@@ -119,6 +153,48 @@ export function insertOptimizationBoundaries(
     if (afterIndex <= 0) continue;
     result.splice(afterIndex, 0, interpolateSample(result[afterIndex - 1], result[afterIndex], fraction));
   }
+  const adjusted = result.map((sample, index) => {
+    const target = targetBoundaries.find((candidate) => Math.abs(candidate.fraction - sample.f) <= EPSILON);
+    const headingRad = target
+      ? sample.headingRad + Math.atan2(
+          Math.sin(target.headingRad - sample.headingRad),
+          Math.cos(target.headingRad - sample.headingRad),
+        )
+      : sample.headingRad;
+    return { ...sample, i: index, headingRad };
+  });
+
+  // A hard off-grid target is inserted after the coarse heading law was
+  // sampled. Refit the preceding span through the exact knot so insertion
+  // cannot create a one-sample heading kink (and a fake velocity collapse).
+  for (let segmentIndex = 0; segmentIndex < laws.length; segmentIndex += 1) {
+    const targets = targetBoundaries
+      .filter((target) => target.segmentIndex === segmentIndex)
+      .sort((first, second) => first.fraction - second.fraction);
+    if (targets.length === 0) continue;
+    let startIndex = adjusted.findIndex((sample) => Math.abs(
+      sample.f - (waypointFractions[segmentIndex] ?? 0),
+    ) <= EPSILON);
+    if (startIndex < 0) continue;
+
+    for (const target of targets) {
+      const goalIndex = adjusted.findIndex((sample) => Math.abs(sample.f - target.fraction) <= EPSILON);
+      if (goalIndex <= startIndex) {
+        startIndex = Math.max(startIndex, goalIndex);
+        continue;
+      }
+      const exactSample = samples.find((sample) => Math.abs(sample.f - target.fraction) <= EPSILON);
+      if (transitions.length === 0 && exactSample && Math.abs(Math.atan2(
+        Math.sin(exactSample.headingRad - target.headingRad),
+        Math.cos(exactSample.headingRad - target.headingRad),
+      )) <= EPSILON) {
+        // The geometry sampler already evaluated the continuous heading law
+        // at this target. Refitting it would introduce new derivative jumps.
+        startIndex = goalIndex;
+        continue;
+      }
+      const startHeading = adjusted[startIndex].headingRad;
+      const goalHeading = startHeading + Math.atan2(
         Math.sin(target.headingRad - startHeading),
         Math.cos(target.headingRad - startHeading),
       );
