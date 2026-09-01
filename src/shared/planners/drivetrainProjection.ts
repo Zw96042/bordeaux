@@ -15,14 +15,14 @@ export interface DrivetrainPointProjection {
   velocityLimitMps: number;
   velocityConstraints: DrivetrainVelocityConstraint[];
   accelerationConstraints: AffineAccelerationConstraint[];
-  motorAccelerationConstraints: AffineScalarAccelerationConstraint[];
+  scalarAccelerationConstraints: AffineScalarAccelerationConstraint[];
 }
 
 export interface DrivetrainProjection {
   pointVelocityLimits: number[];
   intervalVelocityLimits: number[];
   intervalAccelerationConstraints: AffineAccelerationConstraint[][];
-  intervalMotorAccelerationConstraints: AffineScalarAccelerationConstraint[][];
+  intervalScalarAccelerationConstraints: AffineScalarAccelerationConstraint[][];
 }
 
 export interface DrivetrainKinematicValue {
@@ -31,6 +31,14 @@ export interface DrivetrainKinematicValue {
   accelerationMps2: number;
   longitudinalAccelerationMps2: number;
   motorAccelerationLimitMps2?: number;
+}
+
+export interface DrivetrainForceValue {
+  label: string;
+  requiredForceN: number;
+  requiredMotorForceN: number;
+  tractionForceLimitN: number;
+  motorForceLimitN: number;
 }
 
 interface ModuleOffset {
@@ -64,17 +72,39 @@ export function projectDrivetrainAtPoint(
   point: CanonicalPathPoint,
   robot: RobotConfig,
   accelerationLimitMps2: number,
-  motorSafety = 1,
+  forceSafety = 1,
 ): DrivetrainPointProjection {
   const freeSpeed = Math.max(0.01, robot.maxSpeed);
   const velocityConstraints: DrivetrainVelocityConstraint[] = [];
   const accelerationConstraints: AffineAccelerationConstraint[] = [];
-  const motorAccelerationConstraints: AffineScalarAccelerationConstraint[] = [];
+  const scalarAccelerationConstraints: AffineScalarAccelerationConstraint[] = [];
   let velocityLimitMps = freeSpeed;
   const cosHeading = Math.cos(point.headingRad);
   const sinHeading = Math.sin(point.headingRad);
   const offsets = moduleOffsets(robot);
+  if (offsets.length === 0) {
+    return { velocityLimitMps, velocityConstraints, accelerationConstraints, scalarAccelerationConstraints };
+  }
+
+  // Traction limits the acceleration of the chassis center of mass. A module
+  // is a force contact on one rigid body, not an independent point mass; its
+  // rotational point acceleration may legitimately exceed the COM limit.
+  accelerationConstraints.push({
+    uX: point.tangentX,
+    uY: point.tangentY,
+    xX: point.curvatureInvM * point.normalX,
+    xY: point.curvatureInvM * point.normalY,
+    limit: Math.max(0.01, accelerationLimitMps2),
+    label: "chassis-traction",
+  });
+
   const hardLimits = robotHardLimits(robot);
+  const model = robot.driveModel;
+  const radiusSquaredSum = offsets.reduce((sum, module) => sum + module.x ** 2 + module.y ** 2, 0);
+  const moduleCount = offsets.length;
+  const massPerModule = (model?.massKg ?? 0) / moduleCount;
+  const yawForceCoefficient = radiusSquaredSum > EPSILON
+    ? (model?.moiKgM2 ?? 0) / radiusSquaredSum
     : 0;
   const tractionForceLimitN = hardLimits && model
     ? hardLimits.tractionAccelMps2 * model.massKg! / moduleCount * forceSafety

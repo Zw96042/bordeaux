@@ -96,59 +96,37 @@ function fallbackDiagnostics(
 ): PlannerOptimizationDiagnostics {
   return {
     ...(candidate.optimization ?? {
-      plannerUsed: "profiledSpline",
-      solveTimeMs: 0,
-      totalTimeS: interactive.totalTimeS,
-      maxVelocityMps: Math.max(...interactive.samples.map((sample) => Math.abs(sample.velocityMps))),
-      maxAccelerationMps2: Math.max(...interactive.samples.map((sample) => Math.abs(sample.accelerationMps2))),
-      constraintViolations: 0,
-      fallback: false,
-    }),
-    plannerUsed: "profiledSpline",
-    status,
-    totalTimeS: interactive.totalTimeS,
-    constraintViolations: 0,
-    fallback: status === "internal-error",
-    ...(reason ? { fallbackReason: reason } : { fallbackReason: undefined }),
   };
 }
 
-/**
- * Runs the bounded fixed-geometry optimizer and accepts only a validated time
- * improvement. An equal or slower candidate keeps the trustworthy interactive
- * result without describing it as an optimization win.
- */
+/** Accepts a fixed-path result only after authoritative physical validation. */
 export function optimizeFixedGeometryFinal(input: PlannerInput): PlannerResult {
   const interactive = getPlanner("profiledSpline").generate(input);
   let candidate: PlannerResult;
   try {
     candidate = getPlanner("optimizedTrajectory").generate(input);
   } catch (error) {
-    const reason = error instanceof Error ? error.message : "Final optimization failed.";
-    return {
-      ...interactive,
-      optimization: fallbackDiagnostics(interactive, interactive, "internal-error", reason),
-    };
+    return retainedBaseline(input, interactive, error instanceof Error ? error.message : "Final optimization failed.");
   }
 
-  const optimizationFailure = optimizerFailure(candidate);
-  if (!optimizationFailure && candidate.totalTimeS >= interactive.totalTimeS - EPSILON) {
-    return {
-      ...interactive,
-      optimization: fallbackDiagnostics(interactive, candidate, "equivalent"),
-    };
+  const failure = optimizerFailure(candidate) ?? invariantFailure(input, interactive, candidate);
+  if (failure) return retainedBaseline(input, interactive, failure);
+  const validation = validateFinal(input, candidate);
+  if (validation.failure) return retainedBaseline(input, interactive, validation.failure);
+  if (candidate.totalTimeS >= interactive.totalTimeS - EPSILON) {
+    const retained = retainedBaseline(input, interactive);
+    if (!retained.optimization?.fallback) return retained;
   }
-  const failure = optimizationFailure ?? invariantFailure(input, interactive, candidate);
-  if (failure) {
-    return {
-      ...interactive,
-      diagnostics: [...interactive.diagnostics, {
-        severity: "warning",
-        path: `paths.${input.path.name}.planner`,
-        message: `Final optimization kept the interactive trajectory: ${failure}`,
-      }],
-      optimization: fallbackDiagnostics(interactive, candidate, "internal-error", failure),
-    };
-  }
-  return candidate;
+  return {
+    ...candidate,
+    optimization: {
+      ...candidate.optimization!,
+      status: "feasible",
+      constraintViolations: validation.constraintViolations,
+      validatedPoints: validation.validatedPoints,
+      activeConstraints: validation.activeConstraints,
+      maxVelocityMps: Math.max(0, ...candidate.samples.map((sample) => Math.abs(sample.velocityMps))),
+      maxAccelerationMps2: Math.max(0, ...candidate.samples.map((sample) => Math.abs(sample.accelerationMps2))),
+    },
+  };
 }
