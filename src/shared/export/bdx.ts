@@ -1,5 +1,6 @@
 import { getPlanner } from "../planners";
-import { optimizeCorridorFinal } from "../planners/corridorFinal";
+import { authoredPath, getAcceptedTrajectory } from "../planners/acceptedTrajectory";
+import { isOptimizationOutdated } from "../planners/acceptedTrajectoryIdentity";
 import { clone } from "../project/defaults";
 import { activeRoutine } from "../project/routines";
 import type {
@@ -21,15 +22,19 @@ export function buildBdxExport(project: BordeauxProject): BdxExport {
   }
 
   const paths: BdxPath[] = exportablePaths(project).map((path) => {
-    const input = { path, robot: project.robot };
-    const result = project.plannerId === "optimizedTrajectory"
-      ? optimizeCorridorFinal(input)
-      : getPlanner("profiledSpline").generate(input);
+    const accepted = getAcceptedTrajectory(path, project.robot, project.field);
+    if (path.optimization?.accepted && !accepted && !isOptimizationOutdated(path, project.robot, project.field)) {
+      throw new Error(`${path.name}: The applied optimization is invalid. Choose Use normal or optimize and apply again before exporting.`);
+    }
+    const result = accepted ?? getPlanner("profiledSpline").generate({ path: authoredPath(path), robot: project.robot });
     if (result.samples.length < 2) {
       throw new Error(`Path "${path.name}" generated fewer than two samples`);
     }
     const blockingDiagnostic = result.diagnostics.find((item) => item.severity === "error");
     if (blockingDiagnostic) throw new Error(`${path.name}: ${blockingDiagnostic.message}`);
+    if (result.optimization?.fallback) {
+      throw new Error(`${path.name}: ${result.optimization.fallbackReason ?? "Trajectory optimization fell back"}`);
+    }
     assertFinitePlannerResult(path.name, result);
     return {
       id: path.id,
