@@ -1,12 +1,35 @@
-import type { PlannerResult, TrajectoryPlanner, TrajectoryPlannerId } from "../types";
-import { optimizedTrajectoryPlanner } from "./optimizedTrajectory";
+import type { PlannerInput, PlannerResult, TrajectoryPlanner, TrajectoryPlannerId } from "../types";
+import {
+  optimizedTrajectoryPlanner,
+  retimeTrajectoryWithVelocityLimits,
+  scaleTrajectoryTiming,
+} from "./optimizedTrajectory";
 import { profiledSplinePlanner } from "./profiledSpline";
+import { addJerkDiagnostics } from "./jerkDiagnostics";
+import { addAngularLimitDiagnostics } from "./angularConstraints";
 import { applyStationaryActions } from "./stationaryActions";
-import { applyRotationPriority } from "./rotationPriority";
+import { applyRotationPriority, headingTransitionIntervalMask } from "./rotationPriority";
 import { effectivePathConstraints, robotHardLimits } from "../robotLimits";
 import { validateOptimizedTrajectory } from "./trajectoryValidation";
+import { DEFAULT_SAMPLES_PER_SEGMENT } from "./limits";
 
 const EPSILON = 1e-9;
+
+function withoutLegacyTimingPriority(path: PlannerInput["path"]): PlannerInput["path"] {
+  const hasLegacyPriority = path.waypoints.some((waypoint) => waypoint.headingTransition !== undefined)
+    || path.ranges.some((range) => range.rotationPriority !== undefined);
+  if (!hasLegacyPriority) return path;
+  return {
+    ...path,
+    waypoints: path.waypoints.map((waypoint) => {
+      if (waypoint.headingTransition === undefined) return waypoint;
+      const { headingTransition: _legacyTransition, ...rest } = waypoint;
+      return rest;
+    }),
+    ranges: path.ranges.map((range) => {
+      if (range.rotationPriority === undefined) return range;
+      const { rotationPriority: _legacyPriority, ...rest } = range;
+      return rest;
     }),
   };
 }
