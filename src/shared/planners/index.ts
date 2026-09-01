@@ -7,6 +7,67 @@ import { effectivePathConstraints, robotHardLimits } from "../robotLimits";
 import { validateOptimizedTrajectory } from "./trajectoryValidation";
 
 const EPSILON = 1e-9;
+    }),
+  };
+}
+
+function nearestFractionIndex(samples: PlannerResult["samples"], fraction: number): number {
+  return samples.reduce((nearest, sample, index) => (
+    Math.abs(sample.f - fraction) < Math.abs(samples[nearest].f - fraction) ? index : nearest
+  ), 0);
+}
+
+function localVelocityLimitsForViolations(
+  path: PlannerInput["path"],
+  base: PlannerResult,
+  checked: PlannerResult,
+  validation: ReturnType<typeof validateOptimizedTrajectory>,
+  rotationError?: boolean,
+): number[] | null {
+  const limits = base.samples.map((sample) => Math.abs(sample.velocityMps));
+  let changed = false;
+  for (const violation of validation.violations) {
+    const sample = checked.samples[violation.sampleIndex];
+    if (!sample || violation.measured <= violation.limit + EPSILON) continue;
+    if (!["drivetrain-velocity", "drivetrain-acceleration", "angular-velocity", "angular-acceleration"].includes(violation.kind)) continue;
+    const center = nearestFractionIndex(base.samples, sample.f);
+    const exponent = violation.kind === "angular-acceleration" ? 0.5 : 1;
+    const safetyFactor = violation.kind === "angular-acceleration" ? 0.95 : 0.99;
+    const ratio = Math.max(0.05, Math.min(0.99,
+      (violation.limit / violation.measured) ** exponent * safetyFactor,
+    ));
+    const centerLimit = Math.abs(base.samples[center].velocityMps) * ratio;
+    const radius = violation.kind === "drivetrain-acceleration" || violation.kind === "angular-acceleration"
+      ? 8
+      : 3;
+    for (let offset = -radius; offset <= radius; offset += 1) {
+      const index = center + offset;
+      if (index <= 0 || index >= limits.length - 1) continue;
+      const blend = Math.abs(offset) / (radius + 1);
+      const localLimit = centerLimit
+        + (Math.abs(base.samples[index].velocityMps) - centerLimit) * blend;
+      if (localLimit < limits[index] - 1e-6) {
+        limits[index] = Math.max(0, localLimit);
+        changed = true;
+      }
+    }
+  }
+  if (rotationError) {
+    const transitions = headingTransitionIntervalMask(path, base.samples, base.totalDistanceM);
+    for (let index = 0; index < transitions.length; index += 1) {
+      if (!transitions[index]) continue;
+      for (const sampleIndex of [index, index + 1]) {
+        if (sampleIndex <= 0 || sampleIndex >= limits.length - 1) continue;
+        const recoveryLimit = Math.abs(base.samples[sampleIndex].velocityMps) * 0.9;
+        if (recoveryLimit < limits[sampleIndex] - 1e-6) {
+          limits[sampleIndex] = recoveryLimit;
+          changed = true;
+        }
+      }
+    }
+  }
+  return changed ? limits : null;
+}
 
 export function fixedPathSamples(result: PlannerResult) {
   let end = result.samples.length;
@@ -28,10 +89,14 @@ export function getPlanner(id: TrajectoryPlannerId): TrajectoryPlanner {
   return {
     id: planner.id,
     generate(input) {
+      const maxAngDecel = input.path.constraints.maxAngDecel;
+      if (maxAngDecel !== undefined && !Number.isFinite(maxAngDecel)) throw new Error("maxAngDecel must be a finite number");
+      if (maxAngDecel !== undefined && maxAngDecel <= 0) throw new Error("maxAngDecel must be greater than zero");
       const hardLimits = robotHardLimits(input.robot);
       const robot = hardLimits ? { ...input.robot, maxSpeed: hardLimits.maxSpeedMps } : input.robot;
-      const constraints = effectivePathConstraints(input.path.constraints, robot);
-      const path = constraints === input.path.constraints ? input.path : { ...input.path, constraints };
+      const canonicalPath = withoutLegacyTimingPriority(input.path);
+      const constraints = effectivePathConstraints(canonicalPath.constraints, robot);
+      const path = constraints === canonicalPath.constraints ? canonicalPath : { ...canonicalPath, constraints };
       const physicalInput = path === input.path && robot === input.robot ? input : { ...input, path, robot };
       const hasStationaryPause = path.waypoints.some((waypoint) => waypoint.turnInPlace || (waypoint.wait ?? 0) > 0);
       const planningInput = hasStationaryPause
@@ -43,14 +108,37 @@ export function getPlanner(id: TrajectoryPlannerId): TrajectoryPlanner {
             },
           }
         : physicalInput;
-      const generated = planner.generate(planningInput);
+      // Both planner families need the same physics-aware fixed-geometry timing.
+      // The optimized family may subsequently improve the corridor, while the
+      // profiled family stops here. The legacy spline timing is still used as
+      // the reachability seed inside optimizedTrajectoryPlanner.
+      const generated = planner.id === "profiledSpline"
+        ? {
+            ...optimizedTrajectoryPlanner.generate(planningInput),
+            planner: "profiledSpline" as const,
+          }
+        : planner.generate(planningInput);
       let rotated = applyRotationPriority(path, generated, robot);
-      if (planner.id === "optimizedTrajectory"
-        && rotated !== generated
-        && (rotated.optimization?.status === "optimal" || rotated.optimization?.status === "feasible")) {
-        const validation = validateOptimizedTrajectory(planningInput, fixedPathSamples(rotated), {
+      let timingBase = generated;
+      const validatesRotatedTrajectory = planner.id === "profiledSpline"
+        || (rotated.optimization?.status === "optimal"
+          || rotated.optimization?.status === "feasible"
+          || rotated.optimization?.status === "equivalent");
+      if (validatesRotatedTrajectory) {
+        let validation = validateOptimizedTrajectory(planningInput, rotated.samples, {
           angularKinematics: "sample",
         });
+        let rotationError = rotated.diagnostics.find((issue) => issue.severity === "error");
+        for (let attempt = 0; attempt < 10 && (validation.violations.length > 0 || rotationError); attempt += 1) {
+          const localLimits = localVelocityLimitsForViolations(
+            path,
+            timingBase,
+            rotated,
+            validation,
+            Boolean(rotationError),
+          );
+          if (!localLimits) break;
+          const retimed = retimeTrajectoryWithVelocityLimits(planningInput, timingBase, localLimits);
           if (!retimed) break;
           timingBase = retimed;
           rotated = applyRotationPriority(path, timingBase, robot);
