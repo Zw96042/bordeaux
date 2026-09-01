@@ -104,20 +104,6 @@ function accelerationBoundsForInterval(
 ): { minimum: number; maximum: number } | null {
   if (distance <= EPSILON) return accelerationBoundsForSpeedSquared(constraints, startSpeedSquared, scalarConstraints);
   return accelerationBoundsForSpeedSquared(constraints.map((constraint) => ({
-    ...constraint,
-    // x_mid = x_start + u * ds for constant interval acceleration.
-    // Substitution keeps the module equation affine in u.
-    uX: constraint.uX + constraint.xX * distance,
-    uY: constraint.uY + constraint.xY * distance,
-  })), startSpeedSquared, scalarConstraints.map((constraint) => ({
-    ...constraint,
-    ...(envelopeSpeedSquared === undefined ? {
-      velocityCoefficient: undefined,
-      freeSpeed: undefined,
-      motorAcceleration: undefined,
-    } : {}),
-    u: constraint.u + constraint.x * distance,
-  })), envelopeSpeedSquared ?? startSpeedSquared);
 }
 
 function tightenForModuleMotorEnvelope(

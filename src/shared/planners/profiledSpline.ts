@@ -31,9 +31,9 @@ function timeAtFraction(fraction: number, pts: Array<{ s: number }>, times: numb
   return times[times.length - 1] ?? 0;
 }
 
-function diagnosticsFor(pathName: string, derived: any): ValidationIssue[] {
-  return (derived.warnings || []).map((warning: any, index: number) => ({
-    severity: warning.sev === "high" && warning.kind !== "vel" ? "error" : "warning",
+function diagnosticsFor(pathName: string, derived: ReturnType<typeof PM.derivePath>): ValidationIssue[] {
+  return (derived.warnings || []).map((warning, index) => ({
+    severity: warning.sev === "high" && warning.kind !== "vel" && warning.kind !== "curv" ? "error" : "warning",
     path: `paths.${pathName}.diagnostics[${index}]`,
     message: warning.text || "Trajectory diagnostic",
   }));
@@ -79,7 +79,7 @@ function generateProfiledSpline(input: PlannerInput, fullPrecision: boolean): Pl
   const times = derived.prof.t || [];
   const totalDistanceM = derived.sample.length || 0;
   const value = (number: number, places: number) => fullPrecision ? number : R(number, places);
-  const samples: TrajectorySample[] = pts.map((point: any, i: number) => ({
+  const samples: TrajectorySample[] = pts.map((point, i) => ({
     i,
     t: value(times[i] ?? 0, 4),
     s: value(point.s ?? 0, 4),
@@ -98,6 +98,7 @@ function generateProfiledSpline(input: PlannerInput, fullPrecision: boolean): Pl
     totalTimeS: value(derived.prof.totalTime || 0, 4),
     totalDistanceM: value(totalDistanceM, 4),
     samples,
+    waypointSampleIndices: derived.wpIdx,
     markers: markersFor(input, pts, times, fullPrecision),
     diagnostics: diagnosticsFor(input.path.name, derived),
   };

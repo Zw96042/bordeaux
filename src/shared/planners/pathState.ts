@@ -29,6 +29,31 @@ export interface CanonicalPathState {
   totalDistanceM: number;
 }
 
+function segmentHeadingLaw(path: PathDoc, segmentIndex: number): string {
+  const waypoint = path.waypoints[segmentIndex];
+  const mode = waypoint?.segmentHeadingMode ?? path.headingMode ?? "targets";
+  if (mode !== "lookAt") return mode;
+  const target = waypoint?.segmentLookAt;
+  return target ? `${mode}:${target.x}:${target.y}` : mode;
+}
+
+/** A stopped waypoint may connect two distinct heading laws by rotating in place. */
+export function isStationaryHeadingTransition(
+  path: PathDoc,
+  point: CanonicalPathPoint | undefined,
+  outgoingHeadingRad?: number,
+): boolean {
+  if (!point?.stop || point.waypointIndex === undefined) return false;
+  const waypointIndex = point.waypointIndex;
+  if (path.waypoints[waypointIndex]?.turnInPlace) return true;
+  if (waypointIndex <= 0 || waypointIndex >= path.waypoints.length - 1) return false;
+  if (outgoingHeadingRad !== undefined) {
+    const delta = Math.atan2(
+      Math.sin(outgoingHeadingRad - point.headingRad),
+      Math.cos(outgoingHeadingRad - point.headingRad),
+    );
+    if (Math.abs(delta) > 1e-4) return true;
+  }
   return segmentHeadingLaw(path, waypointIndex - 1) !== segmentHeadingLaw(path, waypointIndex);
 }
 
