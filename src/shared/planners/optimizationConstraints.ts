@@ -119,7 +119,40 @@ export function insertOptimizationBoundaries(
     if (afterIndex <= 0) continue;
     result.splice(afterIndex, 0, interpolateSample(result[afterIndex - 1], result[afterIndex], fraction));
   }
-  return result.map((sample, index) => ({ ...sample, i: index }));
+        Math.sin(target.headingRad - startHeading),
+        Math.cos(target.headingRad - startHeading),
+      );
+      const startDistance = adjusted[startIndex].s;
+      const endDistance = adjusted[goalIndex].s;
+      const span = endDistance - startDistance;
+      const secant = span > EPSILON ? (goalHeading - startHeading) / span : 0;
+      const limitSlope = (slope: number) => {
+        if (Math.abs(secant) <= EPSILON || slope * secant <= 0) return 0;
+        return Math.sign(secant) * Math.min(Math.abs(slope), Math.abs(secant) * 3);
+      };
+      const previousDistance = startIndex > 0 ? adjusted[startIndex].s - adjusted[startIndex - 1].s : 0;
+      const startSlope = previousDistance > EPSILON
+        ? limitSlope((startHeading - adjusted[startIndex - 1].headingRad) / previousDistance)
+        : secant;
+      const nextDistance = goalIndex + 1 < adjusted.length
+        ? adjusted[goalIndex + 1].s - adjusted[goalIndex].s
+        : 0;
+      const endSlope = nextDistance > EPSILON
+        ? limitSlope((adjusted[goalIndex + 1].headingRad - goalHeading) / nextDistance)
+        : secant;
+      for (let index = startIndex; index <= goalIndex; index += 1) {
+        const t = span > EPSILON ? (adjusted[index].s - startDistance) / span : 1;
+        const t2 = t * t;
+        const t3 = t2 * t;
+        adjusted[index].headingRad = (2 * t3 - 3 * t2 + 1) * startHeading
+          + (t3 - 2 * t2 + t) * span * startSlope
+          + (-2 * t3 + 3 * t2) * goalHeading
+          + (t3 - t2) * span * endSlope;
+      }
+      startIndex = goalIndex;
+    }
+  }
+  return adjusted;
 }
 
 function angularVelocityLimitForInterval(
@@ -170,27 +203,22 @@ export function buildReachabilityInput(
 ): ReachabilityInput {
   const profile = buildLinearConstraintProfile(input, samples);
   const ranges = effectiveRanges(input.path, samples, samples.at(-1)?.s ?? 0);
-  const translationPriorityStart = translationPriorityStartIndex(
-    input.path,
-    samples,
-    samples.at(-1)?.s ?? 0,
+  // Translation and heading are one coupled motion. The sole exception is an
+  // explicitly authored stationary turn: its discontinuous before/after
+  // headings are connected by stationary samples later, so they must not leak
+  // into the moving reachability solve on either adjacent interval.
+  const preliminaryState = buildCanonicalPathState(input.path, samples);
+  const stationaryTurnBoundary = (index: number) => (
+    isStationaryHeadingTransition(
+      input.path,
+      preliminaryState.points[index],
+      preliminaryState.points[index + 1]?.headingRad,
+    )
   );
-  const initialHeadingBreaks = translationPriorityStart === null ? new Set<number>() : new Set([translationPriorityStart]);
-  const preliminaryState = buildCanonicalPathState(
-    input.path,
-    samples,
-    initialHeadingBreaks,
-  );
-  const dynamicHeadingStops = findDynamicHeadingStops(
-    preliminaryState,
-    translationPriorityStart ?? undefined,
-  );
-  const state = buildCanonicalPathState(
-    input.path,
-    samples,
-    new Set([...initialHeadingBreaks, ...dynamicHeadingStops]),
-    dynamicHeadingStops,
-  );
+  const trackedHeadingIntervals = samples.slice(1).map((_sample, index) => (
+    stationaryTurnBoundary(index) || stationaryTurnBoundary(index + 1)
+  ));
+  const state = buildCanonicalPathState(input.path, samples);
   const drivetrain = buildDrivetrainProjection(
     state,
     input.robot,
@@ -198,7 +226,8 @@ export function buildReachabilityInput(
       (input.path.constraints.maxCentripetalAccel ?? limits.acceleration)
       * DRIVETRAIN_SAFETY
     )),
-    MODULE_MOTOR_SAFETY,
+    trackedHeadingIntervals,
+    DRIVETRAIN_SAFETY,
   );
   const curvatureVelocityLimits = state.points.map((point, index) => {
     const lateralLimit = input.path.constraints.maxCentripetalAccel ?? Math.min(
@@ -225,12 +254,13 @@ export function buildReachabilityInput(
   const angularIntervalVelocityLimits = samples.slice(1).map((sample, index) => {
     const before = samples[index];
     const distance = sample.s - before.s;
-    const waypointIndex = state.points[index + 1].waypointIndex;
-    const stationaryTurnBoundary = state.points[index + 1].stop
-      && waypointIndex !== undefined
-      && Boolean(input.path.waypoints[waypointIndex]?.turnInPlace);
+    const stationaryTurnBoundary = isStationaryHeadingTransition(
+      input.path,
+      state.points[index + 1],
+      state.points[index + 2]?.headingRad,
+    );
     if (stationaryTurnBoundary
-      || (translationPriorityStart !== null && index + 1 >= translationPriorityStart)
+      || trackedHeadingIntervals[index]
       || distance <= EPSILON) return Number.POSITIVE_INFINITY;
     const headingDelta = state.points[index + 1].headingRad - state.points[index].headingRad;
     const headingRatePerM = Math.abs(headingDelta / distance);
@@ -240,12 +270,16 @@ export function buildReachabilityInput(
   });
   const angularAccelerationConstraints = state.points.slice(1).map((point, index): AffineScalarAccelerationConstraint[] => {
     const before = state.points[index];
-    const stationaryTurnBoundary = (candidate: typeof point) => candidate.stop
-      && candidate.waypointIndex !== undefined
-      && Boolean(input.path.waypoints[candidate.waypointIndex]?.turnInPlace);
+    const stationaryTurnBoundary = (candidate: typeof point) => (
+      isStationaryHeadingTransition(
+        input.path,
+        candidate,
+        state.points[candidate.sourceIndex + 1]?.headingRad,
+      )
+    );
     if (stationaryTurnBoundary(before)
       || stationaryTurnBoundary(point)
-      || (translationPriorityStart !== null && index + 1 >= translationPriorityStart)) return [];
+      || trackedHeadingIntervals[index]) return [];
     const midpoint = interpolatePathPoint(before, point);
     const limits = angularAccelerationLimitsForInterval(input, ranges, before.f, point.f);
     const direction = Math.sign(midpoint.headingDerivativeRadPerM);
@@ -253,14 +287,16 @@ export function buildReachabilityInput(
       return [{
         u: 0,
         x: midpoint.headingSecondDerivativeRadPerM2,
-        minimum: -limits.acceleration * NUMERICAL_SAFETY,
-        maximum: limits.acceleration * NUMERICAL_SAFETY,
+        minimum: -limits.acceleration * ANGULAR_ACCELERATION_SAFETY,
+        maximum: limits.acceleration * ANGULAR_ACCELERATION_SAFETY,
         label: "angular-acceleration",
       }];
     }
     return [{
       u: direction * midpoint.headingDerivativeRadPerM,
       x: direction * midpoint.headingSecondDerivativeRadPerM2,
+      minimum: -limits.deceleration * ANGULAR_ACCELERATION_SAFETY,
+      maximum: limits.acceleration * ANGULAR_ACCELERATION_SAFETY,
       label: "angular-acceleration",
     }];
   });
