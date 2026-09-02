@@ -164,13 +164,23 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     .filter(({ waypoint }) => waypoint.turnInPlace || waypoint.jiggle || (waypoint.wait ?? 0) > 0);
   if (actions.length === 0 || result.samples.length === 0) return result;
 
-  const baseIndices = waypointSampleIndices(path, result.samples);
+    const arrival = result.samples[actionIndices[terminalIndex]];
+    while (actionIndices[terminalIndex] + 1 < result.samples.length) {
+      const candidate = result.samples[actionIndices[terminalIndex] + 1];
+      if (Math.hypot(candidate.x - arrival.x, candidate.y - arrival.y) > 1e-5
+        || Math.abs(candidate.s - arrival.s) > 1e-6) break;
+      actionIndices[terminalIndex] += 1;
+    }
+  }
+  const nextMoving = actions.some(({ waypoint }) => waypoint.turnInPlace)
+    ? nextMovingSampleIndices(result.samples)
+    : null;
   const incompatible = actions.find(({ waypoint, index }) => {
     if (!waypoint.turnInPlace) return false;
     if (index >= path.waypoints.length - 1) return false;
     const boundary = baseIndices[index];
-    const movingIndex = firstMovingSampleIndex(result.samples, boundary);
-    const outgoing = movingIndex == null ? null : result.samples[movingIndex].headingRad;
+    const movingIndex = nextMoving![boundary];
+    const outgoing = movingIndex < 0 ? null : result.samples[movingIndex].headingRad;
     const target = waypoint.turnInPlace!.headingDeg * DEG + (path.driveBackward ? Math.PI : 0);
     return outgoing == null || Math.abs(wrapRadians(outgoing - target)) > 2 * DEG;
   });
@@ -187,34 +197,36 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
   const period = samplePeriod(result.samples);
   let projectedSampleCount = result.samples.length;
   const plannedTicks = new Map<number, { turn: number; jiggle: number; wait: number }>();
-  for (const { waypoint, index: waypointIndex } of actions) {
-    const boundary = baseIndices[waypointIndex];
+  for (const { waypoint, index: waypointIndex, implicitTurnHeading } of actions) {
+    const boundary = actionIndices[waypointIndex];
     const arrival = result.samples[boundary];
     const previous = result.samples[Math.max(0, boundary - 1)];
-    const startHeading = waypointIndex === 0 ? arrival.headingRad : previous.headingRad;
+    const startHeading = waypoint.turnInPlace && waypointIndex > 0 ? previous.headingRad : arrival.headingRad;
     const targetHeading = waypoint.turnInPlace
       ? waypoint.turnInPlace.headingDeg * DEG + (path.driveBackward ? Math.PI : 0)
-      : arrival.headingRad;
-    const delta = waypoint.turnInPlace
-      ? directedDelta(startHeading, targetHeading, waypoint.turnInPlace.direction)
+      : implicitTurnHeading ?? arrival.headingRad;
+    const delta = waypoint.turnInPlace || implicitTurnHeading !== undefined
+      ? directedDelta(startHeading, targetHeading, waypoint.turnInPlace?.direction)
       : 0;
-    const angularLimits = activeAngularLimits(path, arrival.f, waypointIndex, result.totalDistanceM);
-    const turnDuration = rotationDuration(delta, angularLimits);
+    const turnDuration = (waypoint.turnInPlace || implicitTurnHeading !== undefined) && Math.abs(delta) >= EPSILON
+      ? rotationDuration(delta, activeAngularLimits(path, arrival.f, waypointIndex, result.totalDistanceM))
+      : 0;
     const turnTicks = turnDuration > EPSILON ? Math.max(1, Math.ceil(turnDuration / period - EPSILON)) : 0;
     const jiggleSupported = !waypoint.jiggle || robot?.drive !== "tank";
-    const jigglePositions = waypoint.jiggle && jiggleSupported
-      ? PM.jigglePositions(waypoint, targetHeading, waypoint.jiggle)
+    const positions = waypoint.jiggle && jiggleSupported
+      ? jigglePositions(waypoint, targetHeading, waypoint.jiggle)
       : null;
-    const linearLimits = activeLinearLimits(path, arrival.f, waypointIndex, result.totalDistanceM);
-    const jiggleDuration = waypoint.jiggle && jigglePositions
-      ? feasibleJiggleStrokeDuration(
-          waypoint.jiggle.strokeTimeS,
-          waypoint.jiggle.distanceM,
-          linearLimits,
-          Math.max(robot?.maxSpeed ?? linearLimits.velocity, EPSILON),
-        )
-      : 0;
-    const jiggleTicks = waypoint.jiggle && jigglePositions
+    let jiggleDuration = 0;
+    if (waypoint.jiggle && positions) {
+      const linearLimits = activeLinearLimits(path, arrival.f, waypointIndex, result.totalDistanceM);
+      jiggleDuration = feasibleJiggleStrokeDuration(
+        waypoint.jiggle.strokeTimeS,
+        waypoint.jiggle.distanceM,
+        linearLimits,
+        Math.max(robot?.maxSpeed ?? linearLimits.velocity, EPSILON),
+      );
+    }
+    const jiggleTicks = waypoint.jiggle && positions
       ? Math.max(1, Math.ceil(jiggleDuration / period - EPSILON))
       : 0;
     const waitTicks = Math.max(0, Math.ceil(Math.max(0, waypoint.wait ?? 0) / period - EPSILON));
@@ -225,13 +237,53 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
     }
   }
 
-  let samples = result.samples.map((sample) => ({ ...sample }));
+  const samples = new Array<TrajectorySample>(projectedSampleCount);
+  const insertedByWaypoint = new Array<number>(path.waypoints.length).fill(0);
   const markers = result.markers.map((marker) => ({ ...marker }));
   const diagnostics = [...result.diagnostics];
   const stationaryActions: PlannerStationaryAction[] = [];
-  let inserted = 0;
+  let sampleCount = 0;
+  let actionCursor = 0;
+  let timeOffset = 0;
   let addedDistance = 0;
+  let headingOverride: { x: number; y: number; s: number; heading: number } | undefined;
 
+  for (let baseIndex = 0; baseIndex < result.samples.length; baseIndex += 1) {
+    const source = result.samples[baseIndex];
+    if (headingOverride && (Math.hypot(source.x - headingOverride.x, source.y - headingOverride.y) > 1e-5
+      || Math.abs(source.s - headingOverride.s) > 1e-6)) {
+      headingOverride = undefined;
+    }
+    samples[sampleCount] = {
+      ...source,
+      t: source.t + timeOffset,
+      ...(headingOverride ? { headingRad: headingOverride.heading } : {}),
+    };
+    sampleCount += 1;
+
+    while (actionCursor < actions.length && actionIndices[actions[actionCursor].index] === baseIndex) {
+      const { waypoint, index: waypointIndex, implicitTurnHeading } = actions[actionCursor];
+      actionCursor += 1;
+      const turn = waypoint.turnInPlace;
+      const arrival = samples[sampleCount - 1];
+      const previous = samples[Math.max(0, sampleCount - 2)];
+      const startHeading = waypoint.turnInPlace && waypointIndex > 0 ? previous.headingRad : arrival.headingRad;
+      const hasTurn = Boolean(turn) || implicitTurnHeading !== undefined;
+      const targetHeading = turn ? turn.headingDeg * DEG + (path.driveBackward ? Math.PI : 0) : implicitTurnHeading ?? arrival.headingRad;
+      const delta = hasTurn ? directedDelta(startHeading, targetHeading, turn?.direction) : 0;
+      const ticks = plannedTicks.get(waypointIndex)!;
+      const turnTicks = ticks.turn;
+      const turnDuration = turnTicks * period;
+      const jiggle = waypoint.jiggle;
+      const jiggleHeading = hasTurn ? targetHeading : arrival.headingRad;
+      const jiggleSupported = !jiggle || robot?.drive !== "tank";
+      const positions = jiggle && jiggleSupported ? jigglePositions(waypoint, jiggleHeading, jiggle) : null;
+      if (jiggle && !jiggleSupported) {
+        diagnostics.push({
+          severity: "error",
+          path: `paths.${path.name}.waypoints[${waypointIndex}].jiggle`,
+          message: "Arbitrary-direction jiggle requires a swerve drivetrain",
+        });
       }
       if (jiggle && jiggleSupported && !positions) {
         diagnostics.push({
