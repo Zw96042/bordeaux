@@ -100,6 +100,27 @@ export function translationPriorityStartIndex(
   return null;
 }
 
+    if (runStart >= priorities.length) break;
+    let runEnd = runStart;
+    while (priorities[runEnd + 1] === "translation") runEnd += 1;
+    const after = runEnd + 1;
+    if (priorities[after] === "heading") {
+      for (let index = runStart; index < priorities.length && priorities[index] !== null; index += 1) {
+        recovery[index] = true;
+      }
+    } else if (after < priorities.length) {
+      // Translation priority owns its authored window. If heading still needs
+      // time afterward, retime only the remaining motion rather than creating
+      // a velocity notch inside the transition or at its waypoint.
+      for (let index = after; index < priorities.length; index += 1) {
+        if (priorities[index] !== "translation") recovery[index] = true;
+      }
+    }
+    runStart = runEnd + 1;
+  }
+  return recovery;
+}
+
 function angularLimits(path: PathDoc, ranges: readonly EffectiveRange[], fraction: number) {
   let velocity = path.constraints.maxAngVel * DEG;
   let acceleration = path.constraints.maxAngAccel * DEG;
@@ -116,9 +137,82 @@ function angularLimits(path: PathDoc, ranges: readonly EffectiveRange[], fractio
   };
 }
 
+function symmetricLimit(configuredLimit: number, fits: (value: number) => boolean): number {
+  const limitForDirection = (direction: -1 | 1) => {
+    let low = 0;
+    let high = configuredLimit;
+    for (let iteration = 0; iteration < 16; iteration += 1) {
+      const midpoint = (low + high) * 0.5;
+      if (fits(midpoint * direction)) low = midpoint;
+      else high = midpoint;
+    }
+    return low;
+  };
+  return Math.min(configuredLimit, limitForDirection(-1), limitForDirection(1));
+}
+
+function drivetrainAngularVelocityLimit(
+  point: CanonicalPathPoint,
+  robot: RobotConfig,
+  linearVelocityMps: number,
+  linearAccelerationMps2: number,
+  headingRad: number,
+  configuredLimit: number,
+): number {
+  if (!robot.driveModel || robot.drive === "tank") return configuredLimit;
+  const actualPoint = { ...point, headingRad };
+  const fits = (angularVelocityRadps: number) => evaluateDrivetrainKinematics(
+    actualPoint,
+    robot,
+    linearVelocityMps,
+    linearAccelerationMps2,
+    angularVelocityRadps,
+    0,
+  ).every((module) => (
+    module.speedMps <= robot.maxSpeed
+  ));
+  return symmetricLimit(configuredLimit, fits);
+}
+
+function drivetrainForceAngularAccelerationLimits(
+  point: CanonicalPathPoint,
+  robot: RobotConfig,
+  linearVelocityMps: number,
+  linearAccelerationMps2: number,
+  angularVelocityRadps: number,
+  headingRad: number,
+  configuredLimit: number,
+): { positive: number; negative: number } {
+  if (!robot.driveModel || robot.drive === "tank") return { positive: configuredLimit, negative: configuredLimit };
+  const actualPoint = { ...point, headingRad };
+  const fits = (angularAccelerationRadps2: number) => evaluateDrivetrainForces(
+    actualPoint,
+    robot,
+    linearVelocityMps,
+    linearAccelerationMps2,
+    angularVelocityRadps,
+    angularAccelerationRadps2,
+  ).every((module) => (
+    module.requiredForceN <= module.tractionForceLimitN
+    && module.requiredMotorForceN <= module.motorForceLimitN
+  ));
+  const solve = (direction: -1 | 1) => {
+    let low = 0;
+    let high = configuredLimit;
+    for (let iteration = 0; iteration < 16; iteration += 1) {
+      const midpoint = (low + high) * 0.5;
+      if (fits(midpoint * direction)) low = midpoint;
+      else high = midpoint;
+    }
+    return low;
+  };
+  return { positive: solve(1), negative: solve(-1) };
+}
+
 function intervalAngularLimits(path: PathDoc, ranges: readonly EffectiveRange[], before: number, after: number) {
-  const first = angularLimits(path, ranges, before);
-  const second = angularLimits(path, ranges, after);
+  const overlapping = ranges.filter((range) => Math.min(after, range.end) >= Math.max(before, range.start) - EPSILON);
+  const first = angularLimits(path, overlapping.map((range) => ({ ...range, start: before, end: after })), before);
+  const second = angularLimits(path, overlapping.map((range) => ({ ...range, start: before, end: after })), after);
   return {
     velocity: Math.min(first.velocity, second.velocity),
     acceleration: Math.min(first.acceleration, second.acceleration),
@@ -126,6 +220,10 @@ function intervalAngularLimits(path: PathDoc, ranges: readonly EffectiveRange[],
   };
 }
 
+type TrackingAngularLimits = ReturnType<typeof angularLimits> & {
+  positiveAcceleration?: number;
+  negativeAcceleration?: number;
+};
 
 function directionalRateLimit(limits: TrackingAngularLimits, delta: number): number {
   return delta >= 0
