@@ -126,42 +126,77 @@ function intervalAngularLimits(path: PathDoc, ranges: readonly EffectiveRange[],
   };
 }
 
-function slewOmega(omega: number, target: number, limits: ReturnType<typeof angularLimits>, dt: number): number {
+
+function directionalRateLimit(limits: TrackingAngularLimits, delta: number): number {
+  return delta >= 0
+    ? limits.positiveAcceleration ?? Number.POSITIVE_INFINITY
+    : limits.negativeAcceleration ?? Number.POSITIVE_INFINITY;
+}
+
+function slewOmega(omega: number, target: number, limits: TrackingAngularLimits, dt: number): number {
   const reversing = Math.sign(target) !== 0 && Math.sign(omega) !== 0 && Math.sign(target) !== Math.sign(omega);
   const increasing = Math.sign(target) === Math.sign(omega) && Math.abs(target) > Math.abs(omega);
-  const rate = reversing
+  const authoredRate = reversing
     ? Math.min(limits.acceleration, limits.deceleration)
     : increasing ? limits.acceleration : limits.deceleration;
+  const rate = Math.min(authoredRate, directionalRateLimit(limits, target - omega)) * TRACKING_RATE_SAFETY;
   return omega + clamp(target - omega, -rate * dt, rate * dt);
+}
+
+function matchingEndpointOmega(
+  heading: number,
+  omega: number,
+  targetHeading: number,
+  targetOmega: number,
+  limits: TrackingAngularLimits,
+  dt: number,
+  accelerationDt: number,
+  mustMatchHere: boolean,
+): number | null {
+  if (dt <= EPSILON) return null;
+  const candidate = (targetHeading - heading) / dt;
+  if (Math.abs(candidate) > limits.velocity + EPSILON) return null;
+  const releaseOmega = mustMatchHere ? candidate : targetOmega;
+  if (!mustMatchHere && Math.abs(candidate - targetOmega) > 0.5 * DEG) return null;
+  return Math.abs(slewOmega(omega, releaseOmega, limits, accelerationDt) - releaseOmega) <= EPSILON
+    ? releaseOmega
+    : null;
 }
 
 function trackedStep(
   actual: number,
   omega: number,
   desiredNow: number,
-  limits: ReturnType<typeof angularLimits>,
+  limits: TrackingAngularLimits,
   dt: number,
   brakingDt = dt,
+  desiredPrevious = desiredNow,
+  accelerationDt = dt,
 ): { actual: number; omega: number } {
-  const error = desiredNow - actual;
+  const desiredOmega = (desiredNow - desiredPrevious) / dt;
+  const error = desiredPrevious - actual;
   // A pure error/dt target keeps accelerating until the heading is reached,
   // which carries angular momentum through the target and creates a visible
   // overshoot/reversal. Cap the catch-up component by the speed that can
   // still brake inside the remaining error, including a one-tick margin for
-  // the fixed-period semi-implicit integration used by the planners.
-  const brakingOmega = Math.max(0, Math.sqrt(2 * limits.deceleration * Math.abs(error)) - limits.deceleration * brakingDt);
-  // The remaining heading error already includes this tick's desired motion.
-  // Adding desiredOmega again can carry momentum past a target just as its
-  // authored law settles. Use the braking-safe speed as the complete target.
-  let targetOmega = Math.sign(error) * Math.min(limits.velocity, brakingOmega);
-  const exactOmega = error / dt;
-  const exactRate = Math.sign(exactOmega) !== 0 && Math.sign(omega) !== 0 && Math.sign(exactOmega) !== Math.sign(omega)
-    ? Math.min(limits.acceleration, limits.deceleration)
-    : Math.abs(exactOmega) > Math.abs(omega) ? limits.acceleration : limits.deceleration;
-  if (Math.abs(exactOmega) <= limits.velocity + EPSILON && Math.abs(exactOmega - omega) <= exactRate * dt + EPSILON) {
-    targetOmega = exactOmega;
+  // the fixed-period integration used by the planners.
+  const brakingRate = Math.min(
+    limits.deceleration,
+    directionalRateLimit(limits, -Math.sign(error || omega || 1)),
+  );
+  const brakingOmega = Math.max(0, Math.sqrt(2 * brakingRate * Math.abs(error)) - brakingRate * brakingDt);
+  let catchupOmega = Math.sign(error) * Math.min(limits.velocity, brakingOmega);
+  // Inside one discrete braking step, approach half the remaining error. This
+  // converges without the nonzero-speed snap that previously crossed the
+  // target and forced a whole-path timing slowdown.
+  if (Math.abs(catchupOmega) <= EPSILON && Math.abs(error) > EPSILON) {
+    catchupOmega = clamp(error / (2 * dt), -limits.velocity, limits.velocity);
   }
-  const nextOmega = slewOmega(omega, targetOmega, limits, dt);
+  // Trajectory samples store the average angular velocity for the interval
+  // ending at that sample. Slew that interval value, then integrate it directly
+  // so heading, force evaluation, playback, and export all share one trace.
+  const targetEndpointOmega = clamp(desiredOmega + catchupOmega, -limits.velocity, limits.velocity);
+  const nextOmega = slewOmega(omega, targetEndpointOmega, limits, accelerationDt);
   return { actual: actual + nextOmega * dt, omega: nextOmega };
 }
 
@@ -176,6 +211,7 @@ function samplePeriod(samples: readonly TrajectorySample[]): number {
 
 function hasAngularViolation(path: PathDoc, ranges: readonly EffectiveRange[], samples: readonly TrajectorySample[]): boolean {
   let previousAcceleration: number | undefined;
+  let previousIntervalS: number | undefined;
   for (let index = 0; index < samples.length; index += 1) {
     const sample = samples[index];
     const limits = index === 0
@@ -186,7 +222,9 @@ function hasAngularViolation(path: PathDoc, ranges: readonly EffectiveRange[], s
     const previous = samples[index - 1];
     const dt = sample.t - previous.t;
     if (dt <= EPSILON) continue;
-    const acceleration = Math.abs(sample.angularVelocityRadps - previous.angularVelocityRadps) / dt;
+    // Exported angular velocities are timestamped at their samples, not at
+    // interval midpoints. Their signed difference uses the full sample period.
+    const signedAcceleration = (sample.angularVelocityRadps - previous.angularVelocityRadps) / dt;
     const reversing = Math.sign(sample.angularVelocityRadps) !== 0
       && Math.sign(previous.angularVelocityRadps) !== 0
       && Math.sign(sample.angularVelocityRadps) !== Math.sign(previous.angularVelocityRadps);
@@ -195,30 +233,38 @@ function hasAngularViolation(path: PathDoc, ranges: readonly EffectiveRange[], s
       : Math.abs(sample.angularVelocityRadps) > Math.abs(previous.angularVelocityRadps)
         ? limits.acceleration
         : limits.deceleration;
-    if (acceleration > limit * 1.02) return true;
-    const signedAcceleration = (sample.angularVelocityRadps - previous.angularVelocityRadps) / dt;
+    if (Math.abs(signedAcceleration) > limit * 1.02) return true;
     if (previousAcceleration !== undefined && (path.constraints.maxAngJerk ?? 0) > 0) {
-      const jerk = Math.abs(signedAcceleration - previousAcceleration) / dt;
+      const jerk = Math.abs(signedAcceleration - previousAcceleration)
+        / Math.max(EPSILON, (dt + (previousIntervalS ?? dt)) * 0.5);
       if (jerk > path.constraints.maxAngJerk! * DEG * 1.02) return true;
     }
     previousAcceleration = signedAcceleration;
+    previousIntervalS = dt;
   }
   return false;
 }
 
-/**
- * Preserves fixed translational timestamps while causally slewing heading under
- * the active angular limits. Existing paths are returned byte-for-byte unless a
- * range or heading-law boundary explicitly gives translation timing priority.
- */
+/** Tracks heading causally under the coupled drivetrain limits. */
 export function applyRotationPriority(path: PathDoc, result: PlannerResult, robot: RobotConfig): PlannerResult {
   if (result.samples.length < 2) return result;
-  const ranges = effectiveRanges(path, result.samples, result.totalDistanceM);
-  const waypointF = waypointFractions(path, result.samples);
+  const ranges = effectiveRanges(path, result.samples, result.totalDistanceM, result.waypointSampleIndices);
+  const waypointF = waypointFractions(path, result.samples, result.waypointSampleIndices);
   const laws = segmentHeadingLaws(path, false);
   const breaks = path.waypoints.slice(0, -1).map((waypoint) => Boolean(waypoint.turnInPlace));
   const transitions = headingTransitionWindows(path.waypoints, laws, breaks, waypointF, result.totalDistanceM);
+  // Automatic heading transitions are already part of the reachability solve.
+  // Returning that jointly optimized trace avoids a second causal controller
+  // that could lag the law, manufacture a stop, or chase only the segment end.
+  if (transitions.length > 0) return result;
   if (!ranges.some((range) => range.rotationPriority === "translation")
+    && transitions.length === 0) {
+    // Authored turn-in-place actions own the stopped heading discontinuity and
+    // are expanded and validated after moving-path planning.
+    if (path.waypoints.some((waypoint) => waypoint.turnInPlace)) return result;
+    if (!hasAngularViolation(path, ranges, result.samples)) return result;
+    return {
+      ...result,
       diagnostics: [...result.diagnostics, {
         severity: "error",
         path: `paths.${path.name}.waypoints`,
