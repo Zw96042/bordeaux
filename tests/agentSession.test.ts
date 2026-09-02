@@ -881,4 +881,13 @@ describe("agent session and private bridge", () => {
       await fs.rm(directory, { recursive: true, force: true });
     }
   });
+
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      await new Promise<void>((resolve) => transport.close(() => resolve()));
+      await fs.rm(endpoint, { force: true });
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
 });

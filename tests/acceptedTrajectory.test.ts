@@ -1,3 +1,31 @@
+import { readFileSync } from "node:fs";
+import { describe, expect, it, beforeAll } from "vitest";
+import { buildBdxExport } from "../src/shared/export/bdx";
+import { acceptedTrajectoryShapeError, authoredPath, createAcceptedTrajectory, getAcceptedTrajectory, optimizationInputKey } from "../src/shared/planners/acceptedTrajectory";
+import { optimizeCorridorFinal } from "../src/shared/planners/corridorFinal";
+import { isOptimizationOutdated } from "../src/shared/planners/acceptedTrajectoryIdentity";
+import { getPlanner } from "../src/shared/planners";
+import { decodeProjectFile, encodeProjectFile } from "../src/shared/project/fileFormat";
+import { validateProject } from "../src/shared/validation";
+import type { BordeauxProject, PlannerResult, PathDoc } from "../src/shared/types";
+
+const project = decodeProjectFile(readFileSync("benchmarks/planner-corpus/v1/corpus.bordeaux.json", "utf8")).project;
+let path: PathDoc;
+let result: PlannerResult;
+let selected: PathDoc;
+
+beforeAll(() => {
+  path = structuredClone(project.paths.find((candidate) => candidate.name.toLowerCase().includes("slalom"))!);
+  expect(path).toBeDefined();
+  path.markers = [{ id: "accepted-event", name: "Event", f: 0.4, cmd: "collect" }];
+  result = optimizeCorridorFinal({ path, robot: project.robot });
+  expect(result.optimizedPath).toBeDefined();
+  selected = { ...path, optimization: { corridorM: 0.15, accepted: createAcceptedTrajectory(path, project.robot, result) } };
+}, 15_000);
+
+function selectedProject(): BordeauxProject {
+  return { ...structuredClone(project), paths: project.paths.map((candidate) => candidate.id === selected.id ? structuredClone(selected) : { ...candidate, exportable: false }) };
+}
 
 describe("explicit accepted optimization", () => {
   it("preserves the exact applied output through save and reopen", () => {
