@@ -137,18 +137,71 @@ export function validateOptimizedTrajectory(
   ));
   const drivetrain = buildDrivetrainProjection(state, input.robot, lateralLimits);
   const ranges = effectiveRanges(input.path, samples, state.totalDistanceM);
-  const usesSampleAngularKinematics = options.angularKinematics === "sample";
-  const stationaryTurnBoundary = (index: number) => {
-    const point = state.points[index];
-    return point?.stop
-      && point.waypointIndex !== undefined
-      && Boolean(input.path.waypoints[point.waypointIndex]?.turnInPlace);
+  ) => {
+    for (const module of evaluateDrivetrainKinematics(
+      point,
+      input.robot,
+      speed,
+      acceleration,
+      angularVelocity,
+      angularAcceleration,
+    )) {
+      if (module.speedMps > input.robot.maxSpeed + tolerance(input.robot.maxSpeed, 1e-3, 0.005)) {
+        pushViolation(violations, "drivetrain-velocity", sampleIndex, module.speedMps, input.robot.maxSpeed, true, module.label);
+        refinableIntervals.add(Math.max(0, sampleIndex - 1));
+      }
+      if (module.speedMps >= input.robot.maxSpeed * 0.995) activeConstraints.add(module.label);
+    }
   };
-  const skipsAngularAt = (index: number) => Boolean(options.skipAngular)
-    || (options.skipAngularFromIndex !== undefined && index >= options.skipAngularFromIndex)
-    || stationaryTurnBoundary(index);
-  const skipsAngularForInterval = (index: number) => skipsAngularAt(index)
-    || skipsAngularAt(index + 1);
+  const validateModuleForces = (
+    point: typeof state.points[number],
+    sampleIndex: number,
+    speed: number,
+    acceleration: number,
+    angularVelocity: number,
+    angularAcceleration: number,
+  ) => {
+    for (const module of evaluateDrivetrainForces(
+      point,
+      input.robot,
+      speed,
+      acceleration,
+      angularVelocity,
+      angularAcceleration,
+    )) {
+      // The closed-form allocation is deliberately conservative; a small
+      // margin represents force redistribution available to the four modules
+      // without masking material wrench infeasibility.
+      if (module.requiredForceN > module.tractionForceLimitN + tolerance(module.tractionForceLimitN, 0.05, 0.06)) {
+        pushViolation(
+          violations,
+          "drivetrain-acceleration",
+          sampleIndex,
+          module.requiredForceN,
+          module.tractionForceLimitN,
+          true,
+          `${module.label} traction force`,
+        );
+        refinableIntervals.add(Math.max(0, sampleIndex - 1));
+      }
+      if (module.requiredMotorForceN > module.motorForceLimitN + tolerance(module.motorForceLimitN, 0.05, 0.06)) {
+        pushViolation(
+          violations,
+          "drivetrain-acceleration",
+          sampleIndex,
+          module.requiredMotorForceN,
+          module.motorForceLimitN,
+          true,
+          `${module.label} motor force`,
+        );
+        refinableIntervals.add(Math.max(0, sampleIndex - 1));
+      }
+      if ((module.tractionForceLimitN > EPSILON && module.requiredForceN >= module.tractionForceLimitN * 0.94)
+        || (module.motorForceLimitN > EPSILON && module.requiredMotorForceN >= module.motorForceLimitN * 0.94)) {
+        activeConstraints.add(`${module.label}-force`);
+      }
+    }
+  };
 
   const expectedStart = input.path.waypoints[0]?.stop
     ? 0
@@ -162,7 +215,6 @@ export function validateOptimizedTrajectory(
       pushViolation(violations, "boundary-velocity", index, measured, expected, false, "Boundary velocity");
     }
   }
-
   samples.forEach((sample, index) => {
     const adjacentVelocity = Math.min(
       linear.intervals[index - 1]?.velocity ?? Number.POSITIVE_INFINITY,
@@ -174,22 +226,9 @@ export function validateOptimizedTrajectory(
     if (speed > linearVelocityLimit + tolerance(linearVelocityLimit, 1e-4, 1e-4)) {
       pushViolation(violations, "linear-velocity", index, speed, linearVelocityLimit, false, "Linear velocity");
     }
-    if (usesSampleAngularKinematics) {
-      for (const module of evaluateDrivetrainKinematics(
-        state.points[index],
-        input.robot,
-        speed,
-        0,
-        sample.angularVelocityRadps,
-        0,
-      )) {
-        if (module.speedMps > input.robot.maxSpeed + tolerance(input.robot.maxSpeed)) {
-          pushViolation(violations, "drivetrain-velocity", index, module.speedMps, input.robot.maxSpeed, false, module.label);
-        }
-        if (module.speedMps >= input.robot.maxSpeed * 0.995) activeConstraints.add(module.label);
-      }
-    } else if (speed > drivetrainVelocityLimit + tolerance(drivetrainVelocityLimit)) {
-      pushViolation(violations, "drivetrain-velocity", index, speed, drivetrainVelocityLimit, false, "Drivetrain velocity");
+    if (!usesSampleAngularKinematics && speed > drivetrainVelocityLimit + tolerance(drivetrainVelocityLimit)) {
+      pushViolation(violations, "drivetrain-velocity", index, speed, drivetrainVelocityLimit, true, "Drivetrain velocity");
+      refinableIntervals.add(Math.max(0, Math.min(samples.length - 2, index)));
     }
     if (linearVelocityLimit > EPSILON && speed >= linearVelocityLimit * 0.995) activeConstraints.add("linear-velocity");
     if (!usesSampleAngularKinematics
@@ -202,7 +241,7 @@ export function validateOptimizedTrajectory(
         ? sample.angularVelocityRadps
         : state.points[index].headingDerivativeRadPerM * speed);
       if (omega > angular.velocity + tolerance(angular.velocity, 2e-3, 0.02)) {
-        pushViolation(violations, "angular-velocity", index, omega, angular.velocity, false, "Angular velocity");
+        pushViolation(violations, "angular-velocity", index, omega, angular.velocity, true, "Angular velocity");
       }
       if (angular.velocity > EPSILON && omega >= angular.velocity * 0.995) activeConstraints.add("angular-velocity");
     }
@@ -212,6 +251,11 @@ export function validateOptimizedTrajectory(
     const before = samples[index];
     const after = samples[index + 1];
     const distance = after.s - before.s;
+    // Check exported feedforward as well as geometry-derived interval motion.
+    // Both traces must honor signed acceleration/deceleration through reversals.
+    if (usesSampleAngularKinematics && !skipsAngularForInterval(index) && after.t > before.t + EPSILON) {
+      const angular = angularLimitsForInterval(input, ranges, before.f, after.f);
+      const previous = before.angularVelocityRadps;
       const current = after.angularVelocityRadps;
       const reversing = previous * current < 0;
       const limit = reversing ? Math.min(angular.acceleration, angular.deceleration)
