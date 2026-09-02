@@ -15,14 +15,14 @@ export interface DrivetrainPointProjection {
   velocityLimitMps: number;
   velocityConstraints: DrivetrainVelocityConstraint[];
   accelerationConstraints: AffineAccelerationConstraint[];
-  motorAccelerationConstraints: AffineScalarAccelerationConstraint[];
+  scalarAccelerationConstraints: AffineScalarAccelerationConstraint[];
 }
 
 export interface DrivetrainProjection {
   pointVelocityLimits: number[];
   intervalVelocityLimits: number[];
   intervalAccelerationConstraints: AffineAccelerationConstraint[][];
-  intervalMotorAccelerationConstraints: AffineScalarAccelerationConstraint[][];
+  intervalScalarAccelerationConstraints: AffineScalarAccelerationConstraint[][];
 }
 
 export interface DrivetrainKinematicValue {
@@ -31,6 +31,14 @@ export interface DrivetrainKinematicValue {
   accelerationMps2: number;
   longitudinalAccelerationMps2: number;
   motorAccelerationLimitMps2?: number;
+}
+
+export interface DrivetrainForceValue {
+  label: string;
+  requiredForceN: number;
+  requiredMotorForceN: number;
+  tractionForceLimitN: number;
+  motorForceLimitN: number;
 }
 
 interface ModuleOffset {
@@ -64,20 +72,46 @@ export function projectDrivetrainAtPoint(
   point: CanonicalPathPoint,
   robot: RobotConfig,
   accelerationLimitMps2: number,
-  motorSafety = 1,
+  forceSafety = 1,
 ): DrivetrainPointProjection {
   const freeSpeed = Math.max(0.01, robot.maxSpeed);
   const velocityConstraints: DrivetrainVelocityConstraint[] = [];
   const accelerationConstraints: AffineAccelerationConstraint[] = [];
-  const motorAccelerationConstraints: AffineScalarAccelerationConstraint[] = [];
+  const scalarAccelerationConstraints: AffineScalarAccelerationConstraint[] = [];
   let velocityLimitMps = freeSpeed;
   const cosHeading = Math.cos(point.headingRad);
   const sinHeading = Math.sin(point.headingRad);
   const offsets = moduleOffsets(robot);
-  const hardLimits = robotHardLimits(robot);
   if (offsets.length === 0) {
-    return { velocityLimitMps, velocityConstraints, accelerationConstraints, motorAccelerationConstraints };
+    return { velocityLimitMps, velocityConstraints, accelerationConstraints, scalarAccelerationConstraints };
   }
+
+  // Traction limits the acceleration of the chassis center of mass. A module
+  // is a force contact on one rigid body, not an independent point mass; its
+  // rotational point acceleration may legitimately exceed the COM limit.
+  accelerationConstraints.push({
+    uX: point.tangentX,
+    uY: point.tangentY,
+    xX: point.curvatureInvM * point.normalX,
+    xY: point.curvatureInvM * point.normalY,
+    limit: Math.max(0.01, accelerationLimitMps2),
+    label: "chassis-traction",
+  });
+
+  const hardLimits = robotHardLimits(robot);
+  const model = robot.driveModel;
+  const radiusSquaredSum = offsets.reduce((sum, module) => sum + module.x ** 2 + module.y ** 2, 0);
+  const moduleCount = offsets.length;
+  const massPerModule = (model?.massKg ?? 0) / moduleCount;
+  const yawForceCoefficient = radiusSquaredSum > EPSILON
+    ? (model?.moiKgM2 ?? 0) / radiusSquaredSum
+    : 0;
+  const tractionForceLimitN = hardLimits && model
+    ? hardLimits.tractionAccelMps2 * model.massKg! / moduleCount * forceSafety
+    : 0;
+  const stallForceLimitN = hardLimits && model
+    ? hardLimits.motorAccelMps2 * model.massKg! / moduleCount * forceSafety
+    : 0;
 
   for (const module of offsets) {
     const offsetX = cosHeading * module.x - sinHeading * module.y;
@@ -87,50 +121,49 @@ export function projectDrivetrainAtPoint(
     const headingDerivative = point.headingDerivativeRadPerM;
     const uX = point.tangentX + headingDerivative * perpendicularX;
     const uY = point.tangentY + headingDerivative * perpendicularY;
-    const xX = point.curvatureInvM * point.normalX
-      + point.headingSecondDerivativeRadPerM2 * perpendicularX
-      - headingDerivative ** 2 * offsetX;
-    const xY = point.curvatureInvM * point.normalY
-      + point.headingSecondDerivativeRadPerM2 * perpendicularY
-      - headingDerivative ** 2 * offsetY;
     const velocityCoefficient = Math.hypot(uX, uY);
     const moduleVelocityLimit = velocityCoefficient > EPSILON
       ? freeSpeed / velocityCoefficient
       : Number.POSITIVE_INFINITY;
     velocityLimitMps = Math.min(velocityLimitMps, moduleVelocityLimit);
     velocityConstraints.push({ coefficient: velocityCoefficient, limitMps: freeSpeed, label: module.label });
-    accelerationConstraints.push({
-      uX,
-      uY,
-      xX,
-      xY,
-      limit: Math.max(0.01, accelerationLimitMps2),
-      label: module.label,
-    });
-    if (hardLimits && velocityCoefficient > EPSILON) {
-      const motorAcceleration = hardLimits.motorAccelMps2 * motorSafety;
-      motorAccelerationConstraints.push({
-        u: velocityCoefficient,
-        x: (uX * xX + uY * xY) / velocityCoefficient,
-        minimum: -motorAcceleration,
-        maximum: motorAcceleration,
-        velocityCoefficient,
-        freeSpeed: hardLimits.maxSpeedMps,
-        motorAcceleration,
-        label: module.label,
+
+    if (hardLimits && tractionForceLimitN > EPSILON) {
+      const forceUX = massPerModule * point.tangentX
+        + yawForceCoefficient * headingDerivative * perpendicularX;
+      const forceUY = massPerModule * point.tangentY
+        + yawForceCoefficient * headingDerivative * perpendicularY;
+      const forceXX = massPerModule * point.curvatureInvM * point.normalX
+        + yawForceCoefficient * point.headingSecondDerivativeRadPerM2 * perpendicularX;
+      const forceXY = massPerModule * point.curvatureInvM * point.normalY
+        + yawForceCoefficient * point.headingSecondDerivativeRadPerM2 * perpendicularY;
+      accelerationConstraints.push({
+        uX: forceUX,
+        uY: forceUY,
+        xX: forceXX,
+        xY: forceXY,
+        limit: tractionForceLimitN,
+        label: `${module.label}-traction-force`,
       });
+      if (velocityCoefficient > EPSILON && stallForceLimitN > EPSILON) {
+        const velocityDirectionX = uX / velocityCoefficient;
+        const velocityDirectionY = uY / velocityCoefficient;
+        scalarAccelerationConstraints.push({
+          u: forceUX * velocityDirectionX + forceUY * velocityDirectionY,
+          x: forceXX * velocityDirectionX + forceXY * velocityDirectionY,
+          minimum: -stallForceLimitN,
+          maximum: stallForceLimitN,
+          velocityCoefficient,
+          freeSpeed: hardLimits.maxSpeedMps,
+          motorAcceleration: stallForceLimitN,
+          label: `${module.label}-motor-force`,
+        });
+      }
     }
 
-    const constantSpeedCoefficient = Math.hypot(xX, xY);
-    if (constantSpeedCoefficient > EPSILON) {
-      velocityLimitMps = Math.min(
-        velocityLimitMps,
-        Math.sqrt(Math.max(0, accelerationLimitMps2) / constantSpeedCoefficient),
-      );
-    }
   }
 
-  return { velocityLimitMps, velocityConstraints, accelerationConstraints, motorAccelerationConstraints };
+  return { velocityLimitMps, velocityConstraints, accelerationConstraints, scalarAccelerationConstraints };
 }
 
 export function evaluateDrivetrainKinematics(
@@ -176,30 +209,129 @@ export function evaluateDrivetrainKinematics(
   });
 }
 
+/**
+ * Allocates the requested chassis wrench across the module force contacts.
+ * Alternating projections redistribute force in the wrench nullspace while
+ * preserving ΣF=m*a and Σ(r×F)=I*alpha, closely matching the force-contact
+ * feasibility model used by Choreo without adding an optimization dependency.
+ */
+export function evaluateDrivetrainForces(
+  point: CanonicalPathPoint,
+  robot: RobotConfig,
+  velocityMps: number,
+  accelerationMps2: number,
+  _angularVelocityRadps: number,
+  angularAccelerationRadps2: number,
+): DrivetrainForceValue[] {
+  const model = robot.driveModel;
+  const hardLimits = robotHardLimits(robot);
+  const offsets = moduleOffsets(robot);
+  if (!model || !hardLimits || offsets.length === 0) return [];
+
+  const massKg = model.massKg!;
+  const moiKgM2 = model.moiKgM2!;
+  const moduleCount = offsets.length;
+  const radiusSquaredSum = offsets.reduce((sum, module) => sum + module.x ** 2 + module.y ** 2, 0);
+  if (radiusSquaredSum <= EPSILON) return [];
+
+  const cosHeading = Math.cos(point.headingRad);
+  const sinHeading = Math.sin(point.headingRad);
+  const comAccelerationX = point.tangentX * accelerationMps2
+    + point.curvatureInvM * point.normalX * velocityMps ** 2;
+  const comAccelerationY = point.tangentY * accelerationMps2
+    + point.curvatureInvM * point.normalY * velocityMps ** 2;
+  const translationForceX = massKg * comAccelerationX / moduleCount;
+  const translationForceY = massKg * comAccelerationY / moduleCount;
+  const yawForceScale = moiKgM2 * angularAccelerationRadps2 / radiusSquaredSum;
+  const tractionForceLimitN = hardLimits.tractionAccelMps2 * massKg / moduleCount;
+  const stallForceLimitN = hardLimits.motorAccelMps2 * massKg / moduleCount;
+  const rotatedOffsets = offsets.map((module) => {
+    const offsetX = cosHeading * module.x - sinHeading * module.y;
+    const offsetY = sinHeading * module.x + cosHeading * module.y;
+    const perpendicularX = -offsetY;
+    const perpendicularY = offsetX;
+    return { ...module, offsetX, offsetY, perpendicularX, perpendicularY };
+  });
+  const forces = rotatedOffsets.map((module) => ({
+    x: translationForceX + yawForceScale * module.perpendicularX,
+    y: translationForceY + yawForceScale * module.perpendicularY,
+  }));
+  const forceLimitN = Math.min(tractionForceLimitN, stallForceLimitN);
+  for (let iteration = 0; iteration < 12; iteration += 1) {
+    forces.forEach((force) => {
+      const magnitude = Math.hypot(force.x, force.y);
+      if (magnitude > forceLimitN && magnitude > EPSILON) {
+        const scale = forceLimitN / magnitude;
+        force.x *= scale;
+        force.y *= scale;
+      }
+    });
+    const achievedForceX = forces.reduce((sum, force) => sum + force.x, 0);
+    const achievedForceY = forces.reduce((sum, force) => sum + force.y, 0);
+    const achievedTorque = forces.reduce((sum, force, index) => (
+      sum + rotatedOffsets[index].offsetX * force.y - rotatedOffsets[index].offsetY * force.x
+    ), 0);
+    const forceCorrectionX = (massKg * comAccelerationX - achievedForceX) / moduleCount;
+    const forceCorrectionY = (massKg * comAccelerationY - achievedForceY) / moduleCount;
+    const torqueCorrectionScale = (moiKgM2 * angularAccelerationRadps2 - achievedTorque) / radiusSquaredSum;
+    rotatedOffsets.forEach((module, index) => {
+      forces[index].x += forceCorrectionX + torqueCorrectionScale * module.perpendicularX;
+      forces[index].y += forceCorrectionY + torqueCorrectionScale * module.perpendicularY;
+    });
+  }
+
+  return rotatedOffsets.map((module, index) => {
+    const requiredForceN = Math.hypot(forces[index].x, forces[index].y);
+    return {
+      label: module.label,
+      requiredForceN,
+      requiredMotorForceN: requiredForceN,
+      tractionForceLimitN,
+      // Match Choreo's force-contact model: wheel speed and maximum wheel
+      // torque are independent constraints. Applying a DC torque-speed line
+      // to the entire allocated force vector double-counts the wheel-speed
+      // constraint and produces severe false slowdowns during combined motion.
+      motorForceLimitN: stallForceLimitN,
+    };
+  });
+}
+
 export function buildDrivetrainProjection(
   state: CanonicalPathState,
   robot: RobotConfig,
   intervalAccelerationLimits: readonly number[],
-  motorSafety = 1,
+  translationPriorityIntervals: readonly boolean[] = [],
+  forceSafety = 1,
 ): DrivetrainProjection {
   if (intervalAccelerationLimits.length !== state.points.length - 1) {
     throw new Error("Drivetrain interval limits must be one less than the path point count.");
   }
+  const withoutHeadingDynamics = (point: CanonicalPathPoint): CanonicalPathPoint => ({
+    ...point,
+    headingDerivativeRadPerM: 0,
+    headingSecondDerivativeRadPerM2: 0,
+  });
   const pointVelocityLimits = state.points.map((point, index) => {
     const limit = Math.min(
       intervalAccelerationLimits[index - 1] ?? Number.POSITIVE_INFINITY,
       intervalAccelerationLimits[index] ?? Number.POSITIVE_INFINITY,
     );
-    return projectDrivetrainAtPoint(point, robot, limit, motorSafety).velocityLimitMps;
+    const projectedPoint = translationPriorityIntervals[index - 1] || translationPriorityIntervals[index]
+      ? withoutHeadingDynamics(point)
+      : point;
+    return projectDrivetrainAtPoint(projectedPoint, robot, limit).velocityLimitMps;
   });
   const intervalProjections = state.points.slice(1).map((point, index) => {
     const midpoint = interpolatePathPoint(state.points[index], point);
-    return projectDrivetrainAtPoint(midpoint, robot, intervalAccelerationLimits[index], motorSafety);
+    const projectedMidpoint = translationPriorityIntervals[index]
+      ? withoutHeadingDynamics(midpoint)
+      : midpoint;
+    return projectDrivetrainAtPoint(projectedMidpoint, robot, intervalAccelerationLimits[index], forceSafety);
   });
   return {
     pointVelocityLimits,
     intervalVelocityLimits: intervalProjections.map((projection) => projection.velocityLimitMps),
     intervalAccelerationConstraints: intervalProjections.map((projection) => projection.accelerationConstraints),
-    intervalMotorAccelerationConstraints: intervalProjections.map((projection) => projection.motorAccelerationConstraints),
+    intervalScalarAccelerationConstraints: intervalProjections.map((projection) => projection.scalarAccelerationConstraints),
   };
 }
