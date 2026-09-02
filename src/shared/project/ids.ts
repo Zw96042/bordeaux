@@ -1,3 +1,7 @@
+function uniqueId(): string {
+  const uuid = globalThis.crypto?.randomUUID;
+  if (typeof uuid === "function") return uuid.call(globalThis.crypto);
+  const random = Math.random().toString(36).slice(2);
   return `${Date.now().toString(36)}-${random}`;
 }
 
