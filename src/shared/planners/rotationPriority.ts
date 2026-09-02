@@ -30,14 +30,10 @@ function waypointFractions(path: PathDoc, samples: readonly TrajectorySample[]):
         best = index;
         bestDistance = distance;
       }
-    }
-    cursor = best;
-    return samples[best]?.f ?? 0;
-  });
 }
 
-export function effectiveRanges(path: PathDoc, samples: readonly TrajectorySample[], totalDistance: number): EffectiveRange[] {
-  const waypointF = waypointFractions(path, samples);
+export function effectiveRanges(path: PathDoc, samples: readonly TrajectorySample[], totalDistance: number, indices?: readonly number[]): EffectiveRange[] {
+  const waypointF = waypointFractions(path, samples, indices);
   return (path.ranges ?? []).map((range) => {
     let start = range.f0;
     let end = range.f1;
@@ -61,22 +57,47 @@ export function activeRanges(ranges: readonly EffectiveRange[], fraction: number
   return ranges.filter((range) => fraction >= range.start - EPSILON && fraction <= range.end + EPSILON);
 }
 
+function rotationPriorityForInterval(
+  ranges: readonly EffectiveRange[],
+  transitions: readonly HeadingTransitionWindow[],
+  before: number,
+  after: number,
+): "heading" | "translation" | null {
+  const start = Math.min(before, after);
+  const end = Math.max(before, after);
+  const overlapsInterior = (candidateStart: number, candidateEnd: number) => (
+    Math.min(end, candidateEnd) - Math.max(start, candidateStart) > EPSILON
+  );
+  const active = ranges.filter((range) => overlapsInterior(range.start, range.end));
+  const activeTransitions = transitions.filter((transition) => (
+    overlapsInterior(transition.start, transition.end)
+  ));
+  if (active.length + activeTransitions.length === 0) return null;
+  return active.every((range) => range.rotationPriority === "translation")
+    && activeTransitions.every((transition) => transition.rotationPriority === "translation")
+    ? "translation"
+    : "heading";
+}
+
+function headingTransitionForInterval(
+  transitions: readonly HeadingTransitionWindow[],
+  before: number,
+  after: number,
+): HeadingTransitionWindow | undefined {
+  const start = Math.min(before, after);
+  const end = Math.max(before, after);
+  return transitions.find((transition) => (
+    Math.min(end, transition.end) - Math.max(start, transition.start) > EPSILON
+  ));
+}
+
 function translationHasPriorityForInterval(
   ranges: readonly EffectiveRange[],
   transitions: readonly HeadingTransitionWindow[],
   before: number,
   after: number,
 ): boolean {
-  const start = Math.min(before, after);
-  const end = Math.max(before, after);
-  const overlaps = (candidateStart: number, candidateEnd: number) => (
-    Math.min(end, candidateEnd) - Math.max(start, candidateStart) >= -EPSILON
-  );
-  const active = ranges.filter((range) => overlaps(range.start, range.end));
-  const activeTransitions = transitions.filter((transition) => overlaps(transition.start, transition.end));
-  return active.length + activeTransitions.length > 0
-    && active.every((range) => range.rotationPriority === "translation")
-    && activeTransitions.every((transition) => transition.rotationPriority === "translation");
+  return rotationPriorityForInterval(ranges, transitions, before, after) === "translation";
 }
 
 export function translationPriorityStartIndex(
@@ -100,6 +121,55 @@ export function translationPriorityStartIndex(
   return null;
 }
 
+export function translationPriorityIntervalMask(
+  path: PathDoc,
+  samples: readonly TrajectorySample[],
+  totalDistanceM: number,
+): boolean[] {
+  const ranges = effectiveRanges(path, samples, totalDistanceM);
+  const waypointF = waypointFractions(path, samples);
+  const laws = segmentHeadingLaws(path, false);
+  const breaks = path.waypoints.slice(0, -1).map((waypoint) => Boolean(waypoint.turnInPlace));
+  const transitions = headingTransitionWindows(path.waypoints, laws, breaks, waypointF, totalDistanceM);
+  return samples.slice(1).map((sample, index) => {
+    const before = samples[index].f;
+    const priority = rotationPriorityForInterval(ranges, transitions, before, sample.f);
+    return priority === "translation";
+  });
+}
+
+export function headingTransitionIntervalMask(
+  path: PathDoc,
+  samples: readonly TrajectorySample[],
+  totalDistanceM: number,
+): boolean[] {
+  const waypointF = waypointFractions(path, samples);
+  const laws = segmentHeadingLaws(path, false);
+  const breaks = path.waypoints.slice(0, -1).map((waypoint) => Boolean(waypoint.turnInPlace));
+  const transitions = headingTransitionWindows(path.waypoints, laws, breaks, waypointF, totalDistanceM);
+  return samples.slice(1).map((sample, index) => Boolean(headingTransitionForInterval(
+    transitions,
+    samples[index].f,
+    sample.f,
+  )));
+}
+
+export function rotationPriorityRecoveryIntervalMask(
+  path: PathDoc,
+  samples: readonly TrajectorySample[],
+  totalDistanceM: number,
+): boolean[] {
+  const ranges = effectiveRanges(path, samples, totalDistanceM);
+  const waypointF = waypointFractions(path, samples);
+  const laws = segmentHeadingLaws(path, false);
+  const breaks = path.waypoints.slice(0, -1).map((waypoint) => Boolean(waypoint.turnInPlace));
+  const transitions = headingTransitionWindows(path.waypoints, laws, breaks, waypointF, totalDistanceM);
+  const priorities = samples.slice(1).map((sample, index) => (
+    rotationPriorityForInterval(ranges, transitions, samples[index].f, sample.f)
+  ));
+  const recovery = priorities.map(() => false);
+  for (let runStart = 0; runStart < priorities.length;) {
+    while (runStart < priorities.length && priorities[runStart] !== "translation") runStart += 1;
     if (runStart >= priorities.length) break;
     let runEnd = runStart;
     while (priorities[runEnd + 1] === "translation") runEnd += 1;
