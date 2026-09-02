@@ -253,59 +253,59 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
         path: `paths.${path.name}.waypoints[${waypointIndex}].jiggle`,
         message: "Arbitrary-direction jiggle requires a swerve drivetrain",
       });
-    }
-    if (jiggle && jiggleSupported && !jigglePositions) {
-      diagnostics.push({
-        severity: "error",
-        path: `paths.${path.name}.waypoints[${waypointIndex}].jiggle`,
-        message: "Jiggle directions must be unique and every stroke must stay on the field",
-      });
-    }
-    const jiggleTicks = jiggle && jigglePositions ? ticks.jiggle : 0;
-    const jiggleStrokeDuration = jiggleTicks * period;
-    const jiggleDuration = jiggle && jigglePositions ? jiggleStrokeDuration * jiggle.strokes : 0;
-    const waitTicks = ticks.wait;
-    const waitDuration = waitTicks * period;
-    const duration = turnDuration + jiggleDuration + waitDuration;
-    if (duration <= EPSILON) return;
-    const arrivalTime = arrival.t;
-    if (turnDuration > EPSILON) stationaryActions.push({
-      kind: "turn",
-      waypointIndex,
-      fraction: arrival.f,
-      startTimeS: arrivalTime,
-      endTimeS: arrivalTime + turnDuration,
-    });
-    if (jiggleDuration > EPSILON) stationaryActions.push({
-      kind: "jiggle",
-      waypointIndex,
-      fraction: arrival.f,
-      startTimeS: arrivalTime + turnDuration,
-      endTimeS: arrivalTime + turnDuration + jiggleDuration,
-      strokeDurationS: jiggleStrokeDuration,
-    });
-    if (waitDuration > EPSILON) stationaryActions.push({
-      kind: "wait",
-      waypointIndex,
-      fraction: arrival.f,
-      startTimeS: arrivalTime + turnDuration + jiggleDuration,
-      endTimeS: arrivalTime + duration,
-    });
-
-    if (turn) arrival.headingRad = startHeading;
-    arrival.velocityMps = 0;
-    arrival.accelerationMps2 = 0;
-    if (turn) {
-      const firstMoving = firstMovingSampleIndex(samples, boundary);
-      for (let sampleIndex = boundary + 1; sampleIndex < (firstMoving ?? samples.length); sampleIndex += 1) {
-        samples[sampleIndex].headingRad = targetHeading;
+            finalJiggleHeading = jiggleHeading;
+            sampleCount += 1;
+          }
+        }
+        addedDistance += jiggle.distanceM * 2 * jiggle.strokes;
       }
+      for (let tick = 1; tick <= waitTicks; tick += 1) {
+        samples[sampleCount] = {
+          ...arrival,
+          i: 0,
+          t: arrivalTime + turnDuration + jiggleDuration + tick * period,
+          s: arrival.s + addedDistance,
+          f: arrival.f,
+          headingRad: finalJiggleHeading ?? waitHeading,
+          velocityMps: 0,
+          accelerationMps2: 0,
+          angularVelocityRadps: 0,
+        };
+        sampleCount += 1;
+      }
+      insertedByWaypoint[waypointIndex] += sampleCount - beforeActionSamples;
+      timeOffset += duration;
     }
-    for (let sampleIndex = boundary + 1; sampleIndex < samples.length; sampleIndex += 1) samples[sampleIndex].t += duration;
-    markers.forEach((marker) => {
-      const afterArrival = marker.timeS > arrivalTime + EPSILON;
-      const terminalAtArrival = waypointIndex === path.waypoints.length - 1
-        && marker.fraction >= 1 - EPSILON
+  }
+
+  samples.length = sampleCount;
+  const waypointSampleIndices = new Array<number>(baseIndices.length);
+  let insertedBefore = 0;
+  for (let index = 0; index < waypointSampleIndices.length; index += 1) {
+    waypointSampleIndices[index] = baseIndices[index] + insertedBefore;
+    insertedBefore += insertedByWaypoint[index];
+  }
+  const markerOffsets: Array<{ time: number; duration: number }> = [];
+  let cumulativeDuration = 0;
+  actions.forEach(({ waypoint, index }) => {
+    const ticks = plannedTicks.get(index)!;
+    const duration = (ticks.turn + ticks.jiggle * (waypoint.jiggle?.strokes ?? 0) + ticks.wait) * period;
+    if (duration <= EPSILON) return;
+    cumulativeDuration += duration;
+    markerOffsets.push({
+      time: result.samples[actionIndices[index]].t,
+      duration: cumulativeDuration,
+    });
+  });
+  markers.forEach((marker) => {
+    let low = 0;
+    let high = markerOffsets.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (markerOffsets[middle].time < marker.timeS - EPSILON) low = middle + 1;
+      else high = middle;
+    }
+    if (low > 0) marker.timeS += markerOffsets[low - 1].duration;
   });
 
   if (samples.length > MAX_TRAJECTORY_SAMPLES) throw new Error(`Stationary actions require ${samples.length} samples, exceeding the trajectory limit of ${MAX_TRAJECTORY_SAMPLES}`);
