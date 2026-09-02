@@ -1,9 +1,14 @@
+import { wrapRadians } from "../math/angles";
+import { orderedWaypointSampleIndices } from "./waypointSamples";
 import type { ConstraintRange, PathDoc, PlannerResult, RobotConfig, TrajectorySample } from "../types";
 import { headingTransitionWindows, segmentHeadingLaws, type HeadingTransitionWindow } from "./headingTransitions";
+import { evaluateDrivetrainForces, evaluateDrivetrainKinematics } from "./drivetrainProjection";
 import { MAX_TRAJECTORY_SAMPLES } from "./limits";
+import { buildCanonicalPathState, interpolatePathPoint, type CanonicalPathPoint } from "./pathState";
 
 const EPSILON = 1e-9;
 const DEG = Math.PI / 180;
+const TRACKING_RATE_SAFETY = 0.995;
 
 export type EffectiveRange = ConstraintRange & { start: number; end: number };
 
@@ -11,25 +16,15 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
 }
 
-function wrapRadians(value: number): number {
-  let wrapped = value;
-  while (wrapped > Math.PI) wrapped -= Math.PI * 2;
-  while (wrapped < -Math.PI) wrapped += Math.PI * 2;
-  return wrapped;
+
+
+function smootherStep(value: number): number {
+  const t = clamp(value, 0, 1);
+  return t ** 3 * (t * (t * 6 - 15) + 10);
 }
 
-function waypointFractions(path: PathDoc, samples: readonly TrajectorySample[]): number[] {
-  let cursor = 0;
-  return path.waypoints.map((waypoint, waypointIndex) => {
-    if (waypointIndex === path.waypoints.length - 1) return samples.at(-1)?.f ?? 1;
-    let best = cursor;
-    let bestDistance = Infinity;
-    for (let index = cursor; index < samples.length; index += 1) {
-      const distance = Math.hypot(samples[index].x - waypoint.x, samples[index].y - waypoint.y);
-      if (distance < bestDistance) {
-        best = index;
-        bestDistance = distance;
-      }
+function waypointFractions(path: PathDoc, samples: readonly TrajectorySample[], indices?: readonly number[]): number[] {
+  return (indices ?? orderedWaypointSampleIndices(path.waypoints, samples)).map((index) => samples[index]?.f ?? 0);
 }
 
 export function effectiveRanges(path: PathDoc, samples: readonly TrajectorySample[], totalDistance: number, indices?: readonly number[]): EffectiveRange[] {
