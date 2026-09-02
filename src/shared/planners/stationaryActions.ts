@@ -232,27 +232,89 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
   let inserted = 0;
   let addedDistance = 0;
 
-  actions.forEach(({ waypoint, index: waypointIndex }) => {
-    const turn = waypoint.turnInPlace;
-    const boundary = baseIndices[waypointIndex] + inserted;
-    const arrival = samples[boundary];
-    const previous = samples[Math.max(0, boundary - 1)];
-    const startHeading = waypointIndex === 0 ? arrival.headingRad : previous.headingRad;
-    const targetHeading = turn ? turn.headingDeg * DEG + (path.driveBackward ? Math.PI : 0) : arrival.headingRad;
-    const delta = turn ? directedDelta(startHeading, targetHeading, turn.direction) : 0;
-    const ticks = plannedTicks.get(waypointIndex)!;
-    const turnTicks = ticks.turn;
-    const turnDuration = turnTicks * period;
-    const jiggle = waypoint.jiggle;
-    const jiggleHeading = turn ? targetHeading : arrival.headingRad;
-    const jiggleSupported = !jiggle || robot?.drive !== "tank";
-    const jigglePositions = jiggle && jiggleSupported ? PM.jigglePositions(waypoint, jiggleHeading, jiggle) : null;
-    if (jiggle && !jiggleSupported) {
-      diagnostics.push({
-        severity: "error",
-        path: `paths.${path.name}.waypoints[${waypointIndex}].jiggle`,
-        message: "Arbitrary-direction jiggle requires a swerve drivetrain",
+      }
+      if (jiggle && jiggleSupported && !positions) {
+        diagnostics.push({
+          severity: "error",
+          path: `paths.${path.name}.waypoints[${waypointIndex}].jiggle`,
+          message: "Jiggle directions must be unique and every stroke must stay on the field",
+        });
+      }
+      const jiggleTicks = jiggle && positions ? ticks.jiggle : 0;
+      const jiggleStrokeDuration = jiggleTicks * period;
+      const jiggleDuration = jiggle && positions ? jiggleStrokeDuration * jiggle.strokes : 0;
+      const waitTicks = ticks.wait;
+      const waitDuration = waitTicks * period;
+      const duration = turnDuration + jiggleDuration + waitDuration;
+      if (duration <= EPSILON) continue;
+      const arrivalTime = arrival.t;
+      if (turnDuration > EPSILON) stationaryActions.push({
+        kind: "turn",
+        waypointIndex,
+        fraction: arrival.f,
+        startTimeS: arrivalTime,
+        endTimeS: arrivalTime + turnDuration,
       });
+      if (jiggleDuration > EPSILON) stationaryActions.push({
+        kind: "jiggle",
+        waypointIndex,
+        fraction: arrival.f,
+        startTimeS: arrivalTime + turnDuration,
+        endTimeS: arrivalTime + turnDuration + jiggleDuration,
+        strokeDurationS: jiggleStrokeDuration,
+      });
+      if (waitDuration > EPSILON) stationaryActions.push({
+        kind: "wait",
+        waypointIndex,
+        fraction: arrival.f,
+        startTimeS: arrivalTime + turnDuration + jiggleDuration,
+        endTimeS: arrivalTime + duration,
+      });
+
+      if (hasTurn) {
+        arrival.headingRad = startHeading;
+        headingOverride = { x: arrival.x, y: arrival.y, s: arrival.s, heading: targetHeading };
+      }
+      arrival.velocityMps = 0;
+      arrival.accelerationMps2 = 0;
+      const beforeActionSamples = sampleCount;
+      for (let tick = 1; tick <= turnTicks; tick += 1) {
+        const u = tick / turnTicks;
+        const progress = 10 * u ** 3 - 15 * u ** 4 + 6 * u ** 5;
+        samples[sampleCount] = {
+          ...arrival,
+          i: 0,
+          t: arrivalTime + tick * period,
+          headingRad: startHeading + delta * progress,
+          velocityMps: 0,
+          accelerationMps2: 0,
+          angularVelocityRadps: delta * (30 * u ** 2 - 60 * u ** 3 + 30 * u ** 4) / turnDuration,
+        };
+        sampleCount += 1;
+      }
+      const waitHeading = hasTurn ? targetHeading : arrival.headingRad;
+      let finalJiggleHeading: number | undefined;
+      if (jiggle && positions) {
+        for (let stroke = 0; stroke < jiggle.strokes; stroke += 1) {
+          const angle = jiggleHeading + (jiggle.startDeg + jiggle.stepDeg * stroke) * DEG;
+          for (let tick = 1; tick <= jiggleTicks; tick += 1) {
+            const u = tick / jiggleTicks;
+            const phase = jigglePhase(u);
+            const radialDistance = jiggle.distanceM * phase.position;
+            samples[sampleCount] = {
+              ...arrival,
+              i: 0,
+              t: arrivalTime + turnDuration + stroke * jiggleStrokeDuration + tick * period,
+              s: arrival.s + addedDistance + stroke * jiggle.distanceM * 2 + jiggle.distanceM * phase.travel,
+              f: arrival.f,
+              x: arrival.x + Math.cos(angle) * radialDistance,
+              y: arrival.y + Math.sin(angle) * radialDistance,
+              headingRad: jiggleHeading,
+              velocityMps: Math.abs(phase.velocity) * jiggle.distanceM / jiggleStrokeDuration,
+              accelerationMps2: tick === jiggleTicks ? 0 : phase.acceleration * jiggle.distanceM / (jiggleStrokeDuration * jiggleStrokeDuration),
+              angularVelocityRadps: 0,
+              curvatureInvM: 0,
+            };
             finalJiggleHeading = jiggleHeading;
             sampleCount += 1;
           }
