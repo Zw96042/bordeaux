@@ -1,11 +1,13 @@
-import { PM } from "../math/pm";
+import { autoHandles } from "../math/geometry";
 import { FIELD_H, FIELD_W, clampWorldPoint } from "../math/fieldBounds";
 import { ACTIVE_FIELD_REFERENCE } from "../field/rebuilt2026";
 import { createPathId, createRoutineId } from "./ids";
+import { robotDefaultConstraints } from "../robotLimits";
 import type {
   BordeauxProject,
   PathConstraints,
   PathDoc,
+  RobotConfig,
   SegmentType,
   Waypoint,
 } from "../types";
@@ -46,7 +48,7 @@ export function buildWaypoints(raw: RawWaypoint[]): Waypoint[] {
   })) as Waypoint[];
 
   out.forEach((w, i) => {
-    const handles = PM.autoHandles(out, i);
+    const handles = autoHandles(out, i);
     w.prevC = w.prevC ?? handles.prevC;
     w.nextC = w.nextC ?? handles.nextC;
   });
@@ -59,7 +61,12 @@ export function buildWaypoints(raw: RawWaypoint[]): Waypoint[] {
   return out;
 }
 
-export function blankPath(name = "NewPath"): PathDoc {
+export function defaultPathConstraints(robot?: RobotConfig): PathConstraints {
+  const constraints = { ...DEFAULT_CONSTRAINTS };
+  return robot ? robotDefaultConstraints(constraints, robot) : constraints;
+}
+
+export function blankPath(name = "NewPath", robot?: RobotConfig): PathDoc {
   return {
     id: createPathId(),
     name,
@@ -70,7 +77,7 @@ export function blankPath(name = "NewPath"): PathDoc {
     targets: [],
     markers: [],
     ranges: [],
-    constraints: { ...DEFAULT_CONSTRAINTS },
+    constraints: defaultPathConstraints(robot),
     headingMode: "targets",
     startVel: 0,
     goalVel: 0,
