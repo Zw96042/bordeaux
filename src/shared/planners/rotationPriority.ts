@@ -238,7 +238,19 @@ export function applyRotationPriority(path: PathDoc, result: PlannerResult, robo
       : desired[index - 1] + wrapRadians(sample.headingRad - desired[index - 1]));
   });
   const samples = result.samples.map((sample) => ({ ...sample }));
+    const endTime = samples[end.index].t;
+    const progress = endTime > startTime + EPSILON
+      ? (samples[sampleIndex].t - startTime) / (endTime - startTime)
+      : 1;
+    // Translation priority is time-optimal for travel: pursue the next heading
+    // knot immediately and let the physical slew/force limits decide how much
+    // rotation fits while moving. Heading priority keeps its authored schedule.
+    const scheduledProgress = transition.rotationPriority === "translation" ? 1 : smootherStep(progress);
+    return start.heading + wrapRadians(end.heading - start.heading) * scheduledProgress;
+  };
+  const pathState = buildCanonicalPathState(path, samples);
   let following = false;
+  let resetAtRangeEnd = false;
   let actual = desired[0];
   let omega = 0;
 
@@ -246,19 +258,105 @@ export function applyRotationPriority(path: PathDoc, result: PlannerResult, robo
   samples[0].angularVelocityRadps = 0;
   for (let index = 1; index < samples.length; index += 1) {
     const dt = samples[index].t - samples[index - 1].t;
-    const priorityHere = translationHasPriorityForInterval(
+    const priorityHere = rotationPriorityForInterval(
       ranges,
       transitions,
       samples[index - 1].f,
       samples[index].f,
     );
-    if (priorityHere) following = true;
+    const transitionHere = transitionByInterval[index - 1];
+    const transitionEnd = transitionHere
+      ? transitionEndIndex.get(transitionHere.waypointIndex) ?? index
+      : index;
+    const transitionEndsHere = Boolean(transitionHere && transitionEnd === index);
+    const transitionKnotHere = Boolean(transitionHere
+      && transitionHardKnotIndices.get(transitionHere.waypointIndex)?.has(index));
+    if (transitionHere || priorityHere === "translation") {
+      following = true;
+      resetAtRangeEnd = true;
+    }
+    const transitionHeadingMustMatch = Boolean(transitionHere && (transitionEndsHere || transitionKnotHere));
+    const headingRangeMustMatch = !transitionHere && priorityHere === "heading" && following;
+    const mayRejoin = transitionHere
+      ? transitionEndsHere || transitionKnotHere
+      : following && priorityHere !== "translation" && resetAtRangeEnd;
     if (!following || dt <= EPSILON) {
       actual = desired[index];
       omega = samples[index].angularVelocityRadps;
       continue;
     }
 
+    const authoredLimits = intervalAngularLimits(path, ranges, samples[index - 1].f, samples[index].f);
+    const distance = samples[index].s - samples[index - 1].s;
+    const intervalLinearAcceleration = distance > EPSILON
+      ? (samples[index].velocityMps ** 2 - samples[index - 1].velocityMps ** 2) / (2 * distance)
+      : 0;
+    const intervalLinearVelocity = Math.sqrt(Math.max(0,
+      (samples[index].velocityMps ** 2 + samples[index - 1].velocityMps ** 2) * 0.5,
+    ));
+    const intervalPoint = interpolatePathPoint(pathState.points[index - 1], pathState.points[index]);
+    const angularAccelerationLimits = drivetrainForceAngularAccelerationLimits(
+      intervalPoint,
+      robot,
+      intervalLinearVelocity,
+      intervalLinearAcceleration,
+      omega,
+      actual,
+      Math.max(authoredLimits.acceleration, authoredLimits.deceleration),
+    );
+    const limits = {
+      ...authoredLimits,
+      velocity: drivetrainAngularVelocityLimit(
+        intervalPoint,
+        robot,
+        Math.max(Math.abs(samples[index - 1].velocityMps), Math.abs(samples[index].velocityMps)),
+        intervalLinearAcceleration,
+        actual,
+        authoredLimits.velocity,
+      ),
+      positiveAcceleration: angularAccelerationLimits.positive,
+      negativeAcceleration: angularAccelerationLimits.negative,
+    };
+    const previousDt = index > 1 ? samples[index - 1].t - samples[index - 2].t : dt;
+    const accelerationDt = index === 1 ? dt * 0.5 : (previousDt + dt) * 0.5;
+    const targetHeading = transitionHere
+      ? transitionReferenceHeading(transitionHere, index)
+      : desired[index];
+    const targetPreviousHeading = transitionHere
+      ? transitionReferenceHeading(transitionHere, index - 1)
+      : desired[index - 1];
+    const targetOmega = result.samples[index].angularVelocityRadps;
+    const matchingOmega = mayRejoin
+      ? matchingEndpointOmega(
+          actual,
+          omega,
+          targetHeading,
+          targetOmega,
+          limits,
+          dt,
+          accelerationDt,
+          transitionHeadingMustMatch || headingRangeMustMatch,
+        )
+      : null;
+    if (matchingOmega !== null) {
+      actual = targetHeading;
+      omega = matchingOmega;
+      if (!transitionHere || transitionEndsHere) {
+        following = false;
+        resetAtRangeEnd = false;
+      }
+    } else {
+      const nextDt = index + 1 < samples.length ? samples[index + 1].t - samples[index].t : dt;
+      ({ actual, omega } = trackedStep(
+        actual,
+        omega,
+        targetHeading,
+        limits,
+        dt,
+        Math.max(dt, nextDt),
+        targetPreviousHeading,
+        accelerationDt,
+      ));
       if ((transitionHeadingMustMatch || headingRangeMustMatch) && (
         Math.abs(targetHeading - actual) > 0.05 * DEG
         || (headingRangeMustMatch && Math.abs(targetOmega - omega) > 0.5 * DEG)
