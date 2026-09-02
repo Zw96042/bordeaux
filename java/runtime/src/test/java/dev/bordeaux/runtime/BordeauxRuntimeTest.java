@@ -165,6 +165,10 @@ class BordeauxRuntimeTest {
         assertEquals(new BordeauxRoutineProgress.Waiting(0.25), runner.completePathProgress("integration-path"));
         assertTrue(scheduler.scheduled.isEmpty());
         time[0] = 10.25;
+        assertEquals(new BordeauxRoutineProgress.CommandWaiting(), runner.periodic());
+        assertEquals(1, scheduler.scheduled.size());
+        assertEquals(new BordeauxRoutineProgress.CommandWaiting(), runner.periodic());
+        scheduler.active.clear();
         assertEquals(new BordeauxRoutineProgress.Complete(), runner.periodic());
         assertEquals(1, scheduler.scheduled.size());
     }

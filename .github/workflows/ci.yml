@@ -25,9 +25,11 @@ jobs:
       - run: npm run certify:field
       - run: npm run test:java
       - run: npm run build
+        id: build
       - run: npm run test:java-integration:built
       - run: npm audit --audit-level=high
       - name: Configure Electron sandbox
+        id: sandbox
         run: |
           node node_modules/electron/install.js
           sudo chown root:root node_modules/electron/dist/chrome-sandbox
@@ -38,12 +40,12 @@ jobs:
         env:
           BORDEAUX_LIBRARY_UI_OUTPUT: .ui-artifacts/library
       - name: Verify optimizer UI
-        if: success() || failure()
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.sandbox.outcome == 'success' }}
         run: xvfb-run -a node scripts/verify-optimizer-ui.mjs
         env:
           BORDEAUX_OPTIMIZER_UI_OUTPUT: .ui-artifacts/optimizer
       - name: Verify mocked robot push UI
-        if: success() || failure()
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.sandbox.outcome == 'success' }}
         run: xvfb-run -a node scripts/verify-robot-push-ui.mjs
         env:
           BORDEAUX_PUSH_UI_OUTPUT: .ui-artifacts/push

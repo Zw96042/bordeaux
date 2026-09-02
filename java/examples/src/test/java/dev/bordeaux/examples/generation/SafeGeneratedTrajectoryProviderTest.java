@@ -11,6 +11,10 @@ import dev.bordeaux.examples.commands.ExistingCommandProvider;
 import dev.bordeaux.runtime.BordeauxBindings;
 import dev.bordeaux.runtime.BordeauxCapabilities;
 import dev.bordeaux.runtime.BordeauxGenerationContext;
+import dev.bordeaux.runtime.BordeauxGeneratedTrajectorySafety;
+import dev.bordeaux.runtime.BordeauxEventRunner;
+import dev.bordeaux.runtime.BordeauxRoutineRunner;
+import dev.bordeaux.runtime.BordeauxRuntimeCompatibility;
 import dev.bordeaux.runtime.BordeauxPathEvents;
 import dev.bordeaux.runtime.BordeauxRoutine;
 import dev.bordeaux.runtime.BordeauxRoutineNode;
@@ -20,6 +24,8 @@ import dev.bordeaux.runtime.BordeauxTrajectoryGeneratorLimits;
 import edu.wpi.first.wpilibj2.command.Commands;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.DoubleSupplier;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 
 class SafeGeneratedTrajectoryProviderTest {
@@ -75,7 +81,8 @@ class SafeGeneratedTrajectoryProviderTest {
                 new BordeauxRoutine("Dynamic", List.of(
                         generatedNode,
                         new BordeauxRoutineNode.Wait("settle", 0.02))));
-        var runner = ContainedGeneratedRoutine.create(
+        var clockMillis = new AtomicInteger();
+        var runner = createWithClock(
                 document,
                 capabilities,
                 "test-field",
@@ -84,7 +91,8 @@ class SafeGeneratedTrajectoryProviderTest {
                 () -> context,
                 (sample, clearance) -> sample.xM() >= clearance && sample.yM() >= clearance,
                 (from, to, clearance) -> true,
-                safeStops::incrementAndGet);
+                safeStops::incrementAndGet,
+                () -> clockMillis.get() / 1_000.0);
         var follower = new RecordingFollower();
 
         try (var loop = new AquitaineRoutineLoop(runner, follower)) {
@@ -101,7 +109,7 @@ class SafeGeneratedTrajectoryProviderTest {
             follower.finished = true;
             assertInstanceOf(BordeauxRoutineProgress.Waiting.class, loop.periodic());
             assertEquals(1, follower.stopCount);
-            Thread.sleep(25);
+            clockMillis.set(25);
             assertInstanceOf(BordeauxRoutineProgress.Complete.class, loop.periodic());
         }
         assertEquals(1, follower.stopCount);
@@ -124,13 +132,15 @@ class SafeGeneratedTrajectoryProviderTest {
                 new BordeauxRoutine("Path then dynamic", List.of(
                         new BordeauxRoutineNode.Path("static", "path-a"),
                         generatedNode)), java.util.Map.of("path-a", List.of()));
-        var runner = ContainedGeneratedRoutine.create(
+        var clockMillis = new AtomicInteger();
+        var runner = createWithClock(
                 document, capabilities,
                 "test-field", "revision", "blue-origin",
                 () -> context,
                 (sample, clearance) -> true,
                 (from, to, clearance) -> true,
-                () -> {});
+                () -> {},
+                () -> clockMillis.get() / 1_000.0);
         var follower = new RecordingFollower();
 
         try (var loop = new AquitaineRoutineLoop(runner, follower)) {
@@ -162,13 +172,15 @@ class SafeGeneratedTrajectoryProviderTest {
                 List.of(), List.of(), List.of(),
                 new BordeauxRoutine("Unsafe dynamic", List.of(generatedNode)));
         AtomicInteger safeStops = new AtomicInteger();
-        var runner = ContainedGeneratedRoutine.create(
+        var clockMillis = new AtomicInteger();
+        var runner = createWithClock(
                 document, capabilities,
                 "test-field", "revision", "blue-origin",
                 () -> movingContext,
                 (sample, clearance) -> true,
                 (from, to, clearance) -> true,
-                safeStops::incrementAndGet);
+                safeStops::incrementAndGet,
+                () -> clockMillis.get() / 1_000.0);
         var follower = new RecordingFollower();
 
         try (var loop = new AquitaineRoutineLoop(runner, follower)) {
@@ -178,6 +190,27 @@ class SafeGeneratedTrajectoryProviderTest {
             assertEquals(0, follower.stopCount);
         }
         assertEquals(0, follower.stopCount);
+    }
+
+    // Exercise containment independently of host scheduling; runtime deadline tests advance their own clocks.
+    private static BordeauxRoutineRunner createWithClock(
+            BordeauxPathEvents document,
+            BordeauxCapabilities capabilities,
+            String fieldId,
+            String fieldRevision,
+            String fieldCoordinateSchemaId,
+            Supplier<BordeauxGenerationContext> currentState,
+            BordeauxGeneratedTrajectorySafety.FieldValidator fieldValidator,
+            BordeauxGeneratedTrajectorySafety.CollisionValidator collisionValidator,
+            Runnable safeStop,
+            DoubleSupplier clock) {
+        var compatibility = new BordeauxRuntimeCompatibility(
+                capabilities.catalogId(), capabilities.catalogHash(), "0.4.0",
+                fieldId, fieldRevision, fieldCoordinateSchemaId);
+        var safety = new BordeauxGeneratedTrajectorySafety(
+                compatibility, currentState, fieldValidator, collisionValidator, safeStop);
+        return new BordeauxRoutineRunner(
+                document, capabilities, BordeauxEventRunner.Scheduler.wpilib(), clock, safety);
     }
 
     private static BordeauxRoutineProgress settle(AquitaineRoutineLoop loop) throws InterruptedException {

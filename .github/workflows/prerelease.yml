@@ -7,6 +7,11 @@ on:
         description: Checked-in beta version, such as 0.2.0-beta.1
         required: true
         type: string
+      unsigned_windows:
+        description: Temporarily publish unsigned Windows beta installers
+        required: false
+        type: boolean
+        default: false
       notes:
         description: Optional prerelease notes; leave blank to generate them from commits
         required: false
@@ -119,20 +124,27 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npm run package:mac:ci -- --config.mac.notarize=true --config.forceCodeSigning=true --config.publish.channel=beta --config.publish.releaseType=prerelease
+        run: |
+          npm run package:mac:ci -- --config.mac.notarize=true --config.forceCodeSigning=true --config.publish.channel=beta --config.publish.releaseType=prerelease --config.dmg.sign=true
+          node scripts/notarize-release-dmgs.mjs release beta
       - name: Require Windows signing credentials and approved signer
-        if: matrix.platform == 'windows'
+        if: matrix.platform == 'windows' && !inputs.unsigned_windows
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           WIN_SIGNER_SHA1: ${{ secrets.WIN_SIGNER_SHA1 }}
         run: node scripts/verify-signing-env.mjs windows
       - name: Build signed Windows packages
-        if: matrix.platform == 'windows'
+        if: matrix.platform == 'windows' && !inputs.unsigned_windows
         env:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         run: npm run package:win -- --config.publish.channel=beta --config.publish.releaseType=prerelease
+      - name: Build unsigned Windows beta packages
+        if: matrix.platform == 'windows' && inputs.unsigned_windows
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run package:win -- --config.forceCodeSigning=false --config.publish.channel=beta --config.publish.releaseType=prerelease
       - name: Build Linux AppImages
         if: matrix.platform == 'linux'
         run: npm run package:linux -- --config.publish.channel=beta --config.publish.releaseType=prerelease
@@ -146,7 +158,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: node scripts/verify-release-signatures.mjs mac release beta release/signature-evidence-mac.json
       - name: Verify Windows Authenticode signatures
-        if: matrix.platform == 'windows'
+        if: matrix.platform == 'windows' && !inputs.unsigned_windows
         env:
           WIN_SIGNER_SHA1: ${{ secrets.WIN_SIGNER_SHA1 }}
         run: node scripts/verify-release-signatures.mjs windows release beta release/signature-evidence-windows.json
@@ -183,9 +195,13 @@ jobs:
       - name: Publish GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
+          UNSIGNED_WINDOWS: ${{ inputs.unsigned_windows }}
           RELEASE_NOTES: ${{ inputs.notes }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
+          if [ "$UNSIGNED_WINDOWS" = "true" ]; then
+            RELEASE_NOTES="${RELEASE_NOTES}"$'\n\n'"Windows setup and portable executables in this beta are unsigned. macOS packages are signed and notarized."
+          fi
           gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/v$RELEASE_VERSION" -f sha="$GITHUB_SHA" >/dev/null
           if [ -n "$RELEASE_NOTES" ]; then
             gh release create "v$RELEASE_VERSION" release-assets/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "Bordeaux v$RELEASE_VERSION" --notes "$RELEASE_NOTES" --prerelease
