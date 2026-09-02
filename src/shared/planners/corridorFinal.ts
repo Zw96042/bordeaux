@@ -2,9 +2,10 @@ import { minimumRobotFieldClearance, observeRobotFieldPortalSequence } from "../
 import { robotFootprintAt, robotFootprintRadius } from "../agent/robotFootprint";
 import { PM } from "../math/pm";
 import { clone } from "../project/defaults";
+import { effectivePathConstraints, robotHardLimits } from "../robotLimits";
 import type { ControlPoint, PathDoc, PlannerInput, PlannerOptimizationDiagnostics, PlannerResult } from "../types";
 import { optimizeFixedGeometryFinal } from "./fixedGeometryFinal";
-import { fixedPathSamples } from "./index";
+import { fixedPathSamples, getPlanner } from "./index";
 import { validateOptimizedTrajectory } from "./trajectoryValidation";
 
 const DEFAULT_CORRIDOR_M = 0.15;
@@ -12,6 +13,7 @@ const MIN_CORRIDOR_M = 0.03;
 const MAX_CORRIDOR_M = 1.5;
 const MAX_SEGMENTS = 40;
 const MAX_EVALUATIONS = 72;
+const DEFAULT_EVALUATIONS = Object.freeze({ common: 24, stress: 48, hard: 72 });
 const MIN_GAIN_S = 0.02;
 const MIN_GAIN_FRACTION = 0.005;
 const EPSILON = 1e-6;
@@ -27,8 +29,9 @@ export interface CorridorFinalOptions {
   budgetTier?: "common" | "stress" | "hard";
   budgetMs?: number;
   maximumEvaluations?: number;
-  now?: () => number;
   isCancelled?: () => boolean;
+  /** Emits validated incumbents; completion never implicitly applies them. */
+  onProgress?: (result: PlannerResult) => void;
 }
 
 interface Handle {
@@ -129,6 +132,29 @@ function passesGates(samples: PlannerResult["samples"], gates: readonly Corridor
   return true;
 }
 
+/** Revalidates saved geometry against the current authored corridor and field. */
+export function validateCorridorCandidate(
+  input: PlannerInput,
+  result: PlannerResult,
+  options: CorridorFinalOptions = {},
+  baseline: PlannerResult = optimizeFixedGeometryFinal(input),
+): boolean {
+  const corridorM = Math.max(MIN_CORRIDOR_M, Math.min(MAX_CORRIDOR_M, options.corridorM ?? DEFAULT_CORRIDOR_M));
+  const resolution = Math.max(128, (input.samplesPerSegment ?? 56) * 2);
+  const reference = PM.sample(input.path.waypoints, resolution).pts as GeometryPoint[];
+  const candidate = PM.sample((result.optimizedPath ?? input.path).waypoints, resolution).pts as GeometryPoint[];
+  const deviationM = routeDeviation(reference, candidate);
+  const authoredTopology = observeRobotFieldPortalSequence(input.robot, baseline.samples);
+  const topology = observeRobotFieldPortalSequence(input.robot, result.samples);
+  return Number.isFinite(deviationM) && deviationM <= corridorM + EPSILON
+    && authoredTopology.valid && topology.valid
+    && topology.visits.length === authoredTopology.visits.length
+    && topology.visits.every((visit, index) => visit.id === authoredTopology.visits[index].id)
+    && passesGates(result.samples, options.gates ?? [])
+    && sweptFootprintInsideCorridor(input, result.samples, reference, corridorM)
+    && minimumRobotFieldClearance(input.robot, result.samples) >= Math.max(0, options.minimumClearanceM ?? 0) - EPSILON;
+}
+
 function movableHandles(path: PathDoc): Handle[] {
   const handles: Handle[] = [];
   path.waypoints.slice(0, -1).forEach((waypoint, segmentIndex) => {
@@ -183,7 +209,7 @@ function fallback(
   baseline: PlannerResult,
   options: Required<Pick<CorridorFinalOptions, "budgetTier" | "budgetMs">>,
   evaluations: number,
-  status: "equivalent" | "cancelled" | "internal-error",
+  status: "equivalent" | "invalid-input",
   reason?: string,
 ): PlannerResult {
   return {
@@ -192,7 +218,7 @@ function fallback(
       plannerUsed: baseline.planner,
       status,
       totalTimeS: baseline.totalTimeS,
-      constraintViolations: 0,
+      constraintViolations: baseline.optimization?.constraintViolations ?? 0,
       fallback: status !== "equivalent",
       fallbackReason: reason,
       evaluations,
@@ -207,149 +233,199 @@ function fallback(
  * and the input path remain immutable.
  */
 export function optimizeCorridorFinal(input: PlannerInput, requested: CorridorFinalOptions = {}): PlannerResult {
-  const now = requested.now ?? (() => performance.now());
+  const startedAt = performance.now();
   const budgetTier = requested.budgetTier ?? "common";
   const budgetMs = Math.max(1, Math.min(30_000, requested.budgetMs
     ?? (budgetTier === "hard" ? 30_000 : budgetTier === "stress" ? 15_000 : 5_000)));
   const diagnosticsOptions = { budgetTier, budgetMs };
   const corridorM = Math.max(MIN_CORRIDOR_M, Math.min(MAX_CORRIDOR_M, requested.corridorM ?? DEFAULT_CORRIDOR_M));
   const minimumClearanceM = Math.max(0, Math.min(0.5, requested.minimumClearanceM ?? 0));
-  const maximumEvaluations = Math.max(1, Math.min(MAX_EVALUATIONS, requested.maximumEvaluations ?? MAX_EVALUATIONS));
-  const startedAt = now();
+  const maximumEvaluations = Math.max(1, Math.min(
+    MAX_EVALUATIONS,
+    requested.maximumEvaluations ?? DEFAULT_EVALUATIONS[budgetTier],
+  ));
   const authored = clone(input.path);
   const baseline = optimizeFixedGeometryFinal({ ...input, path: authored });
   const baselineTopology = observeRobotFieldPortalSequence(input.robot, baseline.samples);
   let evaluations = 0;
-  let budgetFailure: "cancelled" | "deadline" | null = null;
+  let validatedCandidates = 0;
+  let rejectedCandidates = 0;
+  let termination: PlannerOptimizationDiagnostics["termination"];
+  let longestEvaluationMs = 0;
+  const rejectionReasons = new Map<string, number>();
   const canEvaluate = () => {
-    if (requested.isCancelled?.()) { budgetFailure = "cancelled"; return false; }
-    if (now() - startedAt >= budgetMs) { budgetFailure = "deadline"; return false; }
-    return evaluations < maximumEvaluations;
+    if (requested.isCancelled?.()) { termination = "cancelled"; return false; }
+    if (evaluations >= maximumEvaluations) { termination = "work-budget"; return false; }
+    // Keep room for one more evaluation and serializing the incumbent before
+    // the worker's separate hard deadline. Search order stays deterministic.
+    const remainingMs = budgetMs - (performance.now() - startedAt);
+    if (remainingMs <= Math.max(100, longestEvaluationMs * 1.25)) {
+      termination = "time-budget";
+      return false;
+    }
+    return true;
   };
-  const failForBudget = () => fallback(
-    baseline,
-    diagnosticsOptions,
-    evaluations,
-    "cancelled",
-    budgetFailure === "cancelled"
-      ? "Corridor optimization was cancelled."
-      : `Corridor optimization reached the ${budgetTier} solve budget (${budgetMs} ms).`,
-  );
+  const earlyResult = (reason: string, invalid = false) => {
+    const result = fallback(baseline, diagnosticsOptions, evaluations, invalid ? "invalid-input" : "equivalent", reason);
+    result.optimization = {
+      ...result.optimization!,
+      termination: invalid ? "invalid-baseline" : "unsupported",
+      solveTimeMs: performance.now() - startedAt,
+      validatedCandidates: 0,
+      rejectedCandidates: 0,
+      rejectionReasons: [],
+      baselineTimeS: baseline.totalTimeS,
+      gainS: 0,
+    };
+    if (!invalid) requested.onProgress?.(result);
+    return result;
+  };
 
-  if (baseline.optimization?.fallback) {
-    return fallback(baseline, diagnosticsOptions, evaluations, "internal-error", baseline.optimization.fallbackReason ?? "The fixed-path baseline is invalid.");
+  if (baseline.optimization?.fallback || baseline.diagnostics.some((issue) => issue.severity === "error")) {
+    return earlyResult(baseline.optimization?.fallbackReason ?? "The normal trajectory could not be validated.", true);
   }
   if (!baselineTopology.valid) {
-    return fallback(baseline, diagnosticsOptions, evaluations, "internal-error", "The authored path does not establish an unambiguous typed-portal sequence.");
+    return earlyResult("Corridor optimization kept the authored geometry because its typed-portal sequence is ambiguous.");
   }
   if (authored.waypoints.length < 2 || authored.waypoints.length - 1 > MAX_SEGMENTS) {
-    return fallback(baseline, diagnosticsOptions, evaluations, "internal-error", `Corridor optimization supports 1-${MAX_SEGMENTS} segments.`);
+    return earlyResult(`Corridor optimization supports 1-${MAX_SEGMENTS} segments.`);
   }
   if (authored.waypoints.slice(0, -1).some((waypoint) => (waypoint.segType ?? "bezier") !== "bezier")) {
-    return fallback(baseline, diagnosticsOptions, evaluations, "equivalent", "Corridor optimization currently supports all-Bezier paths.");
+    return earlyResult("Corridor optimization currently supports all-Bezier paths.");
   }
   if (authored.waypoints.some((waypoint) => waypoint.jiggle)) {
-    return fallback(baseline, diagnosticsOptions, evaluations, "equivalent", "Corridor optimization keeps paths with jiggle actions on their authored geometry.");
+    return earlyResult("Corridor optimization keeps paths with jiggle actions on their authored geometry.");
   }
 
   const samplesPerSegment = input.samplesPerSegment ?? 56;
   const reference = PM.sample(authored.waypoints, Math.max(128, samplesPerSegment * 2)).pts as GeometryPoint[];
   const handles = movableHandles(authored);
-  if (handles.length === 0) return fallback(baseline, diagnosticsOptions, evaluations, "equivalent", "The path has no movable Bezier handles.");
+  if (handles.length === 0) return earlyResult("The path has no movable Bezier handles.");
+  const hardLimits = robotHardLimits(input.robot);
+  const physicalRobot = hardLimits ? { ...input.robot, maxSpeed: hardLimits.maxSpeedMps } : input.robot;
 
-  const evaluate = (path: PathDoc): Evaluation | null => {
-    if (!canEvaluate()) return null;
-    evaluations += 1;
-    const route = PM.sample(path.waypoints, Math.max(128, samplesPerSegment * 2)).pts as GeometryPoint[];
-    const maxDeviationM = routeDeviation(reference, route);
-    if (!Number.isFinite(maxDeviationM) || maxDeviationM > corridorM + EPSILON) return null;
-    const result = optimizeFixedGeometryFinal({ ...input, path });
-    if (result.optimization?.fallback || result.diagnostics.some((issue) => issue.severity === "error")) return null;
-    if (validateOptimizedTrajectory({ ...input, path }, fixedPathSamples(result), { angularKinematics: "sample" }).violations.length > 0) return null;
-    const topology = observeRobotFieldPortalSequence(input.robot, result.samples);
-    if (!topology.valid
-      || topology.visits.length !== baselineTopology.visits.length
-      || topology.visits.some((visit, index) => visit.id !== baselineTopology.visits[index].id)) return null;
-    if (!passesGates(result.samples, requested.gates ?? [])) return null;
-    if (!sweptFootprintInsideCorridor(input, result.samples, reference, corridorM)) return null;
-    const clearanceM = minimumRobotFieldClearance(input.robot, result.samples);
-    if (clearanceM < minimumClearanceM - EPSILON) return null;
-    return { path, result, maxDeviationM, minimumClearanceM: clearanceM };
-  };
-
+  const baselineClearanceM = minimumRobotFieldClearance(input.robot, baseline.samples);
   let best: Evaluation = {
     path: authored,
     result: baseline,
     maxDeviationM: 0,
-    minimumClearanceM: minimumRobotFieldClearance(input.robot, baseline.samples),
+    minimumClearanceM: baselineClearanceM,
   };
-  const starts: Evaluation[] = [];
+  const snapshot = (): PlannerResult => {
+    const gainS = baseline.totalTimeS - best.result.totalTimeS;
+    const improved = best.path !== authored && gainS >= Math.max(MIN_GAIN_S, baseline.totalTimeS * MIN_GAIN_FRACTION);
+    const retained = improved ? best.result : baseline;
+    return {
+      ...retained,
+      ...(improved ? { optimizedPath: clone(best.path) } : {}),
+      optimization: corridorDiagnostics(retained, diagnosticsOptions, {
+        status: improved ? "feasible" : "equivalent",
+        termination,
+        solveTimeMs: performance.now() - startedAt,
+        totalTimeS: retained.totalTimeS,
+        baselineTimeS: baseline.totalTimeS,
+        gainS: improved ? gainS : 0,
+        fallback: false,
+        fallbackReason: improved ? undefined : `No material improvement was found inside the ${corridorM.toFixed(2)} m corridor.`,
+        evaluations,
+        validatedCandidates,
+        rejectedCandidates,
+        rejectionReasons: [...rejectionReasons].map(([reason, count]) => ({ reason, count })),
+        maxDeviationM: improved ? best.maxDeviationM : 0,
+        minimumClearanceM: improved ? best.minimumClearanceM : baselineClearanceM,
+      }),
+    };
+  };
+  const reject = (reason: string): null => {
+    rejectedCandidates += 1;
+    // Bound payload size even when each rejection has a different error.
+    const key = rejectionReasons.has(reason) || rejectionReasons.size < 7 ? reason : "Other validation failures";
+    rejectionReasons.set(key, (rejectionReasons.get(key) ?? 0) + 1);
+    return null;
+  };
+  requested.onProgress?.(snapshot());
+  const evaluate = (path: PathDoc): Evaluation | null => {
+    if (!canEvaluate()) return null;
+    const evaluationStartedAt = performance.now();
+    evaluations += 1;
+    try {
+      const route = PM.sample(path.waypoints, Math.max(128, samplesPerSegment * 2)).pts as GeometryPoint[];
+      const maxDeviationM = routeDeviation(reference, route);
+      if (!Number.isFinite(maxDeviationM) || maxDeviationM > corridorM + EPSILON) return reject("Outside the authored corridor");
+      // Candidate generation already performs dense physical validation.
+      const result = getPlanner("optimizedTrajectory").generate({ ...input, path });
+      if (result.optimization?.fallback || result.diagnostics.some((issue) => issue.severity === "error")) {
+        return reject((result.optimization?.fallbackReason
+          ?? result.diagnostics.find((issue) => issue.severity === "error")?.message
+          ?? "Candidate generation failed").slice(0, 240));
+      }
+      const physicalPath = { ...path, constraints: effectivePathConstraints(path.constraints, physicalRobot) };
+      const validation = validateOptimizedTrajectory(
+        { ...input, path: physicalPath, robot: physicalRobot },
+        fixedPathSamples(result),
+        { angularKinematics: "sample" },
+      );
+      if (validation.violations.length > 0) return reject(validation.violations[0].message.slice(0, 240));
+      const topology = observeRobotFieldPortalSequence(input.robot, result.samples);
+      if (!topology.valid
+        || topology.visits.length !== baselineTopology.visits.length
+        || topology.visits.some((visit, index) => visit.id !== baselineTopology.visits[index].id)) return reject("Changed the authored portal sequence");
+      if (!passesGates(result.samples, requested.gates ?? [])) return reject("Missed a required gate");
+      if (!sweptFootprintInsideCorridor(input, result.samples, reference, corridorM)) return reject("Robot footprint leaves the corridor");
+      const clearanceM = minimumRobotFieldClearance(input.robot, result.samples);
+      if (clearanceM < minimumClearanceM - EPSILON) return reject("Insufficient field clearance");
+      validatedCandidates += 1;
+      const candidate = { path, result, maxDeviationM, minimumClearanceM: clearanceM };
+      if (result.totalTimeS < best.result.totalTimeS - EPSILON) best = candidate;
+      return candidate;
+    } catch (error) {
+      return reject((error instanceof Error ? error.message : "Candidate evaluation failed").slice(0, 240));
+    } finally {
+      longestEvaluationMs = Math.max(longestEvaluationMs, performance.now() - evaluationStartedAt);
+      requested.onProgress?.(snapshot());
+    }
+  };
+
   const patterns = [
-    (_index: number) => 1,
+    (index: number) => index % 2 ? 1.18 : 0.82,
     (_index: number) => 0.82,
     (_index: number) => 1.18,
     (index: number) => index % 2 ? 0.82 : 1.18,
-    (index: number) => index % 2 ? 1.18 : 0.82,
   ];
   for (let patternIndex = 0; patternIndex < patterns.length && canEvaluate(); patternIndex += 1) {
     const path = clone(authored);
-    if (patternIndex > 0) handles.forEach((handle, index) => {
+    handles.forEach((handle, index) => {
       const waypoint = authored.waypoints[handle.waypointIndex];
       const control = waypoint[handle.key]!;
       const originalM = distance(waypoint, control);
-      setHandleLength(path, handle, Math.max(0.05, Math.min(handle.chordM * 1.5, originalM * patterns[patternIndex](index))));
+      const requestedM = originalM * patterns[patternIndex](index);
+      const corridorLimitedM = Math.max(originalM - corridorM, Math.min(originalM + corridorM, requestedM));
+      setHandleLength(path, handle, Math.max(0.05, Math.min(handle.chordM * 1.5, corridorLimitedM)));
     });
-    const candidate = evaluate(path);
-    if (!candidate) continue;
-    starts.push(candidate);
-    if (candidate.result.totalTimeS < best.result.totalTimeS - EPSILON) best = candidate;
+    evaluate(path);
   }
-  if (budgetFailure) return failForBudget();
 
-  const budgetPerStart = starts.length > 0 ? Math.max(1, Math.floor((maximumEvaluations - evaluations) / starts.length)) : 0;
-  for (const start of starts) {
-    let local = start;
-    const stopAt = Math.min(maximumEvaluations, evaluations + budgetPerStart);
-    for (let pass = 0; pass < 3 && evaluations < stopAt && canEvaluate(); pass += 1) {
-      let improved = false;
-      for (const handle of handles) {
-        const waypoint = local.path.waypoints[handle.waypointIndex];
-        const control = waypoint[handle.key]!;
-        const currentM = distance(waypoint, control);
-        const relativeStep = Math.max(0.015, Math.min(0.4, corridorM / Math.max(0.05, currentM)));
-        let handleBest = local;
-        for (const factor of [1 - relativeStep, 1 - relativeStep * 0.5, 1 + relativeStep * 0.5, 1 + relativeStep]) {
-          if (evaluations >= stopAt || !canEvaluate()) break;
-          const path = clone(local.path);
-          setHandleLength(path, handle, Math.max(0.05, Math.min(handle.chordM * 1.5, currentM * factor)));
-          const candidate = evaluate(path);
-          if (candidate && candidate.result.totalTimeS < handleBest.result.totalTimeS - EPSILON) handleBest = candidate;
-        }
-        if (handleBest !== local) { local = handleBest; improved = true; }
+  let local = best;
+  for (let pass = 0; pass < 3 && canEvaluate(); pass += 1) {
+    let improved = false;
+    for (const handle of handles) {
+      const waypoint = local.path.waypoints[handle.waypointIndex];
+      const control = waypoint[handle.key]!;
+      const currentM = distance(waypoint, control);
+      const relativeStep = Math.max(0.015, Math.min(0.4, corridorM / Math.max(0.05, currentM)));
+      let handleBest = local;
+      for (const factor of [1 - relativeStep, 1 + relativeStep]) {
+        if (!canEvaluate()) break;
+        const path = clone(local.path);
+        setHandleLength(path, handle, Math.max(0.05, Math.min(handle.chordM * 1.5, currentM * factor)));
+        const candidate = evaluate(path);
+        if (candidate && candidate.result.totalTimeS < handleBest.result.totalTimeS - EPSILON) handleBest = candidate;
       }
-      if (!improved) break;
+      if (handleBest !== local) { local = handleBest; improved = true; }
     }
-    if (local.result.totalTimeS < best.result.totalTimeS - EPSILON) best = local;
+    if (!improved) break;
   }
-  if (budgetFailure) return failForBudget();
 
-  const gainS = baseline.totalTimeS - best.result.totalTimeS;
-  const requiredGainS = Math.max(MIN_GAIN_S, baseline.totalTimeS * MIN_GAIN_FRACTION);
-  if (best.path === authored || gainS < requiredGainS) {
-    return fallback(baseline, diagnosticsOptions, evaluations, "equivalent", `No material improvement was found inside the ${corridorM.toFixed(2)} m corridor.`);
-  }
-  return {
-    ...best.result,
-    optimizedPath: clone(best.path),
-    optimization: corridorDiagnostics(best.result, diagnosticsOptions, {
-      status: best.result.optimization?.status === "feasible" ? "feasible" : "optimal",
-      totalTimeS: best.result.totalTimeS,
-      constraintViolations: 0,
-      fallback: false,
-      fallbackReason: undefined,
-      evaluations,
-      maxDeviationM: best.maxDeviationM,
-      minimumClearanceM: best.minimumClearanceM,
-    }),
-  };
+  termination ??= evaluations >= maximumEvaluations ? "work-budget" : "completed";
+  return snapshot();
 }
