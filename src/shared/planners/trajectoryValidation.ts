@@ -1,9 +1,14 @@
 import type { PlannerInput, TrajectorySample } from "../types";
 import { activeRanges, effectiveRanges, type EffectiveRange } from "./rotationPriority";
 import { buildLinearConstraintProfile } from "./optimizationConstraints";
-import { buildCanonicalPathState, findDynamicHeadingStops, interpolatePathPoint } from "./pathState";
+import {
+  buildCanonicalPathState,
+  interpolatePathPoint,
+  isStationaryHeadingTransition,
+} from "./pathState";
 import {
   buildDrivetrainProjection,
+  evaluateDrivetrainForces,
   evaluateDrivetrainKinematics,
   projectDrivetrainAtPoint,
 } from "./drivetrainProjection";
@@ -43,6 +48,7 @@ export interface TrajectoryValidationResult {
 export interface TrajectoryValidationOptions {
   skipAngular?: boolean;
   skipAngularFromIndex?: number;
+  skipAngularIntervals?: readonly boolean[];
   angularKinematics?: "path" | "sample";
 }
 
@@ -112,31 +118,61 @@ export function validateOptimizedTrajectory(
       refinableIntervals: [],
       activeConstraints: [],
       checkedPoints: samples.length,
-      angularValidationSkipped: Boolean(options.skipAngular || options.skipAngularFromIndex !== undefined),
+      angularValidationSkipped: Boolean(options.skipAngular || options.skipAngularFromIndex !== undefined || options.skipAngularIntervals?.some(Boolean)),
     };
   }
 
-  const initialHeadingBreaks = options.skipAngularFromIndex === undefined
-    ? new Set<number>()
-    : new Set([options.skipAngularFromIndex]);
-  const preliminaryState = buildCanonicalPathState(
-    input.path,
-    samples,
-    initialHeadingBreaks,
-  );
-  const dynamicHeadingStops = findDynamicHeadingStops(preliminaryState, options.skipAngularFromIndex);
+  const skipAngularIntervals = options.skipAngularIntervals
+    ?? samples.slice(1).map((_sample, index) => (
+      options.skipAngularFromIndex !== undefined && index + 1 >= options.skipAngularFromIndex
+    ));
+  const initialHeadingBreaks = new Set<number>();
+  for (let index = 1; index < skipAngularIntervals.length; index += 1) {
+    if (skipAngularIntervals[index] !== skipAngularIntervals[index - 1]) initialHeadingBreaks.add(index);
+  }
+  const usesSampleAngularKinematics = options.angularKinematics === "sample";
+  const timestampedAngularVelocities = samples.slice(1).map((sample, index) => {
+    const before = samples[index];
+    const dt = Math.max(EPSILON, sample.t - before.t);
+    const headingDelta = Math.atan2(
+      Math.sin(sample.headingRad - before.headingRad),
+      Math.cos(sample.headingRad - before.headingRad),
+    );
+    return headingDelta / dt;
+  });
   const state = buildCanonicalPathState(
     input.path,
     samples,
-    new Set([...initialHeadingBreaks, ...dynamicHeadingStops]),
-    dynamicHeadingStops,
+    initialHeadingBreaks,
   );
   const linear = buildLinearConstraintProfile(input, samples);
   const lateralLimits = linear.intervals.map((limits) => (
     input.path.constraints.maxCentripetalAccel ?? limits.acceleration
   ));
-  const drivetrain = buildDrivetrainProjection(state, input.robot, lateralLimits);
+  const drivetrain = buildDrivetrainProjection(
+    state,
+    input.robot,
+    lateralLimits,
+    skipAngularIntervals,
+  );
   const ranges = effectiveRanges(input.path, samples, state.totalDistanceM);
+  const stationaryTurnBoundary = (index: number) => (
+    isStationaryHeadingTransition(input.path, state.points[index], state.points[index + 1]?.headingRad)
+  );
+  const skipsAngularAt = (index: number) => Boolean(options.skipAngular)
+    || Boolean(skipAngularIntervals[index - 1] || skipAngularIntervals[index])
+    || stationaryTurnBoundary(index);
+  const skipsAngularForInterval = (index: number) => Boolean(options.skipAngular)
+    || Boolean(skipAngularIntervals[index])
+    || stationaryTurnBoundary(index)
+    || stationaryTurnBoundary(index + 1);
+  const validateModuleVelocity = (
+    point: typeof state.points[number],
+    sampleIndex: number,
+    speed: number,
+    acceleration: number,
+    angularVelocity: number,
+    angularAcceleration: number,
   ) => {
     for (const module of evaluateDrivetrainKinematics(
       point,
