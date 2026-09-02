@@ -219,14 +219,20 @@ export function applyRotationPriority(path: PathDoc, result: PlannerResult, robo
   const breaks = path.waypoints.slice(0, -1).map((waypoint) => Boolean(waypoint.turnInPlace));
   const transitions = headingTransitionWindows(path.waypoints, laws, breaks, waypointF, result.totalDistanceM);
   if (!ranges.some((range) => range.rotationPriority === "translation")
-    && !transitions.some((transition) => transition.rotationPriority === "translation")) return result;
+      diagnostics: [...result.diagnostics, {
+        severity: "error",
+        path: `paths.${path.name}.waypoints`,
+        message: "Heading tracking could not satisfy the configured angular limits",
+      }],
+    };
+  }
   if (robot.drive === "tank") {
     return {
       ...result,
       diagnostics: [...result.diagnostics, {
         severity: "error",
         path: `paths.${path.name}.waypoints`,
-        message: "Translation timing priority requires a swerve drivetrain",
+        message: "Independent heading tracking requires a swerve drivetrain",
       }],
     };
   }
@@ -238,6 +244,98 @@ export function applyRotationPriority(path: PathDoc, result: PlannerResult, robo
       : desired[index - 1] + wrapRadians(sample.headingRad - desired[index - 1]));
   });
   const samples = result.samples.map((sample) => ({ ...sample }));
+  const transitionByInterval = samples.slice(1).map((sample, index) => (
+    headingTransitionForInterval(transitions, samples[index].f, sample.f)
+  ));
+  const transitionStartIndex = new Map<number, number>();
+  const transitionEndIndex = new Map<number, number>();
+  transitionByInterval.forEach((transition, index) => {
+    if (!transition) return;
+    if (!transitionStartIndex.has(transition.waypointIndex)) {
+      transitionStartIndex.set(transition.waypointIndex, index);
+    }
+    transitionEndIndex.set(transition.waypointIndex, index + 1);
+  });
+  const transitionReferenceKnots = new Map<number, { index: number; heading: number }[]>();
+  const transitionHardKnotIndices = new Map<number, Set<number>>();
+  let missedHeadingPriority = false;
+  transitions.forEach((transition) => {
+    const startIndex = transitionStartIndex.get(transition.waypointIndex);
+    const endIndex = transitionEndIndex.get(transition.waypointIndex);
+    if (startIndex == null || endIndex == null) return;
+    const outgoingStart = waypointF[transition.waypointIndex] ?? transition.start;
+    const outgoingLaw = laws[transition.waypointIndex];
+    const targetKnots = (outgoingLaw === "targets" ? path.targets ?? [] : []).map((target) => {
+      const fraction = target.anchor === "dist"
+        ? (target.d ?? target.f * result.totalDistanceM) / Math.max(result.totalDistanceM, EPSILON)
+        : target.f;
+      return { fraction: clamp(fraction, 0, 1), heading: target.deg * DEG };
+    }).filter((target) => (
+      target.fraction > outgoingStart + EPSILON
+      && target.fraction < transition.end - EPSILON
+    )).sort((first, second) => first.fraction - second.fraction);
+    const knots = [{ index: startIndex, heading: desired[startIndex] }];
+    if (outgoingLaw === "tangent" || outgoingLaw.startsWith("lookAt:")) {
+      for (let index = startIndex + 1; index <= endIndex; index += 1) {
+        const previous = knots.at(-1)!;
+        knots.push({
+          index,
+          heading: previous.heading + wrapRadians(desired[index] - previous.heading),
+        });
+      }
+      transitionReferenceKnots.set(transition.waypointIndex, knots);
+      transitionHardKnotIndices.set(
+        transition.waypointIndex,
+        outgoingLaw.startsWith("lookAt:")
+          ? new Set(knots.slice(1).map((knot) => knot.index))
+          : new Set([endIndex]),
+      );
+      return;
+    }
+    targetKnots.forEach((target) => {
+      let index = startIndex;
+      for (let candidate = startIndex + 1; candidate <= endIndex; candidate += 1) {
+        if (Math.abs(samples[candidate].f - target.fraction) < Math.abs(samples[index].f - target.fraction)) {
+          index = candidate;
+        }
+      }
+      const previous = knots.at(-1)!;
+      const heading = previous.heading + wrapRadians(target.heading - previous.heading);
+      if (index === previous.index) {
+        if (Math.abs(wrapRadians(heading - previous.heading)) > 0.05 * DEG) {
+          missedHeadingPriority = true;
+        } else previous.heading = heading;
+      }
+      else knots.push({ index, heading });
+    });
+    const previous = knots.at(-1)!;
+    const outgoingEndIndex = endIndex;
+    const endHeading = previous.heading + wrapRadians(desired[outgoingEndIndex] - previous.heading);
+    if (endIndex === previous.index) {
+      if (Math.abs(wrapRadians(endHeading - previous.heading)) > 0.05 * DEG) {
+        missedHeadingPriority = true;
+      } else previous.heading = endHeading;
+    }
+    else knots.push({ index: endIndex, heading: endHeading });
+    transitionReferenceKnots.set(transition.waypointIndex, knots);
+    transitionHardKnotIndices.set(
+      transition.waypointIndex,
+      new Set(knots.slice(1).map((knot) => knot.index)),
+    );
+  });
+  const transitionReferenceHeading = (transition: HeadingTransitionWindow, sampleIndex: number) => {
+    const knots = transitionReferenceKnots.get(transition.waypointIndex);
+    if (!knots?.length) return desired[sampleIndex];
+    let start = knots[0];
+    let end = knots.at(-1)!;
+    for (let index = 1; index < knots.length; index += 1) {
+      if (sampleIndex <= knots[index].index) {
+        start = knots[index - 1];
+        end = knots[index];
+        break;
+      }
+    }
+    const startTime = samples[start.index].t;
     const endTime = samples[end.index].t;
     const progress = endTime > startTime + EPSILON
       ? (samples[sampleIndex].t - startTime) / (endTime - startTime)
