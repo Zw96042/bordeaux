@@ -95,7 +95,7 @@ export type HeadingTransitionPlacement = "before" | "split" | "after";
 export interface HeadingTransition {
   /** Which adjacent segment provides distance for the heading-law blend. */
   placement?: HeadingTransitionPlacement;
-  /** Whether heading or translation keeps its authored spatial schedule. */
+  /** @deprecated Legacy files may contain this; planning now couples translation and heading. */
   rotationPriority?: "heading" | "translation";
   /** Total path length available for the minimum-jerk blend. */
   distanceM?: number;
@@ -104,6 +104,10 @@ export interface HeadingTransition {
 export interface Waypoint {
   x: number;
   y: number;
+  /** Project-local shared x/y position; heading and tangent handles remain local. */
+  positionLink?: string;
+  /** Opt-in name that exposes this waypoint in the shared-position picker. */
+  positionName?: string;
   theta: number;
   thetaOn: boolean;
   linked: boolean;
@@ -117,7 +121,7 @@ export interface Waypoint {
   segmentFollowMode?: FollowMode;
   /** Field point continuously faced by the outgoing segment when segmentHeadingMode is lookAt. */
   segmentLookAt?: ControlPoint;
-  /** Continuity policy at the boundary into this waypoint's outgoing segment. */
+  /** @deprecated Heading-law transitions are automatic at the waypoint. */
   headingTransition?: HeadingTransition;
   /** Stationary angular move performed after arriving at this stopped waypoint. */
   turnInPlace?: TurnInPlace;
@@ -347,7 +351,7 @@ export interface ConstraintRange {
   maxDecel?: number;
   maxAngVel: number;
   maxAngAccel: number;
-  /** Which motion stays on schedule when heading demand exceeds angular limits. */
+  /** @deprecated Legacy files may contain this; planning now couples translation and heading. */
   rotationPriority?: "heading" | "translation";
   name?: string;
 }
@@ -368,6 +372,16 @@ export interface PathDoc {
   startVel: number;
   goalVel: number;
   exportable?: boolean;
+  /** Authored corridor and explicit selection; project plannerId never selects an artifact. */
+  optimization?: {
+    corridorM: number;
+    accepted?: {
+      version: 1;
+      inputKey: string;
+      samplesPerSegment: number;
+      result: PlannerResult;
+    };
+  };
 }
 
 export interface PathFolder {
@@ -483,6 +497,7 @@ export interface PathEndpointLink {
 export interface ProjectEditorState {
   activePathId?: string;
   javaProjectBookmarkId?: string;
+  unitSystem?: "metric" | "imperial";
 }
 
 export interface FieldReference {
@@ -583,6 +598,8 @@ export interface PlannerResult {
   totalTimeS: number;
   totalDistanceM: number;
   samples: TrajectorySample[];
+  /** Structural authored-waypoint arrivals. Internal planner metadata; not part of BDX exports. */
+  waypointSampleIndices?: number[];
   markers: BdxMarker[];
   diagnostics: ValidationIssue[];
   optimization?: PlannerOptimizationDiagnostics;
@@ -615,6 +632,12 @@ export interface PlannerOptimizationDiagnostics {
   budgetTier?: "common" | "stress" | "hard";
   budgetMs?: number;
   evaluations?: number;
+  validatedCandidates?: number;
+  rejectedCandidates?: number;
+  rejectionReasons?: { reason: string; count: number }[];
+  termination?: "completed" | "work-budget" | "time-budget" | "cancelled" | "unsupported" | "invalid-baseline";
+  baselineTimeS?: number;
+  gainS?: number;
   maxDeviationM?: number;
   minimumClearanceM?: number;
 }

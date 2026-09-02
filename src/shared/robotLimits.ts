@@ -53,7 +53,9 @@ export function robotHardLimits(robot: RobotConfig): RobotHardLimits | null {
   };
 }
 
-export function effectivePathConstraints(constraints: PathConstraints, robot: RobotConfig): PathConstraints {
+// Use the robot envelope when creating a path. Existing numeric constraints
+// remain authored caps, including in older files without default provenance.
+export function robotDefaultConstraints(constraints: PathConstraints, robot: RobotConfig): PathConstraints {
   const limits = robotHardLimits(robot);
   if (!limits) return constraints;
   return {
@@ -65,5 +67,20 @@ export function effectivePathConstraints(constraints: PathConstraints, robot: Ro
     maxAngVel: limits.maxAngularSpeedDegps,
     maxAngAccel: limits.maxAngularAccelDegps2,
     maxAngDecel: limits.maxAngularAccelDegps2,
+  };
+}
+
+export function effectivePathConstraints(constraints: PathConstraints, robot: RobotConfig): PathConstraints {
+  const limits = robotDefaultConstraints(constraints, robot);
+  if (limits === constraints) return constraints;
+  return {
+    ...constraints,
+    maxVel: Math.min(constraints.maxVel, limits.maxVel),
+    maxAccel: Math.min(constraints.maxAccel, limits.maxAccel),
+    maxDecel: Math.min(constraints.maxDecel ?? constraints.maxAccel, limits.maxDecel),
+    maxCentripetalAccel: Math.min(constraints.maxCentripetalAccel ?? constraints.maxAccel, limits.maxCentripetalAccel!),
+    maxAngVel: Math.min(constraints.maxAngVel, limits.maxAngVel),
+    maxAngAccel: Math.min(constraints.maxAngAccel, limits.maxAngAccel),
+    maxAngDecel: Math.min(constraints.maxAngDecel || constraints.maxAngAccel, limits.maxAngDecel!),
   };
 }

@@ -1,3 +1,6 @@
+import type { ControlPoint, Waypoint } from "../types";
+
+type HandleGeometry = Pick<Waypoint, "x" | "y" | "prevC" | "nextC">;
 
 /** Preserve handle lengths while making both tangents point through the waypoint. */
 export function alignedWaypointHandles(waypoint: HandleGeometry, preserveAligned = false): { prevC: ControlPoint; nextC: ControlPoint } | null {
