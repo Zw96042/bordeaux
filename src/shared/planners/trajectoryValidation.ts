@@ -322,15 +322,24 @@ export function validateOptimizedTrajectory(
         if (constraint.label && measured >= motorLimit * 0.94) activeConstraints.add(constraint.label);
       }
     }
+          + midpoint.headingSecondDerivativeRadPerM2 * speedSquared;
+    validateModuleForces(
+      actualMidpoint,
+      index + 1,
+      speed,
+      acceleration,
+      forceAngularVelocity,
+      forceAngularAcceleration,
+    );
 
     if (!skipsAngularForInterval(index)) {
       const angular = angularLimitsForInterval(input, ranges, before.f, after.f);
       const midpointOmega = usesSampleAngularKinematics
-        ? (before.angularVelocityRadps + after.angularVelocityRadps) * 0.5
+        ? timestampedAngularVelocities[index]
         : midpoint.headingDerivativeRadPerM * speed;
       const omega = Math.abs(midpointOmega);
       if (omega > angular.velocity + tolerance(angular.velocity, 2e-3, 0.02)) {
-        pushViolation(violations, "angular-velocity", index + 1, omega, angular.velocity, false, "Angular velocity");
+        pushViolation(violations, "angular-velocity", index + 1, omega, angular.velocity, true, "Angular velocity");
       }
       const signedAngularAcceleration = usesSampleAngularKinematics
         ? sampleAngularAcceleration
@@ -341,13 +350,14 @@ export function validateOptimizedTrajectory(
         ? Math.abs(signedAngularAcceleration)
         : headingDirection * signedAngularAcceleration;
       const reversing = usesSampleAngularKinematics
-        && Math.sign(after.angularVelocityRadps) !== 0
-        && Math.sign(before.angularVelocityRadps) !== 0
-        && Math.sign(after.angularVelocityRadps) !== Math.sign(before.angularVelocityRadps);
+        && Math.sign(timestampedAngularVelocities[index]) !== 0
+        && Math.sign(previousAngularVelocity) !== 0
+        && Math.sign(timestampedAngularVelocities[index])
+          !== Math.sign(previousAngularVelocity);
       const angularAccelerationLimit = usesSampleAngularKinematics
         ? reversing
           ? Math.min(angular.acceleration, angular.deceleration)
-          : Math.abs(after.angularVelocityRadps) >= Math.abs(before.angularVelocityRadps)
+          : Math.abs(timestampedAngularVelocities[index]) >= Math.abs(previousAngularVelocity)
             ? angular.acceleration
             : angular.deceleration
         : angularMagnitudeAcceleration >= 0
@@ -369,6 +379,6 @@ export function validateOptimizedTrajectory(
     refinableIntervals: [...refinableIntervals].sort((left, right) => left - right),
     activeConstraints: [...activeConstraints].sort(),
     checkedPoints: samples.length * 2 - 1,
-    angularValidationSkipped: Boolean(options.skipAngular || options.skipAngularFromIndex !== undefined),
+    angularValidationSkipped: Boolean(options.skipAngular || skipAngularIntervals.some(Boolean)),
   };
 }

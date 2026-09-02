@@ -1,16 +1,12 @@
-import { PM } from "../math/pm";
+import { buildCanonicalPathState, isStationaryHeadingTransition } from "./pathState";
+import { wrapRadians } from "../math/angles";
 import type { ConstraintRange, PathDoc, PlannerResult, PlannerStationaryAction, RobotConfig, TrajectorySample } from "../types";
 import { MAX_TRAJECTORY_SAMPLES } from "./limits";
+import { jigglePositions } from "./jiggle";
+import { orderedWaypointSampleIndices } from "./waypointSamples";
 
 const EPSILON = 1e-9;
 const DEG = Math.PI / 180;
-
-function wrapRadians(value: number): number {
-  let wrapped = value;
-  while (wrapped > Math.PI) wrapped -= Math.PI * 2;
-  while (wrapped < -Math.PI) wrapped += Math.PI * 2;
-  return wrapped;
-}
 
 function directedDelta(start: number, end: number, direction = "shortest"): number {
   let delta = wrapRadians(end - start);
@@ -105,28 +101,23 @@ function samplePeriod(samples: readonly TrajectorySample[]): number {
   return Number.isFinite(best) ? Math.max(0.01, Math.min(0.05, best)) : 0.02;
 }
 
-function waypointSampleIndices(path: PathDoc, samples: readonly TrajectorySample[]): number[] {
-  let cursor = 0;
-  return path.waypoints.map((waypoint, waypointIndex) => {
-    if (waypointIndex === path.waypoints.length - 1) return samples.length - 1;
-    let best = cursor, distance = Infinity;
-    for (let index = cursor; index < samples.length; index += 1) {
-      const candidate = Math.hypot(samples[index].x - waypoint.x, samples[index].y - waypoint.y);
-      if (candidate < distance) { best = index; distance = candidate; }
-      if (distance < 1e-5 && candidate > distance + 1e-4) break;
+function nextMovingSampleIndices(samples: readonly TrajectorySample[]): number[] {
+  const indices = new Array<number>(samples.length).fill(-1);
+  let runStart = 0;
+  while (runStart < samples.length) {
+    const arrival = samples[runStart];
+    let runEnd = runStart;
+    while (runEnd + 1 < samples.length) {
+      const candidate = samples[runEnd + 1];
+      if (Math.hypot(candidate.x - arrival.x, candidate.y - arrival.y) > 1e-5
+        || Math.abs(candidate.s - arrival.s) > 1e-6) break;
+      runEnd += 1;
     }
-    cursor = best;
-    return best;
-  });
-}
-
-function firstMovingSampleIndex(samples: readonly TrajectorySample[], boundary: number): number | null {
-  const arrival = samples[boundary];
-  for (let index = boundary + 1; index < samples.length; index += 1) {
-    const sample = samples[index];
-    if (Math.hypot(sample.x - arrival.x, sample.y - arrival.y) > 1e-5 || Math.abs(sample.s - arrival.s) > 1e-6) return index;
+    const next = runEnd + 1 < samples.length ? runEnd + 1 : -1;
+    for (let index = runStart; index <= runEnd; index += 1) indices[index] = next;
+    runStart = runEnd + 1;
   }
-  return null;
+  return indices;
 }
 
 function rotationDuration(delta: number, limits: ReturnType<typeof activeAngularLimits>): number {
@@ -159,11 +150,36 @@ function jigglePhase(progress: number): { position: number; velocity: number; ac
 
 /** Adds optional waypoint actions after a planner has finished its authored geometry. */
 export function applyStationaryActions(path: PathDoc, result: PlannerResult, robot?: RobotConfig): PlannerResult {
+  if (result.samples.length === 0) return result;
+  const baseIndices = result.waypointSampleIndices ?? orderedWaypointSampleIndices(path.waypoints, result.samples, { fallback: "stationary" });
+  const nextMovingIndices = nextMovingSampleIndices(result.samples);
+  const state = buildCanonicalPathState(path, result.samples);
   const actions = path.waypoints
-    .map((waypoint, index) => ({ waypoint, index }))
-    .filter(({ waypoint }) => waypoint.turnInPlace || waypoint.jiggle || (waypoint.wait ?? 0) > 0);
-  if (actions.length === 0 || result.samples.length === 0) return result;
+    .map((waypoint, index) => {
+      const boundary = baseIndices[index];
+      const movingIndex = nextMovingIndices[boundary] < 0 ? null : nextMovingIndices[boundary];
+      const implicitTurnHeading = !waypoint.turnInPlace
+        && isStationaryHeadingTransition(
+          path,
+          state.points[boundary],
+          movingIndex === null ? undefined : result.samples[movingIndex].headingRad,
+        )
+        && movingIndex !== null
+        ? result.samples[movingIndex].headingRad
+        : undefined;
+      return { waypoint, index, implicitTurnHeading };
+    })
+    .filter(({ waypoint, implicitTurnHeading }) => (
+      waypoint.turnInPlace
+      || implicitTurnHeading !== undefined
+      || waypoint.jiggle
+      || (waypoint.stop && (waypoint.wait ?? 0) > 0)
+    ));
+  if (actions.length === 0) return result;
 
+  const actionIndices = [...baseIndices];
+  const terminalIndex = path.waypoints.length - 1;
+  if (actions.some(({ index }) => index === terminalIndex)) {
     const arrival = result.samples[actionIndices[terminalIndex]];
     while (actionIndices[terminalIndex] + 1 < result.samples.length) {
       const candidate = result.samples[actionIndices[terminalIndex] + 1];
