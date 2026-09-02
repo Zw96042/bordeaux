@@ -1945,4 +1945,13 @@ import { createPlaybackStore } from "../lib/playbackStore";
     }
   }
 
-export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, agentProposalPreviewResult, applyBrushDraft, canApplyAgentProposalCandidate, currentPathLength, duplicatePathForLibrary, pathPreviewResult, remapBrushSelection, requestRoutinePreview, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, syncBrushSelection, waypointPreviewResult };
+// identity determines its destination, regardless of a callback's selected index.
+function replaceEditedPath(project, edited) {
+  const index = project.paths.findIndex((item) => item.id === edited.id);
+  if (index < 0) return project;
+  const paths = project.paths.slice(), before = paths[index];
+  paths[index] = edited;
+  return PathLinks.sync({ ...project, paths }, edited.id, before);
+}
+
+export { App, AppErrorBoundary, replaceEditedPath, agentProposalMatchesPublishedContext, agentProposalPreviewResult, applyBrushDraft, canApplyAgentProposalCandidate, currentPathLength, duplicatePathForLibrary, pathPreviewResult, remapBrushSelection, requestRoutinePreview, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, syncBrushSelection, waypointPreviewResult };

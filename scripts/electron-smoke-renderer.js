@@ -14,6 +14,12 @@
   };
   const addMarker = async (fraction) => {
     document.activeElement?.blur();
+    // Command edits can start a new preview and temporarily make the field inert.
+    // Wait for the same interactive state before each native marker placement.
+    await waitFor(() => {
+      const field = document.querySelector('.stage-plan .fieldcol');
+      return field && !field.inert && field.getAttribute('aria-disabled') !== 'true';
+    }, 'interactive field before marker placement');
     const segment = document.querySelector('.fieldsvg path[data-role="seg"]');
     if (!segment) throw new Error('Smoke marker placement requires a visible path');
     const point = segment.getPointAtLength(segment.getTotalLength() * fraction).matrixTransform(segment.getScreenCTM());
@@ -96,33 +102,37 @@
   if (jsonParameter) {
     setTextAreaValue.call(jsonParameter, '{}');
     jsonParameter.dispatchEvent(new Event('input', { bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     jsonParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   }
+  await waitFor(() => jsonParameter?.getAttribute('aria-invalid') === 'true', 'invalid JSON parameter rejected');
   const jsonShapeRejected = jsonParameter?.getAttribute('aria-invalid') === 'true';
   if (jsonParameter) {
     setTextAreaValue.call(jsonParameter, '["auto"]');
     jsonParameter.dispatchEvent(new Event('input', { bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     jsonParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   }
+  await waitFor(() => jsonParameter?.getAttribute('aria-invalid') === 'false', 'valid JSON parameter accepted');
   if (exactIntegerParameter) {
     setInputValue.call(exactIntegerParameter, '9223372036854775808');
     exactIntegerParameter.dispatchEvent(new Event('input', { bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     exactIntegerParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   }
+  await waitFor(() => exactIntegerParameter?.getAttribute('aria-invalid') === 'true', 'out-of-range long rejected');
   const longRangeRejected = exactIntegerParameter?.getAttribute('aria-invalid') === 'true';
   if (exactIntegerParameter) {
     setInputValue.call(exactIntegerParameter, '9007199254740993');
     exactIntegerParameter.dispatchEvent(new Event('input', { bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     exactIntegerParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   }
+  await waitFor(() => exactIntegerParameter?.getAttribute('aria-invalid') === 'false', 'exact long accepted');
   document.getElementById('event-marker-command')?.click();
   for (let attempt = 0; attempt < 50 && !document.querySelector('#event-marker-command-listbox [role="option"]'); attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -177,11 +187,10 @@
   };
   await addMarker(0.65);
   let markerAutosave;
-  for (let attempt = 0; attempt < 30; attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 100));
+  await waitFor(async () => {
     markerAutosave = await window.bordeauxAPI.restoreLastProject();
-    if (markerAutosave.project.paths[0].markers.length === 2) break;
-  }
+    return markerAutosave.project.paths[0].markers.length === 2;
+  }, 'second event marker autosave');
   const eventMarkerAutosave = markerAutosave.project.paths[0].markers.length === 2
     && markerAutosave.project.paths[0].markers[1].name === 'event2';
   await window.bordeauxAPI.newProject();

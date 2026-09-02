@@ -187,6 +187,8 @@ public final class GeneratedPathIntegration {
   await runGradle(path.join(repositoryRoot, "java", process.platform === "win32" ? "gradlew.bat" : "gradlew"), [
     "-p", path.join(repositoryRoot, "java"),
     ":runtime:test",
+    // The fixture is supplied through the environment, outside Gradle's declared test inputs.
+    "--rerun-tasks",
     "--tests", "dev.bordeaux.runtime.BordeauxRuntimeTest.executesDesktopExportedWaitRoutine",
     "--no-daemon",
     "--console=plain",

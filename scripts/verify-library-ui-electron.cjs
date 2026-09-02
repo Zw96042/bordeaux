@@ -254,12 +254,19 @@ app.whenReady().then(async () => {
     const point = await evaluate(() => { const r = document.querySelector('[data-role="wp"][data-idx="1"]').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; });
     win.webContents.sendInputEvent({ type: 'mouseMove', ...point }); await delay(50);
     win.webContents.sendInputEvent({ type: 'mouseDown', ...point, button: 'left', clickCount: 1 }); await delay(50);
-    win.webContents.sendInputEvent({ type: 'mouseMove', x: point.x + 40, y: point.y + 20, button: 'left' }); await delay(120);
+    win.webContents.sendInputEvent({ type: 'mouseMove', x: point.x + 40, y: point.y + 20, button: 'left' });
+    await wait(() => evaluate((originalPoint) => {
+      const rect = document.querySelector('[data-role="wp"][data-idx="1"]').getBoundingClientRect();
+      return Math.hypot(rect.x + rect.width / 2 - originalPoint.x, rect.y + rect.height / 2 - originalPoint.y) > 5;
+    }, point), 'waypoint drag preview before switching');
     await click('[data-library-item="library-path-1"]');
     win.webContents.sendInputEvent({ type: 'mouseUp', x: point.x + 40, y: point.y + 20, button: 'left', clickCount: 1 });
     await click('[aria-label="Save project"]');
     assert.ok(Math.hypot(saved.paths[0].waypoints[1].x - original.x, saved.paths[0].waypoints[1].y - original.y) > .01);
     assert.deepEqual(saved.paths[1].waypoints[1], original);
+    assert.deepEqual(saved.paths.slice(0, 2).map(({ id, name }) => ({ id, name })), [
+      { id: 'library-path-0', name: 'Opening move' }, { id: 'library-path-1', name: 'Collect second' },
+    ], 'Finishing the captured pointer after switching preserves both path identities');
     await click('[data-library-item="library-path-0"]');
     check('switching commits an active pointer edit without modifying the destination path');
     await pointerClick('[data-library-item="library-path-0"]');
@@ -325,7 +332,7 @@ app.whenReady().then(async () => {
     await click('[aria-label="Save name"]');
     assert.equal(await evaluate(() => document.querySelector('.library-current-name').textContent), 'Fresh routine');
     assert.equal(await evaluate(() => document.querySelector('.routine-workspace-flow .rt-empty').checkVisibility()), true, 'New routine starts in the central flow empty state');
-    assert.ok(await evaluate(() => document.activeElement.matches('.library-pick')));
+    await wait(() => evaluate(() => document.activeElement.matches('.library-pick')), 'renamed routine restores row focus');
     await click('[aria-label="Save project"]');
     assert.ok(saved.routines.some((routine) => routine.name === 'Fresh routine'));
     await click('.pageswitch button', 'Settings'); await click('.pageswitch button', 'Editor');
@@ -386,7 +393,10 @@ app.whenReady().then(async () => {
         return { a: { x: Math.round(a.x+a.width/2), y: Math.round(a.y+a.height/2) }, b: { x: Math.round(b.x+b.width/2), y: Math.round(b.bottom-3) } };
       }, from, to);
       win.webContents.sendInputEvent({ type: 'mouseDown', ...points.a, button: 'left', clickCount: 1 });
-      win.webContents.sendInputEvent({ type: 'mouseMove', ...points.b, button: 'left' }); await delay(100);
+      await wait(() => evaluate(() => Boolean(document.querySelector('.rt-panel.dragging'))), 'routine pointer drag begins');
+      win.webContents.sendInputEvent({ type: 'mouseMove', ...points.b, button: 'left' });
+      if (valid) await wait(() => evaluate(() => Boolean(document.querySelector('.drop-before,.drop-after'))), 'supported routine drop feedback');
+      else await delay(100);
       assert.equal(await evaluate(() => Boolean(document.querySelector('.drop-before,.drop-after'))), valid, 'Drop feedback must match supported sibling moves');
       win.webContents.sendInputEvent({ type: 'mouseUp', ...points.b, button: 'left', clickCount: 1 });
       await delay(100); await click('[aria-label="Save project"]');
