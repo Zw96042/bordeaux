@@ -842,11 +842,8 @@ import { createPlaybackStore } from "../lib/playbackStore";
 
     const writeDoc = useCallback((nd) => {
       setPlanningInputRevision((revision) => revision + 1);
-      setProject((pr) => {
-        const paths = pr.paths.slice(), before = paths[activeIdx]; paths[activeIdx] = nd;
-        return PathLinks.sync({ ...pr, paths }, nd.id, before);
-      });
-    }, [activeIdx]);
+      setProject((pr) => replaceEditedPath(pr, nd));
+    }, []);
     const beginHistory = useCallback(() => { hist.current.past.push(clone(docRef.current)); if (hist.current.past.length > 80) hist.current.past.shift(); hist.current.future = []; projectHist.current.future = []; force((x) => x + 1); }, []);
     const beginEdit = useCallback(() => {
       if (editStore.getSnapshot()) return;
@@ -1945,6 +1942,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
     }
   }
 
+// Pointer callbacks can finish after selection changes. The edited document's
 // identity determines its destination, regardless of a callback's selected index.
 function replaceEditedPath(project, edited) {
   const index = project.paths.findIndex((item) => item.id === edited.id);

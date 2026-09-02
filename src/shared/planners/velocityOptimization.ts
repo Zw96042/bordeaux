@@ -1,3 +1,69 @@
+import type { TrajectorySample } from "../types";
+
+const EPSILON = 1e-9;
+const CONSTRAINT_SAFETY = 0.995;
+const R = (value: number, places = 4) => Number(value.toFixed(places));
+
+export interface LinearVelocityLimit {
+  freeSpeed: number;
+  velocity: number;
+  acceleration: number;
+  deceleration: number;
+}
+
+export interface LinearVelocityProfile {
+  points: LinearVelocityLimit[];
+  intervals: LinearVelocityLimit[];
+}
+
+function enforceLinearLimits(
+  limits: LinearVelocityProfile,
+  samples: readonly TrajectorySample[],
+  velocities: number[],
+): void {
+  for (let iteration = 0; iteration < 4; iteration += 1) {
+    for (let index = 1; index < samples.length; index += 1) {
+      const ds = Math.max(0, samples[index].s - samples[index - 1].s);
+      const interval = limits.intervals[index];
+      const availableAcceleration = interval.acceleration
+        * Math.max(0, Math.min(1, 1 - velocities[index - 1] / interval.freeSpeed))
+        * CONSTRAINT_SAFETY;
+      velocities[index] = Math.min(
+        velocities[index],
+        interval.velocity,
+        Math.sqrt(velocities[index - 1] ** 2 + 2 * availableAcceleration * ds),
+      );
+    }
+
+    for (let index = samples.length - 2; index >= 0; index -= 1) {
+      const ds = Math.max(0, samples[index + 1].s - samples[index].s);
+      const interval = limits.intervals[index + 1];
+      velocities[index] = Math.min(
+        velocities[index],
+        interval.velocity,
+        Math.sqrt(velocities[index + 1] ** 2 + 2 * interval.deceleration * CONSTRAINT_SAFETY * ds),
+      );
+    }
+  }
+}
+
+export function optimizeVelocities(
+  samples: readonly TrajectorySample[],
+  limits: LinearVelocityProfile,
+  startVelocity: number,
+  endVelocity: number,
+  smoothingPasses = 2,
+): number[] {
+  if (samples.length === 0) return [];
+  const velocities = samples.map((sample, index) => Math.min(
+    limits.points[index].velocity,
+    Math.max(0, sample.velocityMps),
+  ));
+  velocities[0] = Math.min(limits.points[0].velocity, Math.max(0, startVelocity));
+  velocities[velocities.length - 1] = Math.min(limits.points.at(-1)!.velocity, Math.max(0, endVelocity));
+
+  enforceLinearLimits(limits, samples, velocities);
+  for (let pass = 0; pass < smoothingPasses; pass += 1) {
     const next = velocities.slice();
     for (let index = 1; index < velocities.length - 1; index += 1) {
       if (velocities[index] <= EPSILON) continue;
