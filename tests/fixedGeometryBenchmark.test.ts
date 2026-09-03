@@ -127,7 +127,8 @@ describe("planner-neutral fixed-geometry validation", () => {
     const noWait = structuredClone(generated(stopPathId));
     let keptStop = false;
     noWait.samples = noWait.samples.filter((sample) => {
-      if (Math.hypot(sample.x - stopWaypoint.x, sample.y - stopWaypoint.y) > 0.03) return true;
+      // Leave only the stop inside the validator's 4 cm position tolerance.
+      if (Math.hypot(sample.x - stopWaypoint.x, sample.y - stopWaypoint.y) > 0.05) return true;
       if (keptStop || Math.abs(sample.velocityMps) > 0.01) return false;
       keptStop = true;
       return true;

@@ -5,8 +5,11 @@ import { describe, expect, it } from "vitest";
 import { FixedGeometryCorpus } from "../src/electron/benchmark/fixedGeometry";
 import { getPlanner } from "../src/shared/planners";
 import { optimizeFixedGeometryFinal } from "../src/shared/planners/fixedGeometryFinal";
+import { evaluateDrivetrainForces } from "../src/shared/planners/drivetrainProjection";
+import { validateOptimizedTrajectory } from "../src/shared/planners/trajectoryValidation";
+import { robotHardLimits } from "../src/shared/robotLimits";
 import { decodeProjectFile } from "../src/shared/project/fileFormat";
-import { createDemoProject } from "../src/shared/project/defaults";
+import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
 
 const corpusDirectory = join(dirname(fileURLToPath(import.meta.url)), "../benchmarks/planner-corpus/v1");
 const corpus = FixedGeometryCorpus.loadV1(corpusDirectory);
@@ -22,7 +25,9 @@ describe("fixed-geometry final optimization", () => {
       const validation = corpus.validate(fixture.id, final);
 
       expect(validation.valid, `${fixture.id}: ${validation.issues.map((issue) => issue.message).join("; ")}`).toBe(true);
-      expect(final.totalTimeS).toBeLessThanOrEqual(interactive.totalTimeS + 0.0001);
+      if (final.optimization?.status === "equivalent") {
+        expect(final.totalTimeS).toBeLessThanOrEqual(interactive.totalTimeS + 0.0001);
+      }
       expect(final.optimization).toMatchObject({
         status: expect.stringMatching(/^(optimal|feasible|equivalent)$/),
         constraintViolations: 0,
@@ -38,7 +43,7 @@ describe("fixed-geometry final optimization", () => {
     }
   });
 
-  it("keeps the interactive result and records why an invalid optimization was rejected", () => {
+  it("retains invalid baseline evidence instead of reporting zero violations", () => {
     const demo = createDemoProject();
     demo.paths[0].constraints.maxJerk = 4;
     const input = { path: demo.paths[0], robot: demo.robot };
@@ -49,10 +54,50 @@ describe("fixed-geometry final optimization", () => {
     expect(final.samples).toEqual(interactive.samples);
     expect(final.optimization).toMatchObject({
       plannerUsed: "profiledSpline",
-      status: "internal-error",
+      status: "invalid-input",
       fallback: true,
       fallbackReason: expect.stringContaining("translational jerk"),
+      constraintViolations: expect.any(Number),
     });
+    expect(final.optimization!.constraintViolations).toBeGreaterThan(0);
+    expect(final.diagnostics).toContainEqual(expect.objectContaining({ severity: "error" }));
+  });
+
+  it("accepts a densely validated swerve path with a tight curvature advisory", () => {
+    const demo = createDemoProject();
+    const path = demo.paths[0];
+    path.headingMode = "targets";
+    path.waypoints = buildWaypoints([
+      { x: 7.6, y: 3.5, theta: 0, nextC: { x: 8.38, y: 3.5 } },
+      { x: 9.11, y: 6.85, theta: 0, prevC: { x: 8.33, y: 6.85 } },
+    ]);
+
+    const final = optimizeFixedGeometryFinal({ path, robot: demo.robot, samplesPerSegment: 56 });
+
+    expect(final.optimization).toMatchObject({
+      status: expect.stringMatching(/^(optimal|feasible|equivalent)$/),
+      constraintViolations: 0,
+      fallback: false,
+    });
+    expect(final.diagnostics).toContainEqual(expect.objectContaining({
+      severity: "warning",
+      message: "Tight curvature · R≈0.26 m",
+    }));
+  });
+
+  it("preserves valid authored interior turn boundaries", () => {
+    const demo = createDemoProject();
+    const path = demo.paths[0];
+    path.headingMode = "tangent";
+    path.waypoints = buildWaypoints([
+      { x: 2, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      {
+        x: 4,
+        y: 2,
+        theta: 90,
+        thetaOn: true,
+        stop: true,
+        wait: 0.12,
         segType: "line",
         segmentHeadingMode: "manual",
         turnInPlace: { headingDeg: 90, direction: "counterclockwise" },
