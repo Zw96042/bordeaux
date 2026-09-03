@@ -1,3 +1,108 @@
+    path.headingMode = "targets";
+    path.waypoints = [
+      { x: 1, y: 4, prevC: { x: 1, y: 4 }, nextC: { x: 2.5, y: 4 }, linked: true, thetaOn: true, theta: 0, stop: false, segType: "bezier" },
+      { x: 5, y: 4, prevC: { x: 3.5, y: 4 }, nextC: { x: 6.5, y: 4 }, linked: true, thetaOn: true, theta: 0, stop: false, segType: "bezier" },
+      { x: 10, y: 4, prevC: { x: 8.5, y: 4 }, nextC: { x: 10, y: 4 }, linked: true, thetaOn: true, theta: -179, stop: false, segType: "bezier" },
+    ];
+    path.targets = [{ f: 0.58, deg: -112 }, { f: 0.75, deg: -179 }];
+    path.constraints.maxAngAccel = 10;
+    path.constraints.maxAngDecel = 10;
+
+    const derived = PM.derivePath(path, project.robot, 56, undefined);
+    expect(derived.prof.rotLimited.some((value: number) => value >= 2)).toBe(true);
+    expect(derived.warnings).toContainEqual(expect.objectContaining({
+      kind: "angaccel",
+      text: expect.stringContaining("add more distance"),
+    }));
+  });
+
+  it("searches corridor improvements with the same robot-derived limits as the fixed planner", () => withWorkBudget(() => {
+    const project = currentTangentToTargetsProject();
+    project.paths[0].waypoints.slice(1, -1).forEach((waypoint) => { waypoint.corner = true; });
+    const input = {
+      path: project.paths[0],
+      robot: project.robot,
+      samplesPerSegment: 56,
+    };
+    const baseline = optimizeFixedGeometryFinal(input);
+    const result = optimizeCorridorFinal(input, {
+      corridorM: 0.15,
+      budgetTier: "common",
+      maximumEvaluations: 24,
+    });
+
+    expect(result.optimization?.evaluations).toBeGreaterThan(1);
+    expect(result.optimization?.evaluations).toBeLessThanOrEqual(24);
+    expect(result.totalTimeS).toBeLessThan(baseline.totalTimeS - 0.02);
+    expect(result.optimizedPath).toBeDefined();
+  }), 60_000);
+
+  it("plans one coupled translation-and-heading trajectory regardless of legacy priority metadata", () => {
+    const results = ([undefined, "heading", "translation"] as const).map((legacyPriority) => {
+      const project = currentTangentToTargetsProject();
+      const transition = project.paths[0].waypoints[2].headingTransition!;
+      if (legacyPriority) transition.rotationPriority = legacyPriority;
+      else delete transition.rotationPriority;
+      return getPlanner("optimizedTrajectory").generate({
+        path: project.paths[0],
+        robot: project.robot,
+        samplesPerSegment: 56,
+      });
+    });
+    const canonical = results[0];
+    const movingEnd = canonical.samples.findIndex((sample) => sample.f >= 1 - 1e-9);
+    const headingTravelWhileMoving = canonical.samples.slice(1, movingEnd + 1).reduce((travel, sample, index) => (
+      travel + Math.abs(PM.angWrap(sample.headingRad - canonical.samples[index].headingRad))
+    ), 0);
+
+    expect(canonical.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+    expect(canonical.totalTimeS - canonical.samples[movingEnd].t).toBeLessThan(0.02);
+    expect(headingTravelWhileMoving).toBeGreaterThan(150 * Math.PI / 180);
+    for (const result of results.slice(1)) {
+      expect(result.samples).toHaveLength(canonical.samples.length);
+      result.samples.forEach((sample, index) => {
+        expect(sample.t).toBeCloseTo(canonical.samples[index].t, 6);
+        expect(sample.velocityMps).toBeCloseTo(canonical.samples[index].velocityMps, 6);
+        expect(sample.headingRad).toBeCloseTo(canonical.samples[index].headingRad, 6);
+      });
+    }
+  });
+
+  it("keeps an ordinary two-point path when corridor topology is ambiguous", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      { x: 2.2, y: 4.0, theta: 0 },
+      { x: 6.36, y: 4.99, theta: 0 },
+    ]);
+
+    const result = finalPreview(path, project, true);
+
+    expect(result.error).toBeUndefined();
+    expect(result.finalFallbackReason).toBeUndefined();
+    expect(result.value.finalOptimization).toMatchObject({
+      status: "equivalent",
+      fallback: false,
+      constraintViolations: 0,
+    });
+  });
+
+  it("does not globally slow the live translation-priority path", () => {
+    const project = liveTranslationPriorityProject();
+    const result = finalPreview(project.paths[0], project);
+
+    expect(result.error).toBeUndefined();
+    expect(result.finalFallbackReason).toBeUndefined();
+    expect(result.value.finalTrajectory.totalTimeS).toBeLessThan(7);
+    expect(result.value.finalOptimization).toMatchObject({
+      fallback: false,
+      constraintViolations: 0,
+    });
+  });
+
+  it("profiles the live path at the fastest validated timing instead of globally slowing it", () => {
+    const project = liveTranslationPriorityProject();
+    const path = project.paths[0];
     const result = getPlanner("profiledSpline").generate({
       path,
       robot: project.robot,
