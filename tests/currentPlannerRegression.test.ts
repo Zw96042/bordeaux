@@ -1,3 +1,108 @@
+  });
+
+  it("rotates and translates concurrently through the current tangent-to-targets transition", () => {
+      const project = currentTangentToTargetsProject();
+      const path = project.paths[0];
+      const input = { path, robot: project.robot, samplesPerSegment: 56 };
+      const result = getPlanner("optimizedTrajectory").generate(input);
+      const hardLimits = robotHardLimits(project.robot)!;
+      const physicalInput = {
+        ...input,
+        path: { ...path, constraints: effectivePathConstraints(path.constraints, project.robot) },
+        robot: { ...project.robot, maxSpeed: hardLimits.maxSpeedMps },
+      };
+      const validation = validateOptimizedTrajectory(physicalInput, fixedPathSamples(result), {
+        angularKinematics: "sample",
+      });
+      const waypoint = path.waypoints[2];
+      const waypointIndex = result.samples.reduce((best, sample, index) => (
+        Math.hypot(sample.x - waypoint.x, sample.y - waypoint.y)
+          < Math.hypot(result.samples[best].x - waypoint.x, result.samples[best].y - waypoint.y)
+          ? index
+          : best
+      ), 0);
+      const waypointDistance = result.samples[waypointIndex].s;
+      const waypointNeighborhood = result.samples.filter((sample) => (
+        Math.abs(sample.s - waypointDistance) <= 0.2
+      ));
+      const arrivalIndex = result.samples.findIndex((sample) => sample.f >= 1 - 1e-9);
+      const headingTravelWhileMoving = result.samples.slice(1, arrivalIndex + 1).reduce((travel, sample, index) => {
+        const previous = result.samples[index];
+        if (Math.min(Math.abs(previous.velocityMps), Math.abs(sample.velocityMps)) <= 1) return travel;
+        return travel + Math.abs(PM.angWrap(sample.headingRad - previous.headingRad));
+      }, 0);
+      const goalHeading = path.waypoints.at(-1)!.theta! * Math.PI / 180;
+      const finalHeadingError = PM.angWrap(result.samples.at(-1)!.headingRad - goalHeading);
+
+      expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+      expect(result.optimization).toMatchObject({ fallback: false, constraintViolations: 0 });
+      expect(validation.violations).toEqual([]);
+      expect(Math.min(...waypointNeighborhood.map((sample) => sample.velocityMps))).toBeGreaterThan(1.2);
+      expect(headingTravelWhileMoving).toBeGreaterThan(150 * Math.PI / 180);
+      expect(result.samples[arrivalIndex].t).toBeLessThan(4);
+      expect(Math.abs(finalHeadingError)).toBeLessThan(0.5 * Math.PI / 180);
+      expect(result.totalTimeS - result.samples[arrivalIndex].t).toBeLessThan(0.03);
+  });
+
+  it("ignores inactive rotation targets outside Targets heading mode", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxAngVel = 360;
+    path.constraints.maxAngAccel = 720;
+    path.constraints.maxAngDecel = 720;
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "tangent" },
+      {
+        x: 4, y: 2, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "manual",
+        headingTransition: { placement: "after", rotationPriority: "heading", distanceM: 0.75 },
+      },
+      { x: 7, y: 2, theta: 0, thetaOn: true, segType: "line" },
+    ]);
+    const withoutTarget = getPlanner("optimizedTrajectory").generate({
+      path: structuredClone(path),
+      robot: project.robot,
+      samplesPerSegment: 56,
+    });
+    path.targets = [{ f: 0.7337, deg: 120 }];
+    const withInactiveTarget = getPlanner("optimizedTrajectory").generate({
+      path,
+      robot: project.robot,
+      samplesPerSegment: 56,
+    });
+
+    expect(withInactiveTarget.samples).toHaveLength(withoutTarget.samples.length);
+    withInactiveTarget.samples.forEach((sample, index) => {
+      expect(sample.headingRad).toBeCloseTo(withoutTarget.samples[index].headingRad, 8);
+      expect(sample.t).toBeCloseTo(withoutTarget.samples[index].t, 8);
+    });
+  });
+
+  it("does not pull an incoming-segment target into an automatic Targets transition", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "targets";
+    path.constraints.maxAngVel = 360;
+    path.constraints.maxAngAccel = 720;
+    path.constraints.maxAngDecel = 720;
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "tangent" },
+      {
+        x: 4, y: 2, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "targets",
+        headingTransition: { placement: "after", rotationPriority: "translation", distanceM: 0.75 },
+      },
+      { x: 7, y: 2, theta: 0, thetaOn: true, segType: "line" },
+    ]);
+    const withoutTarget = getPlanner("optimizedTrajectory").generate({
+      path: structuredClone(path), robot: project.robot, samplesPerSegment: 56,
+    });
+    path.targets = [{ f: 0.25, deg: 120 }];
+    const withInactiveTarget = getPlanner("optimizedTrajectory").generate({
+      path, robot: project.robot, samplesPerSegment: 56,
+    });
+
+    expect(withInactiveTarget.samples).toHaveLength(withoutTarget.samples.length);
+    withInactiveTarget.samples.forEach((sample, index) => {
       expect(sample.headingRad).toBeCloseTo(withoutTarget.samples[index].headingRad, 8);
       expect(sample.t).toBeCloseTo(withoutTarget.samples[index].t, 8);
     });
