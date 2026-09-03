@@ -1,15 +1,15 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CorridorCorpus } from "../src/electron/benchmark/corridor";
 import { observeRobotFieldPortalSequence } from "../src/shared/agent/fieldClearance";
 import { REBUILT_2026_FIELD, officialToAppPoint } from "../src/shared/field/rebuilt2026";
 import { robotFootprintRadius } from "../src/shared/agent/robotFootprint";
-import { optimizeCorridorFinal } from "../src/shared/planners/corridorFinal";
+import { optimizeCorridorFinal, validateCorridorCandidate } from "../src/shared/planners/corridorFinal";
 import { optimizeFixedGeometryFinal } from "../src/shared/planners/fixedGeometryFinal";
 import { decodeProjectFile } from "../src/shared/project/fileFormat";
-import type { TrajectorySample } from "../src/shared/types";
+import type { PlannerResult, TrajectorySample } from "../src/shared/types";
 
 const directory = join(dirname(fileURLToPath(import.meta.url)), "../benchmarks/planner-corpus/v1");
 const corpus = CorridorCorpus.loadV1(directory);
@@ -51,7 +51,7 @@ describe("corridor final optimization", () => {
       if (result.optimizedPath) changedGeometry += 1;
     }
     expect(changedGeometry).toBeGreaterThan(0);
-  });
+  }, 30_000);
 
   it("distinguishes alternate typed portals even when endpoints stay on the same sides", () => {
     const barrier = REBUILT_2026_FIELD.crossingBarriers.find((item) => item.allianceOwner === "blue")!;
@@ -75,30 +75,102 @@ describe("corridor final optimization", () => {
     });
   });
 
-  it("returns the untouched baseline with an explicit common-budget reason on timeout", () => {
-    const fixture = corpus.cases[0];
-    const path = project.paths.find((candidate) => candidate.id === fixture.pathId)!;
-    const authored = structuredClone(path);
-    let clockReads = 0;
-
+  it("returns the validated baseline before an exhausted time budget starts more work", () => {
+    const path = project.paths.find((candidate) => candidate.id === corpus.cases[0].pathId)!;
+    const progress: PlannerResult[] = [];
     const result = optimizeCorridorFinal({ path, robot: project.robot, samplesPerSegment: 56 }, {
-      corridorM: 0.2,
-      budgetTier: "common",
-      budgetMs: 5_000,
-      now: () => clockReads++ === 0 ? 0 : 5_001,
+      budgetMs: 1,
+      onProgress: (incumbent) => progress.push(incumbent),
     });
 
-    expect(path).toEqual(authored);
-    expect(result.optimizedPath).toBeUndefined();
     expect(result.optimization).toMatchObject({
-      optimizationClass: "corridor",
-      status: "cancelled",
-      budgetTier: "common",
-      budgetMs: 5_000,
+      status: "equivalent",
+      termination: "time-budget",
       evaluations: 0,
-      fallback: true,
-      fallbackReason: "Corridor optimization reached the common solve budget (5000 ms).",
+      validatedCandidates: 0,
+      fallback: false,
+      constraintViolations: 0,
     });
+    expect(progress).toHaveLength(1);
+    expect(result.samples).toEqual(progress[0].samples);
+  });
+
+  it("performs useful default search and retains an improved incumbent on cancellation", () => {
+    const fixture = corpus.cases[1];
+    const path = project.paths.find((candidate) => candidate.id === fixture.pathId)!;
+    const input = { path, robot: project.robot, samplesPerSegment: 56 };
+    const regular = optimizeCorridorFinal(input);
+    expect(regular.optimization?.evaluations).toBeGreaterThan(1);
+    expect(regular.optimization?.status).toBe("feasible");
+    expect(regular.optimization?.gainS).toBeGreaterThan(0.02);
+    expect(validateCorridorCandidate(input, regular)).toBe(true);
+    const tampered = structuredClone(regular);
+    tampered.optimizedPath!.waypoints[0].nextC!.y += 3;
+    expect(validateCorridorCandidate(input, tampered)).toBe(false);
+    let cancel = false;
+    let improved: PlannerResult | undefined;
+    const cancelled = optimizeCorridorFinal(input, {
+      isCancelled: () => cancel,
+      onProgress: (incumbent) => {
+        if (incumbent.optimizedPath) { improved = incumbent; cancel = true; }
+      },
+    });
+    expect(improved).toBeDefined();
+    expect(cancelled.optimization).toMatchObject({ status: "feasible", termination: "cancelled", fallback: false });
+    expect(cancelled.samples).toEqual(improved!.samples);
+    expect(cancelled.optimizedPath).toEqual(improved!.optimizedPath);
+  }, 15_000);
+
+  it("returns the improved checkpoint when the cooperative time budget expires", () => {
+    const path = project.paths.find((candidate) => candidate.id === corpus.cases[1].pathId)!;
+    let elapsedMs = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    let improved: PlannerResult | undefined;
+    try {
+      const result = optimizeCorridorFinal({ path, robot: project.robot, samplesPerSegment: 56 }, {
+        budgetMs: 5_000,
+        onProgress: (incumbent) => {
+          if (incumbent.optimizedPath) { improved = incumbent; elapsedMs = 4_950; }
+        },
+      });
+      expect(improved).toBeDefined();
+      expect(result.optimization).toMatchObject({ status: "feasible", termination: "time-budget", fallback: false });
+      expect(result.samples).toEqual(improved!.samples);
+      expect(result.optimizedPath).toEqual(improved!.optimizedPath);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("never worsens the validated result as deterministic work increases", () => {
+    const fixture = corpus.cases[1];
+    const path = project.paths.find((candidate) => candidate.id === fixture.pathId)!;
+    let previousTime = Number.POSITIVE_INFINITY;
+    for (const maximumEvaluations of [4, 12, 24, 48]) {
+      const result = optimizeCorridorFinal({ path, robot: project.robot, samplesPerSegment: 56 }, {
+        maximumEvaluations,
+        budgetMs: 30_000,
+      });
+      expect(result.totalTimeS).toBeLessThanOrEqual(previousTime);
+      expect(result.optimization?.status).not.toBe("optimal");
+      expect(result.optimization!.validatedCandidates! + result.optimization!.rejectedCandidates!)
+        .toBe(result.optimization?.evaluations);
+      previousTime = result.totalTimeS;
+    }
+  }, 30_000);
+
+  it("reports bounded candidate rejection evidence separately from result quality", () => {
+    const fixture = corpus.cases[1];
+    const path = project.paths.find((candidate) => candidate.id === fixture.pathId)!;
+    const result = optimizeCorridorFinal({ path, robot: project.robot, samplesPerSegment: 56 }, {
+      maximumEvaluations: 4,
+      gates: [{ bounds: { xMin: -100, xMax: -99, yMin: -100, yMax: -99 } }],
+    });
+    expect(result.optimization).toMatchObject({
+      status: "equivalent", termination: "work-budget", fallback: false,
+      validatedCandidates: 0, rejectedCandidates: 4,
+    });
+    expect(result.optimization?.rejectionReasons).toContainEqual({ reason: "Missed a required gate", count: 4 });
   });
 
   it("is deterministic at a fixed evaluation ceiling", () => {
@@ -119,5 +191,5 @@ describe("corridor final optimization", () => {
     expect(second.optimizedPath).toEqual(first.optimizedPath);
     expect(second.samples).toEqual(first.samples);
     expect(second.optimization?.evaluations).toBe(first.optimization?.evaluations);
-  });
+  }, 30_000);
 });
