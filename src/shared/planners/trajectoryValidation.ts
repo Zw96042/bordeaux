@@ -1,9 +1,14 @@
 import type { PlannerInput, TrajectorySample } from "../types";
 import { activeRanges, effectiveRanges, type EffectiveRange } from "./rotationPriority";
 import { buildLinearConstraintProfile } from "./optimizationConstraints";
-import { buildCanonicalPathState, findDynamicHeadingStops, interpolatePathPoint } from "./pathState";
+import {
+  buildCanonicalPathState,
+  interpolatePathPoint,
+  isStationaryHeadingTransition,
+} from "./pathState";
 import {
   buildDrivetrainProjection,
+  evaluateDrivetrainForces,
   evaluateDrivetrainKinematics,
   projectDrivetrainAtPoint,
 } from "./drivetrainProjection";
@@ -43,6 +48,7 @@ export interface TrajectoryValidationResult {
 export interface TrajectoryValidationOptions {
   skipAngular?: boolean;
   skipAngularFromIndex?: number;
+  skipAngularIntervals?: readonly boolean[];
   angularKinematics?: "path" | "sample";
 }
 
@@ -112,43 +118,126 @@ export function validateOptimizedTrajectory(
       refinableIntervals: [],
       activeConstraints: [],
       checkedPoints: samples.length,
-      angularValidationSkipped: Boolean(options.skipAngular || options.skipAngularFromIndex !== undefined),
+      angularValidationSkipped: Boolean(options.skipAngular || options.skipAngularFromIndex !== undefined || options.skipAngularIntervals?.some(Boolean)),
     };
   }
 
-  const initialHeadingBreaks = options.skipAngularFromIndex === undefined
-    ? new Set<number>()
-    : new Set([options.skipAngularFromIndex]);
-  const preliminaryState = buildCanonicalPathState(
-    input.path,
-    samples,
-    initialHeadingBreaks,
-  );
-  const dynamicHeadingStops = findDynamicHeadingStops(preliminaryState, options.skipAngularFromIndex);
+  const skipAngularIntervals = options.skipAngularIntervals
+    ?? samples.slice(1).map((_sample, index) => (
+      options.skipAngularFromIndex !== undefined && index + 1 >= options.skipAngularFromIndex
+    ));
+  const initialHeadingBreaks = new Set<number>();
+  for (let index = 1; index < skipAngularIntervals.length; index += 1) {
+    if (skipAngularIntervals[index] !== skipAngularIntervals[index - 1]) initialHeadingBreaks.add(index);
+  }
+  const usesSampleAngularKinematics = options.angularKinematics === "sample";
+  const timestampedAngularVelocities = samples.slice(1).map((sample, index) => {
+    const before = samples[index];
+    const dt = Math.max(EPSILON, sample.t - before.t);
+    const headingDelta = Math.atan2(
+      Math.sin(sample.headingRad - before.headingRad),
+      Math.cos(sample.headingRad - before.headingRad),
+    );
+    return headingDelta / dt;
+  });
   const state = buildCanonicalPathState(
     input.path,
     samples,
-    new Set([...initialHeadingBreaks, ...dynamicHeadingStops]),
-    dynamicHeadingStops,
+    initialHeadingBreaks,
   );
   const linear = buildLinearConstraintProfile(input, samples);
   const lateralLimits = linear.intervals.map((limits) => (
     input.path.constraints.maxCentripetalAccel ?? limits.acceleration
   ));
-  const drivetrain = buildDrivetrainProjection(state, input.robot, lateralLimits);
+  const drivetrain = buildDrivetrainProjection(
+    state,
+    input.robot,
+    lateralLimits,
+    skipAngularIntervals,
+  );
   const ranges = effectiveRanges(input.path, samples, state.totalDistanceM);
-  const usesSampleAngularKinematics = options.angularKinematics === "sample";
-  const stationaryTurnBoundary = (index: number) => {
-    const point = state.points[index];
-    return point?.stop
-      && point.waypointIndex !== undefined
-      && Boolean(input.path.waypoints[point.waypointIndex]?.turnInPlace);
-  };
+  const stationaryTurnBoundary = (index: number) => (
+    isStationaryHeadingTransition(input.path, state.points[index], state.points[index + 1]?.headingRad)
+  );
   const skipsAngularAt = (index: number) => Boolean(options.skipAngular)
-    || (options.skipAngularFromIndex !== undefined && index >= options.skipAngularFromIndex)
+    || Boolean(skipAngularIntervals[index - 1] || skipAngularIntervals[index])
     || stationaryTurnBoundary(index);
-  const skipsAngularForInterval = (index: number) => skipsAngularAt(index)
-    || skipsAngularAt(index + 1);
+  const skipsAngularForInterval = (index: number) => Boolean(options.skipAngular)
+    || Boolean(skipAngularIntervals[index])
+    || stationaryTurnBoundary(index)
+    || stationaryTurnBoundary(index + 1);
+  const validateModuleVelocity = (
+    point: typeof state.points[number],
+    sampleIndex: number,
+    speed: number,
+    acceleration: number,
+    angularVelocity: number,
+    angularAcceleration: number,
+  ) => {
+    for (const module of evaluateDrivetrainKinematics(
+      point,
+      input.robot,
+      speed,
+      acceleration,
+      angularVelocity,
+      angularAcceleration,
+    )) {
+      if (module.speedMps > input.robot.maxSpeed + tolerance(input.robot.maxSpeed, 1e-3, 0.005)) {
+        pushViolation(violations, "drivetrain-velocity", sampleIndex, module.speedMps, input.robot.maxSpeed, true, module.label);
+        refinableIntervals.add(Math.max(0, sampleIndex - 1));
+      }
+      if (module.speedMps >= input.robot.maxSpeed * 0.995) activeConstraints.add(module.label);
+    }
+  };
+  const validateModuleForces = (
+    point: typeof state.points[number],
+    sampleIndex: number,
+    speed: number,
+    acceleration: number,
+    angularVelocity: number,
+    angularAcceleration: number,
+  ) => {
+    for (const module of evaluateDrivetrainForces(
+      point,
+      input.robot,
+      speed,
+      acceleration,
+      angularVelocity,
+      angularAcceleration,
+    )) {
+      // The closed-form allocation is deliberately conservative; a small
+      // margin represents force redistribution available to the four modules
+      // without masking material wrench infeasibility.
+      if (module.requiredForceN > module.tractionForceLimitN + tolerance(module.tractionForceLimitN, 0.05, 0.06)) {
+        pushViolation(
+          violations,
+          "drivetrain-acceleration",
+          sampleIndex,
+          module.requiredForceN,
+          module.tractionForceLimitN,
+          true,
+          `${module.label} traction force`,
+        );
+        refinableIntervals.add(Math.max(0, sampleIndex - 1));
+      }
+      if (module.requiredMotorForceN > module.motorForceLimitN + tolerance(module.motorForceLimitN, 0.05, 0.06)) {
+        pushViolation(
+          violations,
+          "drivetrain-acceleration",
+          sampleIndex,
+          module.requiredMotorForceN,
+          module.motorForceLimitN,
+          true,
+          `${module.label} motor force`,
+        );
+        refinableIntervals.add(Math.max(0, sampleIndex - 1));
+      }
+      if ((module.tractionForceLimitN > EPSILON && module.requiredForceN >= module.tractionForceLimitN * 0.94)
+        || (module.motorForceLimitN > EPSILON && module.requiredMotorForceN >= module.motorForceLimitN * 0.94)) {
+        activeConstraints.add(`${module.label}-force`);
+      }
+    }
+  };
 
   const expectedStart = input.path.waypoints[0]?.stop
     ? 0
@@ -162,7 +251,6 @@ export function validateOptimizedTrajectory(
       pushViolation(violations, "boundary-velocity", index, measured, expected, false, "Boundary velocity");
     }
   }
-
   samples.forEach((sample, index) => {
     const adjacentVelocity = Math.min(
       linear.intervals[index - 1]?.velocity ?? Number.POSITIVE_INFINITY,
@@ -174,22 +262,9 @@ export function validateOptimizedTrajectory(
     if (speed > linearVelocityLimit + tolerance(linearVelocityLimit, 1e-4, 1e-4)) {
       pushViolation(violations, "linear-velocity", index, speed, linearVelocityLimit, false, "Linear velocity");
     }
-    if (usesSampleAngularKinematics) {
-      for (const module of evaluateDrivetrainKinematics(
-        state.points[index],
-        input.robot,
-        speed,
-        0,
-        sample.angularVelocityRadps,
-        0,
-      )) {
-        if (module.speedMps > input.robot.maxSpeed + tolerance(input.robot.maxSpeed)) {
-          pushViolation(violations, "drivetrain-velocity", index, module.speedMps, input.robot.maxSpeed, false, module.label);
-        }
-        if (module.speedMps >= input.robot.maxSpeed * 0.995) activeConstraints.add(module.label);
-      }
-    } else if (speed > drivetrainVelocityLimit + tolerance(drivetrainVelocityLimit)) {
-      pushViolation(violations, "drivetrain-velocity", index, speed, drivetrainVelocityLimit, false, "Drivetrain velocity");
+    if (!usesSampleAngularKinematics && speed > drivetrainVelocityLimit + tolerance(drivetrainVelocityLimit)) {
+      pushViolation(violations, "drivetrain-velocity", index, speed, drivetrainVelocityLimit, true, "Drivetrain velocity");
+      refinableIntervals.add(Math.max(0, Math.min(samples.length - 2, index)));
     }
     if (linearVelocityLimit > EPSILON && speed >= linearVelocityLimit * 0.995) activeConstraints.add("linear-velocity");
     if (!usesSampleAngularKinematics
@@ -202,7 +277,7 @@ export function validateOptimizedTrajectory(
         ? sample.angularVelocityRadps
         : state.points[index].headingDerivativeRadPerM * speed);
       if (omega > angular.velocity + tolerance(angular.velocity, 2e-3, 0.02)) {
-        pushViolation(violations, "angular-velocity", index, omega, angular.velocity, false, "Angular velocity");
+        pushViolation(violations, "angular-velocity", index, omega, angular.velocity, true, "Angular velocity");
       }
       if (angular.velocity > EPSILON && omega >= angular.velocity * 0.995) activeConstraints.add("angular-velocity");
     }
@@ -212,7 +287,55 @@ export function validateOptimizedTrajectory(
     const before = samples[index];
     const after = samples[index + 1];
     const distance = after.s - before.s;
-    if (distance <= EPSILON) continue;
+    if (distance <= EPSILON) {
+      if (!usesSampleAngularKinematics || skipsAngularForInterval(index)) continue;
+      const intervalDt = after.t - before.t;
+      if (intervalDt <= EPSILON) continue;
+      const point = interpolatePathPoint(state.points[index], state.points[index + 1]);
+      const angularVelocity = timestampedAngularVelocities[index];
+      const previousAngularVelocity = index === 0
+        ? before.angularVelocityRadps
+        : timestampedAngularVelocities[index - 1];
+      const previousDt = index === 0 ? intervalDt : before.t - samples[index - 1].t;
+      const accelerationDt = index === 0 ? intervalDt * 0.5 : (previousDt + intervalDt) * 0.5;
+      const angularAcceleration = (angularVelocity - previousAngularVelocity) / Math.max(EPSILON, accelerationDt);
+      const angular = angularLimitsAt(input, ranges, (before.f + after.f) * 0.5);
+      if (Math.abs(angularVelocity) > angular.velocity + tolerance(angular.velocity, 2e-3, 0.02)) {
+        pushViolation(
+          violations,
+          "angular-velocity",
+          index + 1,
+          Math.abs(angularVelocity),
+          angular.velocity,
+          true,
+          "Angular velocity",
+        );
+        refinableIntervals.add(index);
+      }
+      const reversing = Math.sign(angularVelocity) !== 0
+        && Math.sign(previousAngularVelocity) !== 0
+        && Math.sign(angularVelocity) !== Math.sign(previousAngularVelocity);
+      const angularAccelerationLimit = reversing
+        ? Math.min(angular.acceleration, angular.deceleration)
+        : Math.abs(angularVelocity) >= Math.abs(previousAngularVelocity)
+          ? angular.acceleration
+          : angular.deceleration;
+      if (Math.abs(angularAcceleration) > angularAccelerationLimit + tolerance(angularAccelerationLimit, 2e-3, 0.02)) {
+        pushViolation(
+          violations,
+          "angular-acceleration",
+          index + 1,
+          Math.abs(angularAcceleration),
+          angularAccelerationLimit,
+          true,
+          "Angular acceleration",
+        );
+        refinableIntervals.add(index);
+      }
+      validateModuleVelocity(point, index + 1, 0, 0, angularVelocity, angularAcceleration);
+      validateModuleForces(point, index + 1, 0, 0, angularVelocity, angularAcceleration);
+      continue;
+    }
     const interval = linear.intervals[index];
     const beforeSquared = before.velocityMps ** 2;
     const afterSquared = after.velocityMps ** 2;
@@ -246,40 +369,79 @@ export function validateOptimizedTrajectory(
     if (lateralLimit > EPSILON && centripetalAcceleration >= lateralLimit * 0.995) {
       activeConstraints.add("centripetal-acceleration");
     }
-    const midpointProjection = projectDrivetrainAtPoint(midpoint, input.robot, lateralLimit);
-    const sampleAngularAcceleration = usesSampleAngularKinematics && index > 0
-      ? (after.angularVelocityRadps - before.angularVelocityRadps)
-        / Math.max(EPSILON, (after.t - samples[index - 1].t) / 2)
-      : 0;
-    if (usesSampleAngularKinematics) {
-      const angularVelocity = (before.angularVelocityRadps + after.angularVelocityRadps) * 0.5;
-      for (const module of evaluateDrivetrainKinematics(
-        midpoint,
-        input.robot,
-        speed,
-        acceleration,
-        angularVelocity,
-        sampleAngularAcceleration,
-      )) {
-        const moduleAccelerationLimit = lateralLimit;
-        if (module.speedMps > input.robot.maxSpeed + tolerance(input.robot.maxSpeed)) {
-          pushViolation(violations, "drivetrain-velocity", index + 1, module.speedMps, input.robot.maxSpeed, true, module.label);
-          refinableIntervals.add(index);
+    const projectedMidpoint = skipAngularIntervals[index]
+      ? {
+          ...midpoint,
+          headingDerivativeRadPerM: 0,
+          headingSecondDerivativeRadPerM2: 0,
         }
-        if (module.accelerationMps2 > moduleAccelerationLimit + tolerance(moduleAccelerationLimit)) {
-          pushViolation(violations, "drivetrain-acceleration", index + 1, module.accelerationMps2, moduleAccelerationLimit, true, module.label);
-          refinableIntervals.add(index);
+      : midpoint;
+    const midpointProjection = projectDrivetrainAtPoint(projectedMidpoint, input.robot, lateralLimit);
+    const intervalDt = Math.max(EPSILON, after.t - before.t);
+    // A stationary heading transition owns the skipped interval immediately
+    // before this moving interval. Do not finite-difference across that
+    // intentional discontinuity; the moving angular state restarts from the
+    // boundary sample and the inserted stationary action is validated on its
+    // own timestamps.
+    const previousAngularVelocity = index === 0 || skipsAngularForInterval(index - 1)
+      ? before.angularVelocityRadps
+      : timestampedAngularVelocities[index - 1];
+    const sampleAngularAccelerationCandidates = usesSampleAngularKinematics
+      ? [
+          index === 0
+            ? 2 * (timestampedAngularVelocities[0] - before.angularVelocityRadps) / intervalDt
+            : (timestampedAngularVelocities[index] - previousAngularVelocity)
+              / Math.max(EPSILON, (after.t - samples[index - 1].t) * 0.5),
+          ...(index === samples.length - 2
+            ? [2 * (after.angularVelocityRadps - timestampedAngularVelocities[index]) / intervalDt]
+            : []),
+        ]
+      : [0];
+    const sampleAngularAcceleration = sampleAngularAccelerationCandidates.reduce((largest, candidate) => (
+      Math.abs(candidate) > Math.abs(largest) ? candidate : largest
+    ), 0);
+    const actualMidpoint = usesSampleAngularKinematics
+      ? {
+          ...midpoint,
+          headingRad: before.headingRad + Math.atan2(
+            Math.sin(after.headingRad - before.headingRad),
+            Math.cos(after.headingRad - before.headingRad),
+          ) * 0.5,
         }
-        const motorAccelerationLimit = module.motorAccelerationLimitMps2 ?? Number.POSITIVE_INFINITY;
-        const longitudinalAcceleration = Math.abs(module.longitudinalAccelerationMps2);
-        if (longitudinalAcceleration > motorAccelerationLimit + tolerance(motorAccelerationLimit)) {
-          pushViolation(violations, "drivetrain-acceleration", index + 1, longitudinalAcceleration, motorAccelerationLimit, true, `${module.label} motor`);
-          refinableIntervals.add(index);
-        }
-        if (module.speedMps >= input.robot.maxSpeed * 0.995
-          || module.accelerationMps2 >= moduleAccelerationLimit * 0.94
-          || longitudinalAcceleration >= motorAccelerationLimit * 0.94) activeConstraints.add(module.label);
+      : midpoint;
+    const projectedAccelerationConstraints = usesSampleAngularKinematics
+      ? midpointProjection.accelerationConstraints.filter((constraint) => constraint.label === "chassis-traction")
+      : midpointProjection.accelerationConstraints;
+    const bounds = accelerationBoundsForSpeedSquared(
+      projectedAccelerationConstraints,
+      speedSquared,
+      usesSampleAngularKinematics ? [] : midpointProjection.scalarAccelerationConstraints,
+      Math.max(beforeSquared, afterSquared),
+    );
+    if (!bounds || acceleration < bounds.minimum - tolerance(Math.abs(bounds?.minimum ?? 0))
+      || acceleration > bounds.maximum + tolerance(Math.abs(bounds?.maximum ?? 0))) {
+      const belowMinimum = Boolean(bounds && acceleration < bounds.minimum);
+      const limit = bounds
+        ? Math.abs(belowMinimum ? bounds.minimum : bounds.maximum)
+        : 0;
+      const measured = bounds && belowMinimum && Math.abs(acceleration) <= limit
+        ? limit + bounds.minimum - acceleration
+        : Math.abs(acceleration);
+      pushViolation(violations, "drivetrain-acceleration", index + 1, measured, limit, true, "Drivetrain acceleration");
+      refinableIntervals.add(index);
+    } else {
+      for (const constraint of projectedAccelerationConstraints) {
+        const measured = Math.hypot(
+          constraint.uX * acceleration + constraint.xX * speedSquared,
+          constraint.uY * acceleration + constraint.xY * speedSquared,
+        );
+        if (constraint.label && measured >= constraint.limit * 0.94) activeConstraints.add(constraint.label);
       }
+    }
+    if (usesSampleAngularKinematics) {
+      const angularVelocity = skipsAngularForInterval(index) ? 0 : timestampedAngularVelocities[index];
+      const angularAcceleration = skipsAngularForInterval(index) ? 0 : sampleAngularAcceleration;
+      validateModuleVelocity(actualMidpoint, index + 1, speed, acceleration, angularVelocity, angularAcceleration);
     } else {
       const midpointVelocityLimit = Math.min(interval.velocity, midpointProjection.velocityLimitMps);
       if (speed > midpointVelocityLimit + tolerance(midpointVelocityLimit)) {
@@ -293,44 +455,36 @@ export function validateOptimizedTrajectory(
         }
       }
 
-      const bounds = accelerationBoundsForSpeedSquared(midpointProjection.accelerationConstraints, speedSquared);
-      if (!bounds || acceleration < bounds.minimum - tolerance(Math.abs(bounds?.minimum ?? 0))
-        || acceleration > bounds.maximum + tolerance(Math.abs(bounds?.maximum ?? 0))) {
-        const limit = bounds
-          ? Math.max(Math.abs(bounds.minimum), Math.abs(bounds.maximum))
-          : 0;
-        pushViolation(violations, "drivetrain-acceleration", index + 1, Math.abs(acceleration), limit, true, "Drivetrain acceleration");
-        refinableIntervals.add(index);
-      } else {
-        for (const constraint of midpointProjection.accelerationConstraints) {
-          const measured = Math.hypot(
-            constraint.uX * acceleration + constraint.xX * speedSquared,
-            constraint.uY * acceleration + constraint.xY * speedSquared,
-          );
-          if (constraint.label && measured >= constraint.limit * 0.94) activeConstraints.add(constraint.label);
-        }
-      }
-      for (const constraint of midpointProjection.motorAccelerationConstraints) {
-        const moduleSpeed = constraint.velocityCoefficient! * speed;
-        const motorLimit = constraint.motorAcceleration!
-          * Math.max(0, 1 - moduleSpeed / constraint.freeSpeed!);
-        const measured = Math.abs(constraint.u * acceleration + constraint.x * speedSquared);
-        if (measured > motorLimit + tolerance(motorLimit)) {
-          pushViolation(violations, "drivetrain-acceleration", index + 1, measured, motorLimit, true, `${constraint.label} motor`);
-          refinableIntervals.add(index);
-        }
-        if (constraint.label && measured >= motorLimit * 0.94) activeConstraints.add(constraint.label);
-      }
     }
+
+    const forceAngularVelocity = skipsAngularForInterval(index)
+      ? 0
+      : usesSampleAngularKinematics
+        ? timestampedAngularVelocities[index]
+        : midpoint.headingDerivativeRadPerM * speed;
+    const forceAngularAcceleration = skipsAngularForInterval(index)
+      ? 0
+      : usesSampleAngularKinematics
+        ? sampleAngularAcceleration
+        : midpoint.headingDerivativeRadPerM * acceleration
+          + midpoint.headingSecondDerivativeRadPerM2 * speedSquared;
+    validateModuleForces(
+      actualMidpoint,
+      index + 1,
+      speed,
+      acceleration,
+      forceAngularVelocity,
+      forceAngularAcceleration,
+    );
 
     if (!skipsAngularForInterval(index)) {
       const angular = angularLimitsForInterval(input, ranges, before.f, after.f);
       const midpointOmega = usesSampleAngularKinematics
-        ? (before.angularVelocityRadps + after.angularVelocityRadps) * 0.5
+        ? timestampedAngularVelocities[index]
         : midpoint.headingDerivativeRadPerM * speed;
       const omega = Math.abs(midpointOmega);
       if (omega > angular.velocity + tolerance(angular.velocity, 2e-3, 0.02)) {
-        pushViolation(violations, "angular-velocity", index + 1, omega, angular.velocity, false, "Angular velocity");
+        pushViolation(violations, "angular-velocity", index + 1, omega, angular.velocity, true, "Angular velocity");
       }
       const signedAngularAcceleration = usesSampleAngularKinematics
         ? sampleAngularAcceleration
@@ -341,13 +495,14 @@ export function validateOptimizedTrajectory(
         ? Math.abs(signedAngularAcceleration)
         : headingDirection * signedAngularAcceleration;
       const reversing = usesSampleAngularKinematics
-        && Math.sign(after.angularVelocityRadps) !== 0
-        && Math.sign(before.angularVelocityRadps) !== 0
-        && Math.sign(after.angularVelocityRadps) !== Math.sign(before.angularVelocityRadps);
+        && Math.sign(timestampedAngularVelocities[index]) !== 0
+        && Math.sign(previousAngularVelocity) !== 0
+        && Math.sign(timestampedAngularVelocities[index])
+          !== Math.sign(previousAngularVelocity);
       const angularAccelerationLimit = usesSampleAngularKinematics
         ? reversing
           ? Math.min(angular.acceleration, angular.deceleration)
-          : Math.abs(after.angularVelocityRadps) >= Math.abs(before.angularVelocityRadps)
+          : Math.abs(timestampedAngularVelocities[index]) >= Math.abs(previousAngularVelocity)
             ? angular.acceleration
             : angular.deceleration
         : angularMagnitudeAcceleration >= 0
@@ -369,6 +524,6 @@ export function validateOptimizedTrajectory(
     refinableIntervals: [...refinableIntervals].sort((left, right) => left - right),
     activeConstraints: [...activeConstraints].sort(),
     checkedPoints: samples.length * 2 - 1,
-    angularValidationSkipped: Boolean(options.skipAngular || options.skipAngularFromIndex !== undefined),
+    angularValidationSkipped: Boolean(options.skipAngular || skipAngularIntervals.some(Boolean)),
   };
 }
