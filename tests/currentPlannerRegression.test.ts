@@ -1,3 +1,108 @@
+  });
+
+  it("does not create a velocity notch at a smooth non-stop waypoint", () => {
+    const project = currentTangentToTargetsProject("split");
+    const path = project.paths[0];
+    const result = getPlanner("optimizedTrajectory").generate({
+      path,
+      robot: project.robot,
+      samplesPerSegment: 56,
+    });
+    const waypoint = path.waypoints[1];
+    const nearestIndex = result.samples.reduce((bestIndex, sample, index) => (
+      Math.hypot(sample.x - waypoint.x, sample.y - waypoint.y)
+        < Math.hypot(result.samples[bestIndex].x - waypoint.x, result.samples[bestIndex].y - waypoint.y)
+        ? index
+        : bestIndex
+    ), 0);
+    const waypointSample = result.samples[nearestIndex];
+    const comparisonSamples = result.samples.filter((sample) => (
+      Math.abs(sample.s - waypointSample.s) >= 0.25
+      && Math.abs(sample.s - waypointSample.s) <= 0.4
+    ));
+    const slowerSideSpeed = Math.min(
+      Math.max(...comparisonSamples.filter((sample) => sample.s < waypointSample.s).map((sample) => sample.velocityMps)),
+      Math.max(...comparisonSamples.filter((sample) => sample.s > waypointSample.s).map((sample) => sample.velocityMps)),
+    );
+
+    expect(waypoint.stop).toBe(false);
+    expect(waypointSample.velocityMps).toBeGreaterThanOrEqual(slowerSideSpeed * 0.8);
+  });
+
+  it("keeps curvature continuous through an ordinary linked moving waypoint", () => {
+    const project = currentTangentToTargetsProject();
+    const path = project.paths[0];
+    const result = optimizeCorridorFinal({
+      path,
+      robot: project.robot,
+      samplesPerSegment: 56,
+    }, {
+      corridorM: 0.15,
+      budgetTier: "common",
+    });
+    for (const waypoint of path.waypoints.slice(1, -1)) {
+      const waypointIndex = result.samples.reduce((bestIndex, sample, index) => (
+        Math.hypot(sample.x - waypoint.x, sample.y - waypoint.y)
+          < Math.hypot(result.samples[bestIndex].x - waypoint.x, result.samples[bestIndex].y - waypoint.y)
+          ? index
+          : bestIndex
+      ), 0);
+      const before = result.samples[waypointIndex - 1];
+      const at = result.samples[waypointIndex];
+      const after = result.samples[waypointIndex + 1];
+      const curvatureJump = Math.abs(at.curvatureInvM - after.curvatureInvM);
+      const pointNotchMps = Math.max(0, 0.5 * (before.velocityMps + after.velocityMps) - at.velocityMps);
+
+      expect(waypoint.stop).toBe(false);
+      expect(curvatureJump).toBeLessThan(0.25);
+      expect(pointNotchMps).toBeLessThan(0.05);
+    }
+  });
+
+  it("finishes the endpoint heading while moving with only a bounded settle", () => {
+    const project = currentTangentToTargetsProject("after");
+    const path = project.paths[0];
+    const preview = finalPreview(path, project);
+
+    expect(preview.error).toBeUndefined();
+    expect(preview.finalFallbackReason).toBeUndefined();
+    const trajectory = preview.value.finalTrajectory;
+    const arrivalIndex = trajectory.samples.findIndex((sample: { f: number }) => sample.f >= 1 - 1e-9);
+    const arrival = trajectory.samples[arrivalIndex];
+    const goalHeading = path.waypoints.at(-1)!.theta! * Math.PI / 180;
+    const finalSample = trajectory.samples.at(-1)!;
+    const rotatingTail = trajectory.samples.find((sample: { angularVelocityRadps: number; t: number }) => (
+      sample.t > arrival.t + 1e-6
+      && Math.abs(sample.angularVelocityRadps) > 1 * Math.PI / 180
+    ));
+    const headingError = Math.atan2(
+      Math.sin(finalSample.headingRad - goalHeading),
+      Math.cos(finalSample.headingRad - goalHeading),
+    );
+
+    expect(rotatingTail).toBeUndefined();
+    expect(Math.abs(headingError)).toBeLessThan(0.5 * Math.PI / 180);
+    // Moving samples store the average angular velocity of the interval ending
+    // at that sample; a stopped endpoint must still publish a zero terminal
+    // angular state for playback and robot feedforward.
+    expect(Math.abs(finalSample.velocityMps)).toBeLessThan(1e-6);
+    expect(Math.abs(finalSample.angularVelocityRadps)).toBeLessThan(1 * Math.PI / 180);
+    expect(trajectory.totalTimeS).toBeGreaterThanOrEqual(arrival.t);
+    expect(trajectory.totalTimeS).toBe(trajectory.samples.at(-1)!.t);
+    expect(trajectory.totalTimeS - arrival.t).toBeLessThan(0.03);
+    expect(arrival.t).toBeLessThan(3.85);
+  });
+
+  it("keeps the incoming Tangent segment tangent and rotates through the outgoing segment", () => {
+    const project = currentTangentToTargetsProject("after");
+    const path = project.paths[0];
+    const trajectory = finalPreview(path, project).value.finalTrajectory;
+    const samples = trajectory.samples as PlannerResult["samples"];
+    const nearestToWaypoint = (waypoint: { x: number; y: number }) => samples.reduce((nearest, sample) => (
+      Math.hypot(sample.x - waypoint.x, sample.y - waypoint.y)
+        < Math.hypot(nearest.x - waypoint.x, nearest.y - waypoint.y)
+        ? sample
+        : nearest
     ));
     const firstBoundary = nearestToWaypoint(path.waypoints[1]);
     const transitionBoundary = nearestToWaypoint(path.waypoints[2]);
