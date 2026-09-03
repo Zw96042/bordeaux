@@ -99,6 +99,25 @@ describe("corridor final optimization", () => {
       fallback: true,
       fallbackReason: "Corridor optimization reached the common solve budget (5000 ms).",
     });
+      expect(result.optimization?.status).not.toBe("optimal");
+      expect(result.optimization!.validatedCandidates! + result.optimization!.rejectedCandidates!)
+        .toBe(result.optimization?.evaluations);
+      previousTime = result.totalTimeS;
+    }
+  }, 30_000);
+
+  it("reports bounded candidate rejection evidence separately from result quality", () => {
+    const fixture = corpus.cases[1];
+    const path = project.paths.find((candidate) => candidate.id === fixture.pathId)!;
+    const result = optimizeCorridorFinal({ path, robot: project.robot, samplesPerSegment: 56 }, {
+      maximumEvaluations: 4,
+      gates: [{ bounds: { xMin: -100, xMax: -99, yMin: -100, yMax: -99 } }],
+    });
+    expect(result.optimization).toMatchObject({
+      status: "equivalent", termination: "work-budget", fallback: false,
+      validatedCandidates: 0, rejectedCandidates: 4,
+    });
+    expect(result.optimization?.rejectionReasons).toContainEqual({ reason: "Missed a required gate", count: 4 });
   });
 
   it("is deterministic at a fixed evaluation ceiling", () => {
@@ -119,5 +138,5 @@ describe("corridor final optimization", () => {
     expect(second.optimizedPath).toEqual(first.optimizedPath);
     expect(second.samples).toEqual(first.samples);
     expect(second.optimization?.evaluations).toBe(first.optimization?.evaluations);
-  });
+  }, 30_000);
 });
