@@ -1,3 +1,108 @@
+    ));
+    const firstBoundary = nearestToWaypoint(path.waypoints[1]);
+    const transitionBoundary = nearestToWaypoint(path.waypoints[2]);
+    const wrap = (angle: number) => Math.atan2(Math.sin(angle), Math.cos(angle));
+    const transitionWaypoint = path.waypoints[2];
+    const exactIncomingTangent = Math.atan2(
+      transitionWaypoint.y - transitionWaypoint.prevC.y,
+      transitionWaypoint.x - transitionWaypoint.prevC.x,
+    );
+    const tangentErrors = samples.slice(1, -1).flatMap((sample, index) => {
+      const before = samples[index];
+      const after = samples[index + 2];
+      if (sample.f <= firstBoundary.f + 0.01 || sample.f >= transitionBoundary.f - 0.01) return [];
+      if (after.s - before.s < 1e-6) return [];
+      const tangent = Math.atan2(after.y - before.y, after.x - before.x);
+      return [Math.abs(wrap(sample.headingRad - tangent))];
+    });
+    const outgoingMoving = samples.filter((sample) => (
+      sample.f >= transitionBoundary.f - 1e-6
+      && sample.f < 1 - 1e-6
+      && sample.velocityMps > 0.05
+    ));
+    const movingHeadingTravel = outgoingMoving.slice(1).reduce((travel, sample, index) => (
+      travel + Math.abs(wrap(sample.headingRad - outgoingMoving[index].headingRad))
+    ), 0);
+    const arrival = samples.find((sample) => sample.f >= 1 - 1e-9)!;
+    const goalHeading = path.waypoints.at(-1)!.theta! * Math.PI / 180;
+    const movingArrivalLag = Math.abs(wrap(goalHeading - arrival.headingRad));
+
+    expect(Math.max(...tangentErrors) * 180 / Math.PI).toBeLessThan(3);
+    expect(Math.abs(wrap(transitionBoundary.headingRad - exactIncomingTangent)) * 180 / Math.PI).toBeLessThan(0.25);
+    expect(movingHeadingTravel * 180 / Math.PI).toBeGreaterThan(60);
+    expect(movingArrivalLag * 180 / Math.PI).toBeLessThan(0.5);
+    expect(arrival.t).toBeLessThan(3.85);
+    expect(trajectory.totalTimeS - arrival.t).toBeLessThan(0.03);
+  });
+
+  it("ignores legacy range priority metadata", () => {
+    const project = currentTangentToTargetsProject();
+    const path = project.paths[0];
+    path.ranges = [{
+      anchor: "param", f0: 0.05, f1: 0.15,
+      maxVel: path.constraints.maxVel,
+      maxAccel: path.constraints.maxAccel,
+      maxDecel: path.constraints.maxDecel,
+      maxAngVel: path.constraints.maxAngVel,
+      maxAngAccel: path.constraints.maxAngAccel,
+    }];
+    const baseline = getPlanner("optimizedTrajectory").generate({
+      path: structuredClone(path), robot: project.robot, samplesPerSegment: 56,
+    });
+    path.ranges[0].rotationPriority = "heading";
+
+    const result = getPlanner("optimizedTrajectory").generate({ path, robot: project.robot, samplesPerSegment: 56 });
+    expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+    expect(result.samples).toHaveLength(baseline.samples.length);
+    result.samples.forEach((sample, index) => {
+      expect(sample.t).toBeCloseTo(baseline.samples[index].t, 6);
+      expect(sample.headingRad).toBeCloseTo(baseline.samples[index].headingRad, 6);
+      expect(sample.velocityMps).toBeCloseTo(baseline.samples[index].velocityMps, 6);
+    });
+  });
+
+  it("uses a small coupled retime instead of a stopped terminal turn", () => {
+    const project = liveTranslationPriorityProject();
+    const path = project.paths[0];
+    path.headingMode = "targets";
+    path.constraints.maxVel = 4;
+    path.constraints.maxAccel = 5;
+    path.constraints.maxDecel = 5;
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "tangent" },
+      {
+        x: 4, y: 2, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "targets",
+        headingTransition: { placement: "after", rotationPriority: "translation", distanceM: 0.75 },
+      },
+      { x: 7, y: 2, theta: 90, thetaOn: true, segType: "line" },
+    ]);
+
+    const result = getPlanner("optimizedTrajectory").generate({ path, robot: project.robot, samplesPerSegment: 56 });
+    const arrival = result.samples.find((sample) => sample.f >= 1 - 1e-9)!;
+    const noRotationPath = structuredClone(path);
+    noRotationPath.waypoints.at(-1)!.theta = 0;
+    const noRotationResult = getPlanner("optimizedTrajectory").generate({
+      path: noRotationPath,
+      robot: project.robot,
+      samplesPerSegment: 56,
+    });
+    const noRotationArrival = noRotationResult.samples.find((sample) => sample.f >= 1 - 1e-9)!;
+    const finalSample = result.samples.at(-1)!;
+    const headingError = Math.atan2(Math.sin(finalSample.headingRad - Math.PI / 2), Math.cos(finalSample.headingRad - Math.PI / 2));
+
+    expect(Math.abs(arrival.t - noRotationArrival.t)).toBeLessThan(0.25);
+    expect(Math.abs(headingError)).toBeLessThan(0.5 * Math.PI / 180);
+    expect(result.totalTimeS - arrival.t).toBeLessThan(0.03);
+
+    const limitedPath = structuredClone(path);
+    limitedPath.constraints.maxAngVel = 180;
+    limitedPath.constraints.maxAngAccel = 360;
+    limitedPath.constraints.maxAngDecel = 360;
+    const limited = getPlanner("optimizedTrajectory").generate({ path: limitedPath, robot: project.robot, samplesPerSegment: 56 });
+    expect(limited.totalTimeS).toBeGreaterThan(result.totalTimeS);
+    expect(validateOptimizedTrajectory({ path: limitedPath, robot: project.robot }, limited.samples, {
+      angularKinematics: "sample",
+    }).violations).toEqual([]);
   });
 
   it("rotates and translates concurrently through the current tangent-to-targets transition", () => {
