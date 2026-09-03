@@ -1,3 +1,66 @@
+import { describe, expect, it, vi } from "vitest";
+// @ts-expect-error The production worker is an intentional JavaScript module.
+import { processPathPreviewJob } from "../src/renderer/assets/path-preview-worker";
+import { PM } from "../src/shared/math/pm";
+import { buildWaypoints, createDemoProject, defaultPathConstraints } from "../src/shared/project/defaults";
+import { fixedPathSamples, getPlanner } from "../src/shared/planners";
+import { optimizeCorridorFinal } from "../src/shared/planners/corridorFinal";
+import { optimizeFixedGeometryFinal } from "../src/shared/planners/fixedGeometryFinal";
+import { validateOptimizedTrajectory } from "../src/shared/planners/trajectoryValidation";
+import { effectivePathConstraints, robotHardLimits } from "../src/shared/robotLimits";
+import type { PlannerResult } from "../src/shared/types";
+
+type DemoProject = ReturnType<typeof createDemoProject>;
+
+function finalPreview(path: DemoProject["paths"][number], project: DemoProject, optimize = false) {
+  return processPathPreviewJob({
+    id: 1,
+    quality: "final",
+    plannerId: "optimizedTrajectory",
+    optimize,
+    path,
+    robot: project.robot,
+    perSegment: 56,
+    deadline: "common",
+    deadlineMs: 5_000,
+  });
+}
+
+function liveTranslationPriorityProject() {
+  const project = createDemoProject();
+  project.plannerId = "optimizedTrajectory";
+  project.robot = {
+    drive: "swerve",
+    w: 0.84,
+    l: 0.84,
+    heightM: 0.5,
+    maxSpeed: 5.346559406159112,
+    driveModel: {
+      motorId: "custom",
+      motorFreeRpm: 6784,
+      motorMaxTorqueNm: 3.6,
+      motorCount: 4,
+      gearRatio: 6.75,
+      wheelDiameterM: 0.1016,
+      massKg: 54,
+      moiKgM2: 6.3504,
+      wheelbaseM: 0.66,
+      trackwidthM: 0.66,
+      wheelFrictionCoefficient: 1.2,
+    },
+  };
+  const path = project.paths[0];
+  path.name = "New path";
+  path.headingMode = "targets";
+  path.constraints = defaultPathConstraints(project.robot);
+  path.waypoints = [{
+    linked: true, thetaOn: true, theta: 0, stop: false,
+    x: 5.025734627553844, y: 7.596827504102406,
+    prevC: { x: 4.241734627553845, y: 7.596827504102406 },
+    nextC: { x: 5.809734627553842, y: 7.596827504102406 },
+    segmentHeadingMode: "tangent",
+  }, {
+    linked: true, thetaOn: true, theta: 0, stop: false,
     x: 9.382303843976448, y: 5.421513053877565,
     prevC: { x: 9.35875766275833, y: 7.68112184271061 },
     nextC: { x: 9.406914766065318, y: 3.0597264296200053 },
