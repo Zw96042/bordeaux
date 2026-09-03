@@ -1,3 +1,108 @@
+    const result = getPlanner("profiledSpline").generate({
+      path,
+      robot: project.robot,
+      samplesPerSegment: 56,
+    });
+    expect(result.diagnostics.filter((issue) => issue.severity === "error")).toEqual([]);
+    const firstInterior = path.waypoints[1];
+    const firstInteriorSample = result.samples.reduce((nearest, sample) => (
+      Math.hypot(sample.x - firstInterior.x, sample.y - firstInterior.y)
+        < Math.hypot(nearest.x - firstInterior.x, nearest.y - firstInterior.y)
+        ? sample
+        : nearest
+    ));
+
+    expect(firstInteriorSample.velocityMps).toBeGreaterThan(0.5);
+    expect(result.totalTimeS).toBeLessThan(5.5);
+  });
+
+  it("does not manufacture a stop at smooth waypoints around a tangent-to-targets transition", () => {
+    const project = currentTangentToTargetsProject();
+    const path = project.paths[0];
+    const input = { path, robot: project.robot, samplesPerSegment: 56 };
+    const result = getPlanner("optimizedTrajectory").generate(input);
+    const hardLimits = robotHardLimits(project.robot)!;
+    const physicalInput = {
+      ...input,
+      path: { ...path, constraints: effectivePathConstraints(path.constraints, project.robot) },
+      robot: { ...project.robot, maxSpeed: hardLimits.maxSpeedMps },
+    };
+    const validation = validateOptimizedTrajectory(physicalInput, fixedPathSamples(result), {
+      angularKinematics: "sample",
+    });
+    const interiorVelocities = path.waypoints.slice(1, -1).map((waypoint) => result.samples.reduce((nearest, sample) => (
+      Math.hypot(sample.x - waypoint.x, sample.y - waypoint.y)
+        < Math.hypot(nearest.x - waypoint.x, nearest.y - waypoint.y) ? sample : nearest
+    )).velocityMps);
+
+    expect(result.totalTimeS).toBeLessThan(7);
+    interiorVelocities.forEach((velocity) => expect(velocity).toBeGreaterThan(0.5));
+    const movingInterior = result.samples.slice(1).filter((sample) => (
+      sample.s > 0.1 && sample.s < result.totalDistanceM - 0.15
+    ));
+    expect(Math.max(...movingInterior.map((sample) => sample.t - result.samples[sample.i - 1].t))).toBeLessThan(0.1);
+    expect(validation.violations).toEqual([]);
+  });
+
+  it.each(["after", "split", "before"] as const)(
+    "keeps legacy tangent-to-targets placement %s as a valid final trajectory",
+    (placement) => {
+      const project = currentTangentToTargetsProject(placement);
+      const result = finalPreview(project.paths[0], project);
+
+      expect(result.error, placement).toBeUndefined();
+      expect(result.finalFallbackReason, placement).toBeUndefined();
+      expect(result.value.finalOptimization, placement).toMatchObject({
+        fallback: false,
+        constraintViolations: 0,
+      });
+    },
+  );
+
+  it("does not slow translation for Before or At when timing priority is Translation", () => {
+    for (const placement of ["before", "split"] as const) {
+      for (const goalVel of [0, 1]) {
+        const project = currentTangentToTargetsProject(placement);
+        project.paths[0].goalVel = goalVel;
+        const result = getPlanner("optimizedTrajectory").generate({
+          path: project.paths[0],
+          robot: project.robot,
+          samplesPerSegment: 56,
+        });
+        const label = `${placement} with ${goalVel} m/s goal velocity`;
+        const arrival = result.samples.find((sample) => sample.s >= result.totalDistanceM - 1e-6)!;
+        const moving = result.samples.filter((sample) => (
+          sample.s > result.totalDistanceM * 0.15
+          && sample.s < result.totalDistanceM - 0.15
+        ));
+        expect(arrival.t, label).toBeLessThan(5);
+        expect(result.totalTimeS, label).toBeLessThan(5);
+        expect(Math.min(...moving.map((sample) => sample.velocityMps)), label).toBeGreaterThan(0.25);
+        expect(result.diagnostics.some((issue) => issue.severity === "error"), label).toBe(false);
+        expect(arrival.velocityMps, label).toBeCloseTo(goalVel, 5);
+      }
+    }
+  });
+
+  it("uses the waypoint as the single blend location for every legacy placement", () => {
+    for (const goalVel of [0, 1]) {
+      const placements = (["before", "split", "after"] as const).map((placement) => {
+        const project = currentTangentToTargetsProject(placement);
+        project.paths[0].goalVel = goalVel;
+        const result = getPlanner("optimizedTrajectory").generate({
+          path: project.paths[0],
+          robot: project.robot,
+          samplesPerSegment: 56,
+        });
+        const arrival = result.samples.find((sample) => sample.s >= result.totalDistanceM - 1e-6)!;
+        const label = `${placement} with ${goalVel} m/s goal velocity`;
+        expect(arrival.t, label).toBeLessThan(5);
+        expect(arrival.velocityMps, label).toBeCloseTo(goalVel, 5);
+        return arrival;
+      });
+      const arrivalTimes = placements.map((arrival) => arrival.t);
+      expect(Math.max(...arrivalTimes) - Math.min(...arrivalTimes)).toBeLessThan(0.02);
+    }
   });
 
   it("does not create a velocity notch at a smooth non-stop waypoint", () => {
