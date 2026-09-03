@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { AgentBridgeClient, AgentBridgeServer } from "../src/electron/agentBridge";
 import { AgentSessionService, runAgentPlanningJobDirect } from "../src/electron/agentSession";
+import type { RepairCandidate } from "../src/shared/agent/types";
 import { createDemoProject } from "../src/shared/project/defaults";
 import type { JavaCommandCatalog, JavaCommandDescriptor } from "../src/shared/types";
+import { validateProject } from "../src/shared/validation";
 
 function snapshot(revision = 0) {
   const project = createDemoProject();
@@ -135,6 +138,34 @@ describe("agent session and private bridge", () => {
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
   });
 
+  it("bounds concurrent read-only planning workers", async () => {
+    const releases: Array<() => void> = [];
+    let active = 0;
+    let peak = 0;
+    const service = new AgentSessionService(() => {}, () => null, async (job) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      active -= 1;
+      return runAgentPlanningJobDirect(job);
+    });
+    service.publishSnapshot(snapshot());
+
+    const requests = Array.from({ length: 100 }, () => service.request({ method: "analyze_path", params: {} }));
+    const settled = Promise.allSettled(requests);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(releases).toHaveLength(2);
+    expect(peak).toBe(2);
+    releases.forEach((release) => release());
+    const results = await settled;
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(2);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(98);
+    expect(results.find((result) => result.status === "rejected")).toMatchObject({
+      reason: expect.objectContaining({ message: expect.stringContaining("already running 2 path analyses") }),
+    });
+  });
+
   it("keeps preview-producing planning jobs newest-wins", async () => {
     const releases: Array<() => void> = [];
     const signals: AbortSignal[] = [];
@@ -207,10 +238,9 @@ describe("agent session and private bridge", () => {
 
     const invalid = structuredClone(initial);
     invalid.revision = 1;
-    invalid.project.robot.drive = "tank";
     invalid.project.paths[0].ranges.push({
-      anchor: "param", f0: 0, f1: 1, rotationPriority: "translation",
-      maxVel: 1, maxAccel: 1, maxAngVel: 90, maxAngAccel: 180,
+      anchor: "param", f0: 0, f1: 1,
+      maxVel: -1, maxAccel: 1, maxAngVel: 90, maxAngAccel: 180,
     });
 
     expect(service.tryPublishSnapshot(invalid)).toBe(false);
@@ -633,7 +663,7 @@ describe("agent session and private bridge", () => {
     let finishPath: ((value: unknown) => void) | undefined;
     const started = new Promise<void>((resolve) => { pathStarted = resolve; });
     const notifications: string[] = [];
-    const service = new AgentSessionService((proposal) => { notifications.push(proposal.intent); }, () => null, (job, signal) => {
+    const service = new AgentSessionService((proposal) => { notifications.push(proposal.intent); }, () => null, (job) => {
       if (job.kind !== "route") return runAgentPlanningJobDirect(job);
       pathStarted?.();
       return new Promise((resolve) => { finishPath = resolve; });
@@ -860,6 +890,8 @@ describe("agent session and private bridge", () => {
     }
   });
 
+  it("does not let an older bridge remove the active runtime descriptor", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-agent-owner-test-"));
     const service = new AgentSessionService(() => {}, () => null);
     service.publishSnapshot(snapshot());
     const older = new AgentBridgeServer(directory, service);
