@@ -57,11 +57,26 @@ export function accelerationBoundsForSpeedSquared(
   scalarConstraints: readonly AffineScalarAccelerationConstraint[] = [],
   envelopeSpeedSquared = speedSquared,
 ): { minimum: number; maximum: number } | null {
+  return accelerationBounds(constraints, speedSquared, scalarConstraints, envelopeSpeedSquared, 0, true);
+}
+
+function accelerationBounds(
+  constraints: readonly AffineAccelerationConstraint[],
+  speedSquared: number,
+  scalarConstraints: readonly AffineScalarAccelerationConstraint[],
+  envelopeSpeedSquared: number,
+  distance: number,
+  applyMotorEnvelope: boolean,
+): { minimum: number; maximum: number } | null {
   let minimum = Number.NEGATIVE_INFINITY;
   let maximum = Number.POSITIVE_INFINITY;
   for (const constraint of constraints) {
-    const a = constraint.uX ** 2 + constraint.uY ** 2;
-    const b = 2 * speedSquared * (constraint.uX * constraint.xX + constraint.uY * constraint.xY);
+    // x_mid = x_start + u * ds. Substitute in registers instead of
+    // cloning every constraint for each reachability search probe.
+    const uX = constraint.uX + constraint.xX * distance;
+    const uY = constraint.uY + constraint.xY * distance;
+    const a = uX ** 2 + uY ** 2;
+    const b = 2 * speedSquared * (uX * constraint.xX + uY * constraint.xY);
     const c = speedSquared ** 2 * (constraint.xX ** 2 + constraint.xY ** 2) - constraint.limit ** 2;
     if (a <= EPSILON) {
       if (c > EPSILON) return null;
@@ -77,17 +92,18 @@ export function accelerationBoundsForSpeedSquared(
   for (const constraint of scalarConstraints) {
     const offset = constraint.x * speedSquared;
     const moduleSpeed = (constraint.velocityCoefficient ?? 0) * Math.sqrt(Math.max(0, envelopeSpeedSquared));
-    const motorLimit = constraint.freeSpeed && constraint.motorAcceleration
+    const motorLimit = applyMotorEnvelope && constraint.freeSpeed && constraint.motorAcceleration
       ? constraint.motorAcceleration * Math.max(0, 1 - moduleSpeed / constraint.freeSpeed)
       : Number.POSITIVE_INFINITY;
     const constraintMinimum = Math.max(constraint.minimum, -motorLimit);
     const constraintMaximum = Math.min(constraint.maximum, motorLimit);
-    if (Math.abs(constraint.u) <= EPSILON) {
+    const u = constraint.u + constraint.x * distance;
+    if (Math.abs(u) <= EPSILON) {
       if (offset < constraintMinimum - EPSILON || offset > constraintMaximum + EPSILON) return null;
       continue;
     }
-    const first = (constraintMinimum - offset) / constraint.u;
-    const second = (constraintMaximum - offset) / constraint.u;
+    const first = (constraintMinimum - offset) / u;
+    const second = (constraintMaximum - offset) / u;
     minimum = Math.max(minimum, Math.min(first, second));
     maximum = Math.min(maximum, Math.max(first, second));
     if (minimum > maximum + EPSILON) return null;
@@ -103,21 +119,10 @@ function accelerationBoundsForInterval(
   envelopeSpeedSquared?: number,
 ): { minimum: number; maximum: number } | null {
   if (distance <= EPSILON) return accelerationBoundsForSpeedSquared(constraints, startSpeedSquared, scalarConstraints);
-  return accelerationBoundsForSpeedSquared(constraints.map((constraint) => ({
-    ...constraint,
-    // x_mid = x_start + u * ds for constant interval acceleration.
-    // Substitution keeps the module equation affine in u.
-    uX: constraint.uX + constraint.xX * distance,
-    uY: constraint.uY + constraint.xY * distance,
-  })), startSpeedSquared, scalarConstraints.map((constraint) => ({
-    ...constraint,
-    ...(envelopeSpeedSquared === undefined ? {
-      velocityCoefficient: undefined,
-      freeSpeed: undefined,
-      motorAcceleration: undefined,
-    } : {}),
-    u: constraint.u + constraint.x * distance,
-  })), envelopeSpeedSquared ?? startSpeedSquared);
+  return accelerationBounds(
+    constraints, startSpeedSquared, scalarConstraints,
+    envelopeSpeedSquared ?? startSpeedSquared, distance, envelopeSpeedSquared !== undefined,
+  );
 }
 
 function tightenForModuleMotorEnvelope(
