@@ -1,3 +1,108 @@
+    x: 9.382303843976448, y: 5.421513053877565,
+    prevC: { x: 9.35875766275833, y: 7.68112184271061 },
+    nextC: { x: 9.406914766065318, y: 3.0597264296200053 },
+    segType: "bezier", segmentHeadingMode: "tangent", corner: false,
+  }, {
+    linked: true, thetaOn: true, theta: 0, stop: false,
+    x: 6.339719443186393, y: 5.492281877488863,
+    prevC: { x: 7.353914243449744, y: 5.468692269618431 },
+    nextC: { x: 5.43406956568423, y: 5.513346790731007 },
+    segType: "bezier", segmentHeadingMode: "targets", corner: false,
+    headingTransition: { placement: "after", rotationPriority: "translation", distanceM: 0.75 },
+  }, {
+    linked: true, thetaOn: true, theta: -42, stop: false,
+    x: 3.457271608135819, y: 5.550933095977322,
+    prevC: { x: 4.362657902712776, y: 5.5812825404826985 },
+    nextC: { x: 2.5518853135588597, y: 5.520583651471945 },
+  }];
+  return project;
+}
+
+function currentTangentToTargetsProject(placement: "after" | "split" | "before" = "after") {
+  const project = liveTranslationPriorityProject();
+  const path = project.paths[0];
+  path.waypoints = [{
+    linked: true, thetaOn: true, theta: 0, stop: false,
+    x: 5.007440283439009, y: 7.546001973557936,
+    prevC: { x: 4.223440283439009, y: 7.546001973557936 },
+    nextC: { x: 5.791440283439008, y: 7.546001973557936 },
+    segmentHeadingMode: "tangent",
+  }, {
+    linked: true, thetaOn: true, theta: -90, stop: false,
+    x: 9.320023185417924, y: 5.397863768476647,
+    prevC: { x: 9.305974333573825, y: 7.708087725960924 },
+    nextC: { x: 9.332881933436493, y: 3.2833430898184397 },
+    segType: "bezier", segmentHeadingMode: "tangent", corner: false,
+  }, {
+    linked: true, thetaOn: true, theta: -177.9383205562294, stop: false,
+    x: 6.51945630346719, y: 5.297047190326336,
+    prevC: { x: 7.480650304920239, y: 5.295177255057877 },
+    nextC: { x: 5.5138913740124424, y: 5.2990034461118185 },
+    segType: "bezier", segmentHeadingMode: "targets", corner: false,
+    headingTransition: { placement, rotationPriority: "translation", distanceM: 0.75 },
+  }, {
+    linked: true, thetaOn: true, theta: -39, stop: false,
+    x: 3.4416315927404133, y: 5.3024475350761,
+    prevC: { x: 4.447198013720099, y: 5.301537983465229 },
+    nextC: { x: 2.4360651717607267, y: 5.303357086686971 },
+  }];
+  return project;
+}
+
+// Correctness searches use a fixed work ceiling; CPU contention must not
+// decide which candidates are checked. Deadline behavior has separate tests.
+function withWorkBudget(check: () => void): void {
+  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+  try { check(); } finally { clock.mockRestore(); }
+}
+
+describe("current planner regressions", () => {
+  it("bounds heading interpolation when target spacing is extremely uneven", () => {
+    [0.45, 0.9].forEach((middleFraction) => {
+      const anchors = [
+        { f: 0, rad: 0 },
+        { f: middleFraction, rad: 1 * PM.D2R },
+        { f: 1, rad: 170 * PM.D2R },
+      ];
+      const headings = Array.from({ length: 1001 }, (_, index) => PM.headingAt(index / 1000, anchors));
+
+      expect(Math.min(...headings)).toBeGreaterThanOrEqual(-1e-9);
+      expect(Math.max(...headings)).toBeLessThanOrEqual(170 * PM.D2R + 1e-9);
+    });
+  });
+
+  it("enforces angular acceleration through a signed heading reversal without zero-speed samples", () => {
+    const points = Array.from({ length: 21 }, (_, index) => ({
+      x: index / 2,
+      y: 0,
+      s: index / 2,
+      heading: 0,
+      curv: 0,
+    }));
+    const anchors = [
+      { f: 0, rad: 0 },
+      { f: 0.5, rad: 179 * PM.D2R },
+      { f: 1, rad: 0 },
+    ];
+    const headings = points.map((point) => PM.headingAt(point.s / 10, anchors));
+    [[720, 10], [10, 720]].forEach(([maxAngAccel, maxAngDecel]) => {
+      const profile = PM.profile(points, {
+        maxVel: 4,
+        maxAccel: 6,
+        maxDecel: 6,
+        maxAngVel: 540,
+        maxAngAccel,
+        maxAngDecel,
+      }, 2, 2, { heading: headings });
+      const angularAccelerations = points.slice(2).map((_point, offset) => {
+        const index = offset + 2;
+        const beforeDt = profile.t[index - 1] - profile.t[index - 2];
+        const afterDt = profile.t[index] - profile.t[index - 1];
+        const beforeOmega = PM.angWrap(headings[index - 1] - headings[index - 2]) / beforeDt;
+        const afterOmega = PM.angWrap(headings[index] - headings[index - 1]) / afterDt;
+        return { beforeOmega, afterOmega, value: Math.abs(afterOmega - beforeOmega) / ((beforeDt + afterDt) / 2) };
+      });
+      const reversal = angularAccelerations.find(({ beforeOmega, afterOmega }) => beforeOmega * afterOmega < 0);
 
       expect(reversal).toBeDefined();
       expect(reversal!.value).toBeLessThanOrEqual(10 * PM.D2R + 1e-9);
