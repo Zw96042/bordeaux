@@ -1,6 +1,7 @@
 import type { ValidationIssue, ValidationResult } from "./types";
 import { FIELD_H, FIELD_W } from "./math/fieldBounds";
 import { ACTIVE_FIELD_REFERENCE } from "./field/rebuilt2026";
+import { acceptedTrajectoryShapeError } from "./planners/acceptedTrajectoryIdentity";
 
 type RecordValue = Record<string, unknown>;
 
@@ -343,6 +344,15 @@ function validateProjectInner(project: unknown): ValidationResult {
       if (path.folderId !== undefined && (typeof path.folderId !== "string" || !folderIds.has(path.folderId))) issues.push(issue(`${base}.folderId`, "Path folder does not exist"));
       if (path.driveBackward !== undefined && typeof path.driveBackward !== "boolean") issues.push(issue(`${base}.driveBackward`, "Drive backward must be true or false"));
       if (path.exportable !== undefined && typeof path.exportable !== "boolean") issues.push(issue(`${base}.exportable`, "Exportable must be true or false"));
+      if (path.optimization !== undefined) {
+        const options = path.optimization;
+        if (!isRecord(options) || !finite(options.corridorM) || options.corridorM < 0.03 || options.corridorM > 1.5) {
+          issues.push(issue(`${base}.optimization`, "Optimization corridor must be between 0.03 and 1.5 meters"));
+        } else if (options.accepted !== undefined) {
+          const error = acceptedTrajectoryShapeError(options.accepted);
+          if (error) issues.push(issue(`${base}.optimization.accepted`, error));
+        }
+      }
       if (path.headingMode !== undefined && !["manual", "tangent", "targets"].includes(String(path.headingMode))) issues.push(issue(`${base}.headingMode`, "Heading mode is invalid"));
       if (path.followMode !== undefined && !["time", "position"].includes(String(path.followMode))) issues.push(issue(`${base}.followMode`, "Follow mode must be time or position"));
       validateFinite(issues, path.startVel, `${base}.startVel`, "Start velocity", { nonnegative: true });
@@ -363,8 +373,12 @@ function validateProjectInner(project: unknown): ValidationResult {
           }
           validateFinite(issues, waypoint.x, `${wpBase}.x`, "Waypoint X");
           validateFinite(issues, waypoint.y, `${wpBase}.y`, "Waypoint Y");
+          if (waypoint.positionLink !== undefined && (typeof waypoint.positionLink !== "string" || !waypoint.positionLink.trim())) issues.push(issue(`${wpBase}.positionLink`, "Shared position ID must be a nonempty string"));
           if (finite(waypoint.x) && finite(waypoint.y) && (waypoint.x < 0 || waypoint.x > FIELD_W || waypoint.y < 0 || waypoint.y > FIELD_H)) {
             issues.push(issue(wpBase, "Waypoint must stay inside the FRC field bounds"));
+          }
+          if (waypoint.positionName !== undefined && (typeof waypoint.positionName !== "string" || !waypoint.positionName.trim() || waypoint.positionName.length > 80)) {
+            issues.push(issue(`${wpBase}.positionName`, "Linkable point name must contain 1–80 characters"));
           }
           validateFinite(issues, waypoint.theta, `${wpBase}.theta`, "Waypoint heading");
           (["thetaOn", "linked", "stop"] as const).forEach((key) => {
@@ -399,27 +413,6 @@ function validateProjectInner(project: unknown): ValidationResult {
             }
           }
           if (waypoint.segmentHeadingMode === "lookAt" && !isRecord(waypoint.segmentLookAt)) issues.push(issue(`${wpBase}.segmentLookAt`, "Track point heading requires a field point"));
-          if (waypoint.headingTransition !== undefined) {
-            if (!isRecord(waypoint.headingTransition)) issues.push(issue(`${wpBase}.headingTransition`, "Heading transition must be an object"));
-            else {
-              if (waypoint.headingTransition.placement !== undefined && !["before", "split", "after"].includes(String(waypoint.headingTransition.placement))) {
-                issues.push(issue(`${wpBase}.headingTransition.placement`, "Heading transition side must be before, split, or after"));
-              }
-              if (waypoint.headingTransition.rotationPriority !== undefined && !["heading", "translation"].includes(String(waypoint.headingTransition.rotationPriority))) {
-                issues.push(issue(`${wpBase}.headingTransition.rotationPriority`, "Heading transition timing priority must be heading or translation"));
-              }
-              if (waypoint.headingTransition.distanceM !== undefined) {
-                validateFinite(issues, waypoint.headingTransition.distanceM, `${wpBase}.headingTransition.distanceM`, "Heading transition distance", { positive: true });
-                if (finite(waypoint.headingTransition.distanceM) && waypoint.headingTransition.distanceM < 0.05) {
-                  issues.push(issue(`${wpBase}.headingTransition.distanceM`, "Heading transition distance must be at least 0.05 meters"));
-                }
-              }
-              if (wi === 0 || wi === waypointCount - 1) issues.push(issue(`${wpBase}.headingTransition`, "Heading transition belongs to an interior segment boundary"));
-              if (waypoint.headingTransition.rotationPriority === "translation" && isRecord(project.robot) && project.robot.drive === "tank") {
-                issues.push(issue(`${wpBase}.headingTransition.rotationPriority`, "Translation timing priority requires a swerve drivetrain"));
-              }
-            }
-          }
           if (waypoint.turnInPlace !== undefined) {
             if (!isRecord(waypoint.turnInPlace)) issues.push(issue(`${wpBase}.turnInPlace`, "Turn in place must be an object"));
             else {
@@ -551,12 +544,6 @@ function validateProjectInner(project: unknown): ValidationResult {
         }
         ["f0", "f1", "maxVel", "maxAccel", "maxAngVel", "maxAngAccel"].forEach((key) => validateFinite(issues, range[key], `${rangeBase}.${key}`, `Range ${key}`, key.startsWith("max") ? { positive: true } : {}));
         ["d0", "d1", "w0", "w1", "maxDecel"].forEach((key) => validateOptionalFinite(issues, range[key], `${rangeBase}.${key}`, `Range ${key}`, key === "maxDecel" ? { positive: true } : { nonnegative: true }));
-        if (range.rotationPriority !== undefined && range.rotationPriority !== "heading" && range.rotationPriority !== "translation") {
-          issues.push(issue(`${rangeBase}.rotationPriority`, "Timing priority must be heading or translation"));
-        }
-        if (range.rotationPriority === "translation" && isRecord(project.robot) && project.robot.drive === "tank") {
-          issues.push(issue(`${rangeBase}.rotationPriority`, "Translation timing priority requires a swerve drivetrain"));
-        }
       });
 
       if (!isRecord(path.constraints)) {
@@ -578,6 +565,9 @@ function validateProjectInner(project: unknown): ValidationResult {
       }
       if (project.editor.javaProjectBookmarkId !== undefined && (typeof project.editor.javaProjectBookmarkId !== "string" || !/^[a-f0-9]{20}$/.test(project.editor.javaProjectBookmarkId))) {
         issues.push(issue("$.editor.javaProjectBookmarkId", "Java project bookmark is invalid"));
+      }
+      if (project.editor.unitSystem !== undefined && project.editor.unitSystem !== "metric" && project.editor.unitSystem !== "imperial") {
+        issues.push(issue("$.editor.unitSystem", "Display units must be metric or imperial"));
       }
     }
   }
