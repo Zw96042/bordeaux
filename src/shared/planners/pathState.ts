@@ -29,6 +29,34 @@ export interface CanonicalPathState {
   totalDistanceM: number;
 }
 
+function segmentHeadingLaw(path: PathDoc, segmentIndex: number): string {
+  const waypoint = path.waypoints[segmentIndex];
+  const mode = waypoint?.segmentHeadingMode ?? path.headingMode ?? "targets";
+  if (mode !== "lookAt") return mode;
+  const target = waypoint?.segmentLookAt;
+  return target ? `${mode}:${target.x}:${target.y}` : mode;
+}
+
+/** A stopped waypoint may connect two distinct heading laws by rotating in place. */
+export function isStationaryHeadingTransition(
+  path: PathDoc,
+  point: CanonicalPathPoint | undefined,
+  outgoingHeadingRad?: number,
+): boolean {
+  if (!point?.stop || point.waypointIndex === undefined) return false;
+  const waypointIndex = point.waypointIndex;
+  if (path.waypoints[waypointIndex]?.turnInPlace) return true;
+  if (waypointIndex <= 0 || waypointIndex >= path.waypoints.length - 1) return false;
+  if (outgoingHeadingRad !== undefined) {
+    const delta = Math.atan2(
+      Math.sin(outgoingHeadingRad - point.headingRad),
+      Math.cos(outgoingHeadingRad - point.headingRad),
+    );
+    if (Math.abs(delta) > 1e-4) return true;
+  }
+  return segmentHeadingLaw(path, waypointIndex - 1) !== segmentHeadingLaw(path, waypointIndex);
+}
+
 function unwrap(values: readonly number[]): number[] {
   if (values.length === 0) return [];
   const result = [values[0]];
@@ -41,20 +69,52 @@ function unwrap(values: readonly number[]): number[] {
   return result;
 }
 
+// Neighbors depend only on distance, so every derivative can share them.
+// Reuse a neighbor across identical distances to keep long waits/turns linear.
+function derivativeNeighbors(positions: readonly number[]): { before: number[]; after: number[] } {
+  const before = new Array<number>(positions.length);
+  const after = new Array<number>(positions.length);
+  for (let index = 0; index < positions.length; index += 1) {
+    let candidate = index === 0 ? 0 : index - 1;
+    if (index > 0 && positions[index] === positions[index - 1]) candidate = before[index - 1];
+    while (candidate > 0 && positions[index] - positions[candidate] <= EPSILON) candidate -= 1;
+    before[index] = candidate;
+  }
+  for (let index = positions.length - 1; index >= 0; index -= 1) {
+    let candidate = Math.min(index + 1, positions.length - 1);
+    if (index + 1 < positions.length && positions[index] === positions[index + 1]) candidate = after[index + 1];
+    while (candidate < positions.length - 1 && positions[candidate] - positions[index] <= EPSILON) candidate += 1;
+    after[index] = candidate;
+  }
+  return { before, after };
+}
+
 function derivative(
   values: readonly number[],
   positions: readonly number[],
+  neighbors: ReturnType<typeof derivativeNeighbors>,
   breaks: ReadonlySet<number> = new Set(),
 ): number[] {
   return values.map((_value, index) => {
-    let before = index === 0 ? 0 : index - 1;
-    let after = index === values.length - 1 ? values.length - 1 : index + 1;
+    let before = neighbors.before[index];
+    let after = neighbors.after[index];
+    if (positions[index] - positions[before] <= EPSILON) before = index;
+    if (positions[after] - positions[index] <= EPSILON) after = index;
     if (breaks.has(index)) {
       if (after > index) before = index;
       else after = index;
     } else {
       if (breaks.has(before)) before = index;
       if (breaks.has(after)) after = index;
+    }
+    if (before < index && after > index) {
+      const left = positions[index] - positions[before];
+      const right = positions[after] - positions[index];
+      // A target can split a sampling interval at any distance. Weight the
+      // secants at this sample, rather than differentiating at the midpoint
+      // of its neighbors (which invents angular acceleration on uneven grids).
+      return ((values[index] - values[before]) / left * right
+        + (values[after] - values[index]) / right * left) / (left + right);
     }
     const distance = positions[after] - positions[before];
     return distance > EPSILON ? (values[after] - values[before]) / distance : 0;
@@ -63,8 +123,7 @@ function derivative(
 
 function waypointSampleIndices(path: PathDoc, samples: readonly TrajectorySample[]): number[] {
   let cursor = 0;
-  return path.waypoints.map((waypoint, waypointIndex) => {
-    if (waypointIndex === path.waypoints.length - 1) return Math.max(0, samples.length - 1);
+  return path.waypoints.map((waypoint) => {
     let best = cursor;
     let bestDistance = Number.POSITIVE_INFINITY;
     for (let index = cursor; index < samples.length; index += 1) {
@@ -83,7 +142,6 @@ export function buildCanonicalPathState(
   path: PathDoc,
   samples: readonly TrajectorySample[],
   headingBreaks: ReadonlySet<number> = new Set(),
-  syntheticStops: ReadonlySet<number> = new Set(),
 ): CanonicalPathState {
   if (samples.length < 2) throw new Error("Canonical path state requires at least two trajectory samples.");
   const positions = samples.map((sample) => sample.s);
@@ -99,14 +157,15 @@ export function buildCanonicalPathState(
   waypointIndices.forEach((sampleIndex, waypointIndex) => {
     if (path.waypoints[waypointIndex]?.stop) stoppedSamples.add(sampleIndex);
   });
-  const tangentXRaw = derivative(samples.map((sample) => sample.x), positions, stoppedSamples);
-  const tangentYRaw = derivative(samples.map((sample) => sample.y), positions, stoppedSamples);
+  const neighbors = derivativeNeighbors(positions);
+  const tangentXRaw = derivative(samples.map((sample) => sample.x), positions, neighbors, stoppedSamples);
+  const tangentYRaw = derivative(samples.map((sample) => sample.y), positions, neighbors, stoppedSamples);
   const tangentAngles = unwrap(tangentXRaw.map((x, index) => Math.atan2(tangentYRaw[index], x)));
-  const curvatures = derivative(tangentAngles, positions, stoppedSamples);
+  const curvatures = derivative(tangentAngles, positions, neighbors, stoppedSamples);
   const headings = unwrap(samples.map((sample) => sample.headingRad));
   const headingDerivativeBreaks = new Set([...stoppedSamples, ...headingBreaks]);
-  const headingDerivatives = derivative(headings, positions, headingDerivativeBreaks);
-  const headingSecondDerivatives = derivative(headingDerivatives, positions, headingDerivativeBreaks);
+  const headingDerivatives = derivative(headings, positions, neighbors, headingDerivativeBreaks);
+  const headingSecondDerivatives = derivative(headingDerivatives, positions, neighbors, headingDerivativeBreaks);
   const waypointBySample = new Map<number, number>();
   waypointIndices.forEach((sampleIndex, waypointIndex) => {
     if (!waypointBySample.has(sampleIndex)) waypointBySample.set(sampleIndex, waypointIndex);
@@ -145,36 +204,15 @@ export function buildCanonicalPathState(
       segmentIndex: segment,
       segmentFraction: segmentEnd > segmentStart ? (index - segmentStart) / (segmentEnd - segmentStart) : 0,
       ...(waypointIndex !== undefined ? { waypointIndex } : {}),
-      stop: stoppedSamples.has(index) || syntheticStops.has(index),
+      stop: stoppedSamples.has(index),
     };
   });
 
   return {
     points,
     waypointSampleIndices: waypointIndices,
-    totalDistanceM: samples.at(-1)?.s ?? 0,
+    totalDistanceM: samples[samples.length - 1].s,
   };
-}
-
-export function findDynamicHeadingStops(
-  state: CanonicalPathState,
-  stopAtIndex?: number,
-): Set<number> {
-  const result = new Set<number>();
-  state.waypointSampleIndices.slice(1, -1).forEach((sampleIndex) => {
-    if (stopAtIndex !== undefined && sampleIndex >= stopAtIndex) return;
-    const before = state.points[sampleIndex - 1];
-    const point = state.points[sampleIndex];
-    const after = state.points[sampleIndex + 1];
-    if (!before || !point || !after || point.stop) return;
-    const beforeDistance = point.s - before.s;
-    const afterDistance = after.s - point.s;
-    if (beforeDistance <= EPSILON || afterDistance <= EPSILON) return;
-    const incomingRate = (point.headingRad - before.headingRad) / beforeDistance;
-    const outgoingRate = (after.headingRad - point.headingRad) / afterDistance;
-    if (Math.abs(outgoingRate - incomingRate) > 0.05) result.add(sampleIndex);
-  });
-  return result;
 }
 
 export function interpolatePathPoint(
