@@ -53,5 +53,33 @@ describe("fixed-geometry final optimization", () => {
       fallback: true,
       fallbackReason: expect.stringContaining("translational jerk"),
     });
+      maxAngAccel: 120,
+      maxAngDecel: 120,
+    };
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 8, y: 2, theta: 180, thetaOn: true },
+    ]);
+    path.ranges = [{
+      anchor: "param",
+      f0: 0.05,
+      f1: 0.95,
+      maxVel: 4,
+      maxAccel: 5,
+      maxDecel: 5,
+      maxAngVel: 60,
+      maxAngAccel: 120,
+      rotationPriority: "translation",
+    }];
+
+    const result = getPlanner("optimizedTrajectory").generate({ path, robot: demo.robot, samplesPerSegment: 56 });
+    expect(result.optimization).toMatchObject({
+      status: expect.stringMatching(/^(optimal|feasible|equivalent)$/),
+      constraintViolations: 0,
+      fallback: false,
+    });
+    expect(result.samples[0].velocityMps).toBe(1);
+    expect(result.samples.at(-1)!.velocityMps).toBe(1);
+    expect(result.diagnostics).not.toContainEqual(expect.objectContaining({ severity: "error" }));
   });
 });
