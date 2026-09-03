@@ -7,7 +7,6 @@ import {
 import {
   REBUILT_2026_FIELD,
   appToOfficialPoint,
-  officialToAppPoint,
 } from "../src/shared/field/rebuilt2026";
 
 describe("field certification", () => {
