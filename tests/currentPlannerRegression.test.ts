@@ -1,3 +1,108 @@
+      plannerId: "profiledSpline",
+      path,
+      robot: project.robot,
+      perSegment: 56,
+    });
+    const translationInteractive = processPathPreviewJob({
+      id: 4,
+      quality: "interactive",
+      plannerId: "profiledSpline",
+      path: translationPath,
+      robot: project.robot,
+      perSegment: 56,
+    });
+    expect(interactive.error).toBeUndefined();
+    expect(translationInteractive.error).toBeUndefined();
+    const geometry = PM.derivePath(path, project.robot, 56, undefined);
+    const interactiveInteriorMinimum = Math.min(...interactive.value.sample.pts
+      .map((sample: { s: number }, index: number) => {
+        const fraction = sample.s / interactive.value.sample.length;
+        return fraction >= 0.35 && fraction <= 0.85 ? interactive.value.prof.v[index] : Infinity;
+      }));
+    const translationInteractiveMinimum = Math.min(...translationInteractive.value.sample.pts
+      .map((sample: { s: number }, index: number) => {
+        const fraction = sample.s / translationInteractive.value.sample.length;
+        return fraction >= 0.35 && fraction <= 0.85 ? translationInteractive.value.prof.v[index] : Infinity;
+      }));
+
+    const velocityAt = (samples: PlannerResult["samples"], fraction: number) => {
+      const afterIndex = samples.findIndex((sample) => sample.f >= fraction);
+      if (afterIndex <= 0) return Math.abs(samples[Math.max(0, afterIndex)]?.velocityMps ?? 0);
+      const before = samples[afterIndex - 1];
+      const after = samples[afterIndex];
+      const ratio = (fraction - before.f) / Math.max(1e-9, after.f - before.f);
+      return Math.sqrt(Math.max(0, before.velocityMps ** 2
+        + (after.velocityMps ** 2 - before.velocityMps ** 2) * ratio));
+    };
+    const normalizedVelocity = (fraction: number) => (
+      velocityAt(result.samples, fraction) / Math.max(1e-6, velocityAt(translation.samples, fraction))
+    );
+    const knots = [...geometry.wpFrac.slice(1, -1), ...path.targets.map((target) => target.f)];
+    const knotNotches = knots.map((fraction) => {
+      const center = normalizedVelocity(fraction);
+      const shoulders = (normalizedVelocity(Math.max(0, fraction - 0.04))
+        + normalizedVelocity(Math.min(1, fraction + 0.04))) / 2;
+      return { fraction, ratio: center / Math.max(1e-6, shoulders) };
+    });
+    const interiorMinimum = Math.min(...result.samples
+      .filter((sample) => sample.f >= 0.35 && sample.f <= 0.85)
+      .map((sample) => sample.velocityMps));
+    const translationMinimum = Math.min(...translation.samples
+      .filter((sample) => sample.f >= 0.35 && sample.f <= 0.85)
+      .map((sample) => sample.velocityMps));
+
+    expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+    expect(interiorMinimum).toBeGreaterThanOrEqual(translationMinimum * 0.95);
+    expect(interactiveInteriorMinimum).toBeGreaterThanOrEqual(translationInteractiveMinimum * 0.95);
+    expect(interactive.value.metrics.head).toHaveLength(geometry.metrics.head.length);
+    interactive.value.metrics.head.forEach((heading: number, index: number) => {
+      expect(Math.abs(PM.angWrap(heading - geometry.metrics.head[index]))).toBeLessThan(1e-10);
+    });
+    expect(knotNotches, JSON.stringify(knotNotches)).toSatisfy((notches: Array<{ ratio: number }>) => (
+      notches.every((notch) => notch.ratio >= 0.85)
+    ));
+    path.targets.forEach((target) => {
+      const sample = result.samples.find((candidate) => Math.abs(candidate.f - target.f) <= 1e-9);
+      expect(sample).toBeDefined();
+      expect(Math.abs(PM.angWrap(sample!.headingRad - target.deg * Math.PI / 180))).toBeLessThan(0.05 * Math.PI / 180);
+    });
+  });
+
+  it("does not over-brake a smooth heading law merely because it has rotation targets", () => {
+    const project = currentTangentToTargetsProject();
+    const path = project.paths[0];
+    path.waypoints.splice(0, 2);
+    path.waypoints[0].segmentHeadingMode = "targets";
+    delete path.waypoints[0].headingTransition;
+    path.targets = [{ f: 0.3, deg: -136.2568 }, { f: 0.6, deg: -94.5753 }];
+
+    const result = getPlanner("profiledSpline").generate({
+      path,
+      robot: project.robot,
+      samplesPerSegment: 56,
+    });
+    const baseline = getPlanner("profiledSpline").generate({
+      path: { ...path, targets: [] },
+      robot: project.robot,
+      samplesPerSegment: 56,
+    });
+    const middle = result.samples.filter((sample) => sample.f >= 0.2 && sample.f <= 0.8);
+    const baselineMiddle = baseline.samples.filter((sample) => sample.f >= 0.2 && sample.f <= 0.8);
+    const middleMinimum = Math.min(...middle.map((sample) => sample.velocityMps));
+    const baselineMinimum = Math.min(...baselineMiddle.map((sample) => sample.velocityMps));
+
+    expect(result.diagnostics.filter((issue) => issue.severity === "error")).toEqual([]);
+    expect(middleMinimum, `target ${middleMinimum.toFixed(3)} m/s; baseline ${baselineMinimum.toFixed(3)} m/s`).toBeGreaterThan(baselineMinimum * 0.9);
+    path.targets.forEach((target) => {
+      const sample = result.samples.find((candidate) => Math.abs(candidate.f - target.f) <= 1e-9);
+      expect(sample).toBeDefined();
+      expect(Math.abs(PM.angWrap(sample!.headingRad - target.deg * Math.PI / 180))).toBeLessThan(0.05 * Math.PI / 180);
+    });
+  });
+
+  it("reports a tight angular-acceleration limit on close heading targets", () => {
+    const project = currentTangentToTargetsProject();
+    const path = project.paths[0];
     path.headingMode = "targets";
     path.waypoints = [
       { x: 1, y: 4, prevC: { x: 1, y: 4 }, nextC: { x: 2.5, y: 4 }, linked: true, thetaOn: true, theta: 0, stop: false, segType: "bezier" },
