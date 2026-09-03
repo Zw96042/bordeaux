@@ -207,10 +207,9 @@ describe("agent session and private bridge", () => {
 
     const invalid = structuredClone(initial);
     invalid.revision = 1;
-    invalid.project.robot.drive = "tank";
     invalid.project.paths[0].ranges.push({
-      anchor: "param", f0: 0, f1: 1, rotationPriority: "translation",
-      maxVel: 1, maxAccel: 1, maxAngVel: 90, maxAngAccel: 180,
+      anchor: "param", f0: 0, f1: 1,
+      maxVel: -1, maxAccel: 1, maxAngVel: 90, maxAngAccel: 180,
     });
 
     expect(service.tryPublishSnapshot(invalid)).toBe(false);
@@ -633,7 +632,7 @@ describe("agent session and private bridge", () => {
     let finishPath: ((value: unknown) => void) | undefined;
     const started = new Promise<void>((resolve) => { pathStarted = resolve; });
     const notifications: string[] = [];
-    const service = new AgentSessionService((proposal) => { notifications.push(proposal.intent); }, () => null, (job, signal) => {
+    const service = new AgentSessionService((proposal) => { notifications.push(proposal.intent); }, () => null, (job) => {
       if (job.kind !== "route") return runAgentPlanningJobDirect(job);
       pathStarted?.();
       return new Promise((resolve) => { finishPath = resolve; });

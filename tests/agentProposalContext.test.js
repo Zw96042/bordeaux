@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { agentProposalMatchesPublishedContext, freshProject } from "../src/renderer/app/App";
+import { agentProposalMatchesPublishedContext } from "../src/renderer/lib/agentProposalContext";
+import { freshProject } from "../src/renderer/lib/editorProject";
 import { buildBdxExport } from "../src/shared/export/bdx";
 import { createDemoProject } from "../src/shared/project/defaults";
 import { validateProject } from "../src/shared/validation";
