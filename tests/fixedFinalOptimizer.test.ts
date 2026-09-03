@@ -53,6 +53,111 @@ describe("fixed-geometry final optimization", () => {
       fallback: true,
       fallbackReason: expect.stringContaining("translational jerk"),
     });
+        segType: "line",
+        segmentHeadingMode: "manual",
+        turnInPlace: { headingDeg: 90, direction: "counterclockwise" },
+      },
+      { x: 6, y: 2, theta: 90, thetaOn: true },
+    ]);
+
+    const final = optimizeFixedGeometryFinal({ path, robot: demo.robot, samplesPerSegment: 56 });
+
+    expect(final.optimization).toMatchObject({
+      status: expect.stringMatching(/^(optimal|feasible|equivalent)$/),
+      constraintViolations: 0,
+      fallback: false,
+    });
+    expect(final.stationaryActions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "turn", waypointIndex: 1 }),
+      expect.objectContaining({ kind: "wait", waypointIndex: 1 }),
+    ]));
+  });
+
+  it("does not invent resolution-dependent stops on a smooth target law", () => {
+    const demo = createDemoProject();
+    const path = demo.paths[0];
+    path.headingMode = "targets";
+    path.waypoints = buildWaypoints([
+      { x: 2, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 4, y: 2, theta: 90, thetaOn: true, segType: "line" },
+      { x: 6, y: 2, theta: 90, thetaOn: true },
+    ]);
+
+    for (const samplesPerSegment of [56, 112]) {
+      const result = getPlanner("profiledSpline").generate({ path, robot: demo.robot, samplesPerSegment });
+      const waypoint = path.waypoints[1];
+      const nearest = result.samples.reduce((best, sample) => (
+        Math.hypot(sample.x - waypoint.x, sample.y - waypoint.y)
+          < Math.hypot(best.x - waypoint.x, best.y - waypoint.y) ? sample : best
+      ));
+      expect(nearest.velocityMps, `${samplesPerSegment} samples per segment`).toBeGreaterThan(0.1);
+    }
+  });
+
+  it("does not treat rotational module-point acceleration as chassis traction", () => {
+    const demo = createDemoProject();
+    demo.robot.driveModel = {
+      motorId: "custom",
+      motorFreeRpm: 6784,
+      motorMaxTorqueNm: 3.6,
+      motorCount: 4,
+      gearRatio: 6.75,
+      wheelDiameterM: 0.1016,
+      massKg: 54,
+      moiKgM2: 6.3504,
+      wheelbaseM: 0.66,
+      trackwidthM: 0.66,
+      wheelFrictionCoefficient: 1.2,
+    };
+    const path = demo.paths[0];
+    path.constraints.maxAngAccel = 10_000;
+    path.waypoints = buildWaypoints([
+      { x: 2, y: 2, segType: "line" },
+      { x: 3, y: 2 },
+    ]);
+    const samples = [
+      { i: 0, t: 0, s: 0, f: 0, x: 2, y: 2, headingRad: 0, velocityMps: 0, accelerationMps2: 0, angularVelocityRadps: 0, curvatureInvM: 0 },
+      { i: 1, t: 0.2, s: 1, f: 1, x: 3, y: 2, headingRad: 0.02, velocityMps: 0, accelerationMps2: 0, angularVelocityRadps: 0.2, curvatureInvM: 0 },
+    ];
+
+    const validation = validateOptimizedTrajectory({ path, robot: demo.robot }, samples, {
+      angularKinematics: "sample",
+    });
+
+    expect(validation.violations).toEqual([]);
+  });
+
+  it("validates angular acceleration during a stationary endpoint catch-up", () => {
+    const demo = createDemoProject();
+    const path = demo.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxAngVel = 720;
+    path.constraints.maxAngAccel = 120;
+    path.constraints.maxAngDecel = 120;
+    path.waypoints = buildWaypoints([
+      { x: 2, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 3, y: 2, theta: 0, thetaOn: true },
+    ]);
+    const samples = [
+      { i: 0, t: 0, s: 1, f: 1, x: 3, y: 2, headingRad: 0, velocityMps: 0, accelerationMps2: 0, angularVelocityRadps: 0, curvatureInvM: 0 },
+      { i: 1, t: 0.01, s: 1, f: 1, x: 3, y: 2, headingRad: 0.0025, velocityMps: 0, accelerationMps2: 0, angularVelocityRadps: 0.5, curvatureInvM: 0 },
+    ];
+
+    const validation = validateOptimizedTrajectory({ path, robot: demo.robot }, samples, {
+      angularKinematics: "sample",
+    });
+
+    expect(validation.violations).toContainEqual(expect.objectContaining({
+      kind: "angular-acceleration",
+      sampleIndex: 1,
+    }));
+  });
+
+  it("uses acceleration and deceleration limits by angular-speed magnitude while stationary", () => {
+    const demo = createDemoProject();
+    const path = demo.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxAngVel = 720;
     path.constraints.maxAngAccel = 60;
     path.constraints.maxAngDecel = 720;
     path.waypoints = buildWaypoints([
