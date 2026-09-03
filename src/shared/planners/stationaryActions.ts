@@ -1,6 +1,7 @@
 import { PM } from "../math/pm";
 import type { ConstraintRange, PathDoc, PlannerResult, PlannerStationaryAction, RobotConfig, TrajectorySample } from "../types";
 import { MAX_TRAJECTORY_SAMPLES } from "./limits";
+import { buildCanonicalPathState, isStationaryHeadingTransition } from "./pathState";
 
 const EPSILON = 1e-9;
 const DEG = Math.PI / 180;
@@ -159,12 +160,32 @@ function jigglePhase(progress: number): { position: number; velocity: number; ac
 
 /** Adds optional waypoint actions after a planner has finished its authored geometry. */
 export function applyStationaryActions(path: PathDoc, result: PlannerResult, robot?: RobotConfig): PlannerResult {
-  const actions = path.waypoints
-    .map((waypoint, index) => ({ waypoint, index }))
-    .filter(({ waypoint }) => waypoint.turnInPlace || waypoint.jiggle || (waypoint.wait ?? 0) > 0);
-  if (actions.length === 0 || result.samples.length === 0) return result;
-
+  if (result.samples.length === 0) return result;
   const baseIndices = waypointSampleIndices(path, result.samples);
+  const state = buildCanonicalPathState(path, result.samples);
+  const actions = path.waypoints
+    .map((waypoint, index) => {
+      const boundary = baseIndices[index];
+      const movingIndex = firstMovingSampleIndex(result.samples, boundary);
+      const implicitTurnHeading = !waypoint.turnInPlace
+        && isStationaryHeadingTransition(
+          path,
+          state.points[boundary],
+          movingIndex === null ? undefined : result.samples[movingIndex].headingRad,
+        )
+        && movingIndex !== null
+        ? result.samples[movingIndex].headingRad
+        : undefined;
+      return { waypoint, index, implicitTurnHeading };
+    })
+    .filter(({ waypoint, implicitTurnHeading }) => (
+      waypoint.turnInPlace
+      || implicitTurnHeading !== undefined
+      || waypoint.jiggle
+      || (waypoint.wait ?? 0) > 0
+    ));
+  if (actions.length === 0) return result;
+
   const incompatible = actions.find(({ waypoint, index }) => {
     if (!waypoint.turnInPlace) return false;
     if (index >= path.waypoints.length - 1) return false;
@@ -187,16 +208,17 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
   const period = samplePeriod(result.samples);
   let projectedSampleCount = result.samples.length;
   const plannedTicks = new Map<number, { turn: number; jiggle: number; wait: number }>();
-  for (const { waypoint, index: waypointIndex } of actions) {
+  for (const { waypoint, index: waypointIndex, implicitTurnHeading } of actions) {
     const boundary = baseIndices[waypointIndex];
     const arrival = result.samples[boundary];
     const previous = result.samples[Math.max(0, boundary - 1)];
-    const startHeading = waypointIndex === 0 ? arrival.headingRad : previous.headingRad;
+    const hasTurn = Boolean(waypoint.turnInPlace) || implicitTurnHeading !== undefined;
+    const startHeading = waypoint.turnInPlace && waypointIndex > 0 ? previous.headingRad : arrival.headingRad;
     const targetHeading = waypoint.turnInPlace
       ? waypoint.turnInPlace.headingDeg * DEG + (path.driveBackward ? Math.PI : 0)
-      : arrival.headingRad;
-    const delta = waypoint.turnInPlace
-      ? directedDelta(startHeading, targetHeading, waypoint.turnInPlace.direction)
+      : implicitTurnHeading ?? arrival.headingRad;
+    const delta = hasTurn
+      ? directedDelta(startHeading, targetHeading, waypoint.turnInPlace?.direction)
       : 0;
     const angularLimits = activeAngularLimits(path, arrival.f, waypointIndex, result.totalDistanceM);
     const turnDuration = rotationDuration(delta, angularLimits);
@@ -232,19 +254,22 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
   let inserted = 0;
   let addedDistance = 0;
 
-  actions.forEach(({ waypoint, index: waypointIndex }) => {
+  actions.forEach(({ waypoint, index: waypointIndex, implicitTurnHeading }) => {
     const turn = waypoint.turnInPlace;
+    const hasTurn = Boolean(turn) || implicitTurnHeading !== undefined;
     const boundary = baseIndices[waypointIndex] + inserted;
     const arrival = samples[boundary];
     const previous = samples[Math.max(0, boundary - 1)];
-    const startHeading = waypointIndex === 0 ? arrival.headingRad : previous.headingRad;
-    const targetHeading = turn ? turn.headingDeg * DEG + (path.driveBackward ? Math.PI : 0) : arrival.headingRad;
-    const delta = turn ? directedDelta(startHeading, targetHeading, turn.direction) : 0;
+    const startHeading = turn && waypointIndex > 0 ? previous.headingRad : arrival.headingRad;
+    const targetHeading = turn
+      ? turn.headingDeg * DEG + (path.driveBackward ? Math.PI : 0)
+      : implicitTurnHeading ?? arrival.headingRad;
+    const delta = hasTurn ? directedDelta(startHeading, targetHeading, turn?.direction) : 0;
     const ticks = plannedTicks.get(waypointIndex)!;
     const turnTicks = ticks.turn;
     const turnDuration = turnTicks * period;
     const jiggle = waypoint.jiggle;
-    const jiggleHeading = turn ? targetHeading : arrival.headingRad;
+    const jiggleHeading = hasTurn ? targetHeading : arrival.headingRad;
     const jiggleSupported = !jiggle || robot?.drive !== "tank";
     const jigglePositions = jiggle && jiggleSupported ? PM.jigglePositions(waypoint, jiggleHeading, jiggle) : null;
     if (jiggle && !jiggleSupported) {
@@ -292,10 +317,11 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
       endTimeS: arrivalTime + duration,
     });
 
-    if (turn) arrival.headingRad = startHeading;
+    if (hasTurn) arrival.headingRad = startHeading;
     arrival.velocityMps = 0;
     arrival.accelerationMps2 = 0;
-    if (turn) {
+    if (hasTurn) arrival.angularVelocityRadps = 0;
+    if (hasTurn) {
       const firstMoving = firstMovingSampleIndex(samples, boundary);
       for (let sampleIndex = boundary + 1; sampleIndex < (firstMoving ?? samples.length); sampleIndex += 1) {
         samples[sampleIndex].headingRad = targetHeading;
@@ -321,10 +347,10 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
         headingRad: startHeading + delta * progress,
         velocityMps: 0,
         accelerationMps2: 0,
-        angularVelocityRadps: 0,
+        angularVelocityRadps: delta * (30 * u ** 2 - 60 * u ** 3 + 30 * u ** 4) / turnDuration,
       });
     }
-    const waitHeading = turn ? targetHeading : arrival.headingRad;
+    const waitHeading = hasTurn ? targetHeading : arrival.headingRad;
     const jiggleSamples: TrajectorySample[] = [];
     if (jiggle && jigglePositions) {
       for (let stroke = 0; stroke < jiggle.strokes; stroke += 1) {
@@ -338,7 +364,7 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
             i: 0,
             t: arrivalTime + turnDuration + stroke * jiggleStrokeDuration + tick * period,
             s: arrival.s + addedDistance + stroke * jiggle.distanceM * 2 + jiggle.distanceM * phase.travel,
-            f: 1,
+            f: arrival.f,
             x: arrival.x + Math.cos(angle) * radialDistance,
             y: arrival.y + Math.sin(angle) * radialDistance,
             headingRad: jiggleHeading,
@@ -358,7 +384,7 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
         i: 0,
         t: arrivalTime + turnDuration + jiggleDuration + tick * period,
         s: arrival.s + addedDistance,
-        f: 1,
+        f: arrival.f,
         headingRad: jiggleSamples.at(-1)?.headingRad ?? waitHeading,
         velocityMps: 0,
         accelerationMps2: 0,
@@ -377,11 +403,9 @@ export function applyStationaryActions(path: PathDoc, result: PlannerResult, rob
   if (samples.length > MAX_TRAJECTORY_SAMPLES) throw new Error(`Stationary actions require ${samples.length} samples, exceeding the trajectory limit of ${MAX_TRAJECTORY_SAMPLES}`);
   samples.forEach((sample, index) => {
     sample.i = index;
-    if (index === 0) sample.angularVelocityRadps = 0;
-    else {
+    if (index > 0) {
       const before = samples[index - 1];
       sample.headingRad = before.headingRad + wrapRadians(sample.headingRad - before.headingRad);
-      sample.angularVelocityRadps = (sample.headingRad - before.headingRad) / Math.max(EPSILON, sample.t - before.t);
     }
   });
   const totalTimeS = samples.at(-1)?.t ?? result.totalTimeS;
