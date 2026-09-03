@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CorridorCorpus } from "../src/electron/benchmark/corridor";
 import { observeRobotFieldPortalSequence } from "../src/shared/agent/fieldClearance";
 import { REBUILT_2026_FIELD, officialToAppPoint } from "../src/shared/field/rebuilt2026";
