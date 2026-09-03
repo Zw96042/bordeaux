@@ -53,6 +53,111 @@ describe("fixed-geometry final optimization", () => {
       fallback: true,
       fallbackReason: expect.stringContaining("translational jerk"),
     });
+    path.constraints.maxAngAccel = 60;
+    path.constraints.maxAngDecel = 720;
+    path.waypoints = buildWaypoints([
+      { x: 2, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 3, y: 2, theta: 0, thetaOn: true },
+    ]);
+    const acceleratingNegative = [
+      { i: 0, t: 0, s: 1, f: 1, x: 3, y: 2, headingRad: 0, velocityMps: 0, accelerationMps2: 0, angularVelocityRadps: 0, curvatureInvM: 0 },
+      { i: 1, t: 0.01, s: 1, f: 1, x: 3, y: 2, headingRad: -0.0025, velocityMps: 0, accelerationMps2: 0, angularVelocityRadps: -0.5, curvatureInvM: 0 },
+    ];
+    expect(validateOptimizedTrajectory({ path, robot: demo.robot }, acceleratingNegative, {
+      angularKinematics: "sample",
+    }).violations).toContainEqual(expect.objectContaining({ kind: "angular-acceleration" }));
+
+    path.constraints.maxAngAccel = 720;
+    path.constraints.maxAngDecel = 60;
+    const brakingNegative = [
+      { i: 0, t: 0, s: 1, f: 1, x: 3, y: 2, headingRad: 0, velocityMps: 0, accelerationMps2: 0, angularVelocityRadps: 0, curvatureInvM: 0 },
+      { i: 1, t: 0.01, s: 1, f: 1, x: 3, y: 2, headingRad: -0.005, velocityMps: 0, accelerationMps2: 0, angularVelocityRadps: -0.5, curvatureInvM: 0 },
+      { i: 2, t: 0.02, s: 1, f: 1, x: 3, y: 2, headingRad: -0.009, velocityMps: 0, accelerationMps2: 0, angularVelocityRadps: -0.4, curvatureInvM: 0 },
+    ];
+    expect(validateOptimizedTrajectory({ path, robot: demo.robot }, brakingNegative, {
+      angularKinematics: "sample",
+    }).violations).toContainEqual(expect.objectContaining({
+      kind: "angular-acceleration",
+      sampleIndex: 2,
+    }));
+  });
+
+  it("validates stationary module speed from the authoritative interval heading rate", () => {
+    const demo = createDemoProject();
+    demo.robot.driveModel = {
+      motorId: "custom",
+      motorFreeRpm: 6784,
+      motorMaxTorqueNm: 3.6,
+      motorCount: 4,
+      gearRatio: 6.75,
+      wheelDiameterM: 0.1016,
+      massKg: 54,
+      moiKgM2: 6.3504,
+      wheelbaseM: 0.66,
+      trackwidthM: 0.66,
+      wheelFrictionCoefficient: 1.2,
+    };
+    const path = demo.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxAngVel = 2_000;
+    path.constraints.maxAngAccel = 10_000_000;
+    path.constraints.maxAngDecel = 10_000_000;
+    path.waypoints = buildWaypoints([
+      { x: 2, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 3, y: 2, theta: 0, thetaOn: true },
+    ]);
+    const samples = [
+      { i: 0, t: 0, s: 1, f: 1, x: 3, y: 2, headingRad: 0, velocityMps: 0, accelerationMps2: 0, angularVelocityRadps: 0, curvatureInvM: 0 },
+      { i: 1, t: 0.01, s: 1, f: 1, x: 3, y: 2, headingRad: 0.15, velocityMps: 0, accelerationMps2: 0, angularVelocityRadps: 15, curvatureInvM: 0 },
+    ];
+
+    expect(validateOptimizedTrajectory({ path, robot: demo.robot }, samples, {
+      angularKinematics: "sample",
+    }).violations).toContainEqual(expect.objectContaining({ kind: "drivetrain-velocity" }));
+  });
+
+  it("validates stationary angular speed from headings rather than submitted omega fields", () => {
+    const demo = createDemoProject();
+    const path = demo.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxAngVel = 30;
+    path.constraints.maxAngAccel = 10_000;
+    path.constraints.maxAngDecel = 10_000;
+    path.waypoints = buildWaypoints([
+      { x: 2, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 3, y: 2, theta: 0, thetaOn: true },
+    ]);
+    const samples = [
+      { i: 0, t: 0, s: 1, f: 1, x: 3, y: 2, headingRad: 0, velocityMps: 0, accelerationMps2: 0, angularVelocityRadps: 0, curvatureInvM: 0 },
+      { i: 1, t: 0.1, s: 1, f: 1, x: 3, y: 2, headingRad: 0.1, velocityMps: 0, accelerationMps2: 0, angularVelocityRadps: 0, curvatureInvM: 0 },
+    ];
+
+    expect(validateOptimizedTrajectory({ path, robot: demo.robot }, samples, {
+      angularKinematics: "sample",
+    }).violations).toContainEqual(expect.objectContaining({ kind: "angular-velocity" }));
+  });
+
+  it("couples translation and yaw through module traction and motor force", () => {
+    const demo = createDemoProject();
+    demo.robot.driveModel = {
+      motorId: "custom",
+      motorFreeRpm: 6784,
+      motorMaxTorqueNm: 3.6,
+      motorCount: 4,
+      gearRatio: 6.75,
+      wheelDiameterM: 0.1016,
+      massKg: 54,
+      moiKgM2: 6.3504,
+      wheelbaseM: 0.66,
+      trackwidthM: 0.66,
+      wheelFrictionCoefficient: 1.2,
+    };
+    const limits = robotHardLimits(demo.robot)!;
+    const moduleRadius = Math.hypot(0.33, 0.33);
+    const angularAccelerationLimit = limits.tractionAccelMps2 * demo.robot.driveModel.massKg! * moduleRadius
+      / demo.robot.driveModel.moiKgM2!;
+    const point = {
+      sourceIndex: 0, s: 0, f: 0, x: 0, y: 0,
       tangentRad: 0, tangentX: 1, tangentY: 0, normalX: 0, normalY: 1,
       curvatureInvM: 0, headingRad: 0,
       headingDerivativeRadPerM: 0, headingSecondDerivativeRadPerM2: 0,
