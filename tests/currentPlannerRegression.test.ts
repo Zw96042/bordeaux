@@ -1,3 +1,108 @@
+
+      expect(reversal).toBeDefined();
+      expect(reversal!.value).toBeLessThanOrEqual(10 * PM.D2R + 1e-9);
+      expect(Math.min(...profile.v)).toBeGreaterThan(0.1);
+    });
+  });
+
+  it("inserts an exact interactive sample for an off-grid heading transition target", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "targets";
+    path.waypoints = [
+      { x: 0, y: 4, prevC: { x: 0, y: 4 }, nextC: { x: 2, y: 4 }, linked: true, thetaOn: true, theta: 0, stop: false, segType: "line", segmentHeadingMode: "tangent" },
+      { x: 5, y: 4, prevC: { x: 3, y: 4 }, nextC: { x: 7, y: 4 }, linked: true, thetaOn: false, theta: 0, stop: false, segType: "line", segmentHeadingMode: "targets" },
+      { x: 10, y: 4, prevC: { x: 8, y: 4 }, nextC: { x: 10, y: 4 }, linked: true, thetaOn: true, theta: 90, stop: false, segType: "line" },
+    ];
+    path.targets = [{ f: 0.501, deg: 90 }];
+    const derived = PM.derivePath(path, project.robot, 56, undefined);
+    const targetIndex = derived.sample.pts.findIndex((point: { s: number }) => (
+      Math.abs(point.s / derived.sample.length - 0.501) <= 1e-10
+    ));
+
+    expect(targetIndex).toBeGreaterThan(-1);
+    expect(Math.abs(PM.angWrap(derived.metrics.head[targetIndex] - 90 * PM.D2R))).toBeLessThan(0.05 * PM.D2R);
+    expect(derived.sample.pts[targetIndex]).toMatchObject({ seg: 1 });
+    expect(derived.sample.pts[targetIndex].t).toBeGreaterThan(0);
+    expect(derived.sample.pts[targetIndex].t).toBeLessThan(1 / 56);
+
+    const interactive = processPathPreviewJob({
+      id: 0,
+      quality: "interactive",
+      plannerId: "profiledSpline",
+      path,
+      robot: project.robot,
+      perSegment: 56,
+    });
+    const interactiveTarget = interactive.value.sample.pts.find((point: { s: number }) => (
+      Math.abs(point.s / interactive.value.sample.length - 0.501) <= 1e-10
+    ));
+    expect(interactiveTarget).toMatchObject({ seg: 1 });
+    expect(interactiveTarget.t).toBeGreaterThan(0);
+    expect(interactiveTarget.t).toBeLessThan(1 / 56);
+  });
+
+  it("does not create repeated deep speed valleys at waypoint headings and rotation targets", () => {
+    const project = currentTangentToTargetsProject();
+    const path = project.paths[0];
+    path.waypoints = [{
+      linked: true, thetaOn: true, theta: 0, stop: false,
+      x: 5.014, y: 7.608,
+      prevC: { x: 4.222, y: 7.608 }, nextC: { x: 5.806, y: 7.608 },
+      segType: "bezier", segmentHeadingMode: "tangent",
+    }, {
+      linked: true, thetaOn: true, theta: -91, stop: false,
+      x: 9.287, y: 5.483,
+      prevC: { x: 9.328, y: 7.854 }, nextC: { x: 9.252, y: 3.453 },
+      segType: "bezier", segmentHeadingMode: "targets", corner: false,
+      headingTransition: { placement: "after", rotationPriority: "heading", distanceM: 0.75 },
+    }, {
+      linked: true, thetaOn: true, theta: -180, stop: false,
+      x: 6.815, y: 5.069,
+      prevC: { x: 7.537, y: 5.069 }, nextC: { x: 5.812, y: 5.069 },
+      segType: "bezier", segmentHeadingMode: "targets", corner: false,
+    }, {
+      linked: true, thetaOn: true, theta: -35, stop: false,
+      x: 3.621, y: 5.075,
+      prevC: { x: 4.642, y: 5.075 }, nextC: { x: 2.600, y: 5.075 },
+    }];
+    path.targets = [{ f: 20 / 39.37, deg: -114 }, { f: 23.9 / 39.37, deg: 179 }];
+
+    const preview = processPathPreviewJob({
+      id: 1,
+      quality: "final",
+      plannerId: "profiledSpline",
+      path,
+      robot: project.robot,
+      perSegment: 56,
+      deadline: "common",
+      deadlineMs: 5_000,
+    });
+    expect(preview.error).toBeUndefined();
+    const result = preview.value.finalTrajectory as PlannerResult;
+
+    const translationPath = structuredClone(path);
+    translationPath.targets = [];
+    translationPath.waypoints.forEach((waypoint) => {
+      waypoint.theta = 0;
+      waypoint.segmentHeadingMode = "targets";
+      delete waypoint.headingTransition;
+    });
+    const translationPreview = processPathPreviewJob({
+      id: 2,
+      quality: "final",
+      plannerId: "profiledSpline",
+      path: translationPath,
+      robot: project.robot,
+      perSegment: 56,
+      deadline: "common",
+      deadlineMs: 5_000,
+    });
+    expect(translationPreview.error).toBeUndefined();
+    const translation = translationPreview.value.finalTrajectory as PlannerResult;
+    const interactive = processPathPreviewJob({
+      id: 3,
+      quality: "interactive",
       plannerId: "profiledSpline",
       path,
       robot: project.robot,
