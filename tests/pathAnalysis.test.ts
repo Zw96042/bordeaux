@@ -16,6 +16,33 @@ describe("agent path analysis", () => {
     expect(analysis.extrema[0].sample.nearestWaypointIndex).toBeGreaterThanOrEqual(0);
   });
 
+  it("checks the same minimum of authored and robot limits used by the planner", () => {
+    const project = createDemoProject();
+    project.plannerId = "profiledSpline";
+    project.robot.driveModel = {
+      motorId: "test",
+      motorFreeRpm: 6000,
+      motorMaxTorqueNm: 1,
+      motorCount: 4,
+      gearRatio: 10,
+      wheelDiameterM: 0.1,
+      massKg: 40,
+      moiKgM2: 10,
+      wheelbaseM: 0.6,
+      trackwidthM: 0.8,
+      wheelFrictionCoefficient: 0.5,
+    };
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.waypoints = buildWaypoints([{ x: 1, y: 2 }, { x: 7, y: 2 }]);
+    path.constraints = { maxVel: 0.1, maxAccel: 0.1, maxDecel: 0.1, maxAngVel: 1, maxAngAccel: 1 };
+
+    const analysis = analyzePath(project, path.id);
+
+    expect(analysis.extrema.find((item) => item.metric === "velocity")!.value).toBeLessThanOrEqual(0.1001);
+    expect(analysis.findings.filter((finding) => finding.kind === "constraint")).toEqual([]);
+  });
+
   it("reports a measured robot-footprint collision without mutating the authored path", () => {
     const project = createDemoProject();
     const path = project.paths[0];
