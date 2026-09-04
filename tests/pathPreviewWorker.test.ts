@@ -45,6 +45,52 @@ describe("path preview worker final optimization", () => {
         metrics: { v: [0, 1.2, 0] },
       },
     });
+  it("streams validated candidates with the run identity and uses the user's corridor", () => {
+    const messages: any[] = [];
+    const path = { id: "authored", optimization: { corridorM: 0.4, accepted: { obsolete: true } } };
+    const result = processPathPreviewJob({
+      id: 9, quality: "final", plannerId: "profiledSpline", optimize: true,
+      path, robot: {}, perSegment: 56, deadline: "stress", deadlineMs: 15_000,
+      field: { id: "field" },
+    }, derived, (input: any, options: any) => {
+      expect(input.path).toEqual({ id: "authored" });
+      expect(input.field).toEqual({ id: "field" });
+      expect(options).toMatchObject({ corridorM: 0.4, budgetTier: "stress", budgetMs: 15_000 });
+      options.onProgress(finalTrajectory("equivalent"));
+      options.onProgress(finalTrajectory());
+      return finalTrajectory();
+    }, undefined, (message: any) => messages.push(message));
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toMatchObject({
+      id: 9, type: "progress", quality: "final",
+      value: { finalOptimization: { status: "equivalent" }, prof: { totalTime: 1.8 } },
+    });
+    expect(messages[1].value.finalOptimization.status).toBe("optimal");
+    expect(result.value.finalTrajectory.totalTimeS).toBe(1.8);
+    expect(path.optimization.accepted).toEqual({ obsolete: true });
+  });
+
+  it("reuses the applied trajectory unchanged across repeated final requests", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, theta: 0, segType: "line" },
+      { x: 2, y: 1, theta: 0 },
+    ]);
+    const trajectory = optimizeFixedGeometryFinal({ path, robot: project.robot, samplesPerSegment: 56 });
+    path.optimization = { corridorM: 0.15, accepted: createAcceptedTrajectory(path, project.robot, trajectory) };
+    const selected = path.optimization.accepted!.result;
+    for (let id = 1; id <= 2; id += 1) {
+      const result = processPathPreviewJob({
+        id, quality: "final", plannerId: "profiledSpline", path, robot: project.robot, perSegment: 56,
+      }, PM.derivePath, () => { throw new Error("Selected results must not re-optimize"); }, () => {
+        throw new Error("Selected results must not fall back to the normal profile");
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.value.finalTrajectory).toBe(selected);
+      expect(result.value.prof.totalTime).toBe(selected.totalTimeS);
+    }
   });
 
   it("renders accepted corridor geometry without mutating the authored path", () => {
@@ -60,7 +106,7 @@ describe("path preview worker final optimization", () => {
     accepted.samples[1].x = 1.2;
 
     const result = processPathPreviewJob({
-      id: 3, quality: "final", plannerId: "optimizedTrajectory", path: authored, robot: {}, perSegment: 56,
+      id: 3, quality: "final", plannerId: "optimizedTrajectory", optimize: true, path: authored, robot: {}, perSegment: 56,
       deadline: "common", deadlineMs: 5_000,
     }, derive, () => accepted);
 
@@ -75,6 +121,63 @@ describe("path preview worker final optimization", () => {
     expect(projected.prof).toMatchObject({ totalTime: 1.8, t: [0, 0.9, 1.8] });
     expect(projected.finalOptimization.status).toBe("equivalent");
   });
+
+  it("recomputes graph extrema from the authoritative trajectory", () => {
+    const interactive = derived();
+    Object.assign(interactive.metrics, { vMax: 9, aMax: 8, wMax: 7, kMax: 6 });
+    const accepted = finalTrajectory();
+    accepted.samples[1] = {
+      ...accepted.samples[1],
+      accelerationMps2: -2.5,
+      angularVelocityRadps: 1.4,
+      curvatureInvM: -0.8,
+    };
+
+    const projected = applyFinalTrajectoryToPreview(interactive, accepted);
+
+    expect(projected.metrics).toMatchObject({
+      vMax: 1.2,
+      aMax: 2.5,
+      wMax: 1.4,
+      kMax: 0.8,
+    });
+  });
+
+  it("plays the authoritative optimized heading trace", () => {
+    const accepted = finalTrajectory();
+    accepted.samples[1].headingRad = 0.6;
+    accepted.samples[1].angularVelocityRadps = 2 / 3;
+    accepted.samples[2].headingRad = 1;
+    const projected = applyFinalTrajectoryToPreview(derived(), accepted);
+
+    const pose = PM.poseAtTime(
+      projected.prof.t[1],
+      projected.sample.pts,
+      projected.prof,
+      projected.anchors,
+      projected.mode,
+      projected.rev,
+    );
+
+    expect(pose.heading).toBeCloseTo(accepted.samples[1].headingRad, 8);
+  });
+
+  it("creates or removes terminal catch-up from authoritative final samples", () => {
+    const finalOnly = finalTrajectory();
+    finalOnly.totalTimeS = 2.2;
+    finalOnly.samples = [
+      finalOnly.samples[0],
+      finalOnly.samples[1],
+      { ...finalOnly.samples[2], t: 1.8, headingRad: 0 },
+      { ...finalOnly.samples[2], i: 3, t: 2, headingRad: 0.1, angularVelocityRadps: 0.5 },
+      { ...finalOnly.samples[2], i: 4, t: 2.2, headingRad: 0, angularVelocityRadps: 0 },
+    ];
+
+    const added = applyFinalTrajectoryToPreview(derived(), finalOnly);
+    expect(added.prof.turns).toEqual([expect.objectContaining({
+      catchup: true,
+      t0: 1.8,
+      t1: 2.2,
       headingSamples: [
         { t: 1.8, heading: 0 },
         { t: 2, heading: 0.1 },
