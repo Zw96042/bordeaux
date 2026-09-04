@@ -28,6 +28,111 @@ function finalTrajectory(status = "optimal"): any {
 }
 
 describe("path preview worker final optimization", () => {
+    const translationPriority = processPathPreviewJob({
+      id: 3,
+      quality: "final",
+      plannerId: "optimizedTrajectory", optimize: true,
+      path: translationPriorityPath,
+      robot: project.robot,
+      perSegment: 56,
+      deadline: "common",
+      deadlineMs: 5_000,
+    });
+    expect(translationPriority.error).toBeUndefined();
+    expect(translationPriority.finalFallbackReason).toBeUndefined();
+    expect(translationPriority.value.finalOptimization).toMatchObject({
+      status: expect.stringMatching(/^(optimal|feasible|equivalent)$/),
+      constraintViolations: 0,
+      fallback: false,
+    });
+
+  }, 60_000);
+
+  it("uses the shared planner as the final heading and timing authority", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "targets";
+    path.waypoints = buildWaypoints([
+      { x: 5, y: 7.5, theta: 0, thetaOn: true, segmentHeadingMode: "tangent" },
+      { x: 9.4, y: 5.4, theta: 0, thetaOn: true, segmentHeadingMode: "tangent" },
+      {
+        x: 6.5,
+        y: 5.35,
+        theta: 0,
+        thetaOn: true,
+        segmentHeadingMode: "targets",
+        headingTransition: { placement: "split", rotationPriority: "translation", distanceM: 0.75 },
+      },
+      { x: 3.6, y: 5.34, theta: -42, thetaOn: true },
+    ]);
+
+    const shared = getPlanner("profiledSpline").generate({ path, robot: project.robot, samplesPerSegment: 56 });
+    const moving = fixedPathSamples(shared);
+    for (const quality of ["final"] as const) {
+      const preview = processPathPreviewJob({
+        id: 4,
+        quality,
+        plannerId: "profiledSpline",
+        path,
+        robot: project.robot,
+        perSegment: 56,
+      });
+
+      expect(preview.error).toBeUndefined();
+      expect(preview.value.prof.t).toHaveLength(preview.value.sample.pts.length);
+      expect(preview.value.metrics.head).toHaveLength(preview.value.sample.pts.length);
+      preview.value.sample.pts.forEach((point: any, index: number) => {
+        const nearest = moving.reduce((best, sample) => (
+          Math.hypot(sample.x - point.x, sample.y - point.y)
+            < Math.hypot(best.x - point.x, best.y - point.y) ? sample : best
+        ));
+        expect(Math.hypot(nearest.x - point.x, nearest.y - point.y)).toBeLessThan(0.001);
+        expect(Math.abs(preview.value.prof.t[index] - nearest.t)).toBeLessThan(0.001);
+        expect(Math.atan2(
+          Math.sin(preview.value.metrics.head[index] - nearest.headingRad),
+          Math.cos(preview.value.metrics.head[index] - nearest.headingRad),
+        )).toBeCloseTo(0, 2);
+      });
+    }
+  });
+
+  it("preserves authored endpoint velocities when relaxing translation timing", () => {
+    const trajectory = finalTrajectory();
+    trajectory.samples[0].velocityMps = 1;
+    trajectory.samples.at(-1).velocityMps = 1;
+
+    const slowed = scaleTrajectoryTiming(trajectory, 0.5);
+
+    expect(slowed.samples[0].velocityMps).toBe(1);
+    expect(slowed.samples.at(-1)!.velocityMps).toBe(1);
+    expect(slowed.samples[1].velocityMps).toBe(0.6);
+    expect(slowed.totalTimeS).toBeGreaterThan(trajectory.totalTimeS);
+  });
+
+  it("accepts terminal heading settling without a spurious final fallback", () => {
+    const project = createDemoProject();
+    project.robot = {
+      drive: "swerve",
+      w: 0.84,
+      l: 0.84,
+      heightM: 0.5,
+      maxSpeed: 5.346559406159112,
+      driveModel: {
+        motorId: "custom",
+        motorFreeRpm: 6784,
+        motorMaxTorqueNm: 3.6,
+        motorCount: 4,
+        gearRatio: 6.75,
+        wheelDiameterM: 0.1016,
+        massKg: 54,
+        moiKgM2: 6.3504,
+        wheelbaseM: 0.66,
+        trackwidthM: 0.66,
+        wheelFrictionCoefficient: 1.2,
+      },
+    };
+    const path = project.paths[0];
+    path.headingMode = "targets";
     path.waypoints = buildWaypoints([
       {
         x: 5.023847794792925, y: 7.497700944080724, theta: 0, thetaOn: true,
