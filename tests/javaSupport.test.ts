@@ -120,4 +120,24 @@ describe("Java support installation and trusted catalog builds", () => {
     expect(cancelJavaCatalogBuild()).toBe(true);
     await expect(running).rejects.toThrow(/canceled/);
   });
+      "@echo off\r\necho started > wrapper-started\r\necho catalog built\r\n");
+
+    const running = runJavaCatalogBuild(project);
+    const canceled = cancelJavaCatalogBuild(force);
+    await expect(running).rejects.toThrow(/canceled/);
+    expect(canceled).toBe(true);
+    await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await expect(runJavaCatalogBuild(project)).resolves.toMatchObject({ output: "catalog built" });
+    expect(await fs.readFile(marker, "utf8")).toContain("started");
+  });
+
+  it("releases the build reservation after preflight failures", async () => {
+    const { project } = await fixture();
+    await expect(runJavaCatalogBuild(path.join(project, "missing"))).rejects.toThrow();
+    const noWrapper = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-no-wrapper-"));
+    temporaryDirectories.push(noWrapper);
+    await expect(runJavaCatalogBuild(noWrapper)).rejects.toThrow(/wrapper/);
+    await expect(runJavaCatalogBuild(project)).resolves.toMatchObject({ output: expect.stringContaining("catalog built") });
+  });
 });

@@ -1,3 +1,65 @@
+import { describe, expect, it } from "vitest";
+import { buildJavaDeployment, compareJavaDeployment, type RobotPushScope } from "../src/shared/export/javaDeployment";
+import { buildJavaTrajectory } from "../src/shared/export/javaTrajectory";
+import { blankPath, createDemoProject } from "../src/shared/project/defaults";
+import type { JavaCommandCatalog } from "../src/shared/types";
+
+const catalog: JavaCommandCatalog = { projectName: "Robot", sourceFileCount: 0, scannedAt: "", warnings: [], commands: [], conditions: [], authoritative: true, generatedSchemaVersion: "1.3", catalogId: "robot", supportVersion: "0.4.0", catalogHash: `sha256:${"a".repeat(64)}` };
+function project() {
+  const value = createDemoProject();
+  value.paths = ["A", "B", "C"].map((name) => ({ ...blankPath(name), id: name }));
+  value.routines = [
+    { id: "R", name: "Routine R", nodes: [{ id: "r-a", type: "path", ref: "A" }, { id: "r-b", type: "path", ref: "B" }] },
+    { id: "S", name: "Routine S", nodes: [{ id: "s-c", type: "path", ref: "C" }] },
+  ];
+  value.activeRoutineId = "R"; value.editor = { activePathId: "A" };
+  return value;
+}
+const paths = (...pathIds: string[]): RobotPushScope => ({ kind: "paths", pathIds });
+function baseline() { return buildJavaDeployment(project(), catalog, { kind: "project" }, null).trajectory; }
+function changePath(value: ReturnType<typeof project>, id: string) { value.paths.find((path) => path.id === id)!.constraints.maxVel = 1; }
+
+describe("selective Java deployments", () => {
+  it("replaces A by stable ID while preserving old B and R despite editing B and browsing S", () => {
+    const old = baseline(); const current = project();
+    current.activeRoutineId = "S"; changePath(current, "A"); changePath(current, "B");
+    current.paths[0].name = "Renamed A";
+    const result = buildJavaDeployment(current, catalog, paths("A"), old.contents);
+    expect(result.trajectory.document.paths[0].name).toBe("Renamed A");
+    expect(result.trajectory.document.paths[0].samples).not.toEqual(old.document.paths[0].samples);
+    expect(result.trajectory.document.paths[1]).toEqual(old.document.paths[1]);
+    expect(result.trajectory.document.routine).toEqual(old.document.routine);
+    expect(result.summary).toMatchObject({ selectedNames: ["Renamed A"], updatedNames: ["Renamed A"], preservedPathCount: 2, routine: "Routine R", previousRoutine: "Routine R" });
+    expect(JSON.parse(result.trajectory.contents)).toEqual(result.trajectory.document);
+  });
+  it("pushes a named batch and adds new paths without removing old records", () => {
+    const old = baseline(); const current = project(); changePath(current, "A"); changePath(current, "B");
+    current.paths.push({ ...blankPath("D"), id: "D" });
+    const result = buildJavaDeployment(current, catalog, paths("A", "B", "D"), old.contents);
+    expect(result.trajectory.pathCount).toBe(4);
+    expect(result.summary).toMatchObject({ addedNames: ["D"], updatedNames: ["A", "B"], preservedPathCount: 1 });
+    expect(result.trajectory.document.paths[2]).toEqual(old.document.paths[2]);
+  });
+  it("creates a paths-only first snapshot without deploying the editor routine", () => {
+    const result = buildJavaDeployment(project(), catalog, paths("B"), null);
+    expect(result.trajectory.document.routine).toBeNull();
+    expect(result.trajectory.document.paths.map((path) => path.id)).toEqual(["B"]);
+  });
+  it("compiles the explicitly selected routine and its path dependencies", () => {
+    const old = baseline(); const current = project(); changePath(current, "C");
+    const result = buildJavaDeployment(current, catalog, { kind: "routine", routineId: "S" }, old.contents);
+    expect(result.trajectory.document.routine?.name).toBe("Routine S");
+    expect(result.summary).toMatchObject({ selectedNames: ["Routine S"], dependencyNames: ["C"], preservedPathCount: 2 });
+    expect(result.trajectory.document.paths[0]).toEqual(old.document.paths[0]);
+  });
+  it("includes paths from both decisions and generated fallbacks", () => {
+    const current = project();
+    const capabilities: JavaCommandCatalog = { ...catalog,
+      conditions: [{ id: "ready", label: "Ready", ownerType: "Robot", member: "ready", source: { file: "Robot.java", line: 1 } }],
+      trajectoryGenerators: [{ id: "dynamic", label: "Dynamic", ownerType: "Robot", member: "dynamic", inputs: [], preview: { kind: "runtimeDynamic" }, fallbackPolicy: "validatedBranch",
+        limits: { timeoutMs: 50, maxSamples: 100, maxDurationS: 8, maxDistanceM: 20, maxVelocityMps: 5, maxAccelerationMps2: 10, maxCentripetalAccelerationMps2: 8, maxAngularVelocityRadps: 12, maxAngularAccelerationRadps2: 40, minClearanceM: 0.2 }, source: { file: "Robot.java", line: 1 } }],
+    };
+    current.routines[0].nodes = [{ id: "decision", type: "decision", cond: "ready", thenLabel: "Yes", elseLabel: "No",
       then: [{ id: "a", type: "path", ref: "A" }],
       else: [{ id: "b", type: "path", ref: "B" }, { id: "generated", type: "generatedTrajectory", generatorId: "dynamic", arguments: {}, fallback: { type: "branch", nodes: [{ id: "fallback-c", type: "path", ref: "C" }] } }],
     }];
