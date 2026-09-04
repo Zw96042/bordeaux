@@ -1,12 +1,22 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 // @ts-expect-error The production worker is an intentional JavaScript module.
 import { applyFinalTrajectoryToPreview, processPathPreviewJob } from "../src/renderer/assets/path-preview-worker";
+// @ts-expect-error The renderer path math is an intentional JavaScript module.
+import { PM } from "../src/renderer/lib/pathMath";
+import { fixedPathSamples, getPlanner } from "../src/shared/planners";
+import { optimizeFixedGeometryFinal } from "../src/shared/planners/fixedGeometryFinal";
+import { createAcceptedTrajectory } from "../src/shared/planners/acceptedTrajectory";
+import { scaleTrajectoryTiming } from "../src/shared/planners/optimizedTrajectory";
+import { buildWaypoints, createDemoProject, defaultPathConstraints } from "../src/shared/project/defaults";
 
 function derived(): any {
   return {
     sample: { length: 2, pts: [{ x: 0, y: 0, s: 0 }, { x: 1, y: 0, s: 1 }, { x: 2, y: 0, s: 2 }] },
     prof: { t: [0, 1, 2], v: [0, 1, 0], totalTime: 2, holds: [], turns: [], jiggles: [] },
     metrics: { head: [0, 0, 0], v: [0, 1, 0], accel: [0, 0, 0], omega: [0, 0, 0], curv: [0, 0, 0] },
+    anchors: [{ f: 0, rad: 0 }, { f: 1, rad: 0 }],
+    mode: "targets",
     rev: false,
   };
 }
@@ -28,6 +38,44 @@ function finalTrajectory(status = "optimal"): any {
 }
 
 describe("path preview worker final optimization", () => {
+  it("keeps interactive edits independent from full physics planning", () => {
+    const project = createDemoProject();
+    const interactive = derived();
+    let profileCalls = 0;
+
+    const result = processPathPreviewJob(
+      {
+        id: 1,
+        quality: "interactive",
+        plannerId: "profiledSpline",
+        path: project.paths[0],
+        robot: project.robot,
+        perSegment: 14,
+      },
+      () => interactive,
+      () => { throw new Error("final optimization must not run during an interactive edit"); },
+      () => {
+        profileCalls += 1;
+        return finalTrajectory();
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(profileCalls).toBe(0);
+    expect(result.value).toBe(interactive);
+    expect(result.value.finalTrajectory).toBeUndefined();
+  });
+
+  it("accepts a rounded final trajectory for a tight but valid swerve curve", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "targets";
+    path.waypoints = buildWaypoints([
+      { x: 7.6, y: 3.5, theta: 0, nextC: { x: 8.38, y: 3.5 } },
+      { x: 9.11, y: 6.85, theta: 0, prevC: { x: 8.33, y: 6.85 } },
+    ]);
+
+    const result = processPathPreviewJob({
       id: 1,
       quality: "final",
       plannerId: "optimizedTrajectory", optimize: true,
