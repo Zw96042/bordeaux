@@ -28,6 +28,111 @@ function finalTrajectory(status = "optimal"): any {
 }
 
 describe("path preview worker final optimization", () => {
+      id: 1,
+      quality: "final",
+      plannerId: "optimizedTrajectory", optimize: true,
+      path,
+      robot: project.robot,
+      perSegment: 56,
+      deadline: "common",
+      deadlineMs: 5_000,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.finalFallbackReason).toBeUndefined();
+    expect(result.value.finalOptimization).toMatchObject({
+      status: expect.stringMatching(/^(optimal|feasible|equivalent)$/),
+      constraintViolations: 0,
+      fallback: false,
+    });
+
+  });
+
+  it("optimizes an automatic heading-law change without a spurious dense failure", () => {
+    const project = createDemoProject();
+    project.robot = {
+      drive: "swerve",
+      w: 0.84,
+      l: 0.84,
+      heightM: 0.5,
+      maxSpeed: 5.346559406159112,
+      driveModel: {
+        motorId: "custom",
+        motorFreeRpm: 6784,
+        motorMaxTorqueNm: 3.6,
+        motorCount: 4,
+        gearRatio: 6.75,
+        wheelDiameterM: 0.1016,
+        massKg: 54,
+        moiKgM2: 6.3504,
+        wheelbaseM: 0.66,
+        trackwidthM: 0.66,
+        wheelFrictionCoefficient: 1.2,
+      },
+    };
+    const path = project.paths[0];
+    path.constraints = defaultPathConstraints(project.robot);
+    path.headingMode = "targets";
+    path.waypoints = buildWaypoints([
+      {
+        x: 5.02335590749547, y: 7.6112168063664285, theta: 0, thetaOn: true,
+        prevC: { x: 4.2393559074954705, y: 7.6112168063664285 },
+        nextC: { x: 5.807355907495469, y: 7.6112168063664285 },
+        segmentHeadingMode: "tangent",
+      },
+      {
+        x: 9.477630636385365, y: 5.423280381534321, theta: -92, thetaOn: true,
+        prevC: { x: 9.515762463480733, y: 7.554726164696154 },
+        nextC: { x: 9.438089244602958, y: 3.2130444921242236 },
+        segType: "bezier",
+        segmentHeadingMode: "tangent",
+      },
+      {
+        x: 6.240701081452546, y: 5.360253479135731, theta: -92, thetaOn: true,
+        prevC: { x: 7.412843675460446, y: 5.3456955819511 },
+        nextC: { x: 5.3890506730188905, y: 5.370830894500216 },
+        segType: "bezier",
+        segmentHeadingMode: "targets",
+        headingTransition: { placement: "after", rotationPriority: "heading", distanceM: 0.75 },
+      },
+      {
+        x: 3.686728408847876, y: 5.437753715894135, theta: -92, thetaOn: true,
+        prevC: { x: 4.538052633049433, y: 5.411920303641334 },
+        nextC: { x: 2.8354041846463196, y: 5.463587128146936 },
+      },
+    ]);
+
+    const fixed = optimizeFixedGeometryFinal({ path, robot: project.robot, samplesPerSegment: 56 });
+    expect(fixed.optimization).toMatchObject({
+      status: expect.stringMatching(/^(optimal|equivalent)$/),
+      constraintViolations: 0,
+      fallback: false,
+    });
+
+    const result = processPathPreviewJob({
+      id: 2,
+      quality: "final",
+      plannerId: "optimizedTrajectory", optimize: true,
+      path,
+      robot: project.robot,
+      perSegment: 56,
+      deadline: "common",
+      deadlineMs: 5_000,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.finalFallbackReason).toBeUndefined();
+    expect(result.value.finalOptimization).toMatchObject({
+      status: expect.stringMatching(/^(optimal|feasible|equivalent)$/),
+      constraintViolations: 0,
+      fallback: false,
+    });
+
+    const translationPriorityPath = structuredClone(path);
+    translationPriorityPath.waypoints[2].headingTransition = {
+      ...translationPriorityPath.waypoints[2].headingTransition,
+      rotationPriority: "translation",
+    };
     const translationPriority = processPathPreviewJob({
       id: 3,
       quality: "final",
