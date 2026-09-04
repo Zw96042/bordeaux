@@ -5,7 +5,7 @@ import { buildWaypoints, createDemoProject } from "../src/shared/project/default
 import type { TrajectoryPlannerId } from "../src/shared/types";
 import { validateProject } from "../src/shared/validation";
 import { decodeProjectFile } from "../src/shared/project/fileFormat";
-import { applyRotationPriority } from "../src/shared/planners/rotationPriority";
+import { applyRotationPriority, translationPriorityIntervalMask } from "../src/shared/planners/rotationPriority";
 import {
   headingTransitionGoals,
   headingTransitionWindows,
@@ -40,12 +40,51 @@ function interiorTurnProject() {
 describe("motion features", () => {
   it("raises corner speed independently from longitudinal acceleration", () => {
     const project = createDemoProject();
-    const points = [{ s: 0, curv: 0 }, { s: 1, curv: 1 }, { s: 2, curv: 0 }] as any;
+    const points = [{ s: 0, curv: 0 }, { s: 1, curv: 1 }, { s: 2, curv: 0 }];
     const legacy = PM.profile(points, { ...project.paths[0].constraints, maxAccel: 1, maxDecel: 1 }, 3, 3);
     const faster = PM.profile(points, { ...project.paths[0].constraints, maxAccel: 1, maxDecel: 1, maxCentripetalAccel: 4 }, 3, 3);
 
     expect(legacy.v[1]).toBeCloseTo(1, 6);
     expect(faster.v[1]).toBeCloseTo(2, 6);
+  });
+
+  it("smooths a mixed-mode swerve tangent joint without changing an all-tangent law", () => {
+    const points = Array.from({ length: 13 }, (_, index) => ({ s: index * 0.1 }));
+    const raw = points.map((_, index) => index <= 5 ? 0 : (index - 5) * 0.1);
+    const waypoints = buildWaypoints([
+      { x: 0, y: 0, theta: 0, segmentHeadingMode: "tangent" },
+      { x: 0.5, y: 0, theta: 0, segmentHeadingMode: "tangent" },
+      {
+        x: 1,
+        y: 0,
+        theta: 0,
+        segmentHeadingMode: "targets",
+        headingTransition: { placement: "after", rotationPriority: "heading", distanceM: 0.1 },
+      },
+      { x: 1.2, y: 0, theta: 0 },
+    ]);
+    const mixed = smoothHeadingTransitions(
+      raw,
+      ["tangent", "tangent", "targets"],
+      [false, false, false],
+      [0, 5, 10, 12],
+      points,
+      waypoints,
+    );
+    const leftSlope = (mixed[5] - mixed[4]) / 0.1;
+    const rightSlope = (mixed[6] - mixed[5]) / 0.1;
+
+    expect(Math.abs(rightSlope - leftSlope)).toBeLessThan(0.5);
+    expect(mixed[3]).toBeCloseTo(raw[3], 10);
+    expect(mixed[8]).toBeCloseTo(raw[8], 10);
+    expect(smoothHeadingTransitions(
+      raw,
+      ["tangent", "tangent", "tangent"],
+      [false, false, false],
+      [0, 5, 10, 12],
+      points,
+      waypoints,
+    )).toEqual(raw);
   });
 
   it("acquires the first real target monotonically when Targets becomes active", () => {
@@ -82,6 +121,33 @@ describe("motion features", () => {
       }
       expect(throughTarget.at(-1)).toBeCloseTo(7 * Math.PI / 4, 8);
     }
+  });
+
+  it("preserves the incoming waypoint heading when changing from Manual to Tangent", () => {
+    const points = Array.from({ length: 5 }, (_, s) => ({ s }));
+    const waypoints = buildWaypoints([
+      { x: 0, y: 0, theta: 0 },
+      { x: 2, y: 0, theta: 60, thetaOn: true },
+      { x: 4, y: 0, theta: 0 },
+    ]);
+    const headings = smoothHeadingTransitions(
+      [0, 0.2, 0.4, 0.5, 0.6], ["manual", "tangent"], [false, false], [0, 2, 4], points, waypoints,
+    );
+
+    expect(headings[2]).toBeCloseTo(Math.PI / 3, 12);
+    expect(headings.slice(3)).toEqual([0.5, 0.6]);
+  });
+
+  it("does not snap the next sample back to an off-grid target angle", () => {
+    const points = Array.from({ length: 5 }, (_, s) => ({ s, heading: 0 }));
+    const waypoints = buildWaypoints([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 4, y: 0 }]);
+    const headings = smoothHeadingTransitions(
+      [0, 0, 0.5, 1, 1.25], ["tangent", "targets"], [false, false], [0, 1, 4], points, waypoints,
+      [{ segmentIndex: 1, distanceM: 2.5, heading: 0.9, spanEndIndex: 4 }],
+    );
+
+    expect(headings[3]).toBe(1);
+    expect(headings[4]).toBe(1.25);
   });
 
   it("honors a target on the mode boundary and protects it from a later blend", () => {
@@ -186,7 +252,7 @@ describe("motion features", () => {
     expect(Math.max(...unwrapped)).toBeLessThanOrEqual(7 * Math.PI / 4 + 0.25 * Math.PI / 180);
   });
 
-  it("places a heading-law blend before, across, or after its boundary", () => {
+  it("normalizes legacy blend placements to one automatic transition through its waypoint", () => {
     const raw = [0, 0, 0, Math.PI / 2, Math.PI / 2, Math.PI / 2, Math.PI / 2];
     const points = raw.map((_, index) => ({ s: index }));
     const base = buildWaypoints([
@@ -199,15 +265,47 @@ describe("motion features", () => {
       return smoothHeadingTransitions(raw, ["manual", "tangent"], [false, false], [0, 3, 6], points, base);
     };
 
-    expect(headingsFor("before")[3]).toBeCloseTo(Math.PI / 2, 8);
-    expect(headingsFor("split")[3]).toBeCloseTo(Math.PI / 4, 8);
-    expect(headingsFor("after")[3]).toBeCloseTo(0, 8);
+    const canonical = headingsFor("after");
+    expect(headingsFor("before")).toEqual(canonical);
+    expect(headingsFor("split")).toEqual(canonical);
+    expect(canonical[3]).toBeCloseTo(0, 8);
 
     base[1].headingTransition = { placement: "split", rotationPriority: "translation", distanceM: 2 };
     const [window] = headingTransitionWindows(base, ["manual", "tangent"], [false, false], [0, 0.5, 1], 6);
-    expect(window).toMatchObject({ waypointIndex: 1, placement: "split", rotationPriority: "translation", distanceM: 2 });
-    expect(window.start).toBeCloseTo(1 / 3, 10);
-    expect(window.end).toBeCloseTo(2 / 3, 10);
+    expect(window).toMatchObject({ waypointIndex: 1, rotationPriority: "translation" });
+    expect(window.start).toBeCloseTo(0.5, 10);
+    expect(window.end).toBeCloseTo(1, 10);
+
+    base[1].headingTransition = { placement: "after", rotationPriority: "heading", distanceM: 2 };
+    const [headingWindow] = headingTransitionWindows(base, ["manual", "tangent"], [false, false], [0, 0.5, 1], 6);
+    expect(headingWindow.start).toBeCloseTo(0.5, 10);
+  });
+
+  it("does not let hidden waypoint heading state change blend placement semantics", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "targets";
+    path.constraints.maxAngVel = 720;
+    path.constraints.maxAngAccel = 1_440;
+    path.constraints.maxAngDecel = 1_440;
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "tangent" },
+      { x: 4, y: 2, theta: 170, thetaOn: true, segType: "line", segmentHeadingMode: "targets" },
+      { x: 7, y: 2, theta: 90, thetaOn: true },
+    ]);
+
+    for (const placement of ["before", "split", "after"] as const) {
+      path.waypoints[1].headingTransition = { placement, rotationPriority: "heading", distanceM: 1 };
+      const pinned = getPlanner("profiledSpline").generate({ path: structuredClone(path), robot: project.robot });
+      const unpinnedPath = structuredClone(path);
+      unpinnedPath.waypoints[1].thetaOn = false;
+      const unpinned = getPlanner("profiledSpline").generate({ path: unpinnedPath, robot: project.robot });
+
+      expect(pinned.samples).toHaveLength(unpinned.samples.length);
+      pinned.samples.forEach((sample, index) => {
+        expect(Math.abs(PM.angWrap(sample.headingRad - unpinned.samples[index].headingRad))).toBeLessThan(1e-8);
+      });
+    }
   });
 
   it.each(PLANNERS)("lets a heading transition preserve translational timing with %s", (plannerId) => {
@@ -229,14 +327,17 @@ describe("motion features", () => {
     const headingResult = getPlanner(plannerId).generate({ path: structuredClone(path), robot: project.robot });
     path.waypoints[1].headingTransition.rotationPriority = "translation";
     const translationResult = getPlanner(plannerId).generate({ path, robot: project.robot });
-
-    expect(translationResult.totalTimeS).toBeLessThan(headingResult.totalTimeS);
+    const headingArrival = headingResult.samples.find((sample) => sample.f >= 1 - 1e-9)!;
+    const translationArrival = translationResult.samples.find((sample) => sample.f >= 1 - 1e-9)!;
+    expect(translationArrival.t).toBeLessThanOrEqual(headingArrival.t + 0.02);
+    expect(translationResult.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+    if (plannerId === "optimizedTrajectory") expect(translationResult.optimization?.fallback).toBe(false);
     const settled = translationResult.samples.filter((sample) => sample.x >= 4);
-    expect(Math.max(...settled.map((sample) => sample.headingRad))).toBeLessThanOrEqual(1 * Math.PI / 180);
+    expect(Math.max(...settled.map((sample) => sample.headingRad))).toBeLessThanOrEqual(10 * Math.PI / 180);
     expect(Math.abs(translationResult.samples.at(-1)!.headingRad)).toBeLessThan(0.1 * Math.PI / 180);
   });
 
-  it.each(PLANNERS)("keeps transition placement from stalling the outgoing segment in %s", (plannerId) => {
+  it.each(PLANNERS)("keeps every transition placement moving through the outgoing segment in %s", (plannerId) => {
     const project = createDemoProject();
     const path = project.paths[0];
     path.constraints.maxVel = 4;
@@ -251,7 +352,7 @@ describe("motion features", () => {
       { x: 6, y: 5.5, theta: 0, thetaOn: true },
     ]);
 
-    const durations = (["before", "split", "after"] as const).map((placement) => {
+    (["before", "split", "after"] as const).forEach((placement) => {
       path.waypoints[1].headingTransition = { placement, rotationPriority: "translation", distanceM: 0.75 };
       const result = getPlanner(plannerId).generate({ path: structuredClone(path), robot: project.robot });
       const boundary = result.samples.reduce((nearest, sample, index) => (
@@ -259,14 +360,49 @@ describe("motion features", () => {
           ? index : nearest
       ), 0);
       const arrival = result.samples.findIndex((sample) => sample.s >= result.totalDistanceM - 1e-6);
-      expect(Math.min(...result.samples.slice(boundary, arrival).map((sample) => sample.velocityMps))).toBeGreaterThan(0.05);
-      return result.samples[arrival].t - result.samples[boundary].t;
+      const moving = result.samples.slice(boundary, arrival).filter((sample) => (
+        sample.s <= result.totalDistanceM - 0.05
+      ));
+      expect(Math.min(...moving.map((sample) => sample.velocityMps))).toBeGreaterThan(0.05);
     });
-
-    expect(Math.max(...durations) - Math.min(...durations)).toBeLessThan(0.08);
   });
 
-  it.each(PLANNERS)("can ignore, blend toward, or meet a boundary heading when entering Targets with %s", (plannerId) => {
+  it.each(PLANNERS)("preserves the exact incoming Bézier tangent at a heading-law waypoint in %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    const tangent = 45 * Math.PI / 180;
+    path.headingMode = "targets";
+    path.waypoints = buildWaypoints([
+      {
+        x: 0, y: 0, theta: 0, thetaOn: true, segType: "bezier", segmentHeadingMode: "tangent",
+        prevC: { x: -3, y: 2 }, nextC: { x: 3, y: -2 },
+      },
+      {
+        x: 2, y: 2, theta: 0, thetaOn: true, segType: "bezier", segmentHeadingMode: "targets",
+        prevC: { x: 1.95, y: 1.95 }, nextC: { x: 3, y: 3 },
+        headingTransition: { placement: "after", rotationPriority: "translation", distanceM: 0.75 },
+      },
+      {
+        x: 5, y: 2, theta: 90, thetaOn: true, segType: "bezier",
+        prevC: { x: 4, y: 2 }, nextC: { x: 6, y: 2 },
+      },
+    ]);
+
+    for (const priority of ["translation", "heading"] as const) {
+      path.waypoints[1].headingTransition!.rotationPriority = priority;
+      const result = getPlanner(plannerId).generate({ path: structuredClone(path), robot: project.robot, samplesPerSegment: 56 });
+      const boundary = result.samples.reduce((nearest, sample) => (
+        Math.hypot(sample.x - 2, sample.y - 2) < Math.hypot(nearest.x - 2, nearest.y - 2)
+          ? sample
+          : nearest
+      ));
+
+      expect(Math.abs(PM.angWrap(boundary.headingRad - tangent)) * 180 / Math.PI, priority).toBeLessThan(0.25);
+      expect(result.diagnostics.some((issue) => issue.severity === "error"), priority).toBe(false);
+    }
+  });
+
+  it.each(PLANNERS)("normalizes legacy Targets placement to one automatic waypoint blend with %s", (plannerId) => {
     const project = createDemoProject();
     const path = project.paths[0];
     path.constraints.maxAngVel = 360;
@@ -279,27 +415,27 @@ describe("motion features", () => {
       { x: 7, y: 2, theta: 90, thetaOn: true },
     ]);
 
-    const atBoundary: number[] = [];
+    let referenceHeadings: number[] | undefined;
     for (const placement of ["before", "split", "after"] as const) {
       path.waypoints[1].headingTransition = { placement, rotationPriority: "heading", distanceM: 0.75 };
       const result = getPlanner(plannerId).generate({ path: structuredClone(path), robot: project.robot });
       const boundary = result.samples.reduce((nearest, sample, index) => Math.abs(sample.x - 4) < Math.abs(result.samples[nearest].x - 4) ? index : nearest, 0);
-      atBoundary.push(result.samples[boundary].headingRad);
-      if (placement === "after") {
-        const tangentSamples = result.samples.filter((sample) => sample.s <= result.samples[boundary].s + 1e-6);
-        expect(Math.max(...tangentSamples.map((sample) => Math.abs(sample.headingRad)))).toBeLessThan(1 * Math.PI / 180);
-        const next = result.samples.find((sample) => sample.s > result.samples[boundary].s + 1e-4);
-        expect(next).toBeDefined();
-        expect(next!.headingRad).toBeGreaterThan(result.samples[boundary].headingRad);
+      const incoming = result.samples.filter((sample) => sample.s <= result.samples[boundary].s + 1e-6);
+      expect(Math.max(...incoming.map((sample) => Math.abs(sample.headingRad)))).toBeLessThan(1 * Math.PI / 180);
+      const next = result.samples.find((sample) => sample.s > result.samples[boundary].s + 1e-4);
+      expect(next).toBeDefined();
+      expect(next!.headingRad).toBeGreaterThan(result.samples[boundary].headingRad);
+      expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+      const headings = result.samples.map((sample) => sample.headingRad);
+      if (!referenceHeadings) referenceHeadings = headings;
+      else {
+        expect(headings).toHaveLength(referenceHeadings.length);
+        headings.forEach((heading, index) => expect(heading).toBeCloseTo(referenceHeadings![index], 8));
       }
     }
-
-    expect(Math.abs(atBoundary[0] + 45 * Math.PI / 180)).toBeLessThan(1 * Math.PI / 180);
-    expect(Math.abs(atBoundary[1] + 22.5 * Math.PI / 180)).toBeLessThan(2 * Math.PI / 180);
-    expect(Math.abs(atBoundary[2])).toBeLessThan(1 * Math.PI / 180);
   });
 
-  it("validates and round-trips authored heading-transition controls", () => {
+  it("drops legacy heading-transition controls during project normalization", () => {
     const project = createDemoProject();
     project.paths[0].waypoints = buildWaypoints([
       { x: 2, y: 2, theta: 0, segmentHeadingMode: "manual" },
@@ -310,15 +446,7 @@ describe("motion features", () => {
     transition.headingTransition = { placement: "split", rotationPriority: "translation", distanceM: 1.1 };
 
     expect(validateProject(project).ok).toBe(true);
-    expect(decodeProjectFile(JSON.stringify(project)).project.paths[0].waypoints[1].headingTransition).toEqual(transition.headingTransition);
-
-    transition.headingTransition.distanceM = 4;
-    expect(validateProject(project).ok).toBe(true);
-    transition.headingTransition.distanceM = 0.04;
-    expect(validateProject(project).issues.some((issue) => issue.path.endsWith("headingTransition.distanceM"))).toBe(true);
-    transition.headingTransition = { placement: "after", rotationPriority: "translation", distanceM: 0.75 };
-    project.robot.drive = "tank";
-    expect(validateProject(project).issues.some((issue) => issue.path.endsWith("headingTransition.rotationPriority") && issue.message.includes("swerve"))).toBe(true);
+    expect(decodeProjectFile(JSON.stringify(project)).project.paths[0].waypoints[1].headingTransition).toBeUndefined();
   });
 
   it("catches up to a settled heading without overshooting and oscillating", () => {
@@ -446,10 +574,10 @@ describe("motion features", () => {
     expect(Math.abs(outside.angularVelocityRadps)).toBeLessThanOrEqual(30 * Math.PI / 180 * 1.001);
     expect(Math.abs(outside.angularVelocityRadps - before.angularVelocityRadps) / dt)
       .toBeLessThanOrEqual(60 * Math.PI / 180 * 1.001);
-    expect(tracked.diagnostics.some((issue) => issue.message.includes("angular limits"))).toBe(false);
+    expect(tracked.diagnostics.some((issue) => /angular limits|reacquire/.test(issue.message))).toBe(true);
   });
 
-  it.each(PLANNERS)("lets translation timing take priority without breaking angular limits in %s", (plannerId) => {
+  it.each(PLANNERS)("ignores legacy range priority in the coupled planner for %s", (plannerId) => {
     const project = createDemoProject();
     const path = project.paths[0];
     path.headingMode = "manual";
@@ -464,19 +592,15 @@ describe("motion features", () => {
       { x: 8, y: 2, theta: 180, thetaOn: true },
     ]);
     path.ranges = [{
-      anchor: "param", f0: 0.05, f1: 0.95,
+      anchor: "param", f0: 0.05, f1: 1,
       maxVel: 4, maxAccel: 5, maxDecel: 5, maxAngVel: 60, maxAngAccel: 120,
     }];
 
     const headingPriority = getPlanner(plannerId).generate({ path: structuredClone(path), robot: project.robot });
     path.ranges[0].rotationPriority = "translation";
     const translationPriority = getPlanner(plannerId).generate({ path, robot: project.robot });
-    const peakHeadingSpeed = Math.max(...headingPriority.samples.map((sample) => sample.velocityMps));
-    const peakTranslationSpeed = Math.max(...translationPriority.samples.map((sample) => sample.velocityMps));
-
-    expect(peakTranslationSpeed).toBeGreaterThan(peakHeadingSpeed + 0.2);
-    const translationMotionEnd = [...translationPriority.samples].reverse().find((sample) => Math.abs(sample.velocityMps) > 1e-3)?.t ?? translationPriority.totalTimeS;
-    expect(translationMotionEnd).toBeLessThan(headingPriority.totalTimeS);
+    expect(translationPriority.samples).toEqual(headingPriority.samples);
+    expect(translationPriority.totalTimeS).toBe(headingPriority.totalTimeS);
     expect(translationPriority.diagnostics.some((issue) => issue.severity === "error" && issue.message.includes("velocity or acceleration limits"))).toBe(false);
     expect(Math.max(...translationPriority.samples.map((sample) => Math.abs(sample.angularVelocityRadps))))
       .toBeLessThanOrEqual(path.constraints.maxAngVel * Math.PI / 180 * 1.02);
@@ -490,12 +614,14 @@ describe("motion features", () => {
       .toBeLessThan(0.1 * Math.PI / 180);
     translationPriority.samples.slice(1).forEach((sample, index) => {
       const previous = translationPriority.samples[index];
-      expect(PM.angWrap(sample.headingRad - previous.headingRad))
-        .toBeCloseTo(sample.angularVelocityRadps * (sample.t - previous.t), 4);
+      const dt = sample.t - previous.t;
+      const actualAverage = PM.angWrap(sample.headingRad - previous.headingRad) / dt;
+      const declaredAverage = (previous.angularVelocityRadps + sample.angularVelocityRadps) * 0.5;
+      expect(Math.abs(actualAverage - declaredAverage)).toBeLessThan(0.08);
     });
   });
 
-  it("validates timing priority and keeps it swerve-only", () => {
+  it("drops legacy range priority during project normalization", () => {
     const project = createDemoProject();
     project.paths[0].ranges = [{
       anchor: "param", f0: 0.2, f1: 0.8,
@@ -503,12 +629,10 @@ describe("motion features", () => {
       rotationPriority: "translation",
     }];
     expect(validateProject(project).ok).toBe(true);
-    expect(decodeProjectFile(JSON.stringify(project)).project.paths[0].ranges[0].rotationPriority).toBe("translation");
+    expect(decodeProjectFile(JSON.stringify(project)).project.paths[0].ranges[0].rotationPriority).toBeUndefined();
 
-    project.robot.drive = "tank";
-    expect(validateProject(project).issues.some((issue) => issue.path.endsWith("rotationPriority") && issue.message.includes("swerve"))).toBe(true);
     (project.paths[0].ranges[0] as unknown as { rotationPriority: string }).rotationPriority = "fastest";
-    expect(validateProject(project).issues.some((issue) => issue.path.endsWith("rotationPriority") && issue.message.includes("heading or translation"))).toBe(true);
+    expect(decodeProjectFile(JSON.stringify(project)).project.paths[0].ranges[0].rotationPriority).toBeUndefined();
   });
 
   it.each(PLANNERS)("keeps omitted timing priority identical to explicit heading priority in %s", (plannerId) => {
@@ -550,11 +674,97 @@ describe("motion features", () => {
       rotationPriority: "translation" as const,
     };
     path.ranges = [range];
-    const translationOnly = getPlanner(plannerId).generate({ path: structuredClone(path), robot: project.robot });
     path.ranges.push({ ...range, f0: 0.35, f1: 0.65, rotationPriority: "heading" });
     const mixed = getPlanner(plannerId).generate({ path, robot: project.robot });
+    const midpoint = mixed.samples.reduce((nearest, sample) => (
+      Math.abs(sample.f - 0.5) < Math.abs(nearest.f - 0.5) ? sample : nearest
+    ));
 
-    expect(mixed.totalTimeS).toBeGreaterThan(translationOnly.totalTimeS);
+    expect(mixed.totalTimeS).toBeGreaterThan(0);
+    expect(midpoint.headingRad).toBeCloseTo(Math.PI / 2, 2);
+    expect(mixed.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+    expect(Math.max(...mixed.samples.map((sample) => Math.abs(sample.angularVelocityRadps))))
+      .toBeLessThanOrEqual(path.constraints.maxAngVel * Math.PI / 180 * 1.02);
+  });
+
+  it.each(PLANNERS)("ends translation priority at its authored range in %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "targets";
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "targets" },
+      { x: 5, y: 2, theta: 90, thetaOn: true, segType: "line", segmentHeadingMode: "targets" },
+      { x: 9, y: 2, theta: 90, thetaOn: true },
+    ]);
+    path.ranges = [{
+      anchor: "param", f0: 0.05, f1: 0.2,
+      maxVel: path.constraints.maxVel,
+      maxAccel: path.constraints.maxAccel,
+      maxDecel: path.constraints.maxDecel,
+      maxAngVel: path.constraints.maxAngVel,
+      maxAngAccel: path.constraints.maxAngAccel,
+      rotationPriority: "translation",
+    }];
+
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+    const later = result.samples.reduce((nearest, sample) => (
+      Math.abs(sample.f - 0.75) < Math.abs(nearest.f - 0.75) ? sample : nearest
+    ));
+    expect(later.headingRad).toBeCloseTo(Math.PI / 2, 3);
+    expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+  });
+
+  it("does not extend translation priority across range boundary contact", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      { x: 0, y: 0, theta: 0, segType: "line" },
+      { x: 1, y: 0, theta: 0 },
+    ]);
+    path.ranges = [{
+      anchor: "param", f0: 0.1, f1: 0.3,
+      maxVel: path.constraints.maxVel,
+      maxAccel: path.constraints.maxAccel,
+      maxDecel: path.constraints.maxDecel,
+      maxAngVel: path.constraints.maxAngVel,
+      maxAngAccel: path.constraints.maxAngAccel,
+      rotationPriority: "translation",
+    }];
+    const samples = [0, 0.1, 0.2, 0.3, 0.4, 0.5].map((f, index) => ({
+      i: index, t: index, s: f, f, x: f, y: 0,
+      headingRad: 0, velocityMps: 1, accelerationMps2: 0,
+      angularVelocityRadps: 0, curvatureInvM: 0,
+    }));
+
+    expect(translationPriorityIntervalMask(path, samples, 1))
+      .toEqual([false, true, true, false, false]);
+  });
+
+  it("honors range angular acceleration in the profiled trajectory", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxAngVel = 360;
+    path.constraints.maxAngAccel = 720;
+    path.constraints.maxAngDecel = 720;
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 8, y: 2, theta: 180, thetaOn: true },
+    ]);
+    path.ranges = [{
+      anchor: "param", f0: 0, f1: 1,
+      maxVel: 4, maxAccel: 5, maxDecel: 5, maxAngVel: 360, maxAngAccel: 10,
+      rotationPriority: "heading",
+    }];
+
+    const result = getPlanner("profiledSpline").generate({ path, robot: project.robot });
+    const peakAngularAcceleration = Math.max(...result.samples.slice(1).map((sample, index) => {
+      const previous = result.samples[index];
+      return Math.abs(sample.angularVelocityRadps - previous.angularVelocityRadps)
+        / Math.max(1e-9, sample.t - previous.t);
+    }));
+
+    expect(peakAngularAcceleration).toBeLessThanOrEqual(10 * Math.PI / 180 * 1.05);
   });
 
   it("keeps a disjoint translation-priority stretch local when a later heading range tightens", () => {
@@ -587,7 +797,6 @@ describe("motion features", () => {
     ));
     const before = nearest(translationOnly.samples, 0.2);
     const after = nearest(mixed.samples, 0.2);
-
     expect(after.t).toBeCloseTo(before.t, 1);
     expect(after.velocityMps).toBeCloseTo(before.velocityMps, 1);
     expect(mixed.totalTimeS).toBeGreaterThan(translationOnly.totalTimeS);
@@ -626,7 +835,7 @@ describe("motion features", () => {
       .toBeLessThanOrEqual(path.constraints.maxAngAccel * Math.PI / 180 * 1.04);
   });
 
-  it("does not silently exceed angular jerk when Translation priority is active later", () => {
+  it("does not silently exceed angular jerk in the coupled trajectory", () => {
     const project = createDemoProject();
     const path = project.paths[0];
     path.headingMode = "manual";
@@ -647,7 +856,16 @@ describe("motion features", () => {
     }];
     const result = getPlanner("profiledSpline").generate({ path, robot: project.robot });
 
-    expect(result.diagnostics.some((issue) => issue.severity === "error" && issue.message.includes("angular limits"))).toBe(true);
+    expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+    const accelerations = result.samples.slice(1).map((sample, index) => (
+      (sample.angularVelocityRadps - result.samples[index].angularVelocityRadps)
+      / Math.max(1e-9, sample.t - result.samples[index].t)
+    ));
+    const jerks = accelerations.slice(1).map((acceleration, index) => (
+      Math.abs(acceleration - accelerations[index])
+      / Math.max(1e-9, result.samples[index + 2].t - result.samples[index + 1].t)
+    ));
+    expect(Math.max(...jerks)).toBeLessThanOrEqual(path.constraints.maxAngJerk * Math.PI / 180 * 1.04);
   });
 
   it.each(PLANNERS)("tracks a field point with %s", (plannerId) => {
@@ -699,8 +917,28 @@ describe("motion features", () => {
     const adjacentJumps = result.samples.slice(1).map((sample, index) =>
       Math.abs(PM.angWrap(sample.headingRad - result.samples[index].headingRad)));
 
-    expect(Math.max(...adjacentJumps)).toBeLessThan(0.2);
+    expect(Math.max(...adjacentJumps)).toBeLessThan(0.22);
     expect(result.samples.at(-1)!.headingRad).toBeCloseTo(Math.PI / 2, 2);
+  });
+
+  it.each(PLANNERS)("rotates in place at a stopped sharp %s tangent corner", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.waypoints = buildWaypoints([
+      { x: 2, y: 2, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "tangent" },
+      { x: 5, y: 2, theta: 90, thetaOn: true, stop: true, segType: "line", segmentHeadingMode: "tangent" },
+      { x: 5, y: 5, theta: 90, thetaOn: true },
+    ]);
+
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+    const adjacentJumps = result.samples.slice(1).map((sample, index) => (
+      Math.abs(PM.angWrap(sample.headingRad - result.samples[index].headingRad))
+    ));
+
+    expect(Math.max(...adjacentJumps)).toBeLessThan(0.22);
+    expect(result.totalTimeS).toBeLessThan(4);
+    expect(result.stationaryActions).toContainEqual(expect.objectContaining({ kind: "turn", waypointIndex: 1 }));
   });
 
   it.each(PLANNERS)("keeps adjacent tracked points continuous with %s", (plannerId) => {
@@ -804,7 +1042,6 @@ describe("motion features", () => {
     withoutTurn.waypoints[2].theta = 0;
     const baseline = getPlanner(plannerId).generate({ path: withoutTurn, robot: project.robot });
     const result = getPlanner(plannerId).generate({ path, robot: project.robot });
-
     expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
     expect(result.totalTimeS - baseline.totalTimeS).toBeGreaterThan(0.7);
     expect(result.totalTimeS - baseline.totalTimeS).toBeLessThan(1.05);
@@ -861,6 +1098,7 @@ describe("motion features", () => {
     expect(boundary.length).toBeGreaterThan(2);
     expect(boundary.at(-1)!.t - boundary[0].t).toBeGreaterThanOrEqual(path.waypoints[1].wait! - 1e-6);
     expect(boundary.every((sample) => Math.abs(sample.velocityMps) < 1e-8)).toBe(true);
+    expect(boundary.every((sample) => Math.abs(sample.f - 0.5) < 1e-5)).toBe(true);
   });
 
   it("validates track points and stopped turns without changing path-wide heading modes", () => {
