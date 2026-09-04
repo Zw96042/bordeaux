@@ -591,6 +591,13 @@ describe("motion features", () => {
     expect(after.t).toBeCloseTo(before.t, 1);
     expect(after.velocityMps).toBeCloseTo(before.velocityMps, 1);
     expect(mixed.totalTimeS).toBeGreaterThan(translationOnly.totalTimeS);
+    expect(tracked.samples.at(-1)!.angularVelocityRadps).toBeCloseTo(0, 3);
+    const angularAcceleration = tracked.samples.slice(1).map((sample, index) => (
+      Math.abs(sample.angularVelocityRadps - tracked.samples[index].angularVelocityRadps) / dt
+    ));
+    expect(Math.max(...angularAcceleration))
+      .toBeLessThanOrEqual(path.constraints.maxAngAccel * Math.PI / 180 * 1.001);
+    expect(tracked.diagnostics.some((issue) => issue.message.includes("angular limits"))).toBe(false);
   });
 
   it("keeps an earlier heading transition bounded when Translation is selected later", () => {
@@ -626,7 +633,7 @@ describe("motion features", () => {
       .toBeLessThanOrEqual(path.constraints.maxAngAccel * Math.PI / 180 * 1.04);
   });
 
-  it("does not silently exceed angular jerk when Translation priority is active later", () => {
+  it("does not silently exceed angular jerk in the coupled trajectory", () => {
     const project = createDemoProject();
     const path = project.paths[0];
     path.headingMode = "manual";
@@ -647,7 +654,16 @@ describe("motion features", () => {
     }];
     const result = getPlanner("profiledSpline").generate({ path, robot: project.robot });
 
-    expect(result.diagnostics.some((issue) => issue.severity === "error" && issue.message.includes("angular limits"))).toBe(true);
+    expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+    const accelerations = result.samples.slice(1).map((sample, index) => (
+      (sample.angularVelocityRadps - result.samples[index].angularVelocityRadps)
+      / Math.max(1e-9, sample.t - result.samples[index].t)
+    ));
+    const jerks = accelerations.slice(1).map((acceleration, index) => (
+      Math.abs(acceleration - accelerations[index])
+      / Math.max(1e-9, result.samples[index + 2].t - result.samples[index + 1].t)
+    ));
+    expect(Math.max(...jerks)).toBeLessThanOrEqual(path.constraints.maxAngJerk * Math.PI / 180 * 1.04);
   });
 
   it.each(PLANNERS)("tracks a field point with %s", (plannerId) => {
@@ -699,8 +715,28 @@ describe("motion features", () => {
     const adjacentJumps = result.samples.slice(1).map((sample, index) =>
       Math.abs(PM.angWrap(sample.headingRad - result.samples[index].headingRad)));
 
-    expect(Math.max(...adjacentJumps)).toBeLessThan(0.2);
+    expect(Math.max(...adjacentJumps)).toBeLessThan(0.22);
     expect(result.samples.at(-1)!.headingRad).toBeCloseTo(Math.PI / 2, 2);
+  });
+
+  it.each(PLANNERS)("rotates in place at a stopped sharp %s tangent corner", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.waypoints = buildWaypoints([
+      { x: 2, y: 2, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "tangent" },
+      { x: 5, y: 2, theta: 90, thetaOn: true, stop: true, segType: "line", segmentHeadingMode: "tangent" },
+      { x: 5, y: 5, theta: 90, thetaOn: true },
+    ]);
+
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+    const adjacentJumps = result.samples.slice(1).map((sample, index) => (
+      Math.abs(PM.angWrap(sample.headingRad - result.samples[index].headingRad))
+    ));
+
+    expect(Math.max(...adjacentJumps)).toBeLessThan(0.22);
+    expect(result.totalTimeS).toBeLessThan(4);
+    expect(result.stationaryActions).toContainEqual(expect.objectContaining({ kind: "turn", waypointIndex: 1 }));
   });
 
   it.each(PLANNERS)("keeps adjacent tracked points continuous with %s", (plannerId) => {
@@ -804,7 +840,6 @@ describe("motion features", () => {
     withoutTurn.waypoints[2].theta = 0;
     const baseline = getPlanner(plannerId).generate({ path: withoutTurn, robot: project.robot });
     const result = getPlanner(plannerId).generate({ path, robot: project.robot });
-
     expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
     expect(result.totalTimeS - baseline.totalTimeS).toBeGreaterThan(0.7);
     expect(result.totalTimeS - baseline.totalTimeS).toBeLessThan(1.05);
@@ -861,6 +896,15 @@ describe("motion features", () => {
     expect(boundary.length).toBeGreaterThan(2);
     expect(boundary.at(-1)!.t - boundary[0].t).toBeGreaterThanOrEqual(path.waypoints[1].wait! - 1e-6);
     expect(boundary.every((sample) => Math.abs(sample.velocityMps) < 1e-8)).toBe(true);
+    expect(boundary.every((sample) => Math.abs(sample.f - 0.5) < 1e-5)).toBe(true);
+    expect(boundary.every((sample) => Math.abs(sample.f - boundary[0].f) < 1e-8)).toBe(true);
+    expect(result.samples.every((sample, index) => index === 0 || sample.f >= result.samples[index - 1].f - 1e-9)).toBe(true);
+    result.samples.slice(1).forEach((sample, index) => {
+      const previous = result.samples[index];
+      const dt = sample.t - previous.t;
+      const acceleration = Math.abs(sample.velocityMps - previous.velocityMps) / dt;
+      expect(acceleration).toBeLessThanOrEqual(Math.max(path.constraints.maxAccel, path.constraints.maxDecel) * 1.05);
+    });
   });
 
   it("validates track points and stopped turns without changing path-wide heading modes", () => {

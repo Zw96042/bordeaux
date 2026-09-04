@@ -1,3 +1,35 @@
+import { describe, expect, it, vi } from 'vitest';
+import { loadRendererExport } from './helpers/loadRendererExport';
+
+type Input = { outdatedOptimization?: boolean; id: string; key: string; path: { optimization?: { accepted: object } }; robot: object; plannerId: string };
+type Selection = { id: string; status: string; seconds?: number; message?: string };
+type Result = { status: string; value?: { prof: { totalTime: number }; finalTrajectory: object; acceptedTrajectory?: boolean }; fallbackReason?: string };
+const create = loadRendererExport<(planner: { request(input: Input): { promise: Promise<Result>; cancel(): void } }) => {
+  update(inputs: Input[], selected: Selection): void;
+  getSnapshot(): Record<string, Selection>;
+  cancel(): void;
+}>(new URL('../src/renderer/lib/libraryDurations.js', import.meta.url), 'createLibraryDurations', { replacements: [['export function createLibraryDurations(planner)', 'window.createLibraryDurations = function(planner)']] });
+const input = (id: string, key = id): Input => ({ id, key, path: {}, robot: {}, plannerId: 'profiledSpline' });
+const success = (seconds: number): Result => ({ status: 'success', value: { prof: { totalTime: seconds }, finalTrajectory: {} } });
+function setup() {
+  const jobs: { id: string; resolve(result: Result): void; cancel: ReturnType<typeof vi.fn> }[] = [];
+  const controller = create({ request(item) {
+    let resolve!: (result: Result) => void;
+    const promise = new Promise<Result>((done) => { resolve = done; });
+    const cancel = vi.fn();
+    jobs.push({ id: item.key, resolve, cancel });
+    return { promise, cancel };
+  } });
+  return { controller, jobs };
+}
+const flush = () => new Promise<void>((done) => queueMicrotask(done));
+
+describe('library trajectory durations', () => {
+  it('computes unopened paths sequentially and reuses active selected duration', async () => {
+    const { controller, jobs } = setup();
+    controller.update([input('a'), input('b'), input('c')], { id: 'a', status: 'ready', seconds: 3 });
+    expect(jobs.map((job) => job.id)).toEqual(['b']);
+    expect(controller.getSnapshot().a.seconds).toBe(3);
     jobs[0].resolve(success(4)); await flush();
     expect(jobs.map((job) => job.id)).toEqual(['b', 'c']);
     jobs[1].resolve(success(5)); await flush();
