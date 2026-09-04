@@ -28,11 +28,99 @@ function finalTrajectory(status = "optimal"): any {
 }
 
 describe("path preview worker final optimization", () => {
+    path.waypoints = buildWaypoints([
+      {
+        x: 5.023847794792925, y: 7.497700944080724, theta: 0, thetaOn: true,
+        prevC: { x: 4.239847794792925, y: 7.497700944080724 },
+        nextC: { x: 5.807847794792924, y: 7.497700944080724 },
+        segmentHeadingMode: "tangent",
+      },
+      {
+        x: 9.262529631988476, y: 5.4832778826522, theta: -91.02444054465735, thetaOn: true,
+        prevC: { x: 9.25408073069426, y: 7.430237035505824 },
+        nextC: { x: 9.27311245266581, y: 3.044579777035806 },
+        segmentHeadingMode: "tangent",
+      },
+      {
+        x: 6.406579551787691, y: 5.3352614492988994, theta: -91.02444054465735, thetaOn: true,
+        prevC: { x: 7.647059296057265, y: 5.312709711523859 },
+        nextC: { x: 5.527940124711653, y: 5.351234983771966 },
+        segmentHeadingMode: "targets",
+        headingTransition: { placement: "split", rotationPriority: "translation", distanceM: 0.75 },
+      },
+      {
+        x: 3.3886885142254175, y: 5.378597597192225, theta: -37, thetaOn: true,
+        prevC: { x: 4.267112072131432, y: 5.3534093155555365 },
+        nextC: { x: 2.510264956319402, y: 5.403785878828913 },
+      },
+    ]);
+
+    const result = processPathPreviewJob({
+      id: 2,
+      quality: "final",
+      plannerId: "optimizedTrajectory", optimize: true,
+      path,
+      robot: project.robot,
+      perSegment: 56,
+      deadline: "common",
+      deadlineMs: 1,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.finalFallbackReason).toBeUndefined();
+
+    const nonzeroPath = structuredClone(path);
+    nonzeroPath.waypoints.at(-1)!.theta = 90;
+    const nonzero = processPathPreviewJob({
+      id: 3,
+      quality: "final",
+      plannerId: "optimizedTrajectory", optimize: true,
+      path: nonzeroPath,
+      robot: project.robot,
+      perSegment: 56,
+      deadline: "common",
+      deadlineMs: 1,
+    });
+    expect(nonzero.error).toBeUndefined();
+    expect(nonzero.finalFallbackReason).toBeUndefined();
+
+    const withWaitPath = structuredClone(nonzeroPath);
+    withWaitPath.waypoints.at(-1)!.stop = true;
+    withWaitPath.waypoints.at(-1)!.wait = 0.12;
+    const withWait = processPathPreviewJob({
+      id: 4,
+      quality: "final",
+      plannerId: "optimizedTrajectory", optimize: true,
+      path: withWaitPath,
+      robot: project.robot,
+      perSegment: 56,
+      deadline: "common",
+      deadlineMs: 1,
+    });
+    expect(withWait.error).toBeUndefined();
+    const catchupBeforeWait = withWait.value.prof.turns.find((turn: any) => turn.catchup);
+    const terminalWait = withWait.value.prof.holds.find((hold: any) => hold.idx === withWait.value.sample.pts.length - 1);
+    if (catchupBeforeWait) expect(catchupBeforeWait.t1).toBeCloseTo(terminalWait.t0, 8);
+    const waitTime = (terminalWait.t0 + terminalWait.t1) / 2;
+    const waitPose = PM.poseAtTime(
+      waitTime,
+      withWait.value.sample.pts,
+      withWait.value.prof,
+      withWait.value.anchors,
+      withWait.value.mode,
+      withWait.value.rev,
+    );
+    const finalWaitSample = withWait.value.finalTrajectory.samples.reduce((nearest: any, sample: any) => (
+      Math.abs(sample.t - waitTime) < Math.abs(nearest.t - waitTime) ? sample : nearest
+    ));
+    expect(waitPose.heading).toBeCloseTo(finalWaitSample.headingRad, 6);
+  }, 60_000);
+
   it("runs the corridor final optimizer only for an optimized final request", () => {
     const optimize = () => finalTrajectory();
 
     const result = processPathPreviewJob({
-      id: 1, quality: "final", plannerId: "optimizedTrajectory", path: {}, robot: {}, perSegment: 56,
+      id: 1, quality: "final", plannerId: "optimizedTrajectory", optimize: true, path: {}, robot: {}, perSegment: 56,
     }, derived, optimize);
 
     expect(result).toMatchObject({
@@ -45,6 +133,21 @@ describe("path preview worker final optimization", () => {
         metrics: { v: [0, 1.2, 0] },
       },
     });
+  });
+
+  it("does not optimize final planning because a legacy planner toggle is enabled", () => {
+    let optimizationCalls = 0;
+    const result = processPathPreviewJob({
+      id: 8, quality: "final", plannerId: "optimizedTrajectory", path: {}, robot: {}, perSegment: 56,
+    }, derived, () => {
+      optimizationCalls += 1;
+      return finalTrajectory();
+    }, () => finalTrajectory("equivalent"));
+
+    expect(optimizationCalls).toBe(0);
+    expect(result.value.finalTrajectory.planner).toBe("profiledSpline");
+  });
+
   it("streams validated candidates with the run identity and uses the user's corridor", () => {
     const messages: any[] = [];
     const path = { id: "authored", optimization: { corridorM: 0.4, accepted: { obsolete: true } } };
