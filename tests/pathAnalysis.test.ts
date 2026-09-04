@@ -14,6 +14,11 @@ describe("agent path analysis", () => {
     expect(analysis.rawSamples.length).toBeLessThanOrEqual(80);
     expect(analysis.extrema.map((item) => item.metric)).toContain("velocity");
     expect(analysis.extrema[0].sample.nearestWaypointIndex).toBeGreaterThanOrEqual(0);
+
+    const analysis = analyzePath(project, path.id);
+
+    expect(analysis.extrema.find((item) => item.metric === "velocity")!.value).toBeLessThanOrEqual(0.1001);
+    expect(analysis.findings.filter((finding) => finding.kind === "constraint")).toEqual([]);
   });
 
   it("reports a measured robot-footprint collision without mutating the authored path", () => {

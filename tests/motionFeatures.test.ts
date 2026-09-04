@@ -5,7 +5,7 @@ import { buildWaypoints, createDemoProject } from "../src/shared/project/default
 import type { TrajectoryPlannerId } from "../src/shared/types";
 import { validateProject } from "../src/shared/validation";
 import { decodeProjectFile } from "../src/shared/project/fileFormat";
-import { applyRotationPriority } from "../src/shared/planners/rotationPriority";
+import { applyRotationPriority, translationPriorityIntervalMask } from "../src/shared/planners/rotationPriority";
 import {
   headingTransitionGoals,
   headingTransitionWindows,
@@ -40,12 +40,42 @@ function interiorTurnProject() {
 describe("motion features", () => {
   it("raises corner speed independently from longitudinal acceleration", () => {
     const project = createDemoProject();
-    const points = [{ s: 0, curv: 0 }, { s: 1, curv: 1 }, { s: 2, curv: 0 }] as any;
+    const points = [{ s: 0, curv: 0 }, { s: 1, curv: 1 }, { s: 2, curv: 0 }];
     const legacy = PM.profile(points, { ...project.paths[0].constraints, maxAccel: 1, maxDecel: 1 }, 3, 3);
     const faster = PM.profile(points, { ...project.paths[0].constraints, maxAccel: 1, maxDecel: 1, maxCentripetalAccel: 4 }, 3, 3);
 
     expect(legacy.v[1]).toBeCloseTo(1, 6);
     expect(faster.v[1]).toBeCloseTo(2, 6);
+  });
+
+  it("smooths a mixed-mode swerve tangent joint without changing an all-tangent law", () => {
+    const points = Array.from({ length: 13 }, (_, index) => ({ s: index * 0.1 }));
+    const raw = points.map((_, index) => index <= 5 ? 0 : (index - 5) * 0.1);
+    const waypoints = buildWaypoints([
+      { x: 0, y: 0, theta: 0, segmentHeadingMode: "tangent" },
+      { x: 0.5, y: 0, theta: 0, segmentHeadingMode: "tangent" },
+      {
+        x: 1,
+        y: 0,
+        theta: 0,
+        segmentHeadingMode: "targets",
+        headingTransition: { placement: "after", rotationPriority: "heading", distanceM: 0.1 },
+      },
+      { x: 1.2, y: 0, theta: 0 },
+    ]);
+    const mixed = smoothHeadingTransitions(
+      raw,
+      ["tangent", "tangent", "targets"],
+      [false, false, false],
+      [0, 5, 10, 12],
+      points,
+      waypoints,
+    );
+    const leftSlope = (mixed[5] - mixed[4]) / 0.1;
+    const rightSlope = (mixed[6] - mixed[5]) / 0.1;
+
+    expect(Math.abs(rightSlope - leftSlope)).toBeLessThan(0.5);
+    expect(mixed[3]).toBeCloseTo(raw[3], 10);
     expect(mixed[8]).toBeCloseTo(raw[8], 10);
     expect(smoothHeadingTransitions(
       raw,
