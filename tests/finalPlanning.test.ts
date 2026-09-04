@@ -25,7 +25,7 @@ class FakeWorker {
 function finalPlanningModule() {
   return loadRendererExport<{
     create(options: { workerFactory: () => FakeWorker; deadlines?: { common: number; stress: number; hard: number } }): {
-      request(input: { path: unknown; robot: unknown; plannerId: string }, options: { interactiveResult: unknown; deadline?: "common" | "stress" | "hard" }): {
+      request(input: { path: unknown; robot: unknown; plannerId: string; optimize?: boolean }, options: { interactiveResult?: unknown; deadline?: "common" | "stress" | "hard"; onProgress?: (value: unknown) => void }): {
         promise: Promise<Record<string, unknown>>;
         cancel(): void;
       };
@@ -91,6 +91,7 @@ describe("final planning execution", () => {
     await expect(request.promise).resolves.toEqual({
       status: "canceled",
       fallback: interactiveResult,
+      fallbackProvisional: true,
       fallbackReason: "Final planning was canceled; continuing with the last interactive result.",
     });
     expect(worker.terminated).toBe(true);
@@ -111,16 +112,37 @@ describe("final planning execution", () => {
       { interactiveResult, deadline },
     );
     expect(worker.jobs[0]).toMatchObject({ deadline, deadlineMs });
-    await vi.advanceTimersByTimeAsync(deadlineMs);
+    await vi.advanceTimersByTimeAsync(deadlineMs + 1_000);
 
     await expect(request.promise).resolves.toEqual({
       status: "timeout",
       deadline,
       deadlineMs,
       fallback: interactiveResult,
+      fallbackProvisional: true,
       fallbackReason: `Final planning exceeded the ${deadline} deadline (${deadlineMs} ms); continuing with the last interactive result.`,
     });
     expect(worker.terminated).toBe(true);
+  });
+
+  it("accepts a validated baseline returned at the optimizer deadline", async () => {
+    vi.useFakeTimers();
+    const worker = new FakeWorker();
+    const finalPlanning = finalPlanningModule().create({ workerFactory: () => worker });
+    const request = finalPlanning.request(
+      { path: { id: "path" }, robot: {}, plannerId: "optimizedTrajectory" },
+      { interactiveResult: { source: "interactive" } },
+    );
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(worker.terminated).toBe(false);
+    worker.resolve({ id: worker.jobs[0].id, value: { source: "validated-baseline" }, durationMs: 5_000 });
+
+    await expect(request.promise).resolves.toEqual({
+      status: "success",
+      value: { source: "validated-baseline" },
+      durationMs: 5_000,
+    });
   });
 
   it("reports final-planning failure with an explained interactive fallback", async () => {
@@ -138,6 +160,7 @@ describe("final planning execution", () => {
       status: "failure",
       error: { message: "optimizer unavailable" },
       fallback: interactiveResult,
+      fallbackProvisional: true,
       fallbackReason: "Final planning failed: optimizer unavailable. Continuing with the last interactive result.",
     });
     expect(worker.terminated).toBe(true);
@@ -158,6 +181,7 @@ describe("final planning execution", () => {
       status: "failure",
       error: { message: "candidate failed dense validation" },
       fallback: interactiveResult,
+      fallbackProvisional: true,
       fallbackReason: "Final planning failed: candidate failed dense validation. Continuing with the last interactive result.",
     });
   });
@@ -177,6 +201,7 @@ describe("final planning execution", () => {
       status: "failure",
       error: { message: "worker unavailable" },
       fallback: interactiveResult,
+      fallbackProvisional: true,
       fallbackReason: "Final planning failed: worker unavailable. Continuing with the last interactive result.",
     });
   });
@@ -206,5 +231,49 @@ describe("final planning execution", () => {
     expect(finalWorker.terminated).toBe(false);
     finalRequest.cancel();
     await finalRequest.promise;
+  });
+
+  it.each(['timeout', 'failure', 'canceled'] as const)("retains a validated incumbent separately after %s", async (outcome) => {
+    vi.useFakeTimers();
+    const worker = new FakeWorker();
+    const finalPlanning = finalPlanningModule().create({ workerFactory: () => worker });
+    const onProgress = vi.fn();
+    const request = finalPlanning.request(
+      { path: {}, robot: {}, plannerId: 'profiledSpline', optimize: true },
+      { onProgress },
+    );
+    const incumbent = { finalTrajectory: { totalTimeS: 3.7 } };
+    worker.resolve({ id: worker.jobs[0].id, type: 'progress', value: incumbent });
+    expect(onProgress).toHaveBeenCalledWith(incumbent);
+    expect(worker.terminated).toBe(false);
+
+    if (outcome === 'timeout') await vi.advanceTimersByTimeAsync(6_000);
+    else if (outcome === 'failure') worker.fail('worker interrupted');
+    else request.cancel();
+
+    const result = await request.promise;
+    expect(result.status).toBe(outcome);
+    expect(result.incumbent).toEqual(incumbent);
+    expect(result.value).toBeUndefined();
+    expect(result.fallbackReason).toMatch(/selected trajectory was not changed/);
+    worker.resolve({ id: worker.jobs[0].id, type: 'progress', value: { source: 'late' } });
+    expect(onProgress).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores stale progress and final messages without settling the current run", async () => {
+    const worker = new FakeWorker();
+    const finalPlanning = finalPlanningModule().create({ workerFactory: () => worker });
+    const onProgress = vi.fn();
+    const request = finalPlanning.request(
+      { path: {}, robot: {}, plannerId: 'profiledSpline', optimize: true },
+      { onProgress },
+    );
+    const id = worker.jobs[0].id;
+    worker.resolve({ id: id - 1, type: 'progress', value: { source: 'stale-progress' } });
+    worker.resolve({ id: id - 1, value: { source: 'stale-final' } });
+    expect(onProgress).not.toHaveBeenCalled();
+    expect(worker.terminated).toBe(false);
+    worker.resolve({ id, value: { source: 'current' } });
+    await expect(request.promise).resolves.toMatchObject({ status: 'success', value: { source: 'current' } });
   });
 });
