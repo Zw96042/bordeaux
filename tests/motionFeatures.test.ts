@@ -46,6 +46,56 @@ describe("motion features", () => {
 
     expect(legacy.v[1]).toBeCloseTo(1, 6);
     expect(faster.v[1]).toBeCloseTo(2, 6);
+    expect(mixed[8]).toBeCloseTo(raw[8], 10);
+    expect(smoothHeadingTransitions(
+      raw,
+      ["tangent", "tangent", "tangent"],
+      [false, false, false],
+      [0, 5, 10, 12],
+      points,
+      waypoints,
+    )).toEqual(raw);
+  });
+
+  it("applies narrow constraint ranges to every overlapping profile interval", () => {
+    const project = createDemoProject();
+    const points = Array.from({ length: 57 }, (_, index) => ({ s: index, curv: 0 })) as any;
+    const range = {
+      anchor: "param" as const, f0: 0.505, f1: 0.51,
+      maxVel: 0.25, maxAccel: 0.1, maxDecel: 0.1, maxAngVel: 10, maxAngAccel: 5,
+    };
+    const firstAfterRange = points.findIndex((point: { s: number }) => point.s / 56 > range.f1);
+    const before = firstAfterRange - 1;
+    expect(points[before].s / 56).toBeLessThan(range.f0);
+
+    const constraints = {
+      ...project.paths[0].constraints,
+      maxVel: 4, maxAccel: 10, maxDecel: 10, maxAngVel: 360, maxAngAccel: 720,
+    };
+    const velocity = PM.profile(points, constraints, 4, 4, { ranges: [range] });
+    expect(Math.max(velocity.v[before], velocity.v[firstAfterRange])).toBeLessThanOrEqual(range.maxVel);
+
+    const linearRange = { ...range, maxVel: 100, maxAngVel: 360 };
+    const linearConstraints = { ...constraints, maxVel: 100 };
+    const accelerating = PM.profile(points, linearConstraints, 0, 100, { ranges: [linearRange] });
+    const acceleration = (accelerating.v[firstAfterRange] ** 2 - accelerating.v[before] ** 2) / 2;
+    expect(acceleration).toBeLessThanOrEqual(range.maxAccel + 1e-9);
+    const decelerating = PM.profile(points, linearConstraints, 100, 0, { ranges: [linearRange] });
+    const deceleration = (decelerating.v[before] ** 2 - decelerating.v[firstAfterRange] ** 2) / 2;
+    expect(deceleration).toBeLessThanOrEqual(range.maxDecel + 1e-9);
+
+    const heading = points.map((_: unknown, index: number) => index < firstAfterRange ? 0 : Math.PI / 2);
+    const angular = PM.profile(points, constraints, 4, 4, { ranges: [{ ...range, maxVel: 4 }], heading });
+    const angularVelocity = (Math.PI / 2) / (angular.t[firstAfterRange] - angular.t[before]);
+    expect(angularVelocity).toBeLessThanOrEqual(range.maxAngVel * Math.PI / 180 + 1e-9);
+
+    const accelerationHeading = points.map((_: unknown, index: number) => index < firstAfterRange ? 0 : 0.2);
+    const angularAcceleration = PM.profile(points, linearConstraints, 100, 100, {
+      ranges: [{ ...linearRange, maxAngAccel: 1 }],
+      heading: accelerationHeading,
+    });
+    const accelerationDt = angularAcceleration.t[firstAfterRange] - angularAcceleration.t[before];
+    expect(0.2 / accelerationDt ** 2).toBeLessThanOrEqual(Math.PI / 180 + 1e-9);
   });
 
   it("acquires the first real target monotonically when Targets becomes active", () => {
@@ -82,6 +132,33 @@ describe("motion features", () => {
       }
       expect(throughTarget.at(-1)).toBeCloseTo(7 * Math.PI / 4, 8);
     }
+  });
+
+  it("preserves the incoming waypoint heading when changing from Manual to Tangent", () => {
+    const points = Array.from({ length: 5 }, (_, s) => ({ s }));
+    const waypoints = buildWaypoints([
+      { x: 0, y: 0, theta: 0 },
+      { x: 2, y: 0, theta: 60, thetaOn: true },
+      { x: 4, y: 0, theta: 0 },
+    ]);
+    const headings = smoothHeadingTransitions(
+      [0, 0.2, 0.4, 0.5, 0.6], ["manual", "tangent"], [false, false], [0, 2, 4], points, waypoints,
+    );
+
+    expect(headings[2]).toBeCloseTo(Math.PI / 3, 12);
+    expect(headings.slice(3)).toEqual([0.5, 0.6]);
+  });
+
+  it("does not snap the next sample back to an off-grid target angle", () => {
+    const points = Array.from({ length: 5 }, (_, s) => ({ s, heading: 0 }));
+    const waypoints = buildWaypoints([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 4, y: 0 }]);
+    const headings = smoothHeadingTransitions(
+      [0, 0, 0.5, 1, 1.25], ["tangent", "targets"], [false, false], [0, 1, 4], points, waypoints,
+      [{ segmentIndex: 1, distanceM: 2.5, heading: 0.9, spanEndIndex: 4 }],
+    );
+
+    expect(headings[3]).toBe(1);
+    expect(headings[4]).toBe(1.25);
   });
 
   it("honors a target on the mode boundary and protects it from a later blend", () => {
@@ -186,7 +263,7 @@ describe("motion features", () => {
     expect(Math.max(...unwrapped)).toBeLessThanOrEqual(7 * Math.PI / 4 + 0.25 * Math.PI / 180);
   });
 
-  it("places a heading-law blend before, across, or after its boundary", () => {
+  it("normalizes legacy blend placements to one automatic transition through its waypoint", () => {
     const raw = [0, 0, 0, Math.PI / 2, Math.PI / 2, Math.PI / 2, Math.PI / 2];
     const points = raw.map((_, index) => ({ s: index }));
     const base = buildWaypoints([
@@ -199,12 +276,32 @@ describe("motion features", () => {
       return smoothHeadingTransitions(raw, ["manual", "tangent"], [false, false], [0, 3, 6], points, base);
     };
 
-    expect(headingsFor("before")[3]).toBeCloseTo(Math.PI / 2, 8);
-    expect(headingsFor("split")[3]).toBeCloseTo(Math.PI / 4, 8);
-    expect(headingsFor("after")[3]).toBeCloseTo(0, 8);
+    const canonical = headingsFor("after");
+    expect(headingsFor("before")).toEqual(canonical);
+    expect(headingsFor("split")).toEqual(canonical);
+    expect(canonical[3]).toBeCloseTo(0, 8);
 
     base[1].headingTransition = { placement: "split", rotationPriority: "translation", distanceM: 2 };
     const [window] = headingTransitionWindows(base, ["manual", "tangent"], [false, false], [0, 0.5, 1], 6);
+    expect(window).toMatchObject({ waypointIndex: 1, rotationPriority: "translation" });
+    expect(window.start).toBeCloseTo(0.5, 10);
+    expect(window.end).toBeCloseTo(1, 10);
+
+    base[1].headingTransition = { placement: "after", rotationPriority: "heading", distanceM: 2 };
+    const [headingWindow] = headingTransitionWindows(base, ["manual", "tangent"], [false, false], [0, 0.5, 1], 6);
+    expect(headingWindow.start).toBeCloseTo(0.5, 10);
+  });
+
+  it("does not let hidden waypoint heading state change blend placement semantics", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "targets";
+    path.constraints.maxAngVel = 720;
+    path.constraints.maxAngAccel = 1_440;
+    path.constraints.maxAngDecel = 1_440;
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "tangent" },
+      { x: 4, y: 2, theta: 170, thetaOn: true, segType: "line", segmentHeadingMode: "targets" },
       { x: 7, y: 2, theta: 90, thetaOn: true },
     ]);
 
