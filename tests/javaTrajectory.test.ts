@@ -277,4 +277,8 @@ describe("Java trajectory export", () => {
     }));
     expect(() => buildJavaTrajectory(routineProject, generatedCatalog())).toThrow("exceeds 2000 routine nodes");
   });
+    project.routines[0].nodes = nodes;
+
+    expect(() => buildJavaTrajectory(project, generatedCatalog())).toThrow("exceeds JSON nesting depth of 40");
+  });
 });

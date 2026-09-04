@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyJavaSupportInstall,
   cancelJavaCatalogBuild,
@@ -64,7 +64,11 @@ describe("Java support installation and trusted catalog builds", () => {
     expect(contents.match(/BEGIN Bordeaux Java command support/g)).toHaveLength(1);
     expect(contents).toContain(dialect === "groovy" ? "apply from: file('.bordeaux/bordeaux.gradle')" : "apply(from = file(\".bordeaux/bordeaux.gradle\"))");
     expect(await fs.readFile(path.join(project, ".bordeaux/lib/bordeaux-runtime.jar"), "utf8")).toBe("runtime");
-    expect(await fs.readFile(path.join(project, ".bordeaux/INTEGRATION.md"), "utf8")).toContain("BordeauxBindings.generatedCapabilities(actions)");
+    const integration = await fs.readFile(path.join(project, ".bordeaux/INTEGRATION.md"), "utf8");
+    expect(integration).toContain("BordeauxBindings.generatedCapabilities(actions)");
+    expect(integration).toContain("BordeauxTrajectoryReader.read(input, pathId, bordeauxCompatibility)");
+    expect(integration).toContain("periodic(elapsedSeconds, measuredFraction)");
+    expect(integration).toContain("trajectory-generator provider");
     expect(await fs.readFile(path.join(project, ".bordeaux/bordeaux.gradle"), "utf8")).toContain("-Abordeaux.catalogId=");
     expect(await fs.readFile(path.join(project, `.bordeaux/${buildName}.before-bordeaux`), "utf8")).toContain("GradleRIO");
     await expect(inspectJavaSupport(project, sourceCatalog(), artifacts)).resolves.toMatchObject({ installed: true, supportVersion: "0.4.0", wrapperAvailable: true });
@@ -74,6 +78,18 @@ describe("Java support installation and trusted catalog builds", () => {
     await fs.writeFile(path.join(project, buildName), contents);
     await fs.writeFile(path.join(project, ".bordeaux/lib/bordeaux-runtime.jar"), "corrupted");
     await expect(inspectJavaSupport(project, sourceCatalog(), artifacts)).resolves.toMatchObject({ installed: false });
+  });
+
+  it("keeps shipped Java examples on the measured-progress event API", async () => {
+    const sources = await Promise.all([
+      fs.readFile(path.join(process.cwd(), "java/examples/RobotContainerSnippet.java"), "utf8"),
+      fs.readFile(path.join(process.cwd(), "examples/bordeaux-template-robot/src/main/java/frc/robot/RobotContainer.java"), "utf8"),
+    ]);
+
+    sources.forEach((source) => {
+      expect(source).toContain("periodic(elapsedS, measuredFraction)");
+      expect(source).not.toContain("periodic(elapsedS);");
+    });
   });
 
   it("rejects ambiguous projects, missing GradleRIO, and symlinked support directories", async () => {
@@ -92,11 +108,79 @@ describe("Java support installation and trusted catalog builds", () => {
     await expect(prepareJavaSupportInstall(linked.project, linked.artifacts)).rejects.toThrow(/regular directory/);
   });
 
+  it("bounds project-controlled files before Java support inspection reads them", async () => {
+    const { project, artifacts } = await fixture();
+    const buildFile = path.join(project, "build.gradle");
+    await fs.writeFile(buildFile, Buffer.alloc(2 * 1024 * 1024 + 1, 0x20));
+    await expect(inspectJavaSupport(project, sourceCatalog(), artifacts)).rejects.toThrow(/2097152-byte limit/);
+
+    await fs.writeFile(buildFile, "plugins { id 'edu.wpi.first.GradleRIO' version '2026.2.2' }\n");
+    await fs.mkdir(path.join(project, ".bordeaux"));
+    await fs.writeFile(path.join(project, ".bordeaux/install.json"), Buffer.alloc(64 * 1024 + 1, 0x20));
+    await expect(inspectJavaSupport(project, sourceCatalog(), artifacts)).resolves.toMatchObject({ installed: false });
+  });
+
+  it("distinguishes missing Java artifacts from invalid ones", async () => {
+    const missing = await fixture();
+    await fs.rm(path.join(missing.artifacts, "bordeaux-runtime.jar"));
+    await expect(prepareJavaSupportInstall(missing.project, missing.artifacts)).rejects.toThrow(/artifacts are missing/);
+
+    const invalid = await fixture();
+    await fs.rm(path.join(invalid.artifacts, "bordeaux-runtime.jar"));
+    await fs.mkdir(path.join(invalid.artifacts, "bordeaux-runtime.jar"));
+    await expect(prepareJavaSupportInstall(invalid.project, invalid.artifacts)).rejects.toThrow(/must be a regular file/);
+  });
+
   it("runs only the fixed wrapper task and redacts the project path", async () => {
     const { project } = await fixture();
     const result = await runJavaCatalogBuild(project);
     expect(result.output).toContain("catalog built in <robot-project>");
     expect(result.output).not.toContain(project);
+  });
+
+  it("atomically admits only one simultaneous catalog build", async () => {
+    const { project } = await fixture();
+    await writeWrapper(project,
+      "#!/bin/sh\nprintf 'started\\n' >> build-starts\nsleep 0.05\n",
+      "@echo off\r\necho started>>build-starts\r\nping 127.0.0.1 -n 2 >nul\r\n");
+
+    const outcomes = await Promise.allSettled([runJavaCatalogBuild(project), runJavaCatalogBuild(project)]);
+
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
+    expect(outcomes.find((outcome) => outcome.status === "rejected")).toMatchObject({ reason: expect.objectContaining({ message: expect.stringMatching(/already running/) }) });
+    expect((await fs.readFile(path.join(project, "build-starts"), "utf8")).trim().split(/\r?\n/)).toHaveLength(1);
+  });
+
+  it("cancels an admitted catalog build before delayed preflight can spawn", async () => {
+    const { project } = await fixture();
+    await writeWrapper(project,
+      "#!/bin/sh\nprintf 'started\\n' >> build-starts\n",
+      "@echo off\r\necho started>>build-starts\r\n");
+    const originalRealpath = fs.realpath.bind(fs);
+    let releasePreflight!: () => void;
+    let markPreflightStarted!: () => void;
+    const preflightStarted = new Promise<void>((resolve) => { markPreflightStarted = resolve; });
+    const preflightRelease = new Promise<void>((resolve) => { releasePreflight = resolve; });
+    const realpath = vi.spyOn(fs, "realpath").mockImplementationOnce(async (target) => {
+      markPreflightStarted();
+      await preflightRelease;
+      return originalRealpath(target);
+    });
+    try {
+      const running = runJavaCatalogBuild(project);
+      await preflightStarted;
+      const canceled = cancelJavaCatalogBuild(true);
+      releasePreflight();
+      const [outcome] = await Promise.allSettled([running]);
+
+      expect(canceled).toBe(true);
+      expect(outcome).toMatchObject({ status: "rejected", reason: expect.objectContaining({ message: expect.stringMatching(/canceled/) }) });
+      await expect(fs.stat(path.join(project, "build-starts"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      releasePreflight();
+      realpath.mockRestore();
+    }
   });
 
   it("enforces output, timeout, cancellation, and one-build-at-a-time limits", async () => {
@@ -120,6 +204,19 @@ describe("Java support installation and trusted catalog builds", () => {
     expect(cancelJavaCatalogBuild()).toBe(true);
     await expect(running).rejects.toThrow(/canceled/);
   });
+
+  it("reserves the build before asynchronous wrapper preflight", async () => {
+    const { project } = await fixture();
+    const results = await Promise.allSettled([runJavaCatalogBuild(project), runJavaCatalogBuild(project)]);
+    expect(results[0].status).toBe("fulfilled");
+    expect(results[1]).toMatchObject({ status: "rejected", reason: expect.objectContaining({ message: expect.stringContaining("already running") }) });
+  });
+
+  it.each([false, true])("cancels during preflight without launching the wrapper (force=%s)", async (force) => {
+    const { project } = await fixture();
+    const marker = path.join(project, "wrapper-started");
+    await writeWrapper(project,
+      "#!/bin/sh\necho started > wrapper-started\necho catalog built\n",
       "@echo off\r\necho started > wrapper-started\r\necho catalog built\r\n");
 
     const running = runJavaCatalogBuild(project);
