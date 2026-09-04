@@ -64,7 +64,11 @@ describe("Java support installation and trusted catalog builds", () => {
     expect(contents.match(/BEGIN Bordeaux Java command support/g)).toHaveLength(1);
     expect(contents).toContain(dialect === "groovy" ? "apply from: file('.bordeaux/bordeaux.gradle')" : "apply(from = file(\".bordeaux/bordeaux.gradle\"))");
     expect(await fs.readFile(path.join(project, ".bordeaux/lib/bordeaux-runtime.jar"), "utf8")).toBe("runtime");
-    expect(await fs.readFile(path.join(project, ".bordeaux/INTEGRATION.md"), "utf8")).toContain("BordeauxBindings.generatedCapabilities(actions)");
+    const integration = await fs.readFile(path.join(project, ".bordeaux/INTEGRATION.md"), "utf8");
+    expect(integration).toContain("BordeauxBindings.generatedCapabilities(actions)");
+    expect(integration).toContain("BordeauxTrajectoryReader.read(input, pathId, bordeauxCompatibility)");
+    expect(integration).toContain("periodic(elapsedSeconds, measuredFraction)");
+    expect(integration).toContain("trajectory-generator provider");
     expect(await fs.readFile(path.join(project, ".bordeaux/bordeaux.gradle"), "utf8")).toContain("-Abordeaux.catalogId=");
     expect(await fs.readFile(path.join(project, `.bordeaux/${buildName}.before-bordeaux`), "utf8")).toContain("GradleRIO");
     await expect(inspectJavaSupport(project, sourceCatalog(), artifacts)).resolves.toMatchObject({ installed: true, supportVersion: "0.4.0", wrapperAvailable: true });
@@ -119,5 +123,38 @@ describe("Java support installation and trusted catalog builds", () => {
     await expect(runJavaCatalogBuild(cancel.project)).rejects.toThrow(/already running/);
     expect(cancelJavaCatalogBuild()).toBe(true);
     await expect(running).rejects.toThrow(/canceled/);
+  });
+
+  it("reserves the build before asynchronous wrapper preflight", async () => {
+    const { project } = await fixture();
+    const results = await Promise.allSettled([runJavaCatalogBuild(project), runJavaCatalogBuild(project)]);
+    expect(results[0].status).toBe("fulfilled");
+    expect(results[1]).toMatchObject({ status: "rejected", reason: expect.objectContaining({ message: expect.stringContaining("already running") }) });
+  });
+
+  it.each([false, true])("cancels during preflight without launching the wrapper (force=%s)", async (force) => {
+    const { project } = await fixture();
+    const marker = path.join(project, "wrapper-started");
+    await writeWrapper(project,
+      "#!/bin/sh\necho started > wrapper-started\necho catalog built\n",
+      "@echo off\r\necho started > wrapper-started\r\necho catalog built\r\n");
+
+    const running = runJavaCatalogBuild(project);
+    const canceled = cancelJavaCatalogBuild(force);
+    await expect(running).rejects.toThrow(/canceled/);
+    expect(canceled).toBe(true);
+    await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await expect(runJavaCatalogBuild(project)).resolves.toMatchObject({ output: "catalog built" });
+    expect(await fs.readFile(marker, "utf8")).toContain("started");
+  });
+
+  it("releases the build reservation after preflight failures", async () => {
+    const { project } = await fixture();
+    await expect(runJavaCatalogBuild(path.join(project, "missing"))).rejects.toThrow();
+    const noWrapper = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-no-wrapper-"));
+    temporaryDirectories.push(noWrapper);
+    await expect(runJavaCatalogBuild(noWrapper)).rejects.toThrow(/wrapper/);
+    await expect(runJavaCatalogBuild(project)).resolves.toMatchObject({ output: expect.stringContaining("catalog built") });
   });
 });
