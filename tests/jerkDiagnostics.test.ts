@@ -1,3 +1,50 @@
+import { describe, expect, it } from "vitest";
+import { buildBdxExport } from "../src/shared/export/bdx";
+import { buildJavaTrajectory } from "../src/shared/export/javaTrajectory";
+import { getPlanner } from "../src/shared/planners";
+import { addJerkDiagnostics } from "../src/shared/planners/jerkDiagnostics";
+import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
+import type { JavaCommandCatalog, PlannerResult, TrajectoryPlannerId, TrajectorySample } from "../src/shared/types";
+
+const PLANNERS: TrajectoryPlannerId[] = ["profiledSpline", "optimizedTrajectory"];
+
+function measuredLinearJerk(samples: readonly TrajectorySample[]): number {
+  let linear = 0;
+  for (let index = 1; index < samples.length; index += 1) {
+    const sample = samples[index];
+    const previous = samples[index - 1];
+    const dt = sample.t - previous.t;
+    if (dt <= 1e-9) continue;
+    linear = Math.max(linear, Math.abs(sample.accelerationMps2 - previous.accelerationMps2) / dt);
+  }
+  return linear;
+}
+
+function measuredAngularJerk(samples: readonly TrajectorySample[]): number {
+  let maximum = 0;
+  let previousAcceleration: number | undefined;
+  let previousDt = 0;
+  for (let index = 1; index < samples.length; index += 1) {
+    const before = samples[index - 1];
+    const after = samples[index];
+    const dt = after.t - before.t;
+    if (dt <= 1e-9) { previousAcceleration = undefined; continue; }
+    const acceleration = (after.angularVelocityRadps - before.angularVelocityRadps) / dt;
+    if (previousAcceleration !== undefined) {
+      maximum = Math.max(maximum, Math.abs(acceleration - previousAcceleration) / ((previousDt + dt) / 2));
+    }
+    previousAcceleration = acceleration;
+    previousDt = dt;
+  }
+  return maximum * 180 / Math.PI;
+}
+
+function movingProject() {
+  const project = createDemoProject();
+  const path = project.paths[0];
+  path.constraints = {
+    ...path.constraints,
+    maxVel: 4,
     maxAccel: 10,
     maxDecel: 10,
     maxAngVel: 360,
