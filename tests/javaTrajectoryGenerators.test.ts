@@ -165,7 +165,7 @@ describe("generated trajectory capabilities", () => {
     const app = fs.readFileSync(new URL("../src/renderer/app/App.jsx", import.meta.url), "utf8");
     const panel = fs.readFileSync(new URL("../src/renderer/components/RoutinePanel.jsx", import.meta.url), "utf8");
     const inspector = fs.readFileSync(new URL("../src/renderer/components/RoutineInspector.jsx", import.meta.url), "utf8");
-    expect(app).toContain("AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId, javaProjectState.catalog)");
+    expect(app).toContain("AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId, javaProjectState.catalog, routinePlans)");
     expect(panel).toContain("A.nodeDeploymentState(node, catalog)");
     expect(panel).toContain("A.nodeTitle(node, paths, catalog)");
     expect(inspector).toContain("A.nodeDeploymentState(node, javaProject && javaProject.catalog)");
