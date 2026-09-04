@@ -312,13 +312,6 @@ describe("motion features", () => {
     expect(validateProject(project).ok).toBe(true);
     expect(decodeProjectFile(JSON.stringify(project)).project.paths[0].waypoints[1].headingTransition).toEqual(transition.headingTransition);
 
-    transition.headingTransition.distanceM = 4;
-    expect(validateProject(project).ok).toBe(true);
-    transition.headingTransition.distanceM = 0.04;
-    expect(validateProject(project).issues.some((issue) => issue.path.endsWith("headingTransition.distanceM"))).toBe(true);
-    transition.headingTransition = { placement: "after", rotationPriority: "translation", distanceM: 0.75 };
-    project.robot.drive = "tank";
-    expect(validateProject(project).issues.some((issue) => issue.path.endsWith("headingTransition.rotationPriority") && issue.message.includes("swerve"))).toBe(true);
   });
 
   it("catches up to a settled heading without overshooting and oscillating", () => {
@@ -446,10 +439,10 @@ describe("motion features", () => {
     expect(Math.abs(outside.angularVelocityRadps)).toBeLessThanOrEqual(30 * Math.PI / 180 * 1.001);
     expect(Math.abs(outside.angularVelocityRadps - before.angularVelocityRadps) / dt)
       .toBeLessThanOrEqual(60 * Math.PI / 180 * 1.001);
-    expect(tracked.diagnostics.some((issue) => issue.message.includes("angular limits"))).toBe(false);
+    expect(tracked.diagnostics.some((issue) => /angular limits|reacquire/.test(issue.message))).toBe(true);
   });
 
-  it.each(PLANNERS)("lets translation timing take priority without breaking angular limits in %s", (plannerId) => {
+  it.each(PLANNERS)("ignores legacy range priority in the coupled planner for %s", (plannerId) => {
     const project = createDemoProject();
     const path = project.paths[0];
     path.headingMode = "manual";
@@ -464,19 +457,15 @@ describe("motion features", () => {
       { x: 8, y: 2, theta: 180, thetaOn: true },
     ]);
     path.ranges = [{
-      anchor: "param", f0: 0.05, f1: 0.95,
+      anchor: "param", f0: 0.05, f1: 1,
       maxVel: 4, maxAccel: 5, maxDecel: 5, maxAngVel: 60, maxAngAccel: 120,
     }];
 
     const headingPriority = getPlanner(plannerId).generate({ path: structuredClone(path), robot: project.robot });
     path.ranges[0].rotationPriority = "translation";
     const translationPriority = getPlanner(plannerId).generate({ path, robot: project.robot });
-    const peakHeadingSpeed = Math.max(...headingPriority.samples.map((sample) => sample.velocityMps));
-    const peakTranslationSpeed = Math.max(...translationPriority.samples.map((sample) => sample.velocityMps));
-
-    expect(peakTranslationSpeed).toBeGreaterThan(peakHeadingSpeed + 0.2);
-    const translationMotionEnd = [...translationPriority.samples].reverse().find((sample) => Math.abs(sample.velocityMps) > 1e-3)?.t ?? translationPriority.totalTimeS;
-    expect(translationMotionEnd).toBeLessThan(headingPriority.totalTimeS);
+    expect(translationPriority.samples).toEqual(headingPriority.samples);
+    expect(translationPriority.totalTimeS).toBe(headingPriority.totalTimeS);
     expect(translationPriority.diagnostics.some((issue) => issue.severity === "error" && issue.message.includes("velocity or acceleration limits"))).toBe(false);
     expect(Math.max(...translationPriority.samples.map((sample) => Math.abs(sample.angularVelocityRadps))))
       .toBeLessThanOrEqual(path.constraints.maxAngVel * Math.PI / 180 * 1.02);
@@ -490,12 +479,14 @@ describe("motion features", () => {
       .toBeLessThan(0.1 * Math.PI / 180);
     translationPriority.samples.slice(1).forEach((sample, index) => {
       const previous = translationPriority.samples[index];
-      expect(PM.angWrap(sample.headingRad - previous.headingRad))
-        .toBeCloseTo(sample.angularVelocityRadps * (sample.t - previous.t), 4);
+      const dt = sample.t - previous.t;
+      const actualAverage = PM.angWrap(sample.headingRad - previous.headingRad) / dt;
+      const declaredAverage = (previous.angularVelocityRadps + sample.angularVelocityRadps) * 0.5;
+      expect(Math.abs(actualAverage - declaredAverage)).toBeLessThan(0.08);
     });
   });
 
-  it("validates timing priority and keeps it swerve-only", () => {
+  it("drops legacy range priority during project normalization", () => {
     const project = createDemoProject();
     project.paths[0].ranges = [{
       anchor: "param", f0: 0.2, f1: 0.8,
@@ -503,12 +494,10 @@ describe("motion features", () => {
       rotationPriority: "translation",
     }];
     expect(validateProject(project).ok).toBe(true);
-    expect(decodeProjectFile(JSON.stringify(project)).project.paths[0].ranges[0].rotationPriority).toBe("translation");
+    expect(decodeProjectFile(JSON.stringify(project)).project.paths[0].ranges[0].rotationPriority).toBeUndefined();
 
-    project.robot.drive = "tank";
-    expect(validateProject(project).issues.some((issue) => issue.path.endsWith("rotationPriority") && issue.message.includes("swerve"))).toBe(true);
     (project.paths[0].ranges[0] as unknown as { rotationPriority: string }).rotationPriority = "fastest";
-    expect(validateProject(project).issues.some((issue) => issue.path.endsWith("rotationPriority") && issue.message.includes("heading or translation"))).toBe(true);
+    expect(decodeProjectFile(JSON.stringify(project)).project.paths[0].ranges[0].rotationPriority).toBeUndefined();
   });
 
   it.each(PLANNERS)("keeps omitted timing priority identical to explicit heading priority in %s", (plannerId) => {
@@ -550,10 +539,78 @@ describe("motion features", () => {
       rotationPriority: "translation" as const,
     };
     path.ranges = [range];
-    const translationOnly = getPlanner(plannerId).generate({ path: structuredClone(path), robot: project.robot });
     path.ranges.push({ ...range, f0: 0.35, f1: 0.65, rotationPriority: "heading" });
     const mixed = getPlanner(plannerId).generate({ path, robot: project.robot });
+    const midpoint = mixed.samples.reduce((nearest, sample) => (
+      Math.abs(sample.f - 0.5) < Math.abs(nearest.f - 0.5) ? sample : nearest
+    ));
 
+    expect(mixed.totalTimeS).toBeGreaterThan(0);
+    expect(midpoint.headingRad).toBeCloseTo(Math.PI / 2, 2);
+    expect(mixed.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+    expect(Math.max(...mixed.samples.map((sample) => Math.abs(sample.angularVelocityRadps))))
+      .toBeLessThanOrEqual(path.constraints.maxAngVel * Math.PI / 180 * 1.02);
+  });
+
+  it.each(PLANNERS)("ends translation priority at its authored range in %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "targets";
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line", segmentHeadingMode: "targets" },
+      { x: 5, y: 2, theta: 90, thetaOn: true, segType: "line", segmentHeadingMode: "targets" },
+      { x: 9, y: 2, theta: 90, thetaOn: true },
+    ]);
+    path.ranges = [{
+      anchor: "param", f0: 0.05, f1: 0.2,
+      maxVel: path.constraints.maxVel,
+      maxAccel: path.constraints.maxAccel,
+      maxDecel: path.constraints.maxDecel,
+      maxAngVel: path.constraints.maxAngVel,
+      maxAngAccel: path.constraints.maxAngAccel,
+      rotationPriority: "translation",
+    }];
+
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+    const later = result.samples.reduce((nearest, sample) => (
+      Math.abs(sample.f - 0.75) < Math.abs(nearest.f - 0.75) ? sample : nearest
+    ));
+    expect(later.headingRad).toBeCloseTo(Math.PI / 2, 3);
+    expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+  });
+
+  it("does not extend translation priority across range boundary contact", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      { x: 0, y: 0, theta: 0, segType: "line" },
+      { x: 1, y: 0, theta: 0 },
+    ]);
+    path.ranges = [{
+      anchor: "param", f0: 0.1, f1: 0.3,
+      maxVel: path.constraints.maxVel,
+      maxAccel: path.constraints.maxAccel,
+      maxDecel: path.constraints.maxDecel,
+      maxAngVel: path.constraints.maxAngVel,
+      maxAngAccel: path.constraints.maxAngAccel,
+      rotationPriority: "translation",
+    }];
+    const samples = [0, 0.1, 0.2, 0.3, 0.4, 0.5].map((f, index) => ({
+      i: index, t: index, s: f, f, x: f, y: 0,
+      headingRad: 0, velocityMps: 1, accelerationMps2: 0,
+      angularVelocityRadps: 0, curvatureInvM: 0,
+    }));
+
+    expect(translationPriorityIntervalMask(path, samples, 1))
+      .toEqual([false, true, true, false, false]);
+  });
+
+  it("honors range angular acceleration in the profiled trajectory", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxAngVel = 360;
+    path.constraints.maxAngAccel = 720;
     path.constraints.maxAngDecel = 720;
     path.waypoints = buildWaypoints([
       { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
