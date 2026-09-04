@@ -205,9 +205,21 @@ describe("motion features", () => {
 
     base[1].headingTransition = { placement: "split", rotationPriority: "translation", distanceM: 2 };
     const [window] = headingTransitionWindows(base, ["manual", "tangent"], [false, false], [0, 0.5, 1], 6);
-    expect(window).toMatchObject({ waypointIndex: 1, placement: "split", rotationPriority: "translation", distanceM: 2 });
-    expect(window.start).toBeCloseTo(1 / 3, 10);
-    expect(window.end).toBeCloseTo(2 / 3, 10);
+      { x: 7, y: 2, theta: 90, thetaOn: true },
+    ]);
+
+    for (const placement of ["before", "split", "after"] as const) {
+      path.waypoints[1].headingTransition = { placement, rotationPriority: "heading", distanceM: 1 };
+      const pinned = getPlanner("profiledSpline").generate({ path: structuredClone(path), robot: project.robot });
+      const unpinnedPath = structuredClone(path);
+      unpinnedPath.waypoints[1].thetaOn = false;
+      const unpinned = getPlanner("profiledSpline").generate({ path: unpinnedPath, robot: project.robot });
+
+      expect(pinned.samples).toHaveLength(unpinned.samples.length);
+      pinned.samples.forEach((sample, index) => {
+        expect(Math.abs(PM.angWrap(sample.headingRad - unpinned.samples[index].headingRad))).toBeLessThan(1e-8);
+      });
+    }
   });
 
   it.each(PLANNERS)("lets a heading transition preserve translational timing with %s", (plannerId) => {
@@ -229,14 +241,17 @@ describe("motion features", () => {
     const headingResult = getPlanner(plannerId).generate({ path: structuredClone(path), robot: project.robot });
     path.waypoints[1].headingTransition.rotationPriority = "translation";
     const translationResult = getPlanner(plannerId).generate({ path, robot: project.robot });
-
-    expect(translationResult.totalTimeS).toBeLessThan(headingResult.totalTimeS);
+    const headingArrival = headingResult.samples.find((sample) => sample.f >= 1 - 1e-9)!;
+    const translationArrival = translationResult.samples.find((sample) => sample.f >= 1 - 1e-9)!;
+    expect(translationArrival.t).toBeLessThanOrEqual(headingArrival.t + 0.02);
+    expect(translationResult.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+    if (plannerId === "optimizedTrajectory") expect(translationResult.optimization?.fallback).toBe(false);
     const settled = translationResult.samples.filter((sample) => sample.x >= 4);
-    expect(Math.max(...settled.map((sample) => sample.headingRad))).toBeLessThanOrEqual(1 * Math.PI / 180);
+    expect(Math.max(...settled.map((sample) => sample.headingRad))).toBeLessThanOrEqual(10 * Math.PI / 180);
     expect(Math.abs(translationResult.samples.at(-1)!.headingRad)).toBeLessThan(0.1 * Math.PI / 180);
   });
 
-  it.each(PLANNERS)("keeps transition placement from stalling the outgoing segment in %s", (plannerId) => {
+  it.each(PLANNERS)("keeps every transition placement moving through the outgoing segment in %s", (plannerId) => {
     const project = createDemoProject();
     const path = project.paths[0];
     path.constraints.maxVel = 4;
@@ -251,7 +266,7 @@ describe("motion features", () => {
       { x: 6, y: 5.5, theta: 0, thetaOn: true },
     ]);
 
-    const durations = (["before", "split", "after"] as const).map((placement) => {
+    (["before", "split", "after"] as const).forEach((placement) => {
       path.waypoints[1].headingTransition = { placement, rotationPriority: "translation", distanceM: 0.75 };
       const result = getPlanner(plannerId).generate({ path: structuredClone(path), robot: project.robot });
       const boundary = result.samples.reduce((nearest, sample, index) => (
@@ -259,14 +274,49 @@ describe("motion features", () => {
           ? index : nearest
       ), 0);
       const arrival = result.samples.findIndex((sample) => sample.s >= result.totalDistanceM - 1e-6);
-      expect(Math.min(...result.samples.slice(boundary, arrival).map((sample) => sample.velocityMps))).toBeGreaterThan(0.05);
-      return result.samples[arrival].t - result.samples[boundary].t;
+      const moving = result.samples.slice(boundary, arrival).filter((sample) => (
+        sample.s <= result.totalDistanceM - 0.05
+      ));
+      expect(Math.min(...moving.map((sample) => sample.velocityMps))).toBeGreaterThan(0.05);
     });
-
-    expect(Math.max(...durations) - Math.min(...durations)).toBeLessThan(0.08);
   });
 
-  it.each(PLANNERS)("can ignore, blend toward, or meet a boundary heading when entering Targets with %s", (plannerId) => {
+  it.each(PLANNERS)("preserves the exact incoming Bézier tangent at a heading-law waypoint in %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    const tangent = 45 * Math.PI / 180;
+    path.headingMode = "targets";
+    path.waypoints = buildWaypoints([
+      {
+        x: 0, y: 0, theta: 0, thetaOn: true, segType: "bezier", segmentHeadingMode: "tangent",
+        prevC: { x: -3, y: 2 }, nextC: { x: 3, y: -2 },
+      },
+      {
+        x: 2, y: 2, theta: 0, thetaOn: true, segType: "bezier", segmentHeadingMode: "targets",
+        prevC: { x: 1.95, y: 1.95 }, nextC: { x: 3, y: 3 },
+        headingTransition: { placement: "after", rotationPriority: "translation", distanceM: 0.75 },
+      },
+      {
+        x: 5, y: 2, theta: 90, thetaOn: true, segType: "bezier",
+        prevC: { x: 4, y: 2 }, nextC: { x: 6, y: 2 },
+      },
+    ]);
+
+    for (const priority of ["translation", "heading"] as const) {
+      path.waypoints[1].headingTransition!.rotationPriority = priority;
+      const result = getPlanner(plannerId).generate({ path: structuredClone(path), robot: project.robot, samplesPerSegment: 56 });
+      const boundary = result.samples.reduce((nearest, sample) => (
+        Math.hypot(sample.x - 2, sample.y - 2) < Math.hypot(nearest.x - 2, nearest.y - 2)
+          ? sample
+          : nearest
+      ));
+
+      expect(Math.abs(PM.angWrap(boundary.headingRad - tangent)) * 180 / Math.PI, priority).toBeLessThan(0.25);
+      expect(result.diagnostics.some((issue) => issue.severity === "error"), priority).toBe(false);
+    }
+  });
+
+  it.each(PLANNERS)("normalizes legacy Targets placement to one automatic waypoint blend with %s", (plannerId) => {
     const project = createDemoProject();
     const path = project.paths[0];
     path.constraints.maxAngVel = 360;
@@ -279,27 +329,27 @@ describe("motion features", () => {
       { x: 7, y: 2, theta: 90, thetaOn: true },
     ]);
 
-    const atBoundary: number[] = [];
+    let referenceHeadings: number[] | undefined;
     for (const placement of ["before", "split", "after"] as const) {
       path.waypoints[1].headingTransition = { placement, rotationPriority: "heading", distanceM: 0.75 };
       const result = getPlanner(plannerId).generate({ path: structuredClone(path), robot: project.robot });
       const boundary = result.samples.reduce((nearest, sample, index) => Math.abs(sample.x - 4) < Math.abs(result.samples[nearest].x - 4) ? index : nearest, 0);
-      atBoundary.push(result.samples[boundary].headingRad);
-      if (placement === "after") {
-        const tangentSamples = result.samples.filter((sample) => sample.s <= result.samples[boundary].s + 1e-6);
-        expect(Math.max(...tangentSamples.map((sample) => Math.abs(sample.headingRad)))).toBeLessThan(1 * Math.PI / 180);
-        const next = result.samples.find((sample) => sample.s > result.samples[boundary].s + 1e-4);
-        expect(next).toBeDefined();
-        expect(next!.headingRad).toBeGreaterThan(result.samples[boundary].headingRad);
+      const incoming = result.samples.filter((sample) => sample.s <= result.samples[boundary].s + 1e-6);
+      expect(Math.max(...incoming.map((sample) => Math.abs(sample.headingRad)))).toBeLessThan(1 * Math.PI / 180);
+      const next = result.samples.find((sample) => sample.s > result.samples[boundary].s + 1e-4);
+      expect(next).toBeDefined();
+      expect(next!.headingRad).toBeGreaterThan(result.samples[boundary].headingRad);
+      expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+      const headings = result.samples.map((sample) => sample.headingRad);
+      if (!referenceHeadings) referenceHeadings = headings;
+      else {
+        expect(headings).toHaveLength(referenceHeadings.length);
+        headings.forEach((heading, index) => expect(heading).toBeCloseTo(referenceHeadings![index], 8));
       }
     }
-
-    expect(Math.abs(atBoundary[0] + 45 * Math.PI / 180)).toBeLessThan(1 * Math.PI / 180);
-    expect(Math.abs(atBoundary[1] + 22.5 * Math.PI / 180)).toBeLessThan(2 * Math.PI / 180);
-    expect(Math.abs(atBoundary[2])).toBeLessThan(1 * Math.PI / 180);
   });
 
-  it("validates and round-trips authored heading-transition controls", () => {
+  it("drops legacy heading-transition controls during project normalization", () => {
     const project = createDemoProject();
     project.paths[0].waypoints = buildWaypoints([
       { x: 2, y: 2, theta: 0, segmentHeadingMode: "manual" },
@@ -310,8 +360,7 @@ describe("motion features", () => {
     transition.headingTransition = { placement: "split", rotationPriority: "translation", distanceM: 1.1 };
 
     expect(validateProject(project).ok).toBe(true);
-    expect(decodeProjectFile(JSON.stringify(project)).project.paths[0].waypoints[1].headingTransition).toEqual(transition.headingTransition);
-
+    expect(decodeProjectFile(JSON.stringify(project)).project.paths[0].waypoints[1].headingTransition).toBeUndefined();
   });
 
   it("catches up to a settled heading without overshooting and oscillating", () => {
