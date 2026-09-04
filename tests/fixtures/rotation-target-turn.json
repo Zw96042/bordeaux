@@ -1,0 +1,115 @@
+{
+  "path": {
+    "id": "path_9d61259d-74cd-4787-b5d6-43c0dc6d43c1",
+    "name": "NewPath",
+    "waypoints": [
+      {
+        "linked": true,
+        "thetaOn": true,
+        "theta": 0,
+        "stop": false,
+        "x": 5.02507854786257,
+        "y": 7.641594320540294,
+        "prevC": {
+          "x": 4.24107854786257,
+          "y": 7.641594320540294
+        },
+        "nextC": {
+          "x": 5.809078547862569,
+          "y": 7.641594320540294
+        },
+        "segmentHeadingMode": "tangent"
+      },
+      {
+        "linked": true,
+        "thetaOn": true,
+        "theta": -89.36700329784237,
+        "stop": false,
+        "x": 9.415774256491545,
+        "y": 5.324742753821882,
+        "prevC": {
+          "x": 9.397359691293024,
+          "y": 7.8776527273672485
+        },
+        "nextC": {
+          "x": 9.429638165509258,
+          "y": 3.402714662358261
+        },
+        "segType": "bezier",
+        "corner": false,
+        "segmentHeadingMode": "targets"
+      },
+      {
+        "x": 6.614460920044535,
+        "y": 5.144581478637959,
+        "prevC": {
+          "x": 7.692777696336398,
+          "y": 5.005915838735494
+        },
+        "nextC": {
+          "x": 5.722556108783715,
+          "y": 5.259275559361501
+        },
+        "linked": true,
+        "thetaOn": true,
+        "theta": -179.13076200778661,
+        "stop": false,
+        "segType": "bezier",
+        "segmentHeadingMode": "targets",
+        "corner": false
+      },
+      {
+        "x": 3.5749126987721414,
+        "y": 5.140037730536244,
+        "prevC": {
+          "x": 4.545655154813723,
+          "y": 5.168311434850836
+        },
+        "nextC": {
+          "x": 2.604170242730558,
+          "y": 5.111764026221652
+        },
+        "linked": true,
+        "thetaOn": true,
+        "theta": -37,
+        "stop": false
+      }
+    ],
+    "targets": [
+      {
+        "f": 0.5068867850214318,
+        "deg": -111.37836917640797,
+        "d": 6.201,
+        "anchor": "dist"
+      },
+      {
+        "f": 0.5909550861829231,
+        "deg": 178,
+        "d": 7.23,
+        "anchor": "dist"
+      }
+    ],
+    "markers": [],
+    "ranges": [],
+    "constraints": {
+      "maxVel": 4.2,
+      "maxAccel": 6.5,
+      "maxDecel": 6.5,
+      "maxAngVel": 540,
+      "maxAngAccel": 720,
+      "maxAngDecel": 720,
+      "maxJerk": 0,
+      "maxAngJerk": 0
+    },
+    "headingMode": "targets",
+    "startVel": 0,
+    "goalVel": 0
+  },
+  "robot": {
+    "drive": "swerve",
+    "w": 0.84,
+    "l": 0.84,
+    "heightM": 0.5,
+    "maxSpeed": 5
+  }
+}
