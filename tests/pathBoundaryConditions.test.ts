@@ -1,3 +1,10 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+import { createDemoProject, buildWaypoints } from "../src/shared/project/defaults";
+import { setWaypointFacing } from "../src/renderer/lib/pathEditing";
+import { getPlanner } from "../src/shared/planners";
+import { buildJavaTrajectory } from "../src/shared/export/javaTrajectory";
 import type { JavaCommandCatalog } from "../src/shared/types";
 // @ts-expect-error The inspector is a JavaScript component.
 import { ContextInspector } from "../src/renderer/components/ContextInspector";

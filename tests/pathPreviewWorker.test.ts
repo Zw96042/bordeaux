@@ -156,4 +156,15 @@ describe("path preview worker final optimization", () => {
     });
     expect(result).not.toHaveProperty("value");
   });
+      maxAngVel: path.constraints.maxAngVel,
+      maxAngAccel: path.constraints.maxAngAccel,
+      rotationPriority: "translation",
+    }];
+
+    const result = processPathPreviewJob({
+      id: 90, quality: "final", plannerId: "profiledSpline", path, robot: project.robot, perSegment: 56,
+    });
+    expect(result.value).toBeUndefined();
+    expect(result.error?.message).toMatch(/infeasible|constraint|endpoint|heading/i);
+  });
 });
