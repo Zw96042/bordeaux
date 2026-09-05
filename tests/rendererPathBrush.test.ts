@@ -1,3 +1,108 @@
+      prevC: { x: 4.9, y: 3.4 },
+      nextC: { x: 6.1, y: 4.6 },
+      linked: false,
+      theta: 0,
+      thetaOn: false,
+      stop: false,
+      segType: "bezier",
+    });
+    const authored = { x: 5.5, y: 4, nextC: { x: 6.1, y: 4.6 } };
+    const center = { x: 4.2, y: 4.4 };
+    const radius = 1.2;
+    expect(Math.hypot(authored.x - center.x, authored.y - center.y)).toBeGreaterThan(radius);
+
+    brush().apply(path, { kind: "push", previous: { x: 4.2, y: 4 }, center, radius, strength: 1 });
+
+    const survivor = path.waypoints.find((waypoint) => waypoint.x === authored.x && waypoint.y === authored.y);
+    expect(survivor).toBeDefined();
+    expect(survivor).toMatchObject({ nextC: authored.nextC, linked: false });
+  });
+
+  it("preserves local constraint-range anchors when a segment is split", () => {
+    const path = straightPath();
+    path.ranges = [{ anchor: "wp", w0: 0, t0: 0.25, w1: 0, t1: 0.75 }];
+    brush().apply(path, {
+      kind: "push",
+      previous: { x: 5.5, y: 4 },
+      center: { x: 5.5, y: 4 },
+      radius: 4,
+      strength: 1,
+    });
+
+    const position = (waypointIndex: number, local: number) => {
+      const start = path.waypoints[waypointIndex];
+      const end = path.waypoints[waypointIndex + 1];
+      const oneMinusT = 1 - local;
+      return oneMinusT ** 3 * start.x
+        + 3 * oneMinusT ** 2 * local * start.nextC.x
+        + 3 * oneMinusT * local ** 2 * end.prevC.x
+        + local ** 3 * end.x;
+    };
+    const range = path.ranges[0];
+    expect(position(range.w0, range.t0 ?? 0)).toBeCloseTo(3.25, 2);
+    expect(position(range.w1, range.t1 ?? 0)).toBeCloseTo(7.75, 2);
+  });
+
+  it("remaps split ranges by segment arclength rather than Bezier parameter", () => {
+    const path = straightPath();
+    path.waypoints[0].x = 1;
+    path.waypoints[0].prevC.x = 1;
+    path.waypoints[0].nextC.x = 16;
+    path.waypoints[1].x = 16.5;
+    path.waypoints[1].prevC.x = 16;
+    path.waypoints[1].nextC.x = 16.5;
+    path.ranges = [{ anchor: "wp", w0: 0, t0: 0.4, w1: 0, t1: 0.6 }];
+    const before = path.ranges.map((range) => [
+      anchorFraction(path, range.w0, range.t0),
+      anchorFraction(path, range.w1, range.t1),
+    ]);
+
+    const result = brush().apply(path, {
+      kind: "push",
+      previous: { x: 12.8, y: 4 },
+      center: { x: 12.8, y: 4 },
+      radius: 3,
+      strength: 1,
+    });
+
+    expect(result.added).toBeGreaterThan(0);
+    expect(anchorFraction(path, path.ranges[0].w0, path.ranges[0].t0)).toBeCloseTo(before[0][0], 4);
+    expect(anchorFraction(path, path.ranges[0].w1, path.ranges[0].t1)).toBeCloseTo(before[0][1], 4);
+  });
+
+  it("refuses a smooth merge that would reshape the curve outside the brush", () => {
+    // Merging rewrites both neighbours' handles, which reach past a small brush. Sculpt a
+    // curve first so the span around the merge candidate carries real curvature.
+    const path = straightPath();
+    const pathBrush = brush();
+    pathBrush.apply(path, { kind: "push", previous: { x: 5.5, y: 4 }, center: { x: 5.5, y: 5 }, radius: 2.4, strength: 1 });
+    pathBrush.apply(path, { kind: "push", previous: { x: 5.5, y: 5 }, center: { x: 6.2, y: 5.3 }, radius: 2.4, strength: 1 });
+
+    const center = { x: 4.5, y: 4.7 };
+    const radius = 0.8;
+    const before = samplePath(path);
+
+    pathBrush.apply(path, { kind: "smooth", previous: { x: 4.35, y: 4.65 }, center, radius, strength: 0.4 });
+
+    // Samples the brush could not reach must still lie on the curve. Accepting the merge
+    // here would drag them roughly 2cm.
+    const after = samplePath(path);
+    const outside = before.filter((sample) => Math.hypot(sample.x - center.x, sample.y - center.y) > radius);
+    expect(outside.length).toBeGreaterThan(0);
+    const drift = Math.max(...outside.map((sample) => Math.min(...after.map((other) => Math.hypot(sample.x - other.x, sample.y - other.y)))));
+    expect(drift).toBeLessThan(0.002);
+  });
+
+  it("removes redundant waypoints while preserving local range positions", () => {
+    const path = straightPath();
+    path.waypoints.splice(1, 0, {
+      x: 5.5,
+      y: 4,
+      prevC: { x: 4, y: 4 },
+      nextC: { x: 7, y: 4 },
+      linked: true,
+      theta: 0,
+      thetaOn: false,
       stop: false,
       segType: "bezier",
     });
