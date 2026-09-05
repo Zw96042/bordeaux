@@ -255,6 +255,11 @@ describe("renderer path preview scheduler", () => {
     expect(workerIndex).toBe(3);
     workers[2].resolve({ id: nextRevision, value: { recovered: "worker" }, durationMs: 1 });
     expect(preview.getSnapshot()).toMatchObject({ status: "ready", revision: nextRevision, value: { recovered: "worker" } });
+    };
+    const module = previewModule();
+
+    expect(module.directPreviewIsSafe(path, 14)).toBe(false);
+    expect(module.directPreviewIsSafe(path, 56)).toBe(false);
   });
 
   it("recovers when posting to the worker throws", async () => {
