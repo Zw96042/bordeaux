@@ -109,8 +109,45 @@ describe("planner correctness boundaries", () => {
     expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
   });
 
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 9, y: 2, theta: 180, thetaOn: true },
+    ]);
+    path.ranges = [{
+      anchor: "param", f0: 0, f1: 1,
+      maxVel: path.constraints.maxVel,
+      maxAccel: path.constraints.maxAccel,
+      maxDecel: path.constraints.maxDecel,
+      maxAngVel: path.constraints.maxAngVel,
+      maxAngAccel: 1,
+    }];
+
+    const result = profiledSplinePlanner.generate({ path, robot: project.robot });
+
+    expect(maxAngularAcceleration(result.samples)).toBeLessThanOrEqual(Math.PI / 180 * 1.02);
+  });
+
+  it("never exports samples that exceed authored angular acceleration", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "tangent";
+    path.constraints.maxAngAccel = 30;
+    path.constraints.maxAngDecel = 30;
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 3.488662326708436 },
+      { x: 5, y: 1.07577219652012 },
+      { x: 10, y: 1.1318204896524549 },
+      { x: 15, y: 6.9169465894810855 },
+    ]);
+
+    const exported = buildBdxExport(project).paths[0];
+
+    expect(maxAngularAcceleration(exported.samples))
+      .toBeLessThanOrEqual(path.constraints.maxAngAccel * Math.PI / 180 * 1.02);
+  });
+
   it("rejects oversized stationary timelines before allocating their samples", () => {
     const project = createDemoProject();
+    project.paths[0].waypoints.at(-1)!.stop = true;
     project.paths[0].waypoints.at(-1)!.wait = 20_000;
 
     const base = profiledSplinePlanner.generate({ path: project.paths[0], robot: project.robot });
@@ -120,6 +157,37 @@ describe("planner correctness boundaries", () => {
 });
 
 describe("project validation boundaries", () => {
+  it.each(["profiledSpline", "optimizedTrajectory"] as const)("rejects zero angular deceleration before %s planning", (plannerId) => {
+    const project = createDemoProject();
+    project.plannerId = plannerId;
+    project.paths[0].constraints.maxAngDecel = 0;
+    project.paths[0].waypoints.at(-1)!.stop = true;
+    project.paths[0].waypoints.at(-1)!.turnInPlace = { headingDeg: 90, direction: "counterclockwise" };
+
+    expect(validateProject(project).issues).toContainEqual(expect.objectContaining({
+      path: "$.paths[0].constraints.maxAngDecel",
+      message: "maxAngDecel must be greater than zero",
+    }));
+    expect(() => getPlanner(plannerId).generate({ path: project.paths[0], robot: project.robot }))
+      .toThrow("maxAngDecel must be greater than zero");
+    expect(() => buildBdxExport(project)).toThrow("maxAngDecel must be greater than zero");
+  });
+
+  it("requires a stopped waypoint for a positive wait", () => {
+    const project = createDemoProject();
+    project.paths[0].waypoints = buildWaypoints([
+      { x: 1, y: 2, segType: "line" },
+      { x: 5, y: 2, wait: 1, stop: false, segType: "line" },
+      { x: 9, y: 2 },
+    ]);
+
+    expect(validateProject(project).issues).toContainEqual(expect.objectContaining({
+      path: "$.paths[0].waypoints[1].wait",
+      message: expect.stringContaining("stopped waypoint"),
+    }));
+    expect(() => buildBdxExport(project)).toThrow(/stopped waypoint/);
+  });
+
   it("rejects deeply nested routines without overflowing during migration", () => {
     const project = createDemoProject() as unknown as Record<string, any>;
     let nodes: unknown[] = [];

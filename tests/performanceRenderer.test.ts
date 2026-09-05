@@ -1,3 +1,40 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+// @ts-expect-error The preview worker is an intentional JavaScript module.
+import { applyFinalTrajectoryToPreview } from '../src/renderer/assets/path-preview-worker';
+// @ts-expect-error Routine playback is an intentional JavaScript module.
+import { AUTO } from '../src/renderer/lib/routineModel';
+// @ts-expect-error Renderer path math is an intentional JavaScript module.
+import { PM } from '../src/renderer/lib/pathMath';
+// @ts-expect-error The preview scheduler is an intentional JavaScript module.
+import { PathPreview } from '../src/renderer/assets/path-preview';
+import { createDemoProject } from '../src/shared/project/defaults';
+
+function fixture(count = 5) {
+  const samples = Array.from({ length: count }, (_, index) => ({
+    i: index, t: index, f: index / (count - 1), s: index, x: index, y: 0,
+    headingRad: index * 0.1, velocityMps: index, accelerationMps2: -index,
+    angularVelocityRadps: index * 0.2, curvatureInvM: index * 0.3,
+  }));
+  return {
+    derived: { sample: { length: count - 1, pts: samples.map(({ x, y, s }) => ({ x, y, s })) }, prof: { holds: [], turns: [], jiggles: [] }, metrics: {}, rev: false },
+    trajectory: { samples, stationaryActions: [], totalTimeS: count - 1 },
+  };
+}
+
+afterEach(() => vi.restoreAllMocks());
+
+describe('final trajectory projection performance', () => {
+  it('projects dense monotonic trajectories without a full sample scan per geometry point', () => {
+    const { derived, trajectory } = fixture(2000);
+    let fractionReads = 0;
+    for (const sample of trajectory.samples) {
+      const fraction = sample.f;
+      Object.defineProperty(sample, 'f', { get() { fractionReads += 1; return fraction; } });
+    }
+    const result = applyFinalTrajectoryToPreview(derived, trajectory);
+    expect(result.prof.t).toEqual(trajectory.samples.map((sample) => sample.t));
+    expect(result.prof.v).toEqual(trajectory.samples.map((sample) => sample.velocityMps));
+    expect(result.metrics.accel).toEqual(trajectory.samples.map((sample) => sample.accelerationMps2));
     expect(result.metrics.omega).toEqual(trajectory.samples.map((sample) => sample.angularVelocityRadps));
     expect(result.metrics.curv).toEqual(trajectory.samples.map((sample) => sample.curvatureInvM));
     expect(fractionReads).toBeLessThan(2000 * 80);
