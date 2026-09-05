@@ -1,3 +1,108 @@
+    const pathBrush = brush();
+    const stroke = { kind: "push", previous: { x: 5, y: 4 }, center: { x: 5.1, y: 4.2 }, radius: 1, strength: 0.6 };
+    const first = pathBrush.apply(path, stroke);
+    const count = path.waypoints.length;
+    const second = pathBrush.apply(path, { ...stroke, previous: stroke.center, center: { x: 5.2, y: 4.3 } });
+
+    expect(first.added).toBeGreaterThan(0);
+    expect(second.added).toBeLessThanOrEqual(2);
+    expect(path.waypoints.length).toBeLessThanOrEqual(count + 2);
+  });
+
+  it("smooths noisy waypoints and twirls a curve around the brush center", () => {
+    const path = straightPath();
+    const pathBrush = brush();
+    pathBrush.apply(path, { kind: "push", previous: { x: 5.5, y: 4 }, center: { x: 5.5, y: 5.2 }, radius: 2, strength: 1 });
+    const peakBefore = Math.max(...path.waypoints.map((waypoint) => waypoint.y));
+    pathBrush.apply(path, { kind: "smooth", previous: { x: 5.3, y: 5 }, center: { x: 5.7, y: 5 }, radius: 2.2, strength: 1 });
+    const peakAfter = Math.max(...path.waypoints.map((waypoint) => waypoint.y));
+    expect(peakAfter).toBeLessThan(peakBefore);
+
+    const before = path.waypoints.map(({ x, y }) => ({ x, y }));
+    pathBrush.apply(path, { kind: "twirl", previous: { x: 5.2, y: 4.7 }, center: { x: 5.8, y: 4.7 }, radius: 2, strength: 0.8 });
+    expect(path.waypoints.some((waypoint, index) => Math.hypot(waypoint.x - before[index].x, waypoint.y - before[index].y) > 0.01)).toBe(true);
+  });
+
+  // A segment whose shape is generated from its endpoints, not its handles. Subdividing or
+  // retangenting one would silently reinterpret it as a Bézier.
+  it.each(["arc", "clothoid"])("leaves %s segments untouched", (segType) => {
+    const path: Path = {
+      waypoints: [
+        { x: 1, y: 4, prevC: { x: 1, y: 4 }, nextC: { x: 3, y: 4 }, linked: true, theta: 0, thetaOn: true, stop: false, segType },
+        { x: 6, y: 4, prevC: { x: 4, y: 4 }, nextC: { x: 8, y: 4 }, linked: true, theta: 0, thetaOn: false, stop: false, segType },
+        { x: 12, y: 4, prevC: { x: 10, y: 4 }, nextC: { x: 12, y: 4 }, linked: true, theta: 0, thetaOn: true, stop: false },
+      ],
+      ranges: [],
+    };
+    const snapshot = JSON.stringify(path.waypoints);
+
+    const result = brush().apply(path, { kind: "push", previous: { x: 6, y: 4 }, center: { x: 6, y: 4.6 }, radius: 1.5, strength: 1 });
+
+    expect(result).toMatchObject({ added: 0, removed: 0, changed: false });
+    expect(JSON.stringify(path.waypoints)).toBe(snapshot);
+  });
+
+  it("confines a small drag to the brush on a curved path", () => {
+    const path = curvedPath();
+    const center = { x: 5, y: 4 };
+    const radius = 1;
+    const before = samplePath(path);
+
+    // A 1 cm drag. Before rim anchoring this bent the neighbouring segments by ~0.27 m.
+    brush().apply(path, { kind: "push", previous: { x: center.x, y: center.y - 0.01 }, center, radius, strength: 1 });
+
+    const after = samplePath(path);
+    expect(driftOutside(before, after, center, radius)).toBeLessThan(0.001);
+    // The stroke still did its job inside the brush.
+    expect(distanceToSamples(center, after)).toBeGreaterThan(0.002);
+  });
+
+  it("pins the outside edge when a tight curve enters a small brush", () => {
+    const path: Path = {
+      waypoints: [
+        { x: 1.5, y: 2.357286002021283, prevC: { x: 0.13400839447954405, y: 1.7796357775122171 }, nextC: { x: 2.0551417665539167, y: 2.5920442280515577 }, linked: true, theta: 0, thetaOn: true, stop: false, segType: "bezier" },
+        { x: 5, y: 4.692719192709774, prevC: { x: 3.8768699890705296, y: 4.777529440879848 }, nextC: { x: 6.188715024037764, y: 4.602956462472776 }, linked: true, theta: 0, thetaOn: false, stop: false, segType: "bezier" },
+        { x: 8.5, y: 6.251226670574397, prevC: { x: 7.552763727148848, y: 4.351259580892702 }, nextC: { x: 8.876854514094784, y: 7.007121683149142 }, linked: true, theta: 0, thetaOn: false, stop: false, segType: "bezier" },
+        { x: 12, y: 1.3511616117320955, prevC: { x: 11.502353800164393, y: 0.8821462698795819 }, nextC: { x: 13.730569620727616, y: 2.982167138416041 }, linked: true, theta: 0, thetaOn: true, stop: false, segType: "bezier" },
+      ],
+      ranges: [],
+    };
+    const center = { x: 8.565781697702949, y: 6.350418574169616 };
+    const radius = 0.22996919080615044;
+    const before = samplePath(path, 600);
+
+    brush().apply(path, {
+      kind: "push",
+      previous: { x: 8.557453245336374, y: 6.355953633444609 },
+      center,
+      radius,
+      strength: 1,
+    });
+
+    // Without an entering-side exterior anchor, this moved geometry 1.81 m from the
+    // cursor by more than 1.6 cm.
+    expect(driftOutside(before, samplePath(path, 600), center, radius)).toBeLessThan(0.001);
+  });
+
+  // The hardest case for locality: a waypoint carrying long, hand-authored handles, so any
+  // wholesale retangent of it swings metres of far geometry.
+  function longHandlePath(): Path {
+    return {
+      waypoints: [
+        { x: 1, y: 4, prevC: { x: 1, y: 4 }, nextC: { x: 2, y: 6.5 }, linked: true, theta: 0, thetaOn: true, stop: false, segType: "bezier" },
+        { x: 5, y: 4, prevC: { x: 3.5, y: 6.5 }, nextC: { x: 6.5, y: 1.5 }, linked: true, theta: 0, thetaOn: false, stop: false, segType: "bezier" },
+        { x: 9, y: 4, prevC: { x: 8, y: 1.5 }, nextC: { x: 9, y: 4 }, linked: true, theta: 0, thetaOn: true, stop: false },
+      ],
+      ranges: [],
+    };
+  }
+
+  it.each([
+    { label: "grazing the waypoint", center: { x: 5.95, y: 4 }, radius: 1 },
+    // Here the brush rim falls mid-segment, so the anchor is a generated waypoint rather
+    // than an authored one.
+    { label: "with the rim mid-segment", center: { x: 4.5, y: 4 }, radius: 1.5 },
+    // The authored waypoint sits just inside the rim, where an unweighted retangent would
     // replace its 2 m handles outright and swing the curve by most of a metre.
     { label: "barely reaching the waypoint", center: { x: 4.5, y: 4 }, radius: 1.2 },
   ])("confines a 1 cm drag on a long-handled path $label", ({ center, radius }) => {
