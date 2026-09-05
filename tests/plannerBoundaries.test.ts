@@ -1,11 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { optimizedTrajectoryPlanner } from "../src/shared/planners/optimizedTrajectory";
 import { profiledSplinePlanner } from "../src/shared/planners/profiledSpline";
+import { getPlanner } from "../src/shared/planners";
 import { applyStationaryActions } from "../src/shared/planners/stationaryActions";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
-import type { ConstraintRange, RoutineNode } from "../src/shared/types";
+import type { ConstraintRange, RoutineNode, TrajectorySample } from "../src/shared/types";
 import { validateProject } from "../src/shared/validation";
 import { decodeProjectValue } from "../src/shared/project/fileFormat";
+import { wrapRadians } from "../src/shared/math/angles";
+import { buildBdxExport } from "../src/shared/export/bdx";
+
+function maxAngularAcceleration(samples: readonly TrajectorySample[]): number {
+  return samples.slice(1).reduce((maximum, sample, index) => {
+    const previous = samples[index];
+    return Math.max(maximum, Math.abs(sample.angularVelocityRadps - previous.angularVelocityRadps) / (sample.t - previous.t));
+  }, 0);
+}
+
+function maxAngularDeceleration(samples: readonly TrajectorySample[]): number {
+  return samples.slice(1).reduce((maximum, sample, index) => {
+    const previous = samples[index];
+    if (Math.abs(previous.angularVelocityRadps) <= 1e-9 && Math.abs(sample.angularVelocityRadps) > 1e-9) return maximum;
+    const sameDirection = Math.sign(sample.angularVelocityRadps) === Math.sign(previous.angularVelocityRadps);
+    if (sameDirection && Math.abs(sample.angularVelocityRadps) > Math.abs(previous.angularVelocityRadps)) return maximum;
+    return Math.max(maximum, Math.abs(sample.angularVelocityRadps - previous.angularVelocityRadps) / (sample.t - previous.t));
+  }, 0);
+}
 
 describe("planner correctness boundaries", () => {
   it("normalizes large finite headings in constant time", () => {
