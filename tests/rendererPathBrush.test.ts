@@ -1,3 +1,108 @@
+  return samples;
+}
+
+// Distance from a point to the sampled curve. Comparing sample-to-sample instead would
+// charge for the reparameterization an exact split introduces and report phantom drift.
+function distanceToSamples(value: Point, samples: Point[]): number {
+  let closest = Infinity;
+  for (let index = 1; index < samples.length; index++) {
+    const a = samples[index - 1];
+    const b = samples[index];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared < 1e-18) { closest = Math.min(closest, gap(value, a)); continue; }
+    const t = Math.max(0, Math.min(1, ((value.x - a.x) * dx + (value.y - a.y) * dy) / lengthSquared));
+    closest = Math.min(closest, gap(value, { x: a.x + dx * t, y: a.y + dy * t }));
+  }
+  return closest;
+}
+
+// Worst deformation of the pre-stroke curve at points the brush could not reach.
+function driftOutside(before: Point[], after: Point[], center: Point, radius: number): number {
+  let worst = 0;
+  for (const sample of before) {
+    if (gap(sample, center) <= radius) continue;
+    worst = Math.max(worst, distanceToSamples(sample, after));
+  }
+  return worst;
+}
+
+// Cumulative arc-length fraction at each waypoint, matching how PM resolves a `wp` anchor.
+function waypointFractions(path: Path): number[] {
+  const cumulative = [0];
+  let total = 0;
+  for (let index = 0; index + 1 < path.waypoints.length; index++) {
+    const segment = samplePath({ ...path, waypoints: path.waypoints.slice(index, index + 2) }, 128);
+    for (let step = 1; step < segment.length; step++) total += gap(segment[step - 1], segment[step]);
+    cumulative.push(total);
+  }
+  return cumulative.map((value) => (total > 1e-9 ? value / total : 0));
+}
+
+// Where a `wp`-anchored endpoint actually lands, as a fraction of the whole path.
+function anchorFraction(path: Path, waypointIndex: number, local?: number): number {
+  const fractions = waypointFractions(path);
+  if (local == null) return fractions[Math.max(0, Math.min(fractions.length - 1, waypointIndex))];
+  const segment = Math.max(0, Math.min(fractions.length - 2, Math.round(waypointIndex)));
+  return fractions[segment] + (fractions[segment + 1] - fractions[segment]) * Math.max(0, Math.min(1, local));
+}
+
+function anchorPoint(path: Path, waypointIndex: number, local = 0): Point {
+  const segment = Math.max(0, Math.min(path.waypoints.length - 2, waypointIndex));
+  const samples = samplePath({ ...path, waypoints: path.waypoints.slice(segment, segment + 2) }, 2048);
+  const lengths = [0];
+  for (let index = 1; index < samples.length; index++) lengths.push(lengths[index - 1] + gap(samples[index - 1], samples[index]));
+  const target = lengths.at(-1)! * Math.max(0, Math.min(1, local));
+  const upper = lengths.findIndex((value) => value >= target);
+  if (upper <= 0) return samples[0];
+  const span = Math.max(1e-12, lengths[upper] - lengths[upper - 1]);
+  const mix = (target - lengths[upper - 1]) / span;
+  return {
+    x: samples[upper - 1].x + (samples[upper].x - samples[upper - 1].x) * mix,
+    y: samples[upper - 1].y + (samples[upper].y - samples[upper - 1].y) * mix,
+  };
+}
+
+// An S-curve with realistic handle lengths, used where a straight line would hide bending.
+function curvedPath(): Path {
+  return {
+    waypoints: [
+      { x: 2, y: 2, prevC: { x: 2, y: 2 }, nextC: { x: 3.2, y: 2.6 }, linked: true, theta: 0, thetaOn: true, stop: false, segType: "bezier" },
+      { x: 5, y: 4, prevC: { x: 3.9, y: 3.4 }, nextC: { x: 6.1, y: 4.6 }, linked: true, theta: 0, thetaOn: false, stop: false, segType: "bezier" },
+      { x: 8, y: 5, prevC: { x: 6.9, y: 4.7 }, nextC: { x: 9, y: 5.3 }, linked: true, theta: 0, thetaOn: false, stop: false, segType: "bezier" },
+      { x: 11, y: 3, prevC: { x: 10, y: 3.6 }, nextC: { x: 11, y: 3 }, linked: true, theta: 0, thetaOn: true, stop: false },
+    ],
+    ranges: [],
+  };
+}
+
+describe("path sculpting brushes", () => {
+  it("subdivides only the influenced curve and pushes the new waypoints", () => {
+    const path = straightPath();
+    const result = brush().apply(path, {
+      kind: "push",
+      previous: { x: 5.5, y: 4 },
+      center: { x: 5.5, y: 5 },
+      radius: 1.6,
+      strength: 1,
+    });
+
+    expect(result.added).toBeGreaterThan(1);
+    expect(path.waypoints.length).toBe(2 + result.added);
+    expect(path.waypoints[0]).toMatchObject({ x: 1, y: 4 });
+    expect(path.waypoints.at(-1)).toMatchObject({ x: 10, y: 4 });
+    expect(path.waypoints.slice(1, -1).some((waypoint) => waypoint.y > 4.1)).toBe(true);
+    expect(path.ranges[0].w1).toBe(path.waypoints.length - 1);
+    expect(path.waypoints.every((waypoint) => [waypoint.x, waypoint.y, waypoint.prevC.x, waypoint.nextC.y].every(Number.isFinite))).toBe(true);
+  });
+
+  it("does not retangent an unmoved waypoint just outside the brush radius", () => {
+    const path = straightPath();
+    // A hand-shaped, deliberately unlinked waypoint sitting outside the brush.
+    path.waypoints.splice(1, 0, {
+      x: 5.5,
+      y: 4,
       prevC: { x: 4.9, y: 3.4 },
       nextC: { x: 6.1, y: 4.6 },
       linked: false,
