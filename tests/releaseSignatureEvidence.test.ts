@@ -193,7 +193,7 @@ describe("release signature evidence", () => {
     })).rejects.toThrow(/approved Apple team/);
   });
 
-  it("keeps both promoted release workflows fail-closed and publishes their evidence", async () => {
+  it("retains signing checks and permits only an explicit unsigned beta exception", async () => {
     for (const workflowName of ["prerelease.yml", "package.yml"]) {
       const workflow = await readFile(new URL(`../.github/workflows/${workflowName}`, import.meta.url), "utf8");
       expect(workflow).toContain("verify-signing-env.mjs windows");
@@ -203,8 +203,16 @@ describe("release signature evidence", () => {
       expect(workflow).toContain("release/signature-evidence-*.json");
     }
 
+    const beta = await readFile(new URL("../.github/workflows/prerelease.yml", import.meta.url), "utf8");
+    const production = await readFile(new URL("../.github/workflows/package.yml", import.meta.url), "utf8");
+    expect(beta).toContain("matrix.platform == 'windows' && !inputs.unsigned_windows");
+    expect(beta).toContain("matrix.platform == 'windows' && inputs.unsigned_windows");
+    expect(beta).toContain("default: false");
+    expect(beta).toContain("Windows setup and portable executables in this beta are unsigned.");
+    expect(production).not.toContain("unsigned_windows");
+
     const packaging = await readFile(new URL("../docs/packaging.md", import.meta.url), "utf8");
-    expect(packaging).toContain("a promoted beta or production release cannot contain unsigned Windows artifacts");
+    expect(packaging).toContain("signed beta runs and production releases require signed Windows artifacts");
     expect(packaging).not.toContain("Windows (optional)");
     expect(packaging).not.toContain("Windows packages may be published unsigned");
   });
