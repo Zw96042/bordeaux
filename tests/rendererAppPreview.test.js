@@ -1,3 +1,108 @@
+  it("waits for the worker instead of rendering a profiled fallback for optimized mode", () => {
+    const project = createDemoProject();
+    project.plannerId = "optimizedTrajectory";
+    const derivePath = vi.spyOn(PM, "derivePath");
+
+    try {
+      const html = renderToString(React.createElement(App, { initialProject: project }));
+
+      expect(html).toContain("Preparing path preview");
+      expect(derivePath).not.toHaveBeenCalled();
+    } finally {
+      derivePath.mockRestore();
+    }
+  });
+
+  it("never presents a routine run derived from stale inputs", () => {
+    const currentRequest = {};
+    const staleRequest = {};
+    const staleRun = { steps: [{ id: "old" }], segs: [], total: 4 };
+
+    expect(routinePreviewResult({ status: "ready", key: staleRequest, path: staleRequest, value: staleRun }, currentRequest, true)).toMatchObject({
+      run: { steps: [], segs: [], total: 0 },
+      pending: true,
+      error: null,
+    });
+    expect(routinePreviewResult({ status: "ready", key: currentRequest, path: currentRequest, value: staleRun }, currentRequest, true)).toMatchObject({
+      run: staleRun,
+      pending: false,
+      error: null,
+    });
+    const error = { message: "routine failed" };
+    expect(routinePreviewResult({ status: "error", errorKey: currentRequest, errorPath: currentRequest, error }, currentRequest, true)).toMatchObject({
+      run: { steps: [], segs: [], total: 0 },
+      pending: false,
+      error,
+    });
+    expect(routinePreviewResult({ status: "pending", key: currentRequest, path: currentRequest, value: staleRun }, currentRequest, true)).toMatchObject({
+      run: { steps: [], segs: [], total: 0 },
+      pending: true,
+      error: null,
+    });
+  });
+
+  it("does not send a routine preview that fails admission", () => {
+    const previewer = { request: vi.fn(), cancel: vi.fn() };
+    const request = { routine: {}, paths: [], robot: {}, outcomes: {}, plannerId: "profiledSpline" };
+    const error = { name: "RangeError", message: "Routine too large" };
+
+    expect(requestRoutinePreview(previewer, request, { allowed: false, error })).toBe(false);
+    expect(previewer.request).not.toHaveBeenCalled();
+    expect(previewer.cancel).toHaveBeenCalledOnce();
+    expect(routinePreviewResult({}, request, true, error)).toMatchObject({
+      run: { steps: [], segs: [], total: 0 },
+      pending: false,
+      error,
+    });
+
+    previewer.cancel.mockClear();
+    expect(requestRoutinePreview(previewer, request, { allowed: true, error: null }, false)).toBe(false);
+    expect(previewer.request).not.toHaveBeenCalled();
+    expect(previewer.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("does not derive even a small path during initial render", () => {
+    const project = createDemoProject();
+    const derivePath = vi.spyOn(PM, "derivePath");
+
+    try {
+      const html = renderToString(React.createElement(App, { initialProject: project }));
+
+      expect(html).toContain("Preparing path preview");
+      expect(derivePath).not.toHaveBeenCalled();
+    } finally {
+      derivePath.mockRestore();
+    }
+  });
+
+  it("requires the exact ready robot-scoped path preview", () => {
+    const doc = { id: "path" };
+    const robot = { id: "updated-robot" };
+    const request = { doc, robot, plannerId: "profiledSpline", quality: "final" };
+    const previousRequest = { ...request, robot: { id: "previous-robot" } };
+    const derived = { planner: request.plannerId, sample: { pts: [] } };
+
+    expect(pathPreviewResult({ status: "ready", key: previousRequest, path: doc, value: derived }, request)).toEqual({
+      value: null,
+      error: null,
+      pending: true,
+    });
+    expect(pathPreviewResult({ status: "pending", key: request, path: doc, value: derived }, request)).toEqual({
+      value: null,
+      error: null,
+      pending: true,
+    });
+
+    const error = { message: "robot collision preview failed" };
+    expect(pathPreviewResult({ status: "error", key: previousRequest, path: doc, value: derived, errorKey: request, errorPath: doc, error }, request)).toEqual({
+      value: null,
+      error,
+      pending: false,
+    });
+    expect(pathPreviewResult({ status: "ready", key: request, path: doc, value: derived }, request)).toEqual({
+      value: derived,
+      error: null,
+      pending: false,
     });
   });
 
