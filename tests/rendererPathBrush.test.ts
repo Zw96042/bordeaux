@@ -1,3 +1,108 @@
+      stop: false,
+      segType: "bezier",
+    });
+    path.waypoints[0].nextC = { x: 2.5, y: 4 };
+    path.waypoints[2].prevC = { x: 8.5, y: 4 };
+    path.ranges = [{ anchor: "wp", w0: 0, t0: 0.5, w1: 1, t1: 0.5 }];
+
+    const result = brush().apply(path, {
+      kind: "smooth",
+      previous: { x: 5.3, y: 4 },
+      center: { x: 5.5, y: 4 },
+      radius: 3,
+      strength: 1,
+    });
+
+    expect(result).toMatchObject({ added: 0, removed: 1 });
+    expect(path.waypoints).toHaveLength(2);
+    expect(path.ranges[0]).toMatchObject({ w0: 0, w1: 0 });
+    expect(path.ranges[0].t0).toBeCloseTo(0.25, 1);
+    expect(path.ranges[0].t1).toBeCloseTo(0.75, 1);
+  });
+
+  it("keeps semantic and shape-defining waypoints", () => {
+    const path = straightPath();
+    path.waypoints.splice(1, 0, {
+      x: 5.5,
+      y: 6,
+      prevC: { x: 4, y: 5.5 },
+      nextC: { x: 7, y: 5.5 },
+      linked: false,
+      corner: true,
+      theta: 90,
+      thetaOn: true,
+      stop: false,
+      segType: "bezier",
+    });
+
+    const result = brush().apply(path, {
+      kind: "smooth",
+      previous: { x: 5.3, y: 6 },
+      center: { x: 5.5, y: 6 },
+      radius: 3,
+      strength: 1,
+    });
+
+    expect(result.removed).toBe(0);
+    expect(path.waypoints).toHaveLength(3);
+    expect(path.waypoints[1]).toMatchObject({ x: 5.5, y: 6, corner: true, thetaOn: true });
+  });
+
+  it("keeps a non-semantic waypoint when merging would change the curve", () => {
+    const path = straightPath();
+    path.waypoints.splice(1, 0, {
+      x: 5.5,
+      y: 6,
+      prevC: { x: 4.5, y: 6 },
+      nextC: { x: 6.5, y: 6 },
+      linked: true,
+      theta: 0,
+      thetaOn: false,
+      stop: false,
+      segType: "bezier",
+    });
+
+    const result = brush().apply(path, {
+      kind: "smooth",
+      previous: { x: 5.45, y: 6 },
+      center: { x: 5.5, y: 6 },
+      radius: 1,
+      strength: 0.2,
+    });
+
+    expect(result.removed).toBe(0);
+    expect(path.waypoints).toHaveLength(3);
+  });
+
+  it("keeps waypoint boundaries that change segment policy", () => {
+    const path = straightPath();
+    path.waypoints.splice(1, 0, {
+      x: 5.5,
+      y: 4,
+      prevC: { x: 4, y: 4 },
+      nextC: { x: 7, y: 4 },
+      linked: true,
+      theta: 0,
+      thetaOn: false,
+      stop: false,
+      segType: "bezier",
+      segmentFollowMode: "reverse",
+    });
+
+    const result = brush().apply(path, {
+      kind: "smooth",
+      previous: { x: 5.3, y: 4 },
+      center: { x: 5.5, y: 4 },
+      radius: 3,
+      strength: 1,
+    });
+
+    expect(result.removed).toBe(0);
+    expect(path.waypoints).toHaveLength(3);
+  });
+
+  it("does not keep adding topology after local spacing is dense enough", () => {
+    const path = straightPath();
     const pathBrush = brush();
     const stroke = { kind: "push", previous: { x: 5, y: 4 }, center: { x: 5.1, y: 4.2 }, radius: 1, strength: 0.6 };
     const first = pathBrush.apply(path, stroke);
