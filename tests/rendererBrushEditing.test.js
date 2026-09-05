@@ -1,3 +1,6 @@
+import { describe, expect, it } from "vitest";
+import { applyBrushDraft, remapBrushSelection, syncBrushSelection } from "../src/renderer/lib/brushEditing";
+import { PathEdit } from "../src/renderer/assets/path-edit";
 
 function path() {
   return {
