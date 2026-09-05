@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+// @ts-expect-error The production preview engine is an intentional JavaScript module.
+import { PM } from "../src/renderer/lib/pathMath";
 import { loadRendererExport } from "./helpers/loadRendererExport";
 
 interface Point { x: number; y: number; s: number }
@@ -39,9 +41,6 @@ describe("renderer field scene construction", () => {
 
 describe("renderer path hit testing", () => {
   it("keeps separate visits when a path crosses the same field point", () => {
-    const math = loadRendererExport<{
-      nearestVisits(x: number, y: number, points: Array<Point & { seg: number; t: number; heading: number }>, options: { tolerance: number }): Array<{ f: number }>;
-    }>(new URL("../src/renderer/lib/pathMath.js", import.meta.url), "PM", { context: { console } });
     const crossing = [
       { x: -1, y: 0, s: 0, seg: 0, t: 0, heading: 0 },
       { x: 1, y: 0, s: 2, seg: 0, t: 1, heading: 0 },
@@ -51,7 +50,7 @@ describe("renderer path hit testing", () => {
       { x: 0, y: 1, s: 18, seg: 2, t: 1, heading: Math.PI / 2 },
     ];
 
-    const visits = math.nearestVisits(0, 0, crossing, { tolerance: 0.1 });
+    const visits = PM.nearestVisits(0, 0, crossing, { tolerance: 0.1 });
     expect(visits).toHaveLength(2);
     expect(visits[0].f).toBeLessThan(visits[1].f);
   });
