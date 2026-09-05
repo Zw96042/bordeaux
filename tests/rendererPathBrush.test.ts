@@ -1,3 +1,66 @@
+import { describe, expect, it } from "vitest";
+import { loadRendererExport } from "./helpers/loadRendererExport";
+
+interface Point { x: number; y: number }
+interface Waypoint extends Point {
+  prevC: Point;
+  nextC: Point;
+  linked: boolean;
+  theta: number;
+  thetaOn: boolean;
+  stop: boolean;
+  corner?: boolean;
+  segType?: string;
+  segmentFollowMode?: string;
+}
+interface Path {
+  waypoints: Waypoint[];
+  ranges: Array<{ anchor: string; w0: number; w1: number; t0?: number; t1?: number }>;
+}
+
+interface Stroke {
+  kind: string;
+  center: Point;
+  previous: Point;
+  origin?: Point;
+  radius: number;
+  strength: number;
+}
+
+function brush() {
+  return loadRendererExport<{
+    apply(path: Path, stroke: Stroke): { path: Path; added: number; removed: number; changed: boolean };
+  }>(new URL("../src/renderer/lib/pathBrush.js", import.meta.url), "PathBrush");
+}
+
+function straightPath(): Path {
+  return {
+    waypoints: [
+      { x: 1, y: 4, prevC: { x: 1, y: 4 }, nextC: { x: 4, y: 4 }, linked: true, theta: 0, thetaOn: true, stop: false, segType: "bezier" },
+      { x: 10, y: 4, prevC: { x: 7, y: 4 }, nextC: { x: 10, y: 4 }, linked: true, theta: 0, thetaOn: true, stop: false },
+    ],
+    ranges: [{ anchor: "wp", w0: 0, w1: 1 }],
+  };
+}
+
+const gap = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
+
+// Densely samples every segment so tests can compare curve shape rather than control-point
+// bookkeeping: splitting or merging a segment moves handles while leaving the curve intact.
+function samplePath(path: Path, perSegment = 80): Point[] {
+  const samples: Point[] = [];
+  for (let index = 0; index + 1 < path.waypoints.length; index++) {
+    const start = path.waypoints[index];
+    const end = path.waypoints[index + 1];
+    for (let step = 0; step <= perSegment; step++) {
+      const t = step / perSegment;
+      const u = 1 - t;
+      samples.push({
+        x: u ** 3 * start.x + 3 * u ** 2 * t * start.nextC.x + 3 * u * t ** 2 * end.prevC.x + t ** 3 * end.x,
+        y: u ** 3 * start.y + 3 * u ** 2 * t * start.nextC.y + 3 * u * t ** 2 * end.prevC.y + t ** 3 * end.y,
+      });
+    }
+  }
   return samples;
 }
 
