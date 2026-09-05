@@ -1,3 +1,13 @@
+import React from "react";
+import { renderToString } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
+import { App, replaceEditedPath, agentProposalPreviewResult, canApplyAgentProposalCandidate, currentPathLength, pathPreviewResult, requestRoutinePreview, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, waypointPreviewResult } from "../src/renderer/app/App";
+import { PathPreview } from "../src/renderer/assets/path-preview";
+import { ContextInspector } from "../src/renderer/components/ContextInspector";
+import { PM } from "../src/renderer/lib/pathMath";
+import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
+
+describe("renderer app path preview lifecycle", () => {
   it("waits for the worker instead of rendering a profiled fallback for optimized mode", () => {
     const project = createDemoProject();
     project.plannerId = "optimizedTrajectory";
