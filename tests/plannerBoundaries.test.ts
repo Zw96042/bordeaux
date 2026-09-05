@@ -109,6 +109,111 @@ describe("planner correctness boundaries", () => {
     expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
   });
 
+      path.markers = [{ id: "finish", f: 1, name: "Finish" }];
+
+      const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+      const arrival = result.waypointSampleIndices!.at(-1)!;
+      let lastHeadingChange = arrival;
+      for (let index = arrival + 1; index < result.samples.length; index += 1) {
+        if (Math.abs(wrapRadians(result.samples[index].headingRad - result.samples[index - 1].headingRad)) > 1e-8) {
+          lastHeadingChange = index;
+        }
+      }
+
+      expect(lastHeadingChange).toBe(arrival);
+      expect(result.samples[arrival].headingRad).toBeCloseTo(Math.PI, 5);
+      expect(result.samples.at(-1)!.t - result.samples[lastHeadingChange].t).toBeGreaterThanOrEqual(1 - 1e-4);
+      expect(result.samples.slice(lastHeadingChange).every((sample) => (
+        Math.hypot(sample.x - result.samples[arrival].x, sample.y - result.samples[arrival].y) < 1e-5
+      ))).toBe(true);
+      expect(result.markers[0].timeS).toBeCloseTo(result.totalTimeS, 6);
+    },
+  );
+
+  it.each(["profiledSpline", "optimizedTrajectory"] as const)(
+    "keeps a terminal turn after coupled heading arrival despite legacy priority in %s",
+    (plannerId) => {
+      const project = createDemoProject();
+      const path = project.paths[0];
+      path.headingMode = "manual";
+      path.constraints = {
+        ...path.constraints,
+        maxVel: 4,
+        maxAccel: 5,
+        maxDecel: 5,
+        maxAngVel: 60,
+        maxAngAccel: 120,
+        maxAngDecel: 120,
+      };
+      path.waypoints = buildWaypoints([
+        { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
+        {
+          x: 8, y: 2, theta: 180, thetaOn: true, stop: true,
+          turnInPlace: { headingDeg: 90, direction: "shortest" },
+        },
+      ]);
+      path.ranges = [{
+        anchor: "param", f0: 0.05, f1: 0.95,
+        maxVel: 4, maxAccel: 5, maxDecel: 5, maxAngVel: 60, maxAngAccel: 120,
+        rotationPriority: "translation",
+      }];
+      path.markers = [{ id: "finish", f: 1, name: "Finish" }];
+
+      const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+      const arrival = result.waypointSampleIndices!.at(-1)!;
+      const peakIndex = result.samples.reduce((peak, sample, index) => (
+        index >= arrival && sample.headingRad > result.samples[peak].headingRad ? index : peak
+      ), arrival);
+      const targetIndex = result.samples.findIndex((sample, index) => (
+        index > peakIndex && Math.abs(wrapRadians(sample.headingRad - Math.PI / 2)) < 1e-4
+      ));
+      const maxHeadingStep = result.samples.slice(peakIndex + 1).reduce((maximum, sample, index) => (
+        Math.max(maximum, Math.abs(wrapRadians(sample.headingRad - result.samples[peakIndex + index].headingRad)))
+      ), 0);
+
+      expect(peakIndex).toBe(arrival);
+      expect(Math.abs(wrapRadians(result.samples[peakIndex].headingRad - Math.PI))).toBeLessThan(0.01);
+      expect(result.samples.at(-1)!.headingRad).toBeCloseTo(Math.PI / 2, 3);
+      expect(targetIndex).toBeGreaterThan(arrival);
+      expect(result.samples.slice(targetIndex).every((sample) => (
+        Math.abs(wrapRadians(sample.headingRad - Math.PI / 2)) < 1e-4
+      ))).toBe(true);
+      expect(maxHeadingStep).toBeLessThan(5 * Math.PI / 180);
+      expect(result.markers[0].timeS).toBeCloseTo(result.totalTimeS, 6);
+    },
+  );
+
+  it.each(["profiledSpline", "optimizedTrajectory"] as const)("uses maxAngDecel while settling moving heading in %s", (plannerId) => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints = {
+      ...path.constraints,
+      maxVel: 2,
+      maxAccel: 2,
+      maxDecel: 2,
+      maxAngVel: 360,
+      maxAngAccel: 720,
+      maxAngDecel: 1,
+    };
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 9, y: 2, theta: 180, thetaOn: true },
+    ]);
+
+    const result = getPlanner(plannerId).generate({ path, robot: project.robot });
+
+    expect(maxAngularDeceleration(result.samples))
+      .toBeLessThanOrEqual(path.constraints.maxAngDecel! * Math.PI / 180 * 1.02);
+  });
+
+  it("enforces a full-width local angular acceleration range", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.constraints.maxAngAccel = 720;
+    path.constraints.maxAngDecel = 720;
+    path.waypoints = buildWaypoints([
       { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
       { x: 9, y: 2, theta: 180, thetaOn: true },
     ]);
