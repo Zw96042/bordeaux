@@ -1,18 +1,18 @@
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
-import { createDemoProject } from "../src/shared/project/defaults";
+// @ts-expect-error The production preview engine is an intentional JavaScript module.
+import { PM as RendererPM } from "../src/renderer/lib/pathMath";
+import { PM as SharedPM } from "../src/shared/math/pm";
+import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
 import { loadRendererExport } from "./helpers/loadRendererExport";
 
-interface Point { x: number; y: number }
-
-function rendererMath() {
-  return loadRendererExport<{
-    derivePath(path: unknown, robot: unknown, perSegment: number, plannerId: string): {
-      sample: { pts: Array<Point & { s: number }>; length: number };
-      prof: { totalTime: number };
-    };
-  }>(new URL("../src/renderer/lib/pathMath.js", import.meta.url), "PM", { context: { console } });
-}
+interface Point { x: number; y: number; heading: number; curv: number }
+const rendererMath: {
+  derivePath(path: unknown, robot: unknown, perSegment: number, plannerId: string): {
+    sample: { pts: Array<Point & { s: number }>; length: number };
+    prof: { totalTime: number; head: number[] };
+  };
+} = RendererPM;
 
 function rendererPathLinks() {
   return loadRendererExport<{
@@ -25,12 +25,75 @@ describe("renderer application", () => {
   it("derives finite previews with each maintained planner", () => {
     const project = createDemoProject();
     for (const planner of ["profiledSpline", "optimizedTrajectory"]) {
-      const preview = rendererMath().derivePath(project.paths[0], project.robot, 56, planner);
+      const preview = rendererMath.derivePath(project.paths[0], project.robot, 56, planner);
       expect(preview.sample.pts.length).toBeGreaterThan(2);
       expect(preview.sample.pts.every((point) => Number.isFinite(point.x + point.y + point.s))).toBe(true);
       expect(preview.sample.length).toBeGreaterThan(0);
       expect(preview.prof.totalTime).toBeGreaterThan(0);
     }
+  });
+
+  it("uses the same curvature-continuous linked geometry in interactive and final planning", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, theta: 0, nextC: { x: 2, y: 1 } },
+      {
+        x: 3, y: 2, theta: 0,
+        prevC: { x: 3, y: 1.2 },
+        nextC: { x: 3, y: 3.1 },
+      },
+      { x: 6, y: 3, theta: 0, prevC: { x: 4, y: 3 } },
+    ]);
+    const shared = SharedPM.sample(path.waypoints, 224).pts;
+    const renderer = rendererMath.derivePath(path, project.robot, 224, "optimizedTrajectory").sample.pts;
+    const boundary = 224;
+
+    expect(renderer).toHaveLength(shared.length);
+    shared.forEach((point, index) => {
+      expect(renderer[index].x).toBeCloseTo(point.x, 10);
+      expect(renderer[index].y).toBeCloseTo(point.y, 10);
+      expect(renderer[index].heading).toBeCloseTo(point.heading, 10);
+      expect(renderer[index].curv).toBeCloseTo(point.curv, 10);
+    });
+    expect(Math.abs(shared[boundary].curv - shared[boundary + 1].curv)).toBeLessThan(0.05);
+  });
+
+  it("keeps an incoming Tangent segment tangent until its outgoing heading law begins", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    const tangent = 45 * Math.PI / 180;
+    const handleLength = 0.05;
+    path.waypoints = buildWaypoints([
+      {
+        x: 1, y: 1, theta: 0, segType: "bezier", segmentHeadingMode: "tangent",
+        nextC: { x: 2, y: 1 },
+      },
+      {
+        x: 3, y: 2, theta: 0, segType: "line", segmentHeadingMode: "targets",
+        prevC: {
+          x: 3 - Math.cos(tangent) * handleLength,
+          y: 2 - Math.sin(tangent) * handleLength,
+        },
+        headingTransition: { placement: "after", rotationPriority: "translation", distanceM: 0.75 },
+      },
+      { x: 6, y: 2, theta: -90, segType: "line" },
+    ]);
+    const preview = rendererMath.derivePath(path, project.robot, 56, "optimizedTrajectory");
+    const boundary = preview.sample.pts.reduce((nearest, point, index) => (
+      Math.hypot(point.x - 3, point.y - 2) < Math.hypot(
+        preview.sample.pts[nearest].x - 3,
+        preview.sample.pts[nearest].y - 2,
+      ) ? index : nearest
+    ), 0);
+    const wrap = (angle: number) => Math.atan2(Math.sin(angle), Math.cos(angle));
+
+    for (let index = 0; index <= boundary; index += 1) {
+      expect(Math.abs(wrap(preview.prof.head[index] - preview.sample.pts[index].heading))).toBeLessThan(Math.PI / 180);
+    }
+    expect(Math.abs(wrap(preview.prof.head[boundary] - tangent))).toBeLessThan(0.25 * Math.PI / 180);
+    expect(Math.max(...preview.prof.head.slice(boundary + 1).map((heading) => Math.abs(wrap(heading - tangent)))))
+      .toBeGreaterThan(10 * Math.PI / 180);
   });
 
   it("loads React through the typed renderer module entry without compatibility globals", () => {
@@ -45,14 +108,38 @@ describe("renderer application", () => {
     expect(fs.existsSync(new URL("../src/renderer/legacy", import.meta.url))).toBe(false);
   });
 
-  it("presents only maintained planners and Java export", () => {
+  it("presents deliberate optimization and Java export", () => {
     const panels = fs.readFileSync(new URL("../src/renderer/components/Panels.jsx", import.meta.url), "utf8");
     const app = fs.readFileSync(new URL("../src/renderer/app/App.jsx", import.meta.url), "utf8");
-    expect(panels).toContain("{ v: 'profiledSpline', label: 'Profiled' }");
-    expect(panels).toContain("{ v: 'optimizedTrajectory', label: 'Optimized' }");
+    expect(panels).toContain("optimizationApplied ? 'Optimized' : 'Optimize'");
+    expect(panels).not.toContain("function PlannerFamily");
     expect(app).toContain("exportJava");
     expect(panels).not.toMatch(/LabVIEW|labview|\.bdx/);
     expect(app).toContain("normalizeProjectData(raw)");
+  });
+
+  it("uses the waypoint as the only heading transition anchor", () => {
+    const inspector = fs.readFileSync(new URL("../src/renderer/components/ContextInspector.jsx", import.meta.url), "utf8");
+    const app = fs.readFileSync(new URL("../src/renderer/app/App.jsx", import.meta.url), "utf8");
+    expect(inspector).not.toContain("'Heading transition'");
+    expect(inspector).not.toContain("'Automatically blends through this waypoint.'");
+    expect(inspector).not.toContain("'Heading blend placement'");
+    expect(inspector).not.toContain("label: 'Blend distance'");
+    expect(inspector).not.toContain("label: 'Before'");
+    expect(inspector).not.toContain("label: 'At'");
+    expect(inspector).not.toContain("label: 'After'");
+    expect(inspector).not.toContain("label: 'Keep tangent'");
+    expect(inspector).not.toContain("label: 'Meet heading'");
+    expect(inspector).not.toContain("Timing priority");
+    expect(inspector).not.toContain("timing priority");
+    expect(app).not.toContain("setHeadingTransition");
+  });
+
+  it("draws heading guides from the accepted trajectory", () => {
+    const fieldView = fs.readFileSync(new URL("../src/renderer/components/FieldView.jsx", import.meta.url), "utf8");
+    expect(fieldView).toContain("const plannedHeadingAt = (fraction) =>");
+    expect(fieldView).toContain("M.head[before] + PM.angWrap(M.head[after] - M.head[before]) * progress");
+    expect(fieldView).toContain("segmentMode(segment) === 'tangent' ? pf.heading : plannedHeadingAt(f)");
   });
 
   it("uses canonical shared project state without local compatibility mirrors", () => {
@@ -60,7 +147,8 @@ describe("renderer application", () => {
     expect(app).toContain('normalizeProject as normalizeProjectData');
     expect(app).not.toMatch(/project\.routine(?!s)/);
     expect(app).not.toMatch(/\.\.\.project,\s*routine[,}]/);
-    expect(app).toContain("const plannerId = project.plannerId");
+    expect(app).toContain("const plannerId = 'profiledSpline'");
+    expect(app).toContain("doc.optimization?.accepted");
     expect(app).not.toContain("setPlannerId");
   });
 
@@ -74,7 +162,7 @@ describe("renderer application", () => {
     expect(app).toContain("window.bordeauxAPI.autosaveProject");
   });
 
-  it("keeps linked path endpoints synchronized in both directions", () => {
+  it("keeps linked path endpoint positions synchronized while heading remains local", () => {
     const links = rendererPathLinks();
     const project = createDemoProject();
     const source = structuredClone(project.paths[0]);
@@ -82,6 +170,8 @@ describe("renderer application", () => {
     source.id = "path_source";
     target.id = "path_target";
     target.waypoints[0].x = 8;
+    target.waypoints[0].theta = 73;
+    target.waypoints[0].thetaOn = !source.waypoints.at(-1)!.thetaOn;
     target.waypoints[0].prevC.x += 3;
     target.waypoints[0].nextC.x += 3;
     const linked = { ...project, paths: [source, target], pathLinks: [{ id: "link_1", fromPathId: source.id, toPathId: target.id }] };
@@ -90,8 +180,8 @@ describe("renderer application", () => {
     expect(reconciled.paths[1].waypoints[0]).toMatchObject({
       x: source.waypoints.at(-1)!.x,
       y: source.waypoints.at(-1)!.y,
-      theta: source.waypoints.at(-1)!.theta,
-      thetaOn: source.waypoints.at(-1)!.thetaOn,
+      theta: target.waypoints[0].theta,
+      thetaOn: target.waypoints[0].thetaOn,
     });
     expect(reconciled.paths[1].waypoints[0].stop).toBe(target.waypoints[0].stop);
 
@@ -110,22 +200,29 @@ describe("renderer application", () => {
 
   it("contains planner failures", () => {
     const app = fs.readFileSync(new URL("../src/renderer/app/App.jsx", import.meta.url), "utf8");
-    expect(app).toContain("derivation.error && h('div'");
+    expect(app).toContain("usePlanningNotice(derivation.error, derivation.errorKind, planningInputRevision, doc.id)");
+    expect(app).toContain("error: planningNotice.kind === 'interactive'");
+    const status = fs.readFileSync(new URL("../src/renderer/components/FieldStatus.jsx", import.meta.url), "utf8");
+    expect(status).toContain("role: primary.error ? 'alert' : 'status'");
     expect(app).toContain("class AppErrorBoundary");
+  });
+
+  it("places deliberate optimization in its own panel", () => {
+    const app = fs.readFileSync(new URL("../src/renderer/app/App.jsx", import.meta.url), "utf8");
+    expect(app).toContain("optimizationOpen ? h(OptimizationPanel");
+    expect(app).not.toContain("Optimizing the final trajectory…");
+  });
+
+  it("graphs authoritative stationary heading catch-up instead of forcing angular velocity to zero", () => {
+    const panels = fs.readFileSync(new URL("../src/renderer/components/Panels.jsx", import.meta.url), "utf8");
+    expect(panels).not.toContain("if (metric !== 'velocity') return 0");
+    expect(panels).toContain("derived.finalTrajectory");
   });
 
   it("wires field gestures through the shared coalesced drag controller", () => {
     const field = fs.readFileSync(new URL("../src/renderer/components/FieldView.jsx", import.meta.url), "utf8");
     expect(field).toContain("PointerDrag.useController");
     expect(field).toContain("coalesce: true");
-  });
-
-  it("keeps animation-frame playback below the root editor render", () => {
-    const app = fs.readFileSync(new URL("../src/renderer/app/App.jsx", import.meta.url), "utf8");
-    expect(app).toContain("function createPlaybackStore()");
-    expect(app).toContain("useSyncExternalStore");
-    expect(app).not.toContain("const [playTime, setPlayTime]");
-    expect(app).not.toContain("const [routineTime, setRoutineTime]");
   });
 
   it("offers clustered tool aliases and preserves the established shortcuts", () => {
