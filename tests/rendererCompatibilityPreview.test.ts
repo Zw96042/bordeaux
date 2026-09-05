@@ -1,18 +1,18 @@
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
-import { createDemoProject } from "../src/shared/project/defaults";
+// @ts-expect-error The production preview engine is an intentional JavaScript module.
+import { PM as RendererPM } from "../src/renderer/lib/pathMath";
+import { PM as SharedPM } from "../src/shared/math/pm";
+import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
 import { loadRendererExport } from "./helpers/loadRendererExport";
 
-interface Point { x: number; y: number }
-
-function rendererMath() {
-  return loadRendererExport<{
-    derivePath(path: unknown, robot: unknown, perSegment: number, plannerId: string): {
-      sample: { pts: Array<Point & { s: number }>; length: number };
-      prof: { totalTime: number };
-    };
-  }>(new URL("../src/renderer/lib/pathMath.js", import.meta.url), "PM", { context: { console } });
-}
+interface Point { x: number; y: number; heading: number; curv: number }
+const rendererMath: {
+  derivePath(path: unknown, robot: unknown, perSegment: number, plannerId: string): {
+    sample: { pts: Array<Point & { s: number }>; length: number };
+    prof: { totalTime: number; head: number[] };
+  };
+} = RendererPM;
 
 function rendererPathLinks() {
   return loadRendererExport<{
@@ -25,12 +25,39 @@ describe("renderer application", () => {
   it("derives finite previews with each maintained planner", () => {
     const project = createDemoProject();
     for (const planner of ["profiledSpline", "optimizedTrajectory"]) {
-      const preview = rendererMath().derivePath(project.paths[0], project.robot, 56, planner);
+      const preview = rendererMath.derivePath(project.paths[0], project.robot, 56, planner);
       expect(preview.sample.pts.length).toBeGreaterThan(2);
       expect(preview.sample.pts.every((point) => Number.isFinite(point.x + point.y + point.s))).toBe(true);
       expect(preview.sample.length).toBeGreaterThan(0);
       expect(preview.prof.totalTime).toBeGreaterThan(0);
     }
+  });
+
+  it("uses the same curvature-continuous linked geometry in interactive and final planning", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, theta: 0, nextC: { x: 2, y: 1 } },
+      {
+        x: 3, y: 2, theta: 0,
+        prevC: { x: 3, y: 1.2 },
+        nextC: { x: 3, y: 3.1 },
+      },
+      { x: 6, y: 3, theta: 0, prevC: { x: 4, y: 3 } },
+    ]);
+    const shared = SharedPM.sample(path.waypoints, 224).pts;
+    const renderer = rendererMath.derivePath(path, project.robot, 224, "optimizedTrajectory").sample.pts;
+    const boundary = 224;
+
+    expect(renderer).toHaveLength(shared.length);
+    shared.forEach((point, index) => {
+      expect(renderer[index].x).toBeCloseTo(point.x, 10);
+      expect(renderer[index].y).toBeCloseTo(point.y, 10);
+      expect(renderer[index].heading).toBeCloseTo(point.heading, 10);
+      expect(renderer[index].curv).toBeCloseTo(point.curv, 10);
+    });
+    expect(Math.abs(shared[boundary].curv - shared[boundary + 1].curv)).toBeLessThan(0.05);
+  });
 
   it("keeps an incoming Tangent segment tangent until its outgoing heading law begins", () => {
     const project = createDemoProject();
