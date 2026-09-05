@@ -1,3 +1,46 @@
+import { describe, expect, it, vi } from "vitest";
+import { loadRendererExport } from "./helpers/loadRendererExport";
+import { parseFiniteDraftNumber } from "../src/renderer/lib/numericDraft";
+
+type ElementNode = { type: unknown; props: Record<string, unknown>; children: unknown[] };
+
+function inputIn(node: unknown): ElementNode | undefined {
+  if (!node || typeof node !== "object") return undefined;
+  const element = node as ElementNode;
+  return element.type === "input" ? element : element.children?.map(inputIn).find(Boolean);
+}
+
+function numericDraftHarness(kind: "Num" | "BigNum") {
+  const element = (type: unknown, props: Record<string, unknown>, ...children: unknown[]): ElementNode => ({ type, props: props ?? {}, children });
+  const states: unknown[] = [];
+  const refs: Array<{ current: unknown }> = [];
+  const effectDependencies: unknown[][] = [];
+  let stateIndex = 0;
+  let refIndex = 0;
+  let effectIndex = 0;
+  let pendingEffects: Array<() => void> = [];
+  let unitSystem = "metric";
+  const React = {
+    createElement: element,
+    useEffect: (effect: () => void, dependencies: unknown[]) => {
+      const index = effectIndex++;
+      const previous = effectDependencies[index];
+      effectDependencies[index] = dependencies;
+      if (!previous || dependencies.some((dependency, dependencyIndex) => dependency !== previous[dependencyIndex])) pendingEffects.push(effect);
+    },
+    useId: () => "numeric-draft",
+    useRef: (current: unknown) => {
+      const index = refIndex++;
+      refs[index] ??= { current };
+      return refs[index];
+    },
+    useState: (initial: unknown) => {
+      const index = stateIndex++;
+      if (!(index in states)) states[index] = typeof initial === "function" ? (initial as () => unknown)() : initial;
+      return [states[index], (next: unknown) => { states[index] = typeof next === "function" ? (next as (current: unknown) => unknown)(states[index]) : next; }];
+    },
+  };
+  const UnitPrefs = {
     current: () => unitSystem,
     fromCanonical: (value: number) => unitSystem === "imperial" ? value * 10 : value,
     toCanonical: (value: number) => unitSystem === "imperial" ? value / 10 : value,
