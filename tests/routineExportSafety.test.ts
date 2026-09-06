@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { buildJavaTrajectory } from "../src/shared/export/javaTrajectory";
 import { validateProjectJavaInvocations } from "../src/shared/javaCommands";
@@ -7,6 +9,8 @@ import { createDemoProject } from "../src/shared/project/defaults";
 import type { JavaCommandCatalog } from "../src/shared/types";
 // @ts-expect-error Routine authoring remains a legacy JavaScript module.
 import { AUTO } from "../src/renderer/lib/routineModel";
+// @ts-expect-error The routine inspector is a JavaScript component.
+import { StepInspector } from "../src/renderer/components/RoutineInspector";
 
 function catalog(): JavaCommandCatalog {
   return {
@@ -20,6 +24,29 @@ function catalog(): JavaCommandCatalog {
 }
 
 describe("routine export safety", () => {
+  it.each(["generate", "sequence", "velocity", "terminate"])("keeps saved %s steps removable without exposing unsupported editors", (cat) => {
+    const markup = renderToStaticMarkup(createElement(StepInspector, {
+      node: { id: "legacy", type: "function", cat },
+      acq: {},
+    }));
+
+    expect(markup).toContain("Legacy — cannot deploy");
+    expect(markup).toContain("Remove unsupported step");
+    expect(markup).not.toContain("<input");
+    expect(markup).not.toContain("<textarea");
+  });
+
+  it("still renders a supported command and reports a missing catalog entry", () => {
+    const markup = renderToStaticMarkup(createElement(StepInspector, {
+      node: { id: "command", type: "function", cat: "command", invocation: { commandId: "missing", arguments: {} } },
+      acq: {}, run: { segs: [] }, javaProject: { catalog: catalog() },
+    }));
+
+    expect(markup).toContain("Delete command");
+    expect(markup).toContain("This saved command is missing from the linked catalog.");
+    expect(markup).not.toContain("Remove unsupported step");
+  });
+
   it("authors only paths, decisions, commands, and an available Wait", () => {
     expect(AUTO.authorableSteps(catalog()).map((step: { id: string }) => step.id)).toEqual(["path", "decision", "command", "wait"]);
     expect(AUTO.authorableSteps({ ...catalog(), generatedSchemaVersion: "1.1", builtIns: [] }).map((step: { id: string }) => step.id)).toEqual(["path", "decision", "command"]);
