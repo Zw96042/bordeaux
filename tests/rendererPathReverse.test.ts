@@ -1,3 +1,34 @@
+import { describe, expect, it } from "vitest";
+// @ts-expect-error The renderer math module is intentionally JavaScript.
+import { PM } from "../src/renderer/lib/pathMath";
+
+interface PathFeatures {
+  targets: Array<{ anchor?: "param" | "dist"; f: number; d?: number; deg: number }>;
+  markers: Array<{ anchor?: "param" | "dist"; f: number; d?: number; name: string }>;
+  ranges: Array<{
+    anchor: "param" | "dist" | "wp";
+    f0: number;
+    f1: number;
+    d0?: number;
+    d1?: number;
+    w0?: number;
+    w1?: number;
+    t0?: number;
+    t1?: number;
+  }>;
+}
+
+function pathMath() { return PM; }
+
+describe("reverse path anchors", () => {
+  it("keeps parametric and distance features at their physical field positions", () => {
+    const path: PathFeatures = {
+      targets: [
+        { anchor: "param", f: 0.2, deg: 35 },
+        { anchor: "dist", f: 0.3, d: 3, deg: 90 },
+      ],
+      markers: [
+        { f: 0.75, name: "param default" },
         { anchor: "dist", f: 0.8, d: 8, name: "distance" },
       ],
       ranges: [
