@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { JavaCommandCatalog, JavaIntegrationStatus } from "../shared/types";
@@ -7,6 +8,7 @@ import { writeBufferAtomically, writeJsonAtomically } from "./projectFiles";
 
 export const JAVA_SUPPORT_VERSION = "0.4.0";
 const MAX_BUILD_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_INSTALL_MANIFEST_BYTES = 64 * 1024;
 const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
 const MAX_BUILD_OUTPUT_BYTES = 1024 * 1024;
 const BUILD_TIMEOUT_MS = 150_000;
@@ -26,13 +28,8 @@ interface InstallPreview {
   replacingManagedBlock: boolean;
 }
 
-interface CatalogBuild {
-  child: ChildProcessWithoutNullStreams | null;
-  canceled: boolean;
-  killGraceMs: number;
-}
-
-let activeBuild: CatalogBuild | null = null;
+let activeBuild: { child: ChildProcessWithoutNullStreams; canceled: boolean; killGraceMs: number } | null = null;
+let buildAdmission: { canceled: boolean } | null = null;
 const killEscalations = new WeakMap<ChildProcessWithoutNullStreams, NodeJS.Timeout>();
 
 function sha256(value: Uint8Array | string): string {
@@ -48,11 +45,34 @@ async function regularFile(filePath: string): Promise<boolean> {
   }
 }
 
+async function readBoundedRegularFile(filePath: string, maximumBytes: number, label: string): Promise<Buffer> {
+  const initial = await fs.lstat(filePath);
+  if (!initial.isFile() || initial.isSymbolicLink()) throw new Error(`${label} must be a regular file`);
+  const noFollow = process.platform === "win32" ? 0 : fsConstants.O_NOFOLLOW;
+  const handle = await fs.open(filePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | noFollow);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw new Error(`${label} must be a regular file`);
+    if (stat.size > maximumBytes) throw new Error(`${label} exceeds the ${maximumBytes}-byte limit`);
+    const chunks: Buffer[] = [];
+    let total = 0;
+    while (true) {
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, maximumBytes + 1 - total));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      if (total > maximumBytes) throw new Error(`${label} exceeds the ${maximumBytes}-byte limit`);
+      chunks.push(buffer.subarray(0, bytesRead));
+    }
+    return Buffer.concat(chunks, total);
+  } finally {
+    await handle.close();
+  }
+}
+
 async function boundedFileHash(filePath: string): Promise<string | undefined> {
   try {
-    const stat = await fs.lstat(filePath);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_ARTIFACT_BYTES) return undefined;
-    return sha256(await fs.readFile(filePath));
+    return sha256(await readBoundedRegularFile(filePath, MAX_ARTIFACT_BYTES, "Java support artifact"));
   } catch {
     return undefined;
   }
@@ -167,7 +187,7 @@ async function assertSafeSupportDirectory(projectRoot: string): Promise<void> {
 export async function inspectJavaSupport(projectRoot: string, catalog: JavaCommandCatalog, artifactsDirectory: string): Promise<JavaIntegrationStatus> {
   const build = await buildFileFor(projectRoot);
   const [contents, wrapperAvailable] = await Promise.all([
-    fs.readFile(build.path, "utf8"),
+    readBoundedRegularFile(build.path, MAX_BUILD_FILE_BYTES, "Robot build file").then((value) => value.toString("utf8")),
     regularFile(path.join(projectRoot, process.platform === "win32" ? "gradlew.bat" : "gradlew")),
   ]);
   let supportVersion: string | undefined;
@@ -175,7 +195,8 @@ export async function inspectJavaSupport(projectRoot: string, catalog: JavaComma
   let manifestProcessorHash: string | undefined;
   let manifestScriptHash: string | undefined;
   try {
-    const manifest = JSON.parse(await fs.readFile(path.join(projectRoot, ".bordeaux/install.json"), "utf8")) as Record<string, unknown>;
+    const manifestContents = await readBoundedRegularFile(path.join(projectRoot, ".bordeaux/install.json"), MAX_INSTALL_MANIFEST_BYTES, "Java support manifest");
+    const manifest = JSON.parse(manifestContents.toString("utf8")) as Record<string, unknown>;
     if (typeof manifest.supportVersion === "string" && manifest.supportVersion.length <= 64) supportVersion = manifest.supportVersion;
     if (typeof manifest.runtimeSha256 === "string") manifestRuntimeHash = manifest.runtimeSha256;
     if (typeof manifest.processorSha256 === "string") manifestProcessorHash = manifest.processorSha256;
@@ -208,26 +229,24 @@ export async function inspectJavaSupport(projectRoot: string, catalog: JavaComma
 export async function prepareJavaSupportInstall(projectRoot: string, artifactsDirectory: string): Promise<InstallPreview> {
   const canonicalRoot = await fs.realpath(projectRoot);
   const build = await buildFileFor(canonicalRoot);
-  const stat = await fs.stat(build.path);
-  if (stat.size > MAX_BUILD_FILE_BYTES) throw new Error(`Robot build file exceeds the ${MAX_BUILD_FILE_BYTES}-byte installation limit`);
-  const buildContents = await fs.readFile(build.path, "utf8");
+  const buildContents = (await readBoundedRegularFile(build.path, MAX_BUILD_FILE_BYTES, "Robot build file")).toString("utf8");
   if (!/edu\.wpi\.first\.GradleRIO/.test(buildContents)) throw new Error("Automatic Java support installation requires a GradleRIO Java project");
   const wrapperName = process.platform === "win32" ? "gradlew.bat" : "gradlew";
   if (!(await regularFile(path.join(canonicalRoot, wrapperName)))) throw new Error(`Automatic Java support installation requires a regular ${wrapperName} wrapper`);
   await assertSafeSupportDirectory(canonicalRoot);
   const runtimePath = path.join(artifactsDirectory, "bordeaux-runtime.jar");
   const processorPath = path.join(artifactsDirectory, "bordeaux-processor.jar");
-  let runtimeStat: Awaited<ReturnType<typeof fs.stat>>;
-  let processorStat: Awaited<ReturnType<typeof fs.stat>>;
+  let runtimeJar: Buffer;
+  let processorJar: Buffer;
   try {
-    [runtimeStat, processorStat] = await Promise.all([fs.stat(runtimePath), fs.stat(processorPath)]);
+    [runtimeJar, processorJar] = await Promise.all([
+      readBoundedRegularFile(runtimePath, MAX_ARTIFACT_BYTES, "Bordeaux runtime artifact"),
+      readBoundedRegularFile(processorPath, MAX_ARTIFACT_BYTES, "Bordeaux processor artifact"),
+    ]);
   } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     throw new Error("Bundled Bordeaux Java support artifacts are missing; rebuild or reinstall the desktop app", { cause: error });
   }
-  if (!runtimeStat.isFile() || !processorStat.isFile() || runtimeStat.size > MAX_ARTIFACT_BYTES || processorStat.size > MAX_ARTIFACT_BYTES) {
-    throw new Error("Bundled Bordeaux Java support artifacts are missing or invalid");
-  }
-  const [runtimeJar, processorJar] = await Promise.all([fs.readFile(runtimePath), fs.readFile(processorPath)]);
   const next = withManagedBlock(buildContents, managedBlock(build.name));
   return {
     projectRoot: canonicalRoot,
@@ -245,7 +264,7 @@ export async function prepareJavaSupportInstall(projectRoot: string, artifactsDi
 
 export async function applyJavaSupportInstall(preview: InstallPreview): Promise<void> {
   if (await fs.realpath(preview.projectRoot) !== preview.projectRoot) throw new Error("Linked Java project changed while support installation was open");
-  const currentBuild = await fs.readFile(preview.buildFile, "utf8");
+  const currentBuild = (await readBoundedRegularFile(preview.buildFile, MAX_BUILD_FILE_BYTES, "Robot build file")).toString("utf8");
   if (sha256(currentBuild) !== preview.buildHash) throw new Error("Robot build file changed before installation; review and try again");
   await assertSafeSupportDirectory(preview.projectRoot);
   const supportDirectory = path.join(preview.projectRoot, ".bordeaux");
@@ -307,12 +326,12 @@ function forceStopBuild(child: ChildProcessWithoutNullStreams): void {
 }
 
 export function cancelJavaCatalogBuild(force = false): boolean {
-  if (!activeBuild) return false;
+  if (!buildAdmission) return false;
+  buildAdmission.canceled = true;
+  if (!activeBuild) return true;
   activeBuild.canceled = true;
-  if (activeBuild.child) {
-    if (force) forceStopBuild(activeBuild.child);
-    else stopBuild(activeBuild.child, activeBuild.killGraceMs);
-  }
+  if (force) forceStopBuild(activeBuild.child);
+  else stopBuild(activeBuild.child, activeBuild.killGraceMs);
   return true;
 }
 
@@ -322,23 +341,13 @@ export function windowsGradleCommand(wrapper: string, args: readonly string[]): 
   return `"${wrapper}" ${args.join(" ")}`;
 }
 
-export async function runJavaCatalogBuild(projectRoot: string, limits: { timeoutMs?: number; outputBytes?: number; killGraceMs?: number } = {}): Promise<{ output: string }> {
-  if (activeBuild) throw new Error("A Java catalog build is already running");
-  const build: CatalogBuild = { child: null, canceled: false, killGraceMs: limits.killGraceMs ?? 2_000 };
-  activeBuild = build;
-  try {
-    return await executeJavaCatalogBuild(projectRoot, limits, build);
-  } finally {
-    activeBuild = null;
-  }
-}
-
-async function executeJavaCatalogBuild(projectRoot: string, limits: { timeoutMs?: number; outputBytes?: number; killGraceMs?: number }, build: CatalogBuild): Promise<{ output: string }> {
+async function runAdmittedJavaCatalogBuild(projectRoot: string, limits: { timeoutMs?: number; outputBytes?: number; killGraceMs?: number }, admission: { canceled: boolean }): Promise<{ output: string }> {
   const canonicalRoot = await fs.realpath(projectRoot);
+  if (admission.canceled) throw new Error("Java catalog build was canceled");
   const wrapperName = process.platform === "win32" ? "gradlew.bat" : "gradlew";
   const wrapper = path.join(canonicalRoot, wrapperName);
   if (!(await regularFile(wrapper))) throw new Error(`Linked project does not have a regular ${wrapperName} wrapper`);
-  if (build.canceled) throw new Error("Java catalog build was canceled");
+  if (admission.canceled) throw new Error("Java catalog build was canceled");
   const fixedArgs = ["bordeauxCatalog", "--no-daemon", "--console=plain"];
   const child = process.platform === "win32"
     ? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", windowsGradleCommand(wrapper, fixedArgs)], {
@@ -348,8 +357,8 @@ async function executeJavaCatalogBuild(projectRoot: string, limits: { timeoutMs?
         windowsVerbatimArguments: true,
       })
     : spawn(wrapper, fixedArgs, { cwd: canonicalRoot, env: sanitizedBuildEnvironment(), detached: true });
-  const killGraceMs = build.killGraceMs;
-  build.child = child;
+  const killGraceMs = limits.killGraceMs ?? 2_000;
+  activeBuild = { child, canceled: false, killGraceMs };
   let output = "";
   let outputBytes = 0;
   let overflow = false;
@@ -374,22 +383,35 @@ async function executeJavaCatalogBuild(projectRoot: string, limits: { timeoutMs?
       child.once("error", reject);
       child.once("exit", resolve);
     });
+  } catch (error) {
+    activeBuild = null;
+    throw error;
   } finally {
     clearTimeout(timeout);
     const escalation = killEscalations.get(child);
     if (escalation) clearTimeout(escalation);
     killEscalations.delete(child);
-    if (child.exitCode === null) stopBuild(child, killGraceMs);
+    if (activeBuild?.child === child && child.exitCode === null) stopBuild(child, killGraceMs);
   }
+  const canceled = activeBuild?.canceled === true;
+  activeBuild = null;
   const redacted = output
     .replaceAll(canonicalRoot, "<robot-project>")
     .replace(/\u001b\[[0-9;]*m/g, "")
     .trim();
-  if (build.canceled) throw new Error("Java catalog build was canceled");
+  if (canceled) throw new Error("Java catalog build was canceled");
   if (timedOut) throw new Error(`Java catalog build exceeded the ${timeoutMs / 1000}-second time limit`);
   if (overflow) throw new Error(`Java catalog build exceeded the ${limits.outputBytes ?? MAX_BUILD_OUTPUT_BYTES}-byte output limit`);
   if (exitCode !== 0) throw new Error(`Java catalog build failed with exit code ${exitCode ?? "unknown"}${redacted ? `\n${redacted.slice(-8_192)}` : ""}`);
   return { output: redacted.slice(-8_192) };
+}
+
+export async function runJavaCatalogBuild(projectRoot: string, limits: { timeoutMs?: number; outputBytes?: number; killGraceMs?: number } = {}): Promise<{ output: string }> {
+  if (buildAdmission) throw new Error("A Java catalog build is already running");
+  const admission = { canceled: false };
+  buildAdmission = admission;
+  try { return await runAdmittedJavaCatalogBuild(projectRoot, limits, admission); }
+  finally { if (buildAdmission === admission) buildAdmission = null; }
 }
 
 export function installPreviewSummary(preview: InstallPreview): { buildFile: string; files: string[]; replacing: boolean } {

@@ -5,6 +5,8 @@ import {
   scaleTrajectoryTiming,
 } from "./optimizedTrajectory";
 import { profiledSplinePlanner } from "./profiledSpline";
+import { addJerkDiagnostics } from "./jerkDiagnostics";
+import { addAngularLimitDiagnostics } from "./angularConstraints";
 import { applyStationaryActions } from "./stationaryActions";
 import { applyRotationPriority, headingTransitionIntervalMask } from "./rotationPriority";
 import { effectivePathConstraints, robotHardLimits } from "../robotLimits";
@@ -110,6 +112,9 @@ export function getPlanner(id: TrajectoryPlannerId): TrajectoryPlanner {
   return {
     id: planner.id,
     generate(input) {
+      const maxAngDecel = input.path.constraints.maxAngDecel;
+      if (maxAngDecel !== undefined && !Number.isFinite(maxAngDecel)) throw new Error("maxAngDecel must be a finite number");
+      if (maxAngDecel !== undefined && maxAngDecel <= 0) throw new Error("maxAngDecel must be greater than zero");
       const hardLimits = robotHardLimits(input.robot);
       const robot = hardLimits ? { ...input.robot, maxSpeed: hardLimits.maxSpeedMps } : input.robot;
       const canonicalPath = withoutLegacyTimingPriority(input.path);
@@ -199,7 +204,7 @@ export function getPlanner(id: TrajectoryPlannerId): TrajectoryPlanner {
               }],
             };
           }
-          return applyStationaryActions(path, rotated, robot);
+          return addAngularLimitDiagnostics(path, addJerkDiagnostics(path, applyStationaryActions(path, rotated, robot)));
         }
 
         const optimization = rotated.optimization ?? generated.optimization!;
@@ -239,7 +244,7 @@ export function getPlanner(id: TrajectoryPlannerId): TrajectoryPlanner {
               ])].sort(),
             },
           };
-          if (!hasStationaryPause) {
+          if (!path.waypoints.some((waypoint) => waypoint.turnInPlace || waypoint.jiggle)) {
             const profiled = getPlanner("profiledSpline").generate({
               ...planningInput,
               samplesPerSegment: (planningInput.samplesPerSegment ?? DEFAULT_SAMPLES_PER_SEGMENT) * 2,
@@ -273,7 +278,7 @@ export function getPlanner(id: TrajectoryPlannerId): TrajectoryPlanner {
           }
         }
       }
-      return applyStationaryActions(path, rotated, robot);
+      return addAngularLimitDiagnostics(path, addJerkDiagnostics(path, applyStationaryActions(path, rotated, robot)));
     },
   };
 }

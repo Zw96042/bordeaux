@@ -46,7 +46,7 @@ import { UI } from "./ui";
   ];
   const BRUSHES = [
     { id: 'push', icon: 'brushPush', label: 'Push', detail: 'Move the curve with the pointer' },
-    { id: 'smooth', icon: 'brushSmooth', label: 'Smooth', detail: 'Relax bends while keeping authored waypoints' },
+    { id: 'smooth', icon: 'brushSmooth', label: 'Smooth', detail: 'Relax bends and remove redundant points' },
     { id: 'twirl', icon: 'brushTwirl', label: 'Twirl', detail: 'Rotate the curve through the radius' },
   ];
   function ToolRail({ tool, setTool, brush, setBrush, waypointCount }) {
@@ -220,11 +220,16 @@ import { UI } from "./ui";
   }
 
   function Transport({ derived, doc, metric, setMetric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen }) {
-    const total = derived.prof.totalTime || 0.001;
+    const playback = derived.playback;
+    const prof = playback ? playback.prof : derived.prof;
+    const pts = playback ? playback.pts : derived.sample.pts;
+    const M = playback ? playback.metrics : derived.metrics;
+    const anchors = playback ? playback.anchors : derived.anchors;
+    const rev = playback ? playback.rev : derived.rev;
+    const total = prof.totalTime || 0.001;
     const pct = Math.max(0, Math.min(1, playTime / total));
     const scrubStep = Math.min(0.02, total);
     const graphRef = useRef(null);
-    const prof = derived.prof, pts = derived.sample.pts, M = derived.metrics;
     const timeline = useMemo(() => {
       const motionEnd = Math.max(0, Number(prof.t && prof.t[prof.t.length - 1]) || 0);
       const distance = pts.length ? Math.max(0, Number(pts[pts.length - 1].s) || 0) : 0;
@@ -244,7 +249,9 @@ import { UI } from "./ui";
       const markers = ((doc && doc.markers) || []).map((marker, index) => ({
         key: 'event-' + index,
         label: marker.name || 'Event marker ' + (index + 1),
-        left: percentAt(PM.featureFraction(marker, derived.sample)),
+        left: derived.markers && derived.markers[index]
+          ? Math.max(0, Math.min(100, derived.markers[index].timeS / total * 100))
+          : percentAt(PM.featureFraction(marker, derived.sample)),
       }));
       const targets = ((doc && doc.targets) || []).map((target, index) => ({
         key: 'target-' + index,

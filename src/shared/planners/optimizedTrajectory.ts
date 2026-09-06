@@ -16,6 +16,22 @@ import { buildCanonicalPathState, isStationaryHeadingTransition } from "./pathSt
 const R = (value: number, places = 4) => Number(value.toFixed(places));
 const MAX_REFINEMENT_PASSES = 2;
 
+/** Retain authored boundaries when constraint knots are inserted into a refined seed. */
+function remapWaypointIndices(base: PlannerResult, samples: readonly TrajectorySample[]): number[] | undefined {
+  if (!base.waypointSampleIndices) return undefined;
+  const remapped = new Map<number, number>();
+  const boundaries = new Set(base.waypointSampleIndices);
+  let cursor = 0;
+  base.samples.forEach((source, index) => {
+    while (cursor < samples.length && (samples[cursor].s !== source.s
+      || samples[cursor].x !== source.x || samples[cursor].y !== source.y)) cursor += 1;
+    if (cursor === samples.length) throw new Error("Optimization lost a source geometry sample");
+    if (boundaries.has(index)) remapped.set(index, cursor);
+    cursor += 1;
+  });
+  return base.waypointSampleIndices.map((index) => remapped.get(index)!);
+}
+
 function remapTiming(samples: TrajectorySample[], velocities: number[], fullPrecision = false): TrajectorySample[] {
   if (samples.length < 2) return samples;
 
@@ -340,7 +356,7 @@ function diagnostics(
 
 export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
   id: "optimizedTrajectory",
-  generate(input: PlannerInput): PlannerResult {
+  generate(input): PlannerResult {
     const started = performance.now();
     const base = profiledSplinePlanner.generate(input);
     const optimizationSeed = profiledSplineOptimizationSeed(input);
@@ -384,6 +400,7 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
       let totalIterations = 0;
       for (let refinementPasses = 0; refinementPasses <= MAX_REFINEMENT_PASSES; refinementPasses += 1) {
         const optimizationSamples = insertOptimizationBoundaries(input, candidateBase.samples);
+        const waypointSampleIndices = remapWaypointIndices(candidateBase, optimizationSamples);
         const reachabilityInput = buildReachabilityInput(input, optimizationSamples);
         const reachability = solveReachabilityProfile(reachabilityInput);
         totalIterations += reachability.iterations;
@@ -423,6 +440,7 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
             planner: "optimizedTrajectory",
             totalTimeS,
             totalDistanceM: candidateBase.totalDistanceM,
+            waypointSampleIndices,
             samples,
             markers: candidateBase.markers.map((marker) => ({ ...marker, timeS: R(timeAtFraction(samples, marker.fraction), 6) })),
             diagnostics: candidateBase.diagnostics,
@@ -464,6 +482,7 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
             planner: "optimizedTrajectory",
             totalTimeS,
             totalDistanceM: candidateBase.totalDistanceM,
+            waypointSampleIndices,
             samples: locallyRetimed.samples,
             markers: candidateBase.markers.map((marker) => ({
               ...marker,
@@ -519,6 +538,7 @@ export const optimizedTrajectoryPlanner: TrajectoryPlanner = {
                 planner: "optimizedTrajectory",
                 totalTimeS,
                 totalDistanceM: candidateBase.totalDistanceM,
+                waypointSampleIndices,
                 samples: acceptedSamples,
                 markers: candidateBase.markers.map((marker) => ({
                   ...marker,

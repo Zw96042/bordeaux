@@ -1,3 +1,5 @@
+import { wrapRadians } from "../math/angles";
+import { orderedWaypointSampleIndices } from "./waypointSamples";
 import type { ConstraintRange, PathDoc, PlannerResult, RobotConfig, TrajectorySample } from "../types";
 import { headingTransitionWindows, segmentHeadingLaws, type HeadingTransitionWindow } from "./headingTransitions";
 import { evaluateDrivetrainForces, evaluateDrivetrainKinematics } from "./drivetrainProjection";
@@ -14,38 +16,19 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
 }
 
-function wrapRadians(value: number): number {
-  let wrapped = value;
-  while (wrapped > Math.PI) wrapped -= Math.PI * 2;
-  while (wrapped < -Math.PI) wrapped += Math.PI * 2;
-  return wrapped;
-}
+
 
 function smootherStep(value: number): number {
   const t = clamp(value, 0, 1);
   return t ** 3 * (t * (t * 6 - 15) + 10);
 }
 
-function waypointFractions(path: PathDoc, samples: readonly TrajectorySample[]): number[] {
-  let cursor = 0;
-  return path.waypoints.map((waypoint, waypointIndex) => {
-    if (waypointIndex === path.waypoints.length - 1) return samples.at(-1)?.f ?? 1;
-    let best = cursor;
-    let bestDistance = Infinity;
-    for (let index = cursor; index < samples.length; index += 1) {
-      const distance = Math.hypot(samples[index].x - waypoint.x, samples[index].y - waypoint.y);
-      if (distance < bestDistance) {
-        best = index;
-        bestDistance = distance;
-      }
-    }
-    cursor = best;
-    return samples[best]?.f ?? 0;
-  });
+function waypointFractions(path: PathDoc, samples: readonly TrajectorySample[], indices?: readonly number[]): number[] {
+  return (indices ?? orderedWaypointSampleIndices(path.waypoints, samples)).map((index) => samples[index]?.f ?? 0);
 }
 
-export function effectiveRanges(path: PathDoc, samples: readonly TrajectorySample[], totalDistance: number): EffectiveRange[] {
-  const waypointF = waypointFractions(path, samples);
+export function effectiveRanges(path: PathDoc, samples: readonly TrajectorySample[], totalDistance: number, indices?: readonly number[]): EffectiveRange[] {
+  const waypointF = waypointFractions(path, samples, indices);
   return (path.ranges ?? []).map((range) => {
     let start = range.f0;
     let end = range.f1;
@@ -292,8 +275,9 @@ function drivetrainForceAngularAccelerationLimits(
 }
 
 function intervalAngularLimits(path: PathDoc, ranges: readonly EffectiveRange[], before: number, after: number) {
-  const first = angularLimits(path, ranges, before);
-  const second = angularLimits(path, ranges, after);
+  const overlapping = ranges.filter((range) => Math.min(after, range.end) >= Math.max(before, range.start) - EPSILON);
+  const first = angularLimits(path, overlapping.map((range) => ({ ...range, start: before, end: after })), before);
+  const second = angularLimits(path, overlapping.map((range) => ({ ...range, start: before, end: after })), after);
   return {
     velocity: Math.min(first.velocity, second.velocity),
     acceleration: Math.min(first.acceleration, second.acceleration),
@@ -390,6 +374,7 @@ function samplePeriod(samples: readonly TrajectorySample[]): number {
 
 function hasAngularViolation(path: PathDoc, ranges: readonly EffectiveRange[], samples: readonly TrajectorySample[]): boolean {
   let previousAcceleration: number | undefined;
+  let previousIntervalS: number | undefined;
   for (let index = 0; index < samples.length; index += 1) {
     const sample = samples[index];
     const limits = index === 0
@@ -400,11 +385,9 @@ function hasAngularViolation(path: PathDoc, ranges: readonly EffectiveRange[], s
     const previous = samples[index - 1];
     const dt = sample.t - previous.t;
     if (dt <= EPSILON) continue;
-    const accelerationDt = index === 1
-      ? dt * 0.5
-      : (sample.t - samples[index - 2].t) * 0.5;
-    const signedAcceleration = (sample.angularVelocityRadps - previous.angularVelocityRadps)
-      / Math.max(EPSILON, accelerationDt);
+    // Exported angular velocities are timestamped at their samples, not at
+    // interval midpoints. Their signed difference uses the full sample period.
+    const signedAcceleration = (sample.angularVelocityRadps - previous.angularVelocityRadps) / dt;
     const reversing = Math.sign(sample.angularVelocityRadps) !== 0
       && Math.sign(previous.angularVelocityRadps) !== 0
       && Math.sign(sample.angularVelocityRadps) !== Math.sign(previous.angularVelocityRadps);
@@ -416,10 +399,11 @@ function hasAngularViolation(path: PathDoc, ranges: readonly EffectiveRange[], s
     if (Math.abs(signedAcceleration) > limit * 1.02) return true;
     if (previousAcceleration !== undefined && (path.constraints.maxAngJerk ?? 0) > 0) {
       const jerk = Math.abs(signedAcceleration - previousAcceleration)
-        / Math.max(EPSILON, accelerationDt);
+        / Math.max(EPSILON, (dt + (previousIntervalS ?? dt)) * 0.5);
       if (jerk > path.constraints.maxAngJerk! * DEG * 1.02) return true;
     }
     previousAcceleration = signedAcceleration;
+    previousIntervalS = dt;
   }
   return false;
 }
@@ -427,8 +411,8 @@ function hasAngularViolation(path: PathDoc, ranges: readonly EffectiveRange[], s
 /** Tracks heading causally under the coupled drivetrain limits. */
 export function applyRotationPriority(path: PathDoc, result: PlannerResult, robot: RobotConfig): PlannerResult {
   if (result.samples.length < 2) return result;
-  const ranges = effectiveRanges(path, result.samples, result.totalDistanceM);
-  const waypointF = waypointFractions(path, result.samples);
+  const ranges = effectiveRanges(path, result.samples, result.totalDistanceM, result.waypointSampleIndices);
+  const waypointF = waypointFractions(path, result.samples, result.waypointSampleIndices);
   const laws = segmentHeadingLaws(path, false);
   const breaks = path.waypoints.slice(0, -1).map((waypoint) => Boolean(waypoint.turnInPlace));
   const transitions = headingTransitionWindows(path.waypoints, laws, breaks, waypointF, result.totalDistanceM);

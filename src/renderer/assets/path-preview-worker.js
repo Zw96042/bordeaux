@@ -1,3 +1,7 @@
+import { derivePlannerPreview } from "./optimized-preview";
+import { buildRoutineRun } from "../lib/routineRun";
+import { RoutinePreview } from "./routine-preview";
+const derivePathPreview = derivePlannerPreview;
 import { PM } from "../lib/pathMath";
 import { optimizeCorridorFinal } from "../../shared/planners/corridorFinal";
 import { getPlanner } from "../../shared/planners";
@@ -321,12 +325,30 @@ export function processPathPreviewJob(
   }
 }
 
-if (typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope) {
-  self.onmessage = (event) => self.postMessage(processPathPreviewJob(
-    event.data,
-    PM.derivePath,
-    optimizeCorridorFinal,
-    interactiveTrajectory,
-    (progress) => self.postMessage(progress),
-  ));
+export function processRoutinePreviewJob(job, buildRun = buildRoutineRun) {
+  const startedAt = performance.now();
+  try {
+    const admission = RoutinePreview.workerRoutineAdmission(job.routine, job.paths, job.robot, job.outcomes);
+    if (!admission.allowed) throw new RangeError(admission.error.message);
+    return {
+      id: job.id,
+      value: buildRun(job.routine, job.paths, job.robot, job.outcomes, job.plannerId, derivePathPreview),
+      durationMs: performance.now() - startedAt,
+    };
+  } catch (error) {
+    return {
+      id: job.id,
+      error: {
+        name: error && error.name ? error.name : 'Error',
+        message: error && error.message ? error.message : String(error),
+      },
+      durationMs: performance.now() - startedAt,
+    };
+  }
+}
+
+if (typeof self !== 'undefined') {
+  self.onmessage = (event) => self.postMessage(event.data?.kind === 'routine'
+    ? processRoutinePreviewJob(event.data)
+    : processPathPreviewJob(event.data, PM.derivePath, optimizeCorridorFinal, interactiveTrajectory, (progress) => self.postMessage(progress)));
 }

@@ -18,10 +18,6 @@ beforeAll(async () => {
       if (job.kind === "throw") throw new Error("Worker failed");
       if (job.kind === "exit") process.exit(job.code);
       if (job.kind === "message") parentPort.postMessage(job.message);
-      if (job.kind === "resultThenThrow") {
-        parentPort.postMessage({ ok: true, result: 4 });
-        throw new Error("Late worker failure");
-      }
     });
   `);
 });
@@ -66,9 +62,13 @@ describe("one-request worker lifecycle", () => {
   });
 
   it("settles once when a worker fails after posting its result", async () => {
-    const terminate = vi.spyOn(Worker.prototype, "terminate");
+    const originalTerminate = Worker.prototype.terminate;
+    const terminate = vi.spyOn(Worker.prototype, "terminate").mockImplementation(function (this: Worker) {
+      this.emit("error", new Error("Late worker failure"));
+      return originalTerminate.call(this);
+    });
 
-    await expect(runWorkerTask(filename, { kind: "resultThenThrow" }, "Test")).resolves.toBe(4);
+    await expect(runWorkerTask(filename, { kind: "message", message: { ok: true, result: 4 } }, "Test")).resolves.toBe(4);
 
     expect(terminate).toHaveBeenCalledTimes(1);
     await terminate.mock.results[0].value;

@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { AgentBridgeClient, AgentBridgeServer } from "../src/electron/agentBridge";
 import { AgentSessionService, runAgentPlanningJobDirect } from "../src/electron/agentSession";
+import type { RepairCandidate } from "../src/shared/agent/types";
 import { createDemoProject } from "../src/shared/project/defaults";
 import type { JavaCommandCatalog, JavaCommandDescriptor } from "../src/shared/types";
+import { validateProject } from "../src/shared/validation";
 
 function snapshot(revision = 0) {
   const project = createDemoProject();
@@ -133,6 +136,34 @@ describe("agent session and private bridge", () => {
     expect(signals.every((signal) => !signal.aborted)).toBe(true);
     releases.forEach((release) => release());
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+  });
+
+  it("bounds concurrent read-only planning workers", async () => {
+    const releases: Array<() => void> = [];
+    let active = 0;
+    let peak = 0;
+    const service = new AgentSessionService(() => {}, () => null, async (job) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      active -= 1;
+      return runAgentPlanningJobDirect(job);
+    });
+    service.publishSnapshot(snapshot());
+
+    const requests = Array.from({ length: 100 }, () => service.request({ method: "analyze_path", params: {} }));
+    const settled = Promise.allSettled(requests);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(releases).toHaveLength(2);
+    expect(peak).toBe(2);
+    releases.forEach((release) => release());
+    const results = await settled;
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(2);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(98);
+    expect(results.find((result) => result.status === "rejected")).toMatchObject({
+      reason: expect.objectContaining({ message: expect.stringContaining("already running 2 path analyses") }),
+    });
   });
 
   it("keeps preview-producing planning jobs newest-wins", async () => {
@@ -859,6 +890,84 @@ describe("agent session and private bridge", () => {
     }
   });
 
+  it("does not let an older bridge remove the active runtime descriptor", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-agent-owner-test-"));
+    const service = new AgentSessionService(() => {}, () => null);
+    service.publishSnapshot(snapshot());
+    const older = new AgentBridgeServer(directory, service);
+    const active = new AgentBridgeServer(directory, service);
+    try {
+      await older.start();
+      await active.start();
+      await older.stop();
+
+      const result: any = await new AgentBridgeClient(directory).request({ method: "inspect_session" });
+      expect(result.sessionId).toBe("session_test");
+    } finally {
+      await older.stop();
+      await active.stop();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("closes accepted sockets when descriptor publication fails", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-agent-startup-test-"));
+    const service = new AgentSessionService(() => {}, () => null);
+    const server = new AgentBridgeServer(directory, service);
+    const clients: net.Socket[] = [];
+    const rename = vi.spyOn(fs, "rename").mockImplementation(async (source) => {
+      const descriptor = JSON.parse(await fs.readFile(source, "utf8"));
+      const client = net.createConnection(descriptor.endpoint);
+      clients.push(client);
+      client.on("error", () => {});
+      await new Promise<void>((resolve) => client.once("connect", resolve));
+      throw new Error("descriptor publication failed");
+    });
+    try {
+      await expect(server.start()).rejects.toThrow("descriptor publication failed");
+      expect(server.enabled).toBe(false);
+    } finally {
+      rename.mockRestore();
+      clients.forEach((client) => client.destroy());
+      await server.stop();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("streams a schema-sized repair resource across bounded bridge frames", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-agent-large-test-"));
+    const service = new AgentSessionService(() => {}, () => null);
+    const project = createDemoProject();
+    const authoredPath = structuredClone(project.paths[0]);
+    authoredPath.id = "path_large";
+    authoredPath.name = "Large";
+    authoredPath.waypoints = Array.from({ length: 4_096 }, () => structuredClone(authoredPath.waypoints[0]));
+    project.paths = [authoredPath];
+    project.editor = { ...project.editor, activePathId: authoredPath.id };
+    expect(validateProject(project).ok).toBe(true);
+    const analysis = {
+      pathId: authoredPath.id, pathName: authoredPath.name, authoredPath, planner: "profiledSpline" as const,
+      totalTimeS: null, totalDistanceM: null, sampleCount: 0, samplesTruncated: false,
+      rawSamples: [], extrema: [], findings: [], plannerDiagnostics: [],
+    };
+    const resource: RepairCandidate = {
+      id: "repair_large", label: "Large repair", path: authoredPath, targetFindingIds: [],
+      before: analysis, after: analysis, changedFields: [], valid: true,
+    };
+    expect(Buffer.byteLength(JSON.stringify(resource))).toBeGreaterThan(1024 * 1024);
+    vi.spyOn(service, "request").mockResolvedValue(resource);
+    const server = new AgentBridgeServer(directory, service);
+    try {
+      await server.start();
+      const result: any = await new AgentBridgeClient(directory).request({ method: "inspect_session" });
+      expect(result.path.waypoints).toHaveLength(4_096);
+      expect(result.before.authoredPath.waypoints).toHaveLength(4_096);
+    } finally {
+      await server.stop();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("does not open a bridge request when cancellation arrives during descriptor I/O", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-agent-cancel-test-"));
     const service = new AgentSessionService(() => {}, () => null);
@@ -877,6 +986,44 @@ describe("agent session and private bridge", () => {
     } finally {
       requestSpy.mockRestore();
       await server.stop();
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("settles the response read when a bridge request write fails", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-agent-write-test-"));
+    const endpoint = path.join(os.tmpdir(), `bordeaux-mcp-w-${path.basename(directory).slice(-6)}.sock`);
+    const transport = net.createServer((socket) => socket.destroy());
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => unhandled.push(error);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        transport.once("error", reject);
+        transport.listen(endpoint, () => { transport.off("error", reject); resolve(); });
+      });
+      await fs.chmod(endpoint, 0o600);
+      await fs.mkdir(path.join(directory, "mcp"), { recursive: true, mode: 0o700 });
+      await fs.writeFile(path.join(directory, "mcp", "runtime-v1.json"), JSON.stringify({
+        schemaVersion: 1,
+        protocolVersion: 1,
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        instanceId: "write-failure-test",
+        endpoint,
+        token: "write-failure-test-token",
+      }), { mode: 0o600 });
+      process.on("unhandledRejection", onUnhandled);
+
+      const largeRequest = { method: "inspect_session" as const, padding: "x".repeat(32 * 1024 * 1024) };
+      const request = new AgentBridgeClient(directory).request(largeRequest);
+      await expect(request).rejects.toThrow();
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      await new Promise<void>((resolve) => transport.close(() => resolve()));
+      await fs.rm(endpoint, { force: true });
       await fs.rm(directory, { recursive: true, force: true });
     }
   });

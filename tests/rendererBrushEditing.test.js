@@ -47,7 +47,7 @@ describe("brush edit lifecycle", () => {
     expect(notifications).toBe(1);
   });
 
-  it("keeps a segment selection at the same index through a brush stroke", () => {
+  it("keeps a segment selection on its original endpoint after earlier subdivision", () => {
     const editStore = PathEdit.create();
     const result = applyBrushDraft(editStore, path(), {
       kind: "push",
@@ -59,7 +59,7 @@ describe("brush edit lifecycle", () => {
 
     const selection = remapBrushSelection({ kind: "seg", idx: 1 }, result.beforeWaypoints, result.path.waypoints);
     expect(selection).toEqual({ kind: "seg", idx: expect.any(Number) });
-    expect(selection.idx).toBe(1);
+    expect(selection.idx).toBeGreaterThan(1);
     expect(result.path.waypoints[selection.idx]).toBe(result.beforeWaypoints[1]);
   });
 
@@ -93,7 +93,6 @@ describe("brush edit lifecycle", () => {
 
     expect(selection.current.kind).toBe(initial.kind);
     expect(second.path.waypoints[selection.current.idx]).toMatchObject(tracked);
-    expect(selected).toEqual([]);
-    expect(second.path.waypoints).toHaveLength(source.waypoints.length);
+    expect(selected.at(-1)).toEqual(selection.current);
   });
 });

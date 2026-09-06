@@ -1,3 +1,4 @@
+import { indexIntervalPolicies } from "../planners/intervalPolicies";
 import type { ConstraintRange, ControlPoint, DriveType, PathConstraints, PathDoc, RobotConfig, TurnInPlace } from "../types";
 import type { GeometryPoint } from "./geometry";
 import type { HeadingAnchor } from "./headingAnchors";
@@ -64,54 +65,32 @@ function profile(pts: readonly Pick<GeometryPoint, "s" | "curv">[], c: ProfileCo
   v[n - 1] = Math.min(v[n - 1], endV);
   // hard stops: velocity pinned to 0
   stopSet.forEach(idx => { if (idx >= 0 && idx < n) v[idx] = 0; });
-  // per-point accel/decel limits, tightened by any constraint ranges (tightest wins)
-  const ranges = opts.ranges || [];
-  const totalS = pts[n - 1].s || 1;
-  const accelG = Math.max(0.1, c.maxAccel);
-  const decelG = (c.maxDecel != null && c.maxDecel > 0) ? c.maxDecel : accelG;
-  const aFwd = new Array<number>(n).fill(accelG), aBack = new Array<number>(n).fill(decelG);
-  const rangeAngV = new Array<number>(n).fill(Infinity), rangeAngA = new Array<number>(n).fill(Infinity);
-  // Index i describes the interval (i - 1, i). Evaluating overlap instead of
-  // requiring both endpoints to be inside a policy preserves very short
-  // transition windows that fall between geometry samples.
-  const translationPriority = new Array<boolean>(n).fill(false);
-  const headingTransitions = opts.headingTransitions || [];
-  if (ranges.length || headingTransitions.length) {
-    for (let i = 0; i < n; i++) {
-      const f = pts[i].s / totalS;
-      let rv = Infinity, ra = Infinity, rd = Infinity, rw = Infinity, rwa = Infinity;
-      for (let r = 0; r < ranges.length; r++) {
-        const R = ranges[r]; const lo = Math.min(R.f0, R.f1), hi = Math.max(R.f0, R.f1);
-        if (f >= lo && f <= hi) {
-          if (R.maxVel > 0) rv = Math.min(rv, R.maxVel);
-          if (R.maxAccel > 0) ra = Math.min(ra, R.maxAccel);
-          if (R.maxDecel != null && R.maxDecel > 0) rd = Math.min(rd, R.maxDecel);
-          if (R.maxAngVel > 0) rw = Math.min(rw, R.maxAngVel);
-          if (R.maxAngAccel > 0) rwa = Math.min(rwa, R.maxAngAccel);
-        }
-      }
-      if (rv < Infinity) v[i] = Math.min(v[i], rv);
+    // Per-interval limits, tightened by any overlapping constraint range (tightest wins).
+    const ranges = opts.ranges || [];
+    const totalS = pts[n - 1].s || 1;
+    const accelG = Math.max(0.1, c.maxAccel);
+    const decelG = (c.maxDecel != null && c.maxDecel > 0) ? c.maxDecel : accelG;
+    const aFwd = new Array(n).fill(accelG), aBack = new Array(n).fill(decelG);
+    const rangeAngV = new Array(n).fill(Infinity), rangeAngA = new Array(n).fill(Infinity);
+    // Index i describes the interval (i - 1, i). Evaluating overlap instead of
+    // requiring both endpoints to be inside a policy preserves very short
+    // transition windows that fall between geometry samples.
+    const headingTransitions = opts.headingTransitions || [];
+    const intervalPolicies = indexIntervalPolicies(
+      pts.map((point) => point.s / totalS),
+      ranges.map((range) => ({ ...range, start: Math.min(range.f0, range.f1), end: Math.max(range.f0, range.f1) })),
+      headingTransitions,
+    );
+    const translationPriority = intervalPolicies.translationPriority;
+    for (let i = 1; i < n; i++) {
+      const rv = intervalPolicies.maxVel[i], ra = intervalPolicies.maxAccel[i], rd = intervalPolicies.maxDecel[i];
+      const rw = intervalPolicies.maxAngVel[i], rwa = intervalPolicies.maxAngAccel[i];
+      if (rv < Infinity) { v[i - 1] = Math.min(v[i - 1], rv); v[i] = Math.min(v[i], rv); }
       if (ra < Infinity) aFwd[i] = Math.min(accelG, ra);
-      if (rd < Infinity) aBack[i] = Math.min(decelG, rd);
+      if (rd < Infinity) aBack[i - 1] = Math.min(decelG, rd);
       if (rw < Infinity) rangeAngV[i] = rw * Math.PI / 180;
       if (rwa < Infinity) rangeAngA[i] = rwa * Math.PI / 180;
     }
-    let translationFollowing = false;
-    for (let i = 1; i < n; i++) {
-      const start = pts[i - 1].s / totalS, end = pts[i].s / totalS;
-      const overlaps = (lo: number, hi: number) => Math.min(end, hi) - Math.max(start, lo) >= -1e-9;
-      const activeRanges = ranges.filter((R) => overlaps(Math.min(R.f0, R.f1), Math.max(R.f0, R.f1)));
-      const activeTransitions = headingTransitions.filter((policy) => (
-        Math.min(end, policy.end) - Math.max(start, policy.start) > 1e-9
-      ));
-      const activePolicies = activeRanges.length + activeTransitions.length;
-      if (activePolicies > 0) {
-        translationFollowing = activeRanges.every((R) => R.rotationPriority === 'translation')
-          && activeTransitions.every((policy) => policy.rotationPriority === 'translation');
-      }
-      translationPriority[i] = translationFollowing;
-    }
-  }
   // ---- rotational limit: cap v so the commanded heading can actually be tracked ----
   // omega = (dtheta/ds) * v ; enforce |omega| <= Wmax and |d omega/dt| <= Aang (memo §16)
   const rotLimited = new Array<number>(n).fill(0);
@@ -130,7 +109,7 @@ function profile(pts: readonly Pick<GeometryPoint, "s" | "curv">[], c: ProfileCo
       for (let i = 1; i < n; i++) { const limit = Math.min(Aang, rangeAngA[i - 1], rangeAngA[i]); w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i - 1] * w[i - 1] + 2 * limit * dth[i]))); }
       for (let i = n - 2; i >= 0; i--) { const limit = Math.min(AangDecel, rangeAngA[i], rangeAngA[i + 1]); w[i] = Math.min(w[i], Math.sqrt(Math.max(0, w[i + 1] * w[i + 1] + 2 * limit * dth[i + 1]))); }
     }
-    for (let i = 0; i < n; i++) { const gi = Math.abs(g[i]); const translationInterval = i > 0 && translationPriority[i]; if (!translationInterval && gi > 1e-4) { const vr = w[i] / gi; if (vr < v[i] - 0.05) rotLimited[i] = 1; v[i] = Math.min(v[i], vr); } }
+    for (let i = 1; i < n; i++) { const gi = Math.abs(g[i]); if (!translationPriority[i] && gi > 1e-4) { const vr = w[i] / gi, rangeVr = rangeAngV[i] / gi; if (Math.min(vr, rangeVr) < Math.max(v[i - 1], v[i]) - 0.05) rotLimited[i] = 1; v[i - 1] = Math.min(v[i - 1], rangeVr); v[i] = Math.min(v[i], vr, rangeVr); } }
   }
   // forward
   for (let i = 1; i < n; i++) {
@@ -330,10 +309,10 @@ function analyze(pts: readonly Pick<GeometryPoint, "s" | "curv">[], _prof: Veloc
 // ---- one-call derivation: everything the field + panels need for a path ----
 function derivePath(doc: PathDoc, robot: RobotConfig | null, perSeg?: number, options?: { skipStationaryActions?: boolean }) {
   perSeg = perSeg || 56;
-  const smp = sample(doc.waypoints, perSeg);
+  const smp = sample(doc.waypoints, perSeg, true);
   const nWp = doc.waypoints.length;
   const originalLast = Math.max(0, smp.pts.length - 1);
-  let wpIdx = doc.waypoints.map((_, k) => Math.min(originalLast, k * perSeg));
+  let wpIdx = smp.wpIdx ?? doc.waypoints.map((_, k) => Math.min(originalLast, k * perSeg));
   const initialWpFrac = wpIdx.map((index) => smp.pts.length ? smp.pts[index].s / (smp.length || 1) : 0);
   const targetFractions = (doc.targets || []).map((target) => featureFraction(target, smp)).filter((fraction) => {
     let segment = 0;

@@ -98,6 +98,7 @@ function generateProfiledSpline(input: PlannerInput, fullPrecision: boolean): Pl
     totalTimeS: value(derived.prof.totalTime || 0, 4),
     totalDistanceM: value(totalDistanceM, 4),
     samples,
+    waypointSampleIndices: derived.wpIdx,
     markers: markersFor(input, pts, times, fullPrecision),
     diagnostics: diagnosticsFor(input.path.name, derived),
   };

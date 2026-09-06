@@ -19,6 +19,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Assumptions;
@@ -84,7 +85,8 @@ class BordeauxRuntimeTest {
                 "dynamic", "detour", (ObjectNode) MAPPER.readTree("{}"),
                 new BordeauxRoutineNode.GeneratedFallback.SafeStop())));
         BordeauxPathEvents document = new BordeauxPathEvents("auto", "Auto", 1,
-                capabilities.catalogId(), capabilities.catalogHash(), List.of(), List.of(), List.of(), routine);
+                capabilities.catalogId(), capabilities.catalogHash(), List.of(), List.of(), List.of(), routine,
+                Map.of("next-path", List.of(), "path-a", List.of(), "path-b", List.of()));
         BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, capabilities, new RecordingScheduler());
 
         BordeauxRuntimeException failure = assertThrows(BordeauxRuntimeException.class, runner::startProgress);
@@ -100,11 +102,14 @@ class BordeauxRuntimeTest {
                         new BordeauxRoutineNode.Command("collect", "collect", arguments),
                         new BordeauxRoutineNode.Path("next", "next-path")), List.of())));
         BordeauxPathEvents document = new BordeauxPathEvents("start", "Start", 1,
-                capabilities.catalogId(), capabilities.catalogHash(), List.of(), List.of(), List.of(), routine);
+                capabilities.catalogId(), capabilities.catalogHash(), List.of(), List.of(), List.of(), routine,
+                Map.of("next-path", List.of(), "path-a", List.of(), "path-b", List.of()));
         RecordingScheduler scheduler = new RecordingScheduler();
         BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, capabilities, scheduler);
 
-        assertEquals("next-path", runner.start().orElseThrow());
+        assertEquals(new BordeauxRoutineProgress.CommandWaiting(), runner.startProgress());
+        scheduler.active.clear();
+        assertEquals(new BordeauxRoutineProgress.Path("next-path"), runner.periodic());
         assertEquals(1, scheduler.scheduled.size());
     }
 
@@ -119,7 +124,8 @@ class BordeauxRuntimeTest {
                         new BordeauxRoutineNode.Command("collect", "collect", arguments),
                         new BordeauxRoutineNode.Path("next", "path-b")), List.of())));
         BordeauxPathEvents document = new BordeauxPathEvents("path-a", "A", 1,
-                capabilities.catalogId(), capabilities.catalogHash(), List.of(), List.of(), List.of(), routine);
+                capabilities.catalogId(), capabilities.catalogHash(), List.of(), List.of(), List.of(), routine,
+                Map.of("next-path", List.of(), "path-a", List.of(), "path-b", List.of()));
         double[] time = {100};
         RecordingScheduler scheduler = new RecordingScheduler();
         BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, capabilities, scheduler, () -> time[0]);
@@ -133,6 +139,8 @@ class BordeauxRuntimeTest {
         assertEquals(0.01, waiting.remainingS(), 1e-9);
         assertTrue(scheduler.scheduled.isEmpty());
         time[0] = 100.25;
+        assertEquals(new BordeauxRoutineProgress.CommandWaiting(), runner.periodic());
+        scheduler.active.clear();
         assertEquals(new BordeauxRoutineProgress.Path("path-b"), runner.periodic());
         assertEquals(1, scheduler.scheduled.size());
         assertEquals(new BordeauxRoutineProgress.Complete(), runner.completePathProgress("path-b"));
@@ -166,7 +174,8 @@ class BordeauxRuntimeTest {
         BordeauxCapabilities capabilities = BordeauxBindings.generatedCapabilities(new FirstProvider(), new SecondProvider());
         BordeauxRoutine routine = new BordeauxRoutine("Wait", List.of(new BordeauxRoutineNode.Wait("wait", 15)));
         BordeauxPathEvents document = new BordeauxPathEvents("path", "Path", 1,
-                capabilities.catalogId(), capabilities.catalogHash(), List.of(), List.of(), List.of(), routine);
+                capabilities.catalogId(), capabilities.catalogHash(), List.of(), List.of(), List.of(), routine,
+                Map.of("next-path", List.of(), "path-a", List.of(), "path-b", List.of()));
         BordeauxRoutineRunner runner = new BordeauxRoutineRunner(
                 document, capabilities, new RecordingScheduler(), () -> Double.MAX_VALUE);
 
@@ -314,6 +323,55 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void interleavesRepeatedEventCatchUpInGlobalTimeOrder() {
+        ObjectNode arguments = MAPPER.createObjectNode();
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "auto", "Auto", 2, CATALOG_ID, HASH, List.of(
+                        new BordeauxEvent("a", "A", 0, 0, "a", arguments, false,
+                                BordeauxEvent.Trigger.TIME, 1.0, 2.0, null),
+                        new BordeauxEvent("b", "B", 0.5, 0.25, "b", arguments, false,
+                                BordeauxEvent.Trigger.TIME, 1.0, 2.0, null)));
+        List<String> created = new ArrayList<>();
+        BordeauxEventRunner runner = new BordeauxEventRunner(
+                path, registry(created, "a", "b"), new RecordingScheduler());
+
+        runner.periodic(2.0);
+
+        assertEquals(List.of("a", "b", "a", "b", "a"), created);
+    }
+
+    @Test
+    void rejectsOversizedCatchUpBeforeAnyObservableWork() {
+        ObjectNode arguments = MAPPER.createObjectNode();
+        BordeauxEvent event = new BordeauxEvent(
+                "repeat", "Repeat", 0, 0, "repeat", arguments, false,
+                BordeauxEvent.Trigger.TIME, 0.001, 0.064, "enabled");
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "auto", "Auto", 1, CATALOG_ID, HASH, List.of(event));
+        List<String> created = new ArrayList<>();
+        int[] conditionChecks = {0};
+        RecordingScheduler scheduler = new RecordingScheduler();
+        BordeauxEventRunner runner = new BordeauxEventRunner(
+                path, registry(created, "repeat"),
+                BordeauxConditionRegistry.builder().register("enabled", () -> {
+                    conditionChecks[0]++;
+                    return true;
+                }).build(), scheduler);
+
+        BordeauxRuntimeException failure = assertThrows(
+                BordeauxRuntimeException.class, () -> runner.periodic(0.064));
+
+        assertTrue(failure.getMessage().contains("64"));
+        assertTrue(created.isEmpty());
+        assertTrue(scheduler.scheduled.isEmpty());
+        assertEquals(0, conditionChecks[0]);
+        assertEquals(0, runner.firedCount());
+
+        runner.periodic(0.01);
+        assertEquals(11, runner.firedCount());
+    }
+
+    @Test
     void gatesPositionEventsAndCatchesUpBoundedRepetitions() {
         ObjectNode arguments = MAPPER.createObjectNode();
         BordeauxEvent event = new BordeauxEvent(
@@ -338,6 +396,23 @@ class BordeauxRuntimeTest {
         assertEquals(4, runner.firedCount());
         assertThrows(BordeauxRuntimeException.class,
                 () -> BordeauxConditionRegistry.empty().evaluate("missing"));
+    }
+
+    @Test
+    void positionEventsAdvanceOnlyFromMeasuredProgress() {
+        BordeauxEvent event = new BordeauxEvent(
+                "collect", "Collect", 0.2, 0.5, "collect", MAPPER.createObjectNode(), false,
+                BordeauxEvent.Trigger.POSITION, null, null, null);
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "auto", "Auto", 1, CATALOG_ID, HASH, List.of(event));
+        List<String> created = new ArrayList<>();
+        BordeauxEventRunner runner = new BordeauxEventRunner(
+                path, registry(created, "collect"), new RecordingScheduler());
+
+        runner.periodic(0.9);
+        assertTrue(created.isEmpty());
+        runner.periodic(1.0, 0.5);
+        assertEquals(List.of("collect"), created);
     }
 
     @Test
@@ -478,31 +553,53 @@ class BordeauxRuntimeTest {
     }
 
     @Test
-    void choosesNextPathAndSchedulesCommandsBetweenPaths() throws Exception {
+    void waitsForCommandsBeforeChoosingNextPath() throws Exception {
         ObjectNode arguments = (ObjectNode) MAPPER.readTree("{}");
         BordeauxRoutine routine = new BordeauxRoutine("Choose note", List.of(
                 new BordeauxRoutineNode.Path("first", "path-a"),
                 new BordeauxRoutineNode.Decision("choose", "has-note",
                         List.of(new BordeauxRoutineNode.Command("collect", "collect", arguments),
+                                new BordeauxRoutineNode.Command("score", "score", arguments),
                                 new BordeauxRoutineNode.Path("a-next", "path-b")),
                         List.of(new BordeauxRoutineNode.Path("b-next", "path-c")))));
         BordeauxPathEvents document = new BordeauxPathEvents(
-                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), routine);
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), routine,
+                Map.of("path-a", List.of(), "path-b", List.of(), "path-c", List.of()));
         boolean[] hasNote = {true};
         List<String> created = new ArrayList<>();
         RecordingScheduler scheduler = new RecordingScheduler();
-        BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, registry(created, "collect"),
+        BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, registry(created, "collect", "score"),
                 BordeauxConditionRegistry.builder().register("has-note", () -> hasNote[0]).build(), scheduler);
 
-        assertEquals("path-a", runner.start().orElseThrow());
-        assertEquals("path-b", runner.completePath("path-a").orElseThrow());
+        BordeauxRoutineRunner.Transition firstPath = runner.startTransition();
+        assertEquals(BordeauxRoutineRunner.Status.PATH_ACTIVE, firstPath.status());
+        assertEquals("path-a", firstPath.pathId().orElseThrow());
+
+        BordeauxRoutineRunner.Transition collecting = runner.completePathTransition("path-a");
+        assertEquals(BordeauxRoutineRunner.Status.WAITING_FOR_COMMAND, collecting.status());
+        assertTrue(collecting.pathId().isEmpty());
         assertEquals(List.of("collect"), created);
         assertEquals(1, runner.commandCount());
-        assertTrue(runner.completePath("path-b").isEmpty());
+        assertEquals(collecting, runner.periodicTransition());
+        assertEquals(List.of("collect"), created);
+
+        scheduler.finish(scheduler.scheduled.get(0));
+        BordeauxRoutineRunner.Transition scoring = runner.periodicTransition();
+        assertEquals(BordeauxRoutineRunner.Status.WAITING_FOR_COMMAND, scoring.status());
+        assertEquals(List.of("collect", "score"), created);
+        assertEquals(2, runner.commandCount());
+        assertEquals(scoring, runner.periodicTransition());
+
+        scheduler.finish(scheduler.scheduled.get(1));
+        BordeauxRoutineRunner.Transition secondPath = runner.periodicTransition();
+        assertEquals(BordeauxRoutineRunner.Status.PATH_ACTIVE, secondPath.status());
+        assertEquals("path-b", secondPath.pathId().orElseThrow());
+        assertEquals(BordeauxRoutineRunner.Status.COMPLETE,
+                runner.completePathTransition("path-b").status());
 
         hasNote[0] = false;
         runner.reset();
-        runner.start();
+        assertEquals("path-a", runner.start().orElseThrow());
         assertEquals("path-c", runner.completePath("path-a").orElseThrow());
         assertThrows(BordeauxRuntimeException.class, () -> runner.completePath("wrong"));
     }
@@ -526,6 +623,98 @@ class BordeauxRuntimeTest {
                 new RecordingScheduler()));
         assertThrows(BordeauxRuntimeException.class, () -> new BordeauxEventRunner(eventPath, capabilities,
                 new RecordingScheduler()));
+    }
+
+    @Test
+    void legacyRoutineMethodsFailFastForCommandWaitsButKeepTrueCompletionEmpty() throws Exception {
+        ObjectNode arguments = (ObjectNode) MAPPER.readTree("{}");
+        RecordingScheduler scheduler = new RecordingScheduler();
+        List<String> created = new ArrayList<>();
+        BordeauxCommandRegistry commands = registry(created, "collect");
+
+        BordeauxRoutine startsWithCommand = new BordeauxRoutine("Command first", List.of(
+                new BordeauxRoutineNode.Command("collect", "collect", arguments),
+                new BordeauxRoutineNode.Path("path", "path-a")));
+        BordeauxRoutineRunner startRunner = new BordeauxRoutineRunner(new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), startsWithCommand),
+                commands, BordeauxConditionRegistry.empty(), scheduler);
+
+        BordeauxRuntimeException startFailure = assertThrows(BordeauxRuntimeException.class, startRunner::start);
+        assertTrue(startFailure.getMessage().contains("startTransition()"));
+        assertTrue(startFailure.getMessage().contains("completePathTransition(...)"));
+        assertTrue(startFailure.getMessage().contains("periodic()"));
+        assertEquals(BordeauxRoutineRunner.Status.READY, startRunner.status());
+        assertTrue(created.isEmpty());
+        assertTrue(scheduler.scheduled.isEmpty());
+
+        BordeauxRoutine pathThenCommand = new BordeauxRoutine("Command second", List.of(
+                new BordeauxRoutineNode.Path("path", "path-a"),
+                new BordeauxRoutineNode.Command("collect", "collect", arguments)));
+        BordeauxRoutineRunner completeRunner = new BordeauxRoutineRunner(new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), pathThenCommand),
+                commands, BordeauxConditionRegistry.empty(), scheduler);
+
+        assertEquals("path-a", completeRunner.start().orElseThrow());
+        BordeauxRuntimeException completeFailure = assertThrows(BordeauxRuntimeException.class,
+                () -> completeRunner.completePath("path-a"));
+        assertTrue(completeFailure.getMessage().contains("completePathTransition(...)"));
+        assertEquals(BordeauxRoutineRunner.Status.PATH_ACTIVE, completeRunner.status());
+        assertTrue(created.isEmpty());
+        assertTrue(scheduler.scheduled.isEmpty());
+
+        BordeauxRoutine pathOnly = new BordeauxRoutine("Path only", List.of(
+                new BordeauxRoutineNode.Path("path", "path-a")));
+        BordeauxRoutineRunner finishedRunner = new BordeauxRoutineRunner(new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), pathOnly),
+                commands, BordeauxConditionRegistry.empty(), scheduler);
+        assertEquals("path-a", finishedRunner.start().orElseThrow());
+        assertTrue(finishedRunner.completePath("path-a").isEmpty());
+        assertEquals(BordeauxRoutineRunner.Status.COMPLETE, finishedRunner.status());
+
+        BordeauxRoutineRunner emptyRunner = new BordeauxRoutineRunner(new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(),
+                new BordeauxRoutine("Empty", List.of())), commands, BordeauxConditionRegistry.empty(), scheduler);
+        assertTrue(emptyRunner.start().isEmpty());
+        assertEquals(BordeauxRoutineRunner.Status.COMPLETE, emptyRunner.status());
+    }
+
+    @Test
+    void cancelsActiveRoutineCommandOnResetStopAndClose() throws Exception {
+        ObjectNode arguments = (ObjectNode) MAPPER.readTree("{}");
+        BordeauxRoutine routine = new BordeauxRoutine("Command lifecycle", List.of(
+                new BordeauxRoutineNode.Path("first", "path-a"),
+                new BordeauxRoutineNode.Command("collect", "collect", arguments),
+                new BordeauxRoutineNode.Path("second", "path-b")));
+        BordeauxPathEvents document = new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), routine,
+                Map.of("path-a", List.of(), "path-b", List.of()));
+        RecordingScheduler scheduler = new RecordingScheduler();
+        BordeauxRoutineRunner runner = new BordeauxRoutineRunner(document, registry(new ArrayList<>(), "collect"),
+                BordeauxConditionRegistry.empty(), scheduler);
+
+        runner.start();
+        runner.completePathTransition("path-a");
+        Command resetCommand = scheduler.scheduled.get(0);
+        runner.reset();
+        assertEquals(BordeauxRoutineRunner.Status.READY, runner.status());
+
+        runner.start();
+        runner.completePathTransition("path-a");
+        Command stopCommand = scheduler.scheduled.get(1);
+        runner.stop();
+        assertEquals(BordeauxRoutineRunner.Status.STOPPED, runner.status());
+
+        runner.reset();
+        runner.start();
+        runner.completePathTransition("path-a");
+        Command closeCommand = scheduler.scheduled.get(2);
+        runner.close();
+
+        assertEquals(List.of(resetCommand, stopCommand, closeCommand), scheduler.cancelled);
+        assertEquals(BordeauxRoutineRunner.Status.STOPPED, runner.status());
+        assertFalse(scheduler.isScheduled(resetCommand));
+        assertFalse(scheduler.isScheduled(stopCommand));
+        assertFalse(scheduler.isScheduled(closeCommand));
     }
 
     @Test
@@ -555,6 +744,53 @@ class BordeauxRuntimeTest {
     }
 
     @Test
+    void timeFollowingConsumesOneUpdateAcrossEveryTimeSectionBoundary() {
+        List<BordeauxSample> samples = List.of(
+                sample(0, 0, 0), sample(1, 0.25, 1), sample(2, 0.5, 2),
+                sample(3, 0.75, 3), sample(4, 1, 4));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "time-sections", "Time sections", 1, CATALOG_ID, HASH, List.of(), samples, List.of(
+                        new BordeauxFollowSection(0, BordeauxFollowSection.Mode.TIME, 0, 1),
+                        new BordeauxFollowSection(1, BordeauxFollowSection.Mode.TIME, 1, 2),
+                        new BordeauxFollowSection(2, BordeauxFollowSection.Mode.TIME, 2, 3),
+                        new BordeauxFollowSection(3, BordeauxFollowSection.Mode.TIME, 3, 4)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(3, follower.update(0.8, 0, 0).index());
+        assertEquals(3, follower.sectionIndex());
+        assertFalse(follower.isFinished());
+        assertEquals(4, follower.update(0.2, 0, 0).index());
+        assertTrue(follower.isFinished());
+
+        follower.reset();
+        assertEquals(4, follower.update(1, 0, 0).index());
+        assertTrue(follower.isFinished());
+    }
+
+    @Test
+    void completesATerminalPositionWaitUsingTheTrailingTimeSection() {
+        List<BordeauxSample> samples = List.of(
+                new BordeauxSample(0, 0, 0, 0, 0, 0, 0, 1),
+                new BordeauxSample(1, 0.5, 1, 0.5, 1, 0, 0, 1),
+                new BordeauxSample(2, 1, 2, 1, 2, 0, 0, 0),
+                new BordeauxSample(3, 1.5, 2, 1, 2, 0, 0, 0),
+                new BordeauxSample(4, 2, 2, 1, 2, 0, 0, 0));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "terminal-wait", "Terminal wait", 2, CATALOG_ID, HASH, List.of(), samples, List.of(
+                        new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 2),
+                        new BordeauxFollowSection(0, BordeauxFollowSection.Mode.TIME, 2, 4)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(2, follower.update(0.02, 2, 0).index());
+        assertEquals(1, follower.sectionIndex());
+        assertFalse(follower.isFinished());
+        assertEquals(3, follower.update(0.5, 2, 0).index());
+        assertFalse(follower.isFinished());
+        assertEquals(4, follower.update(0.5, 2, 0).index());
+        assertTrue(follower.isFinished());
+    }
+
+    @Test
     void stationaryPositionUpdatesDoNotAdvanceTheLookahead() {
         List<BordeauxSample> samples = List.of(
                 sample(0, 0, 0), sample(1, 0.2, 1), sample(2, 0.4, 2),
@@ -581,6 +817,82 @@ class BordeauxRuntimeTest {
 
         assertEquals(3, follower.update(0.02, 1, 0).index());
         assertEquals(4, follower.update(0.02, 0, 0).index());
+    }
+
+    @Test
+    void positionFollowingDoesNotJumpToANearbyFutureLoopEndpoint() {
+        List<BordeauxSample> samples = List.of(
+                positionedSample(0, 0, 0), positionedSample(1, 1, 0),
+                positionedSample(2, 1, 1), positionedSample(3, 0, 1),
+                positionedSample(4, 0.01, 0));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "loop", "Loop", 1, CATALOG_ID, HASH, List.of(), samples,
+                List.of(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 4)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(2, follower.update(0.02, 0.01, 0).index());
+        assertFalse(follower.isFinished());
+        follower.update(0.02, 1, 0);
+        follower.update(0.02, 1, 1);
+        follower.update(0.02, 0, 1);
+        follower.update(0.02, 0.01, 0);
+        assertTrue(follower.isFinished());
+    }
+
+    @Test
+    void sparsePositionFollowingCanCompleteWithoutFollowingEveryPolylineVertex() {
+        List<BordeauxSample> samples = List.of(
+                positionedSample(0, 0, 0), positionedSample(1, 1, 0), positionedSample(2, 1, 1));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "sparse", "Sparse", 1, CATALOG_ID, HASH, List.of(), samples,
+                List.of(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 2)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(2, follower.update(0.02, 0, 0).index());
+        assertEquals(2, follower.update(0.02, 1, 1).index());
+        follower.update(0.02, 1, 1);
+        assertTrue(follower.isFinished());
+    }
+
+    @Test
+    void positionNoiseCannotAccumulateProgressAroundALoop() {
+        List<BordeauxSample> samples = List.of(
+                positionedSample(0, 0, 0), positionedSample(1, 1, 0),
+                positionedSample(2, 1, 1), positionedSample(3, 0, 1),
+                positionedSample(4, 0.01, 0));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "noisy-loop", "Noisy loop", 1, CATALOG_ID, HASH, List.of(), samples,
+                List.of(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 4)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        for (int update = 0; update < 200; update++) {
+            follower.update(0.02, update % 2 == 0 ? 0 : 0.04, 0);
+        }
+        assertFalse(follower.isFinished());
+        assertEquals(0, follower.sectionIndex());
+    }
+
+    @Test
+    void positionFollowingAdvancesThroughOnlyCoincidentSamples() {
+        List<BordeauxSample> samples = List.of(
+                positionedSample(0, 0, 0), positionedSample(1, 0, 0),
+                positionedSample(2, 0, 0), positionedSample(3, 1, 0));
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "coincident", "Coincident", 1, CATALOG_ID, HASH, List.of(), samples,
+                List.of(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 3)));
+        BordeauxReferenceFollower follower = new BordeauxReferenceFollower(path);
+
+        assertEquals(3, follower.update(0.02, 0, 0).index());
+        assertFalse(follower.isFinished());
+        follower.update(0.02, 1, 0);
+        assertTrue(follower.isFinished());
+
+        BordeauxPathEvents stationary = new BordeauxPathEvents(
+                "stationary", "Stationary", 1, CATALOG_ID, HASH, List.of(), samples.subList(0, 2),
+                List.of(new BordeauxFollowSection(0, BordeauxFollowSection.Mode.POSITION, 0, 1)));
+        BordeauxReferenceFollower stationaryFollower = new BordeauxReferenceFollower(stationary);
+        stationaryFollower.update(0.02, 0, 0);
+        assertTrue(stationaryFollower.isFinished());
     }
 
     @Test
@@ -736,6 +1048,189 @@ class BordeauxRuntimeTest {
         assertTrue(scheduler.scheduled.isEmpty());
     }
 
+    @Test
+    void preflightsEveryEventBeforeAnyCommandFactoryRuns() throws Exception {
+        int[] factoryCalls = {0};
+        BordeauxCommandRegistry registry = BordeauxCommandRegistry.builder()
+                .catalogId(CATALOG_ID)
+                .catalogHash(HASH)
+                .register("exact", Set.of("sequence"),
+                        args -> args.requireLong("sequence"), args -> {
+                    factoryCalls[0]++;
+                    return new TestCommand("exact-" + args.requireLong("sequence"));
+                })
+                .build();
+        ObjectNode valid = (ObjectNode) MAPPER.readTree("{\"sequence\":\"1\"}");
+        ObjectNode invalid = (ObjectNode) MAPPER.readTree("{\"sequence\":2}");
+        BordeauxPathEvents path = new BordeauxPathEvents(
+                "p", "P", 2, CATALOG_ID, HASH, List.of(
+                        new BordeauxEvent("early", "Early", 0.1, 0.1, "exact", valid, false),
+                        new BordeauxEvent("late", "Late", 1.0, 0.5, "exact", invalid, false)));
+        RecordingScheduler scheduler = new RecordingScheduler();
+
+        BordeauxRuntimeException failure = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxEventRunner(path, registry, scheduler));
+
+        assertTrue(failure.getMessage().contains("late"));
+        assertEquals(0, factoryCalls[0]);
+        assertTrue(scheduler.scheduled.isEmpty());
+
+        BordeauxEvent unknownCommand = new BordeauxEvent(
+                "unknown", "Unknown", 0.1, 0.1, "missing", valid, false);
+        BordeauxRuntimeException missingCommand = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxEventRunner(
+                        new BordeauxPathEvents("p", "P", 1, CATALOG_ID, HASH, List.of(unknownCommand)),
+                        registry, scheduler));
+        assertTrue(missingCommand.getMessage().contains("unknown Bordeaux command ID"));
+
+        BordeauxEvent conditional = new BordeauxEvent(
+                "conditional", "Conditional", 0.1, 0.1, "exact", valid, false,
+                BordeauxEvent.Trigger.TIME, null, null, "robot.ready");
+        BordeauxRuntimeException missingCondition = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxEventRunner(
+                        new BordeauxPathEvents("p", "P", 1, CATALOG_ID, HASH, List.of(conditional)),
+                        registry, scheduler));
+        assertTrue(missingCondition.getMessage().contains("Unknown Bordeaux condition ID"));
+
+        int[] conditionChecks = {0};
+        BordeauxEventRunner validRunner = new BordeauxEventRunner(
+                new BordeauxPathEvents("p", "P", 1, CATALOG_ID, HASH, List.of(conditional)),
+                registry, BordeauxConditionRegistry.builder().register("robot.ready", () -> {
+                    conditionChecks[0]++;
+                    return true;
+                }).build(), scheduler);
+        assertEquals(0, factoryCalls[0]);
+        assertEquals(0, conditionChecks[0]);
+        validRunner.periodic(0.1);
+        assertEquals(1, factoryCalls[0]);
+        assertEquals(1, conditionChecks[0]);
+
+        BordeauxCommandRegistry legacyRegistry = BordeauxCommandRegistry.builder()
+                .catalogId(CATALOG_ID).catalogHash(HASH)
+                .register("exact", Set.of("sequence"), args -> new TestCommand("legacy"))
+                .build();
+        BordeauxRuntimeException missingValidator = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxEventRunner(
+                        new BordeauxPathEvents("p", "P", 1, CATALOG_ID, HASH, List.of(conditional)),
+                        legacyRegistry,
+                        BordeauxConditionRegistry.builder().register("robot.ready", () -> true).build(), scheduler));
+        assertTrue(missingValidator.getMessage().contains("no side-effect-free argument validator"));
+    }
+
+    @Test
+    void preflightsCommandsInEveryRoutineBranch() throws Exception {
+        int[] factoryCalls = {0};
+        BordeauxCommandRegistry registry = BordeauxCommandRegistry.builder()
+                .catalogId(CATALOG_ID)
+                .catalogHash(HASH)
+                .register("exact", Set.of("sequence"),
+                        args -> args.requireLong("sequence"), args -> {
+                    factoryCalls[0]++;
+                    return new TestCommand("exact");
+                })
+                .build();
+        BordeauxRoutine routine = new BordeauxRoutine("Routine", List.of(
+                new BordeauxRoutineNode.Path("first", "path-a"),
+                new BordeauxRoutineNode.Decision("choose", "robot.ready", List.of(), List.of(
+                        new BordeauxRoutineNode.Command("late", "exact",
+                                (ObjectNode) MAPPER.readTree("{\"sequence\":2}"))))));
+        BordeauxPathEvents document = new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), routine);
+
+        BordeauxRuntimeException failure = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxRoutineRunner(document, registry,
+                        BordeauxConditionRegistry.builder().register("robot.ready", () -> true).build(),
+                        new RecordingScheduler()));
+
+        assertTrue(failure.getMessage().contains("late"));
+        assertEquals(0, factoryCalls[0]);
+    }
+
+    @Test
+    void preflightsDeepProgrammaticRoutinesWithoutRecursing() {
+        BordeauxRoutineNode nested = new BordeauxRoutineNode.Path("path", "path-a");
+        for (int depth = 0; depth < 20_000; depth++) {
+            nested = new BordeauxRoutineNode.Decision(
+                    "decision-" + depth, "robot.ready", List.of(nested), List.of());
+        }
+        BordeauxRoutine routine = new BordeauxRoutine("Deep routine", List.of(nested));
+        BordeauxPathEvents document = new BordeauxPathEvents(
+                "path-a", "A", 0, CATALOG_ID, HASH, List.of(), List.of(), List.of(), routine);
+
+        BordeauxRoutineRunner runner = new BordeauxRoutineRunner(
+                document,
+                BordeauxCommandRegistry.builder().catalogId(CATALOG_ID).catalogHash(HASH).build(),
+                BordeauxConditionRegistry.builder().register("robot.ready", () -> true).build(),
+                new RecordingScheduler());
+
+        assertEquals(0, runner.commandCount());
+    }
+
+    @Test
+    void preflightsEventsOnLaterRoutinePathsBeforeTheFirstPathStarts() {
+        int[] factoryCalls = {0};
+        BordeauxCommandRegistry registry = BordeauxCommandRegistry.builder()
+                .catalogId(CATALOG_ID)
+                .catalogHash(HASH)
+                .register("exact", Set.of("sequence"),
+                        args -> args.requireLong("sequence"), args -> {
+                    factoryCalls[0]++;
+                    return new TestCommand("exact");
+                })
+                .build();
+        BordeauxConditionRegistry conditions = BordeauxConditionRegistry.builder()
+                .register("choose-path", () -> true)
+                .build();
+        RecordingScheduler scheduler = new RecordingScheduler();
+
+        BordeauxPathEvents unknownCommand = readRoutineWithLaterEvent(
+                """
+                {"eventId":"later","name":"Later","timeS":0.5,"fraction":0.5,
+                 "commandId":"missing","arguments":{},"cancelOnPathEnd":false}
+                """);
+        assertTrue(unknownCommand.events().isEmpty());
+        assertEquals(Set.of("path-a", "path-b"), unknownCommand.routinePathEvents().keySet());
+        assertThrows(UnsupportedOperationException.class,
+                () -> unknownCommand.routinePathEvents().put("other", List.of()));
+        assertThrows(UnsupportedOperationException.class,
+                () -> unknownCommand.routinePathEvents().get("path-b").clear());
+        BordeauxRuntimeException unknownFailure = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxRoutineRunner(unknownCommand, registry, conditions, scheduler));
+        assertTrue(unknownFailure.getMessage().contains("path-b"));
+        assertTrue(unknownFailure.getMessage().contains("unknown Bordeaux command ID"));
+
+        BordeauxPathEvents missingMetadata = new BordeauxPathEvents(
+                "path-a", "A", 1, CATALOG_ID, HASH, List.of(), List.of(), List.of(), unknownCommand.routine());
+        BordeauxRuntimeException metadataFailure = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxRoutineRunner(missingMetadata, registry, conditions, scheduler));
+        assertTrue(metadataFailure.getMessage().contains("path-b"));
+        assertTrue(metadataFailure.getMessage().contains("readWithRoutine"));
+
+        BordeauxPathEvents badArguments = readRoutineWithLaterEvent(
+                """
+                {"eventId":"later","name":"Later","timeS":0.5,"fraction":0.5,
+                 "commandId":"exact","arguments":{"sequence":"not-a-number"},"cancelOnPathEnd":false}
+                """);
+        BordeauxRuntimeException argumentFailure = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxRoutineRunner(badArguments, registry, conditions, scheduler));
+        assertTrue(argumentFailure.getMessage().contains("path-b"));
+        assertTrue(argumentFailure.getMessage().contains("sequence"));
+
+        BordeauxPathEvents badCondition = readRoutineWithLaterEvent(
+                """
+                {"eventId":"later","name":"Later","timeS":0.5,"fraction":0.5,
+                 "commandId":"exact","arguments":{"sequence":"2"},"cancelOnPathEnd":false,
+                 "conditionId":"missing-condition"}
+                """);
+        BordeauxRuntimeException conditionFailure = assertThrows(BordeauxRuntimeException.class,
+                () -> new BordeauxRoutineRunner(badCondition, registry, conditions, scheduler));
+        assertTrue(conditionFailure.getMessage().contains("path-b"));
+        assertTrue(conditionFailure.getMessage().contains("Unknown Bordeaux condition ID"));
+
+        assertEquals(0, factoryCalls[0]);
+        assertTrue(scheduler.scheduled.isEmpty());
+    }
+
     private static BordeauxPathEvents read(String json) {
         return BordeauxTrajectoryReader.read(
                 new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), "auto");
@@ -757,15 +1252,36 @@ class BordeauxRuntimeTest {
                 """.formatted(fallbackNodes);
     }
 
+    private static BordeauxPathEvents readRoutineWithLaterEvent(String eventJson) {
+        String json = """
+                {"schemaVersion":"bordeaux-trajectory/1.0","generator":"bordeaux",
+                 "catalog":{"schemaVersion":"1.0","catalogId":"test-robot","supportVersion":"0.1.0","catalogHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                 "routine":{"name":"Choose path","nodes":[
+                   {"id":"first","type":"path","ref":"path-a"},
+                   {"id":"choose","type":"decision","cond":"choose-path","thenLabel":"yes","elseLabel":"no",
+                    "then":[{"id":"second","type":"path","ref":"path-b"}],
+                    "else":[{"id":"fallback","type":"path","ref":"path-a"}]}]},
+                 "paths":[
+                   {"id":"path-a","name":"A","totalTimeS":1,"samples":[],"events":[]},
+                   {"id":"path-b","name":"B","totalTimeS":1,"samples":[],"events":[%s]}]}
+                """.formatted(eventJson);
+        return BordeauxTrajectoryReader.readWithRoutine(
+                new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), "path-a");
+    }
+
     private static BordeauxSample sample(int index, double timeS, double xM) {
         return new BordeauxSample(index, timeS, xM, xM / 4, xM, 0, 0, index == 4 ? 0 : 1);
+    }
+
+    private static BordeauxSample positionedSample(int index, double xM, double yM) {
+        return new BordeauxSample(index, index * 0.2, index, index / 4.0, xM, yM, 0, index == 4 ? 0 : 1);
     }
 
     private static BordeauxCommandRegistry registry(List<String> created, String... ids) {
         BordeauxCommandRegistry.Builder builder = BordeauxCommandRegistry.builder()
                 .catalogId(CATALOG_ID).catalogHash(HASH);
         for (String id : ids) {
-            builder.register(id, Set.of(), args -> {
+            builder.register(id, Set.of(), args -> {}, args -> {
                 created.add(id);
                 return new TestCommand(id);
             });
@@ -782,15 +1298,27 @@ class BordeauxRuntimeTest {
     private static final class RecordingScheduler implements BordeauxEventRunner.Scheduler {
         private final List<Command> scheduled = new ArrayList<>();
         private final List<Command> cancelled = new ArrayList<>();
+        private final List<Command> active = new ArrayList<>();
 
         @Override
         public void schedule(Command command) {
             scheduled.add(command);
+            active.add(command);
         }
 
         @Override
         public void cancel(Command command) {
             cancelled.add(command);
+            active.remove(command);
+        }
+
+        @Override
+        public boolean isScheduled(Command command) {
+            return active.contains(command);
+        }
+
+        private void finish(Command command) {
+            if (!active.remove(command)) throw new AssertionError("Command was not scheduled");
         }
     }
 }

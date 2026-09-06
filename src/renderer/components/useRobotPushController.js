@@ -31,7 +31,7 @@ export function useRobotPushController({ getProject, projectKey, catalogKey: sup
   const origin = useRef(null);
   const context = useRef({ projectKey, catalogKey });
   const state = useRef(null);
-  const api = window.bordeauxAPI;
+  const api = typeof window === 'undefined' ? undefined : window.bordeauxAPI;
   const desktopAvailable = Boolean(api?.prepareRobotPush);
   const busy = confirming || ['probing', 'pairing', 'preparing', 'retention-preparing', 'uploading', 'uploaded'].includes(phase) || (phase === 'staged' && !result);
   state.current = { phase, preview, retentionPreview, result, busy, confirming };

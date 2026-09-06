@@ -1,3 +1,5 @@
+// @ts-expect-error The renderer math module is intentionally JavaScript.
+import { PM } from "../src/renderer/lib/pathMath";
 import { describe, expect, it } from "vitest";
 import { createUnitPreferences } from "../src/renderer/lib/unitPreferences";
 import { wheelZoomFactor } from "../src/renderer/lib/zoom";
@@ -57,6 +59,12 @@ function pointerDragHarness() {
 }
 
 describe("renderer utilities", () => {
+  it("normalizes large finite headings without iterative subtraction", () => {
+    const pathMath = PM;
+    expect(pathMath.angWrap(1e12)).toBeGreaterThanOrEqual(-Math.PI);
+    expect(pathMath.angWrap(1e12)).toBeLessThanOrEqual(Math.PI);
+  });
+
   it("converts display units without changing canonical SI values", () => {
     const { prefs, document, values } = unitPreferences();
     expect(prefs.current()).toBe("metric");

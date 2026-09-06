@@ -287,6 +287,21 @@ export function validateOptimizedTrajectory(
     const before = samples[index];
     const after = samples[index + 1];
     const distance = after.s - before.s;
+    // Check exported feedforward as well as geometry-derived interval motion.
+    // Both traces must honor signed acceleration/deceleration through reversals.
+    if (usesSampleAngularKinematics && !skipsAngularForInterval(index) && after.t > before.t + EPSILON) {
+      const angular = angularLimitsForInterval(input, ranges, before.f, after.f);
+      const previous = before.angularVelocityRadps;
+      const current = after.angularVelocityRadps;
+      const reversing = previous * current < 0;
+      const limit = reversing ? Math.min(angular.acceleration, angular.deceleration)
+        : Math.abs(current) > Math.abs(previous) ? angular.acceleration : angular.deceleration;
+      const measured = Math.abs(current - previous) / (after.t - before.t);
+      if (measured > limit * 1.02 + EPSILON) {
+        pushViolation(violations, "angular-acceleration", index + 1, measured, limit, true, "Sample angular acceleration");
+        refinableIntervals.add(index);
+      }
+    }
     if (distance <= EPSILON) {
       if (!usesSampleAngularKinematics || skipsAngularForInterval(index)) continue;
       const intervalDt = after.t - before.t;

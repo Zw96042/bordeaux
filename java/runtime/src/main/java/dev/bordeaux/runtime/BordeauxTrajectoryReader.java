@@ -102,6 +102,7 @@ public final class BordeauxTrajectoryReader {
         int nameMatchCount = 0;
         Set<String> pathIds = new HashSet<>();
         Set<String> eventIds = new HashSet<>();
+        java.util.Map<String, ObjectNode> routinePaths = new java.util.LinkedHashMap<>();
         int sampleCount = 0;
         int eventCount = 0;
         int pathCount = 0;
@@ -175,6 +176,7 @@ public final class BordeauxTrajectoryReader {
                             // Metadata can follow paths in JSON. Parse motion once now,
                             // then attach the checked catalog and routine after the scan.
                             PathData parsed = validateAll ? parsePath(path) : null;
+                            if (includeRoutine) routinePaths.put(pathId, path);
                             if (pathSelector != null) {
                                 PathCandidate candidate = new PathCandidate(path, parsed);
                                 if (pathSelector.equals(pathId)) idMatch = candidate;
@@ -215,8 +217,24 @@ public final class BordeauxTrajectoryReader {
             throw new BordeauxRuntimeException("Path selector '" + pathSelector + "' is ambiguous");
         }
         PathData parsed = selected.parsed() != null ? selected.parsed() : parsePath(selected.json());
+        java.util.Map<String, List<BordeauxEvent>> routineEvents = new java.util.LinkedHashMap<>();
+        if (includeRoutine) {
+            java.util.Deque<BordeauxRoutineNode> pending = new java.util.ArrayDeque<>(routine.nodes());
+            while (!pending.isEmpty()) {
+                BordeauxRoutineNode node = pending.removeFirst();
+                if (node instanceof BordeauxRoutineNode.Path path && !routineEvents.containsKey(path.pathId())) {
+                    routineEvents.put(path.pathId(), parsePath(routinePaths.get(path.pathId())).events());
+                } else if (node instanceof BordeauxRoutineNode.Decision decision) {
+                    pending.addAll(decision.whenTrue());
+                    pending.addAll(decision.whenFalse());
+                } else if (node instanceof BordeauxRoutineNode.GeneratedTrajectory generated
+                        && generated.fallback() instanceof BordeauxRoutineNode.GeneratedFallback.Branch branch) {
+                    pending.addAll(branch.nodes());
+                }
+            }
+        }
         return new BordeauxPathEvents(parsed.id(), parsed.name(), parsed.totalTimeS(), identity.id(), identity.hash(),
-                parsed.events(), parsed.samples(), parsed.followSections(), includeRoutine ? routine : BordeauxRoutine.empty());
+                parsed.events(), parsed.samples(), parsed.followSections(), includeRoutine ? routine : BordeauxRoutine.empty(), routineEvents);
     }
 
     private record PathCandidate(ObjectNode json, PathData parsed) {}
@@ -288,6 +306,7 @@ public final class BordeauxTrajectoryReader {
 
         List<IndexedEvent> indexed = new ArrayList<>();
         Set<String> eventIds = new HashSet<>();
+        java.util.Map<String, ObjectNode> routinePaths = new java.util.LinkedHashMap<>();
         for (int index = 0; index < events.size(); index++) {
             JsonNode event = requireObject(events.get(index), "Path '" + id + "' event " + index + " must be an object");
             String eventId = text(event, "eventId", "Path '" + id + "' event " + index);

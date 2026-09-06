@@ -1,3 +1,4 @@
+import { directPreviewWork, directWorkIsSafe } from "../src/renderer/assets/direct-preview-work";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadRendererExport } from "./helpers/loadRendererExport";
 
@@ -46,7 +47,7 @@ function previewModule() {
       getSnapshot(): { status: string; value: unknown };
     };
   }>(new URL("../src/renderer/assets/path-preview.js", import.meta.url), "PathPreview", {
-    context: { performance, queueMicrotask, setTimeout, clearTimeout },
+    context: { performance, queueMicrotask, setTimeout, clearTimeout, directPreviewWork, directWorkIsSafe },
     replacements: [[
       "return new Worker(new URL('./path-preview-worker.js', import.meta.url), { type: 'module' });",
       "return config.workerFactory();",

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { directPreviewWork, directWorkIsSafe } from "../src/renderer/assets/direct-preview-work";
 import { loadRendererExport } from "./helpers/loadRendererExport";
 
 interface WorkerJob { id: number; quality: "interactive" | "final"; perSegment: number }
@@ -32,11 +33,21 @@ function previewModule(context: Record<string, unknown> = {}) {
       request(input: { path: unknown; robot: unknown; plannerId: string; quality: "interactive" | "final"; key?: string }): number;
       getSnapshot(): { status: string; revision: number; quality: string; path: unknown; value: unknown };
       retain(): () => void;
+      cancel(): void;
       destroy(): void;
     };
     samplesForQuality(quality: string): number;
+    directPreviewIsSafe(path: unknown, perSegment: number): boolean;
   }>(new URL("../src/renderer/assets/path-preview.js", import.meta.url), "PathPreview", {
-    context: { performance, queueMicrotask, setTimeout, clearTimeout, ...context },
+    context: {
+      performance,
+      queueMicrotask,
+      setTimeout,
+      clearTimeout,
+      directPreviewWork,
+      directWorkIsSafe,
+      ...context,
+    },
     replacements: [[
       "return new Worker(new URL('./path-preview-worker.js', import.meta.url), { type: 'module' });",
       "return config.workerFactory();",
@@ -122,6 +133,20 @@ describe("renderer path preview scheduler", () => {
     expect(transport).not.toContainEqual(expect.objectContaining({ source: "worker" }));
   });
 
+  it("reports optimized worker failure instead of publishing a profiled direct fallback", async () => {
+    let directCalls = 0;
+    const preview = previewModule().create({
+      workerFactory: () => { throw new Error("worker unavailable"); },
+      derive: () => { directCalls += 1; return { planner: "profiledSpline" }; },
+    });
+
+    const revision = preview.request({ path: {}, robot: {}, plannerId: "optimizedTrajectory", quality: "final" });
+    await Promise.resolve();
+
+    expect(directCalls).toBe(0);
+    expect(preview.getSnapshot()).toMatchObject({ status: "error", revision });
+  });
+
   it("summarizes timed worker transport without per-job events", () => {
     const bus = benchmarkEventBus("observe");
     const worker = new FakeWorker();
@@ -187,6 +212,27 @@ describe("renderer path preview scheduler", () => {
     expect(module.samplesForQuality("final")).toBe(56);
     preview.destroy();
     expect(worker.terminated).toBe(true);
+  });
+
+  it("cancels active and queued work while keeping the scheduler reusable", () => {
+    const workers = [new FakeWorker(), new FakeWorker()];
+    let workerIndex = 0;
+    const preview = previewModule().create({ workerFactory: () => workers[workerIndex++] });
+    const input = { path: {}, robot: {}, plannerId: "profiledSpline", quality: "final" as const };
+    const canceled = preview.request(input);
+    preview.request(input);
+
+    preview.cancel();
+
+    expect(workers[0].terminated).toBe(true);
+    expect(preview.getSnapshot()).toMatchObject({ status: "idle" });
+    workers[0].resolve({ id: canceled, value: { stale: true } });
+    expect(preview.getSnapshot().value).not.toEqual({ stale: true });
+
+    const resumed = preview.request(input);
+    expect(workers[1].jobs).toEqual([expect.objectContaining({ id: resumed })]);
+    workers[1].resolve({ id: resumed, value: { current: true } });
+    expect(preview.getSnapshot()).toMatchObject({ status: "ready", value: { current: true } });
   });
 
   it("retains exact source provenance until its replacement completes", () => {
@@ -275,6 +321,108 @@ describe("renderer path preview scheduler", () => {
     expect(workerIndex).toBe(3);
     workers[2].resolve({ id: nextRevision, value: { recovered: "worker" }, durationMs: 1 });
     expect(preview.getSnapshot()).toMatchObject({ status: "ready", revision: nextRevision, value: { recovered: "worker" } });
+  });
+
+  it("does not rerun known-heavy timed-out work on the UI thread", async () => {
+    vi.useFakeTimers();
+    const workers = [new FakeWorker(), new FakeWorker()];
+    let workerIndex = 0;
+    let directCalls = 0;
+    const module = previewModule();
+    const preview = module.create({
+      workerFactory: () => workers[workerIndex++],
+      derive: () => { directCalls += 1; return { unsafe: true }; },
+      timeoutMs: 20,
+    });
+    const path = {
+      waypoints: Array.from({ length: 1600 }, () => ({})),
+      ranges: Array.from({ length: 1600 }, () => ({})),
+    };
+    const revision = preview.request({ path, robot: {}, plannerId: "profiledSpline", quality: "interactive" });
+
+    await vi.advanceTimersByTimeAsync(40);
+    await Promise.resolve();
+
+    expect(module.directPreviewIsSafe(path, 14)).toBe(false);
+    expect(directCalls).toBe(0);
+    expect(preview.getSnapshot()).toMatchObject({ status: "error", revision });
+  });
+
+  it("rejects an 890-waypoint tangent path from direct recovery", () => {
+    const path = {
+      headingMode: "tangent",
+      ranges: [],
+      targets: [],
+      waypoints: Array.from({ length: 890 }, (_, index) => ({
+        x: 1 + index * 0.01,
+        y: 4,
+        theta: 0,
+        thetaOn: index === 0 || index === 889,
+      })),
+    };
+    const module = previewModule();
+
+    expect(module.directPreviewIsSafe(path, 14)).toBe(false);
+    expect(module.directPreviewIsSafe(path, 56)).toBe(false);
+  });
+
+  it("rejects translation-priority recovery regardless of geometry size", () => {
+    const path = {
+      ranges: [{ rotationPriority: "translation" }],
+      waypoints: [{ thetaOn: true }, { thetaOn: true }],
+    };
+
+    expect(previewModule().directPreviewIsSafe(path, 14)).toBe(false);
+  });
+
+  it("rejects transition-heavy direct derivation without ranges", () => {
+    const waypointCount = 1600;
+    const path = {
+      headingMode: "targets",
+      ranges: [],
+      waypoints: Array.from({ length: waypointCount }, (_, index) => {
+        const x = 1 + (index % 100) * 0.01;
+        const y = 1 + Math.floor(index / 100) * 0.01;
+        return {
+          x, y, theta: 0, thetaOn: index === 0 || index === waypointCount - 1,
+          stop: false, linked: true, segType: "line",
+          prevC: { x: x - 0.001, y }, nextC: { x: x + 0.001, y },
+          segmentHeadingMode: index % 2 === 0 ? "manual" : "tangent",
+        };
+      }),
+    };
+    const module = previewModule();
+
+    expect(module.directPreviewIsSafe(path, 14)).toBe(false);
+    expect(module.directPreviewIsSafe(path, 56)).toBe(false);
+  });
+
+  it("rejects maximum-size target-anchor derivation without ranges or transitions", () => {
+    const itemCount = 4096;
+    const path = {
+      id: "target-heavy",
+      name: "Target Heavy",
+      headingMode: "targets",
+      startVel: 0,
+      goalVel: 0,
+      markers: [],
+      ranges: [],
+      waypoints: Array.from({ length: itemCount }, (_, index) => {
+        const x = 1 + index * 0.001;
+        return {
+          x, y: 1, theta: 0, thetaOn: index === 0 || index === itemCount - 1,
+          stop: false, linked: true, segType: "line",
+          prevC: { x: x - 0.0003, y: 1 }, nextC: { x: x + 0.0003, y: 1 },
+        };
+      }),
+      targets: Array.from({ length: itemCount }, (_, index) => ({
+        f: index / (itemCount - 1), deg: index % 360, anchor: "param",
+      })),
+    };
+    const module = previewModule();
+
+    expect(module.directPreviewIsSafe(path, 14)).toBe(false);
+    expect(module.directPreviewIsSafe(path, 56)).toBe(false);
   });
 
   it("recovers when posting to the worker throws", async () => {

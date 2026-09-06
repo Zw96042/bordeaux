@@ -28,8 +28,8 @@ describe('robot settings review regressions', () => {
     const markup = renderToStaticMarkup(React.createElement(RobotPage, {
       robot, unitSystem: system, pushController: {},
     }));
-    expect(markup).toContain(`aria-label="Vertex 1 X" step="0.01" value="${display}"/><span class="u">${unit}</span>`);
-    expect(markup).toContain(`aria-label="Vertex 1 Y" step="0.01" value="-${display}"/><span class="u">${unit}</span>`);
+    expect(markup).toMatch(new RegExp(`<input(?=[^>]*aria-label="Vertex 1 X")(?=[^>]*step="0[.]01")(?=[^>]*value="${display.replace(".", "[.]")}")[^>]*><span class="u">${unit}</span>`));
+    expect(markup).toMatch(new RegExp(`<input(?=[^>]*aria-label="Vertex 1 Y")(?=[^>]*step="0[.]01")(?=[^>]*value="-${display.replace(".", "[.]")}")[^>]*><span class="u">${unit}</span>`));
     expect(robot).toEqual(before);
   });
 

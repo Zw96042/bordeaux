@@ -386,6 +386,9 @@ function validateProjectInner(project: unknown): ValidationResult {
           });
           if (waypoint.corner !== undefined && typeof waypoint.corner !== "boolean") issues.push(issue(`${wpBase}.corner`, "Corner must be true or false"));
           validateOptionalFinite(issues, waypoint.wait, `${wpBase}.wait`, "Waypoint wait", { nonnegative: true });
+          if (finite(waypoint.wait) && waypoint.wait > 0 && waypoint.stop !== true) {
+            issues.push(issue(`${wpBase}.wait`, "Wait requires a stopped waypoint"));
+          }
           validatePoint(issues, waypoint.prevC, `${wpBase}.prevC`, "Previous control handle");
           validatePoint(issues, waypoint.nextC, `${wpBase}.nextC`, "Next control handle");
           if (wi > 0 && wi < waypointCount - 1 && waypoint.stop !== true) {
@@ -552,7 +555,8 @@ function validateProjectInner(project: unknown): ValidationResult {
         const constraints = path.constraints;
         ["maxVel", "maxAccel", "maxDecel", "maxAngVel", "maxAngAccel"].forEach((key) => validateFinite(issues, constraints[key], `${base}.constraints.${key}`, key, { positive: true }));
         validateOptionalFinite(issues, constraints.maxCentripetalAccel, `${base}.constraints.maxCentripetalAccel`, "maxCentripetalAccel", { positive: true });
-        ["maxAngDecel", "maxJerk", "maxAngJerk"].forEach((key) => validateOptionalFinite(issues, constraints[key], `${base}.constraints.${key}`, key, { nonnegative: true }));
+        validateOptionalFinite(issues, constraints.maxAngDecel, `${base}.constraints.maxAngDecel`, "maxAngDecel", { positive: true });
+        ["maxJerk", "maxAngJerk"].forEach((key) => validateOptionalFinite(issues, constraints[key], `${base}.constraints.${key}`, key, { nonnegative: true }));
       }
     });
   }

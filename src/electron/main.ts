@@ -44,6 +44,7 @@ import {
 import { AgentSessionService } from "./agentSession";
 import { buildJavaTrajectoryOffThread, compareJavaDeploymentOffThread, buildJavaDeploymentOffThread } from "./javaTrajectoryWorkerClient";
 import { runAgentPlanningInWorker } from "./agentPlanningWorkerClient";
+import { quitAfterMcpInputEnds } from "./mcpStdioLifecycle";
 import { serveBordeauxMcp } from "../mcp/server";
 import { RobotPairingController, readRobotPairing, writeRobotPairing } from "./robotPairings";
 import { createRobotPushOperation, type RobotPushOperation, type RobotPushProgress } from "./robotPush";
@@ -71,6 +72,8 @@ let allowClose = false;
 let appUpdates: AppUpdateController | null = null;
 let updateCheckTimer: NodeJS.Timeout | null = null;
 let backgroundShutdownPromise: Promise<void> | null = null;
+let backgroundServicesReadyForExit = false;
+let finalQuitInProgress = false;
 
 let smokeCloseGuardTriggered = false;
 let linkedJavaProjectPath: string | null = null;
@@ -137,7 +140,10 @@ const agentSessions = new AgentSessionService(
 );
 
 app.setName("Bordeaux");
+if (smokeDirectory) app.setPath("userData", smokeDirectory);
 app.setAppUserModelId("org.frc2468.bordeaux");
+const ownsDesktopInstance = mcpStdioMode || app.requestSingleInstanceLock();
+if (!ownsDesktopInstance) app.quit();
 
 function showUpdateMessage(options: Electron.MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> {
   const window = mainWindow;
@@ -224,6 +230,7 @@ function createAppUpdateController(): AppUpdateController {
     prepareToInstall: async () => {
       await stopBackgroundServices();
       if (dirty) throw new Error("The project changed while Bordeaux was preparing the update. Save or discard it, then try again.");
+      backgroundServicesReadyForExit = true;
       allowClose = true;
     },
     warn: (message, error) => console.warn(message, error),
@@ -478,8 +485,27 @@ function createWindow() {
 
   if (process.env.BORDEAUX_SMOKE_TEST === "1") {
     window.webContents.once("did-finish-load", async () => {
+      let inputRunning = false;
+      const inputTimer = setInterval(() => {
+        if (inputRunning || window.isDestroyed()) return;
+        inputRunning = true;
+        void window.webContents.executeJavaScript('window.__bordeauxSmokeInput || null').then(async (point) => {
+          if (!point) return;
+          window.focus();
+          window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'M' });
+          window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'M' });
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          window.webContents.sendInputEvent({ type: 'mouseMove', x: point.x, y: point.y });
+          window.webContents.sendInputEvent({ type: 'mouseDown', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+          window.webContents.sendInputEvent({ type: 'mouseUp', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+          await window.webContents.executeJavaScript('window.__bordeauxSmokeInput = null');
+        }).catch(() => undefined).finally(() => { inputRunning = false; });
+      }, 10);
       try {
         if (!smokeDirectory) throw new Error("Smoke test requires a fixture directory");
+        if (process.platform === "darwin") app.focus({ steal: true });
+        window.show();
+        window.focus();
         const smokeScript = await fs.promises.readFile(path.join(smokeDirectory, "renderer.js"), "utf8");
         const result: Record<string, unknown> = await window.webContents.executeJavaScript(smokeScript);
         if (process.env.BORDEAUX_SMOKE_CAPTURE_PATH) {
@@ -493,10 +519,14 @@ function createWindow() {
         const filesWritten = fs.existsSync(path.join(smokeDirectory, "project.bordeaux.json")) && fs.existsSync(path.join(smokeDirectory, "java-project", "src", "main", "deploy", "bordeaux", "Smoke-edited.bordeaux.json"));
         result.filesWritten = filesWritten;
         result.closeGuard = smokeCloseGuardTriggered && !window.isDestroyed();
+        clearInterval(inputTimer);
         console.log(`BORDEAUX_SMOKE_RESULT ${JSON.stringify(result)}`);
         allowClose = true;
+        await stopBackgroundServices();
+        backgroundServicesReadyForExit = true;
         app.exit(0);
       } catch (error) {
+        clearInterval(inputTimer);
         console.error("BORDEAUX_SMOKE_FAILED", error);
         app.exit(1);
       }
@@ -1238,10 +1268,20 @@ ipcMain.on("agent:proposalReceipt", (event, rawId, rawSessionId, rawRevision, ra
   receipt.resolve();
 });
 
-app.whenReady().then(async () => {
+if (!mcpStdioMode && ownsDesktopInstance) app.on("second-instance", () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+});
+
+if (ownsDesktopInstance) app.whenReady().then(async () => {
   if (mcpStdioMode) {
     app.dock?.hide();
-    serveBordeauxMcp(new AgentBridgeClient(app.getPath("userData")));
+    const server = serveBordeauxMcp(new AgentBridgeClient(app.getPath("userData")));
+    quitAfterMcpInputEnds(process.stdin, () => server.close(), () => app.quit(), (error) => {
+      console.warn("Could not close the Bordeaux MCP stdio server cleanly:", error);
+    });
     return;
   }
   try {
@@ -1274,7 +1314,18 @@ app.whenReady().then(async () => {
 app.on("before-quit", () => {
   if (updateCheckTimer) clearTimeout(updateCheckTimer);
   updateCheckTimer = null;
-  void stopBackgroundServices().catch((error) => console.warn("Could not stop Bordeaux background services cleanly:", error));
+});
+app.on("will-quit", (event) => {
+  if (backgroundServicesReadyForExit) return;
+  event.preventDefault();
+  if (finalQuitInProgress) return;
+  finalQuitInProgress = true;
+  void stopBackgroundServices().catch((error) => {
+    console.warn("Could not stop Bordeaux background services cleanly:", error);
+  }).finally(() => {
+    backgroundServicesReadyForExit = true;
+    app.quit();
+  });
 });
 app.on("web-contents-created", (_event, contents) => contents.on("will-attach-webview", (event) => event.preventDefault()));
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });

@@ -1,3 +1,4 @@
+import { wrapRadians } from "./angles";
 import type { ControlPoint, Waypoint } from "../types";
 
 export interface GeometryPoint extends ControlPoint {
@@ -90,7 +91,7 @@ function evalQuintic(curve: QuinticCurve, t: number) {
 }
 
 // shortest signed angle difference (radians)
-export function angWrap(a: number) { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; }
+export const angWrap = wrapRadians;
 
 export function angLerp(a: number, b: number, t: number) { return a + angWrap(b - a) * t; }
 
@@ -235,7 +236,8 @@ export function sample(waypoints: readonly Waypoint[], perSeg = 60, trackWaypoin
         head = ang + (arc.sweep >= 0 ? Math.PI / 2 : -Math.PI / 2);
         curv = arc.rad > 1e-6 ? 1 / arc.rad : 0;
       } else if (effType === 'clothoid' && cloth) {
-        pos = { x: cloth.xs[k], y: cloth.ys[k] }; head = cloth.hs[k]; curv = Math.abs(cloth.ks[k]);
+        // Numerical integration may drift; authored segment endpoints remain exact.
+        pos = k === steps ? p1 : { x: cloth.xs[k], y: cloth.ys[k] }; head = cloth.hs[k]; curv = Math.abs(cloth.ks[k]);
       } else {
         const smooth = smoothBezier ? evalQuintic(smoothBezier, t) : null;
         pos = smooth ? smooth.pos : bez(p0, c0, c1, p1, t);

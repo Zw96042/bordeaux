@@ -123,7 +123,7 @@ class SafeGeneratedTrajectoryProviderTest {
                 List.of(), List.of(), List.of(),
                 new BordeauxRoutine("Path then dynamic", List.of(
                         new BordeauxRoutineNode.Path("static", "path-a"),
-                        generatedNode)));
+                        generatedNode)), java.util.Map.of("path-a", List.of()));
         var runner = ContainedGeneratedRoutine.create(
                 document, capabilities,
                 "test-field", "revision", "blue-origin",

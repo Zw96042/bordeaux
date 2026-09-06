@@ -182,7 +182,7 @@ function parseScope(scope: RobotPushScope): RobotPushScope {
   if (!result.success) throw new Error(`Invalid push selection: ${result.error.issues[0].message}`);
   return result.data;
 }
-function compileSelection(project: BordeauxProject, catalog: JavaCommandCatalog, scope: RobotPushScope, checkLinks = true): { built: BuiltJavaTrajectory; dependencyNames: string[]; selectedNames: string[] } {
+function compileSelection(project: BordeauxProject, catalog: JavaCommandCatalog, scope: RobotPushScope, checkLinks = true, baseline: DeploymentDocument | null = null): { built: Pick<BuiltJavaTrajectory, "document">; dependencyNames: string[]; selectedNames: string[] } {
   if (new Set(project.paths.map((path) => path.id)).size !== project.paths.length) throw new Error("Project path IDs must be unique");
   // IDs must be unambiguous even when another routine is only an invalid draft.
   if (new Set(project.routines.map((routine) => routine.id)).size !== project.routines.length) throw new Error("Project routine IDs must be unique");
@@ -218,12 +218,19 @@ function compileSelection(project: BordeauxProject, catalog: JavaCommandCatalog,
   }
   const paths = project.paths.filter((path) => pathIds.has(path.id));
 
+  if (scope.kind === "routine" && paths.length === 0) {
+    if (!baseline) throw new Error("Push a path first, then push this routine. The robot runtime requires at least one deployed path, and this routine has no static path dependencies.");
+    // A routine-only selection changes no motion. Validate against the verified
+    // retained document instead of generating a placeholder or replanning local drafts.
+    const document = { ...baseline, routine: { name: routine!.name, nodes: structuredClone(routine!.nodes) } };
+    validateDocument(document, project, catalog);
+    return { built: { document: { ...document, paths: [] } }, selectedNames: [routine!.name], dependencyNames: [] };
+  }
+
   const planningRoutine = routine ?? { id: "deployment-empty", name: "Paths only", nodes: [] };
-  // The project validator requires an authored path/routine even for a routine
-  // with no static dependencies. The placeholder is never exported.
   const scopedProject: BordeauxProject = {
     ...project,
-    paths: paths.length ? paths.map(({ folderId: _folder, ...path }) => path) : [{ ...blankPath("Deployment validation"), exportable: false }],
+    paths: paths.map(({ folderId: _folder, ...path }) => path),
     pathFolders: undefined,
     routines: [planningRoutine],
     activeRoutineId: planningRoutine.id,
@@ -247,10 +254,7 @@ export function buildJavaDeployment(project: BordeauxProject, catalog: JavaComma
     compatible(baseline, project, catalog);
     validateDocument(baseline, project, catalog);
   }
-  const { built, selectedNames, dependencyNames } = compileSelection(project, catalog, scope);
-  if (!baseline && scope.kind === "routine" && built.document.paths.length === 0) {
-    throw new Error("Push a path first, then push this routine. The robot runtime requires at least one deployed path, and this routine has no static path dependencies.");
-  }
+  const { built, selectedNames, dependencyNames } = compileSelection(project, catalog, scope, true, baseline);
   if (baseline && scope.kind !== "project" && stable(baseline.robot) !== stable(built.document.robot)) throw new Error("Exported robot configuration differs; review a full-project replacement.");
   const replacements = new Map(built.document.paths.map((path) => [path.id, path]));
   const preserve = scope.kind !== "project" && baseline;
@@ -298,7 +302,7 @@ export function compareJavaDeployment(project: BordeauxProject, catalog: JavaCom
   }
   const compare = (scope: RobotPushScope): JavaDeploymentItemStatus => {
     try {
-      const { built } = compileSelection(project, catalog, scope, false);
+      const { built } = compileSelection(project, catalog, scope, false, baseline);
       if (!baseline) return { state: "missing" };
       if (stable(baseline.robot) !== stable(built.document.robot)) return { state: "unknown", message: "Exported robot configuration differs; review a full-project replacement." };
       const allPathsMatch = built.document.paths.every((path) => stable(path) === stable(baseline.paths.find((old) => old.id === path.id)));

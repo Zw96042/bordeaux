@@ -402,7 +402,8 @@ class BordeauxGeneratedTrajectoryRuntimeTest {
     private static BordeauxRoutineRunner runner(BordeauxRoutine routine, BordeauxCapabilities capabilities,
             BordeauxGeneratedTrajectorySafety safety, double[] time) {
         BordeauxPathEvents document = new BordeauxPathEvents("auto", "Auto", 1, CATALOG_ID, HASH,
-                List.of(), List.of(), List.of(), routine);
+                List.of(), List.of(), List.of(), routine, java.util.Map.of(
+                        "fallback-path", List.of(), "static-finish", List.of()));
         return new BordeauxRoutineRunner(document, capabilities, new NoopScheduler(), () -> time[0], safety);
     }
 

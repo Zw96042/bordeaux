@@ -7,6 +7,7 @@ import type {
   BdxExport,
   BdxPath,
   BordeauxProject,
+  PlannerResult,
 } from "../types";
 import { validateProject } from "../validation";
 import { robotHardLimits } from "../robotLimits";
@@ -15,12 +16,18 @@ function exportablePaths(project: BordeauxProject) {
   return project.paths.filter((path) => path.exportable !== false);
 }
 
-export function buildBdxExport(project: BordeauxProject): BdxExport {
+export interface BuiltBdxExport {
+  document: BdxExport;
+  plannerResults: PlannerResult[];
+}
+
+export function buildBdxExportWithPlannerResults(project: BordeauxProject): BuiltBdxExport {
   const validation = validateProject(project);
   if (!validation.ok) {
     throw new Error(validation.issues.map((x) => x.message).join("\n"));
   }
 
+  const plannerResults: PlannerResult[] = [];
   const paths: BdxPath[] = exportablePaths(project).map((path) => {
     const accepted = getAcceptedTrajectory(path, project.robot, project.field);
     if (path.optimization?.accepted && !accepted && !isOptimizationOutdated(path, project.robot, project.field)) {
@@ -36,6 +43,7 @@ export function buildBdxExport(project: BordeauxProject): BdxExport {
       throw new Error(`${path.name}: ${result.optimization.fallbackReason ?? "Trajectory optimization fell back"}`);
     }
     assertFinitePlannerResult(path.name, result);
+    plannerResults.push(result);
     return {
       id: path.id,
       name: path.name,
@@ -52,7 +60,7 @@ export function buildBdxExport(project: BordeauxProject): BdxExport {
   assertFiniteValue(routine, "routine");
 
   const hardLimits = robotHardLimits(project.robot);
-  return {
+  const document: BdxExport = {
     schemaVersion: "1.1",
     generator: "bordeaux",
     field: clone(project.field),
@@ -74,6 +82,11 @@ export function buildBdxExport(project: BordeauxProject): BdxExport {
     paths,
     routine: routine ?? null,
   };
+  return { document, plannerResults };
+}
+
+export function buildBdxExport(project: BordeauxProject): BdxExport {
+  return buildBdxExportWithPlannerResults(project).document;
 }
 
 function assertFiniteValue(value: unknown, valuePath: string): void {

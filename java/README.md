@@ -62,6 +62,17 @@ recipe states whether it is compile-checked, source/API-verified, or an integrat
 `bordeauxCatalog` task copies the processor resource to `build/bordeaux/catalog-v1.json`, which is the
 only generated project file the app reads.
 
+If a test or custom integration builds `BordeauxCommandRegistry` by hand, use the four-argument `register` overload and repeat the factory's argument reads in a side-effect-free validator:
+
+```java
+.register("score", Set.of("count"),
+    args -> args.requireLong("count", "1", "5"),
+    args -> score(args.requireLong("count", "1", "5")))
+```
+
+Event and routine runners call the validator during construction so malformed autonomous arguments fail before motion or command creation. The older three-argument overload remains available for direct `registry.create(...)` use, but registries containing those entries are deliberately rejected by the runners because their factories cannot be safely invoked during preflight.
+
+
 ## Catalog identity
 
 Set `-Abordeaux.catalogId=<team-stable-id>` on `JavaCompile`; otherwise the first provider type is the fallback ID. The generated catalog uses `schemaVersion: "1.3"`, `supportVersion: "0.4.0"`, and a deterministic `catalogHash`. It includes the closed `bordeaux.wait` built-in and any strictly bounded `@BordeauxTrajectoryGenerator` descriptors. Both the ID and hash are compiled into `BordeauxGeneratedBindings` and its capabilities.
@@ -120,6 +131,8 @@ through their authored end window without loop-jitter skips. Event IDs are requi
 IDs are rejected. Generated bindings reject missing, unknown, malformed, or out-of-range arguments
 again on the robot before creating a command.
 
+Load one selected path with `BordeauxTrajectoryReader.read(input, pathIdOrName)`, construct `BordeauxEventRunner`, then call `periodic(elapsedS, measuredFraction)` from the normal robot loop. Time events use elapsed path time; position events use monotonic measured progress even on a time-followed section. Optional condition IDs are resolved through `BordeauxConditionRegistry`, and repeated events catch up through their authored end window without loop-jitter skips. Catch-up is limited to 64 due invocations per update; a larger backlog fails before event state, conditions, factories, or the scheduler are touched. Event IDs are required and duplicate IDs are rejected. `readWithRoutine(...)` retains the bounded event metadata for every path referenced anywhere in the routine tree, and `BordeauxRoutineRunner` validates those events along with every routine command and decision before the first path starts. This preflight validates command IDs, condition IDs, and arguments without invoking command factories or evaluating sensor conditions; each path's `BordeauxEventRunner` still schedules only that selected path's events. Manually constructed multi-path documents must likewise provide `routinePathEvents` for every referenced path; missing metadata is rejected before `startTransition()`.
+
 For trajectory references, construct `BordeauxReferenceFollower` from that selected path and call `update(dtS, measuredXM, measuredYM)` each robot loop. Time sections advance on a section-local clock. Position sections advance monotonically from the measured field pose, use a short sample lookahead, and do not complete until the robot reaches the section endpoint. The returned `BordeauxSample` is a reference for the team's drivetrain controller; this low-level class does not construct a drivetrain or own odometry.
 
 The low-level follower remains available during migration and still leaves controller lifecycle to the
@@ -132,14 +145,21 @@ modules to use the seam or the compile-checked integration examples.
 
 For a multi-path autonomous routine, load the bounded stream with
 `BordeauxTrajectoryReader.readWithRoutine(input, pathIdOrName, compatibility)`, then construct
-`BordeauxRoutineRunner` with that document and generated capabilities. Routines without a wait or
+`BordeauxRoutineRunner` with that document and generated capabilities. Routines without a command, wait, or
 generated trajectory can use `start()` and `completePath(...)`, which return the next stable path ID
 or an empty result at completion. Other routines use `startProgress()`,
 `completePathProgress(...)`, `completeGeneratedTrajectoryProgress(...)`, and `periodic()` from the
 normal robot loop. Progress is explicit: `Path` and `GeneratedTrajectory` are references the
-drivetrain may follow, `Waiting` and `Generating` require another `periodic()` call, and
+drivetrain may follow, `CommandWaiting`, `Waiting`, and `Generating` require another `periodic()` call, and
 `SafeStopped` and `Complete` are terminal. Every decision and command, including those in a
 generated fallback, is preflighted before start.
+
+The command transition API remains available through `startTransition()`,
+`completePathTransition(id)`, and `periodicTransition()`. Existing transition integrations must
+change their routine `periodic()` call to `periodicTransition()`: `periodic()` now returns the richer
+`BordeauxRoutineProgress` needed for built-in waits and generated trajectories. A transition with
+`WAITING_FOR_COMMAND` must be polled once per robot loop; `PATH_ACTIVE` carries the next path and
+`COMPLETE` ends the routine. Custom schedulers must implement `isScheduled(...)`.
 
 Generated trajectories additionally require `BordeauxGeneratedTrajectorySafety`. Supply the exact compiled `BordeauxRuntimeCompatibility`, a `BordeauxGenerationContext` supplier with the current field pose, field-relative X/Y velocity, angular velocity, and robot-owned limits, field and swept-segment collision validators, and the drivetrain's safe-stop callback. The runner executes each team generator on a fresh daemon worker, takes the stricter descriptor/robot limit in every dimension, and releases no samples until the whole result is finite, ordered, duration/distance/velocity/acceleration bounded, field-valid, and collision-free. It derives translational acceleration and path curvature from XY samples rather than trusting declared velocity or robot heading. Generated bindings also preflight every typed fallback argument without invoking a team command factory. A deadline, thrown error, invalid sample, or validator failure takes the catalog-declared validated static fallback; otherwise the safe-stop callback runs exactly once. Timed-out work is interrupted and never reused or exposed.
 The released generated samples also use field-velocity direction, velocity, acceleration, angular
@@ -150,8 +170,8 @@ direction reversal.
 On `BordeauxEventRunner`, `endPath()`, `stop()`, `close()`, and `reset()` cancel only commands from
 events that set `cancelOnPathEnd: true`; ordinary commands scheduled by an event are left alone.
 `reset()` also clears exactly-once state for another run, and elapsed time cannot move backward
-without a reset. Aquitaine Command nodes are different: `BordeauxRoutineRunner` schedules and
-continues, and its `stop()`, `reset()`, and `close()` methods do not cancel those team-owned commands.
+without a reset. Aquitaine Command nodes run sequentially: `BordeauxRoutineRunner` waits for each scheduled command
+to finish, and its `stop()`, `reset()`, and `close()` methods cancel the waiting command.
 
 ## Optional Bordeaux push mailbox
 
@@ -180,6 +200,7 @@ mailbox.periodic();
 ```
 
 Replace the team number and seasonal field identity with the values compiled into the robot project. Directory provisioning belongs in robot initialization, and mailbox failures should be reported through `DriverStation.reportError` without crashing the control loop.
+
 
 ## Build and test
 

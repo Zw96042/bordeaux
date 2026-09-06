@@ -18,6 +18,18 @@ import { UI } from "./ui";
 
   // muted semantic colors (reserved for meaning, low saturation)
   const C_START = '#4bbf86', C_END = '#d2655f', C_NODE = '#8b94a2', C_NEUTRAL = '#9aa3b0';
+  function rangeLabelIndexes(rangeCount, selectedIndex, maximum = 80) {
+    const limit = Math.max(0, Math.floor(maximum));
+    const indexes = new Set();
+    if (!limit) return indexes;
+    const step = Math.max(1, Math.ceil(rangeCount / limit));
+    for (let index = 0; index < rangeCount && indexes.size < limit; index += step) indexes.add(index);
+    if (Number.isInteger(selectedIndex) && selectedIndex >= 0 && selectedIndex < rangeCount && !indexes.has(selectedIndex)) {
+      if (indexes.size >= limit) indexes.delete(Array.from(indexes).at(-1));
+      indexes.add(selectedIndex);
+    }
+    return indexes;
+  }
 
   const localFootprint = (robot) => robot.footprint && robot.footprint.kind === 'polygon' && Array.isArray(robot.footprint.verticesM)
     ? robot.footprint.verticesM
@@ -637,7 +649,9 @@ import { UI } from "./ui";
           const c = W2P(PM.pointAtFraction(check.f, pts));
           reserveLabelSpace(c.x, c.y - P(28), P(28), P(28));
         });
-        ranges.forEach((range) => {
+        const labeledRangeIndexes = rangeLabelIndexes(ranges.length, sel.kind === 'cr' ? sel.idx : -1);
+        ranges.forEach((range, index) => {
+          if (!labeledRangeIndexes.has(index)) return;
           ['f0', 'f1'].forEach((key) => {
             const c = W2P(PM.pointAtFraction(range[key], pts));
             reserveLabelSpace(c.x, c.y, P(24), P(24));
@@ -708,7 +722,7 @@ import { UI } from "./ui";
           const fraction = (rg.f0 + rg.f1) / 2;
           const mid = PM.pointAtFraction(fraction, pts); const mc = W2P(mid);
           const summary = UI.constraintRangeSummary(rg, doc.constraints, robot);
-          if (summary) {
+          if (summary && labeledRangeIndexes.has(ri)) {
             const text = summary.text;
             const tw = P(Math.max(78, text.length * 7.4 + 20)), th = P(24);
             const label = placeRangeLabel(fraction, mc, tw, th);
@@ -924,7 +938,9 @@ import { UI } from "./ui";
 
     // ---------- ROBOT (dynamic) ----------
     const robotEl = useMemo(() => {
-      const pose = pts.length > 1 ? PM.poseAtTime(playTime, pts, derived.prof, derived.anchors, derived.mode, derived.rev)
+      const playback = derived.playback;
+      const posePoints = playback ? playback.pts : pts;
+      const pose = posePoints.length > 1 ? PM.poseAtTime(playTime, posePoints, playback ? playback.prof : derived.prof, playback ? playback.anchors : derived.anchors, derived.mode, playback ? playback.rev : derived.rev)
         : (doc.waypoints[0] ? { x: doc.waypoints[0].x, y: doc.waypoints[0].y, heading: ((doc.waypoints[0].theta || 0) + (derived.rev ? 180 : 0)) * Math.PI / 180, speed: 0 } : null);
       if (!pose) return null;
       const c = W2P(pose);
@@ -1079,4 +1095,4 @@ import { UI } from "./ui";
   }
 
 export const FIELD_DIMS = { FIELD_W, FIELD_H, IMG_W, IMG_H };
-export { FieldView };
+export { FieldView, rangeLabelIndexes };

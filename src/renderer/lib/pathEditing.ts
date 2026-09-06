@@ -78,6 +78,14 @@ export function reversePath(path: PathDoc): PathDoc {
   const oldHeading = path.waypoints.map((w) => w.segmentHeadingMode);
   const oldFollow = path.waypoints.map((w) => w.segmentFollowMode);
   const oldLookAt = path.waypoints.map((w) => w.segmentLookAt && { ...w.segmentLookAt });
+  const oldLaws = path.waypoints.slice(0, -1).map((waypoint) => {
+    const mode = waypoint.segmentHeadingMode || path.headingMode || 'targets';
+    return mode === 'lookAt' ? 'lookAt:' + (waypoint.segmentLookAt ? waypoint.segmentLookAt.x + ':' + waypoint.segmentLookAt.y : '') : mode;
+  });
+  const oldTransitions = path.waypoints.map((waypoint, index) => index > 0 && index < path.waypoints.length - 1
+    && oldLaws[index] !== oldLaws[index - 1] && !waypoint.turnInPlace
+    ? { placement: 'after' as const, rotationPriority: 'heading' as const, distanceM: 0.75, ...(waypoint.headingTransition || {}) }
+    : null);
   const w = path.waypoints.slice().reverse(); const n = w.length;
   w.forEach((x) => {
     const p = x.prevC; x.prevC = x.nextC; x.nextC = p;
@@ -101,6 +109,11 @@ export function reversePath(path: PathDoc): PathDoc {
       delete w[j].segmentLookAt;
     }
     delete w[j].headingTransition;
+  }
+  for (let oldIndex = 1; oldIndex < n - 1; oldIndex++) {
+    const transition = oldTransitions[oldIndex]; if (!transition) continue;
+    w[n - 1 - oldIndex].headingTransition = { ...transition,
+      placement: transition.placement === 'before' ? 'after' : transition.placement === 'split' ? 'split' : 'before' };
   }
   path.waypoints = w; remapWaypointRanges(path, Array.from({ length: n }, (_, index) => n - 1 - index));
   w.forEach((waypoint) => delete waypoint.jiggle);

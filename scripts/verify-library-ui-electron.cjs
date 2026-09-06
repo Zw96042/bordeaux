@@ -16,6 +16,10 @@ async function click(selector, text) {
   if (selector === '.library-connection' && !(await evaluate(() => document.querySelector('.settings-general')))) {
     await click('.pageswitch button', 'Settings'); connectionFromSettings = true;
   }
+  await wait(() => evaluate((selector, text) => {
+    const el = [...document.querySelectorAll(selector)].find((item) => text == null || item.textContent.trim() === text);
+    return Boolean(el && !el.disabled && !el.closest('[inert]'));
+  }, selector, text), 'ready control: ' + selector + ' ' + text);
   await evaluate((selector, text) => {
     const el = [...document.querySelectorAll(selector)].find((item) => text == null || item.textContent.trim() === text);
     if (!el || el.disabled || el.closest('[inert]')) throw new Error('Unavailable: ' + selector + ' ' + text);

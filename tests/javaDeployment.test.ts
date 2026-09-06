@@ -72,12 +72,27 @@ describe("selective Java deployments", () => {
     expect(linkedFallback.summary.dependencyNames).toEqual(["A", "B", "C", "D", "E"]);
     expect(linkedFallback.trajectory.document.routine?.nodes).toEqual(current.routines[0].nodes);
   });
-  it("supports command-only routines while retaining existing paths", () => {
-    const current = project(); current.routines[0].nodes = [];
-    const result = buildJavaDeployment(current, catalog, { kind: "routine", routineId: "R" }, baseline().contents);
+  it("supports command-only routines while retaining existing paths exactly", () => {
+    const current = project();
+    const old = baseline();
+    current.paths = []; // The verified robot snapshot supplies all motion, not local drafts.
+    const commandCatalog: JavaCommandCatalog = { ...catalog, commands: [{
+      id: "score", label: "Score", ownerType: "Robot", member: "score", parameters: [],
+      kind: "factory", confidence: "confirmed", runtimeReady: true,
+      source: { file: "Robot.java", line: 1 },
+    }] };
+    current.routines[0].nodes = [{ id: "score-step", type: "function", cat: "command", title: "Score",
+      invocation: { commandId: "score", arguments: {} } }];
+    const result = buildJavaDeployment(current, commandCatalog, { kind: "routine", routineId: "R" }, old.contents);
+    expect(result.trajectory.document.paths).toEqual(old.document.paths);
     expect(result.trajectory.pathCount).toBe(3);
-    expect(result.trajectory.document.routine?.nodes).toEqual([]);
-    expect(result.summary.pathIds).toEqual([]);
+    expect(result.trajectory.document.routine?.nodes).toEqual(current.routines[0].nodes);
+    expect(result.summary).toMatchObject({ pathIds: [], dependencyNames: [], addedNames: [], updatedNames: [], preservedPathCount: 3 });
+    expect(compareJavaDeployment(current, commandCatalog, result.trajectory.contents).routines.R.state).toBe("matches");
+    current.routines[0].nodes = [{ id: "unknown-step", type: "function", cat: "command",
+      invocation: { commandId: "unknown", arguments: {} } }];
+    expect(() => buildJavaDeployment(current, commandCatalog, { kind: "routine", routineId: "R" }, old.contents))
+      .toThrow(/unknown/);
   });
   it("explains how to push a routine with no static paths to an empty robot", () => {
     const current = project(); current.routines[0].nodes = [];

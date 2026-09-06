@@ -2,6 +2,7 @@ import { officialToAppPoint, officialToAppRect, REBUILT_2026_FIELD, REBUILT_2026
 import { resolveProjectFieldTerm } from "../field/vocabulary";
 import { FIELD_H, FIELD_W } from "../math/fieldBounds";
 import { PM } from "../math/pm";
+import { orderedWaypointSampleIndices } from "../planners/waypointSamples";
 import { buildWaypoints, clone, createPathId } from "../project/defaults";
 import type { BordeauxProject, PathDoc, TrajectorySample } from "../types";
 import { analyzePath, minimumPathClearance } from "./pathAnalysis";
@@ -427,23 +428,8 @@ function splitContainingRangeForBump(path: PathDoc, containerIndex: number, anch
   path.ranges.splice(containerIndex, 1, ...replacements);
 }
 
-function waypointArrivalIndices(path: PathDoc, samples: readonly TrajectorySample[]): number[] {
-  let cursor = 0;
-  return path.waypoints.map((waypoint, waypointIndex) => {
-    let best = cursor;
-    let distance = Number.POSITIVE_INFINITY;
-    const last = waypointIndex === path.waypoints.length - 1 ? samples.length - 1 : Math.max(cursor, samples.length - (path.waypoints.length - waypointIndex));
-    for (let index = cursor; index <= last; index += 1) {
-      const candidate = Math.hypot(samples[index].x - waypoint.x, samples[index].y - waypoint.y);
-      if (candidate < distance) { distance = candidate; best = index; }
-    }
-    cursor = best;
-    return best;
-  });
-}
-
 function localAnchor(path: PathDoc, samples: readonly TrajectorySample[], sampleIndex: number): { waypointIndex: number; t: number } {
-  const arrivals = waypointArrivalIndices(path, samples);
+  const arrivals = orderedWaypointSampleIndices(path.waypoints, samples);
   let waypointIndex = 0;
   while (waypointIndex + 1 < arrivals.length - 1 && arrivals[waypointIndex + 1] <= sampleIndex) waypointIndex += 1;
   const start = samples[arrivals[waypointIndex]]?.s ?? 0;

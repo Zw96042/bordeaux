@@ -220,15 +220,15 @@ shows caller-driven progress and follower stop ownership. The full lifecycle is 
 ### A routine pauses while the drivetrain keeps its last output
 
 The caller owns the motion follower. Stop it whenever a `Path` or `GeneratedTrajectory` completes,
-before advancing into `Waiting` or `Generating`, and stop exactly once at terminal completion,
+before advancing into `CommandWaiting`, `Waiting`, or `Generating`, and stop exactly once at terminal completion,
 safe-stop, cancellation, or close. Do not wait for the next motion node to zero the previous output.
 
 ### The runner asks for caller-driven progress
 
-The convenience `start()`/`completePath(...)` API is only for routines without waits or generated
+The convenience `start()`/`completePath(...)` API is only for routines without commands, waits, or generated
 trajectories. Use `startProgress()`, `completePathProgress(...)`,
 `completeGeneratedTrajectoryProgress(...)`, and `periodic()` for the full routine state machine.
-Treat `Path` and `GeneratedTrajectory` as motion work, `Waiting` and `Generating` as periodic work,
+Treat `Path` and `GeneratedTrajectory` as motion work, `CommandWaiting`, `Waiting`, and `Generating` as periodic work,
 and `Complete` and `SafeStopped` as terminal.
 
 ## Vendor recipe status

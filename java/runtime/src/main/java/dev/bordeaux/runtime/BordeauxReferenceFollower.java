@@ -6,6 +6,7 @@ import java.util.List;
 public final class BordeauxReferenceFollower {
     private static final int POSITION_LOOKAHEAD_SAMPLES = 2;
     private static final double END_TOLERANCE_M = 0.08;
+    private static final double POSITION_PROGRESS_TOLERANCE_M = 0.08;
 
     private final List<BordeauxSample> samples;
     private final List<BordeauxFollowSection> sections;
@@ -13,6 +14,10 @@ public final class BordeauxReferenceFollower {
     private int sectionIndex;
     private int sampleIndex;
     private int measuredSampleIndex;
+    private int permittedSampleIndex;
+    private double lastMeasuredXM;
+    private double lastMeasuredYM;
+    private boolean hasMeasuredPosition;
     private double sectionElapsedS;
     private boolean finished;
     private int lastSearchSamples;
@@ -41,20 +46,31 @@ public final class BordeauxReferenceFollower {
         if (finished) return samples.get(sampleIndex);
         BordeauxFollowSection section = sections.get(sectionIndex);
         if (section.mode() == BordeauxFollowSection.Mode.TIME) {
-            sectionElapsedS += dtS;
-            double target = samples.get(section.startSample()).timeS() + sectionElapsedS;
-            while (sampleIndex < section.endSample() && samples.get(sampleIndex + 1).timeS() <= target + 1e-9) {
-                sampleIndex++;
+            double remainingTimeS = dtS;
+            while (!finished && section.mode() == BordeauxFollowSection.Mode.TIME) {
+                sectionElapsedS += remainingTimeS;
+                double target = samples.get(section.startSample()).timeS() + sectionElapsedS;
+                while (sampleIndex < section.endSample()
+                        && samples.get(sampleIndex + 1).timeS() <= target + 1e-9) {
+                    sampleIndex++;
+                }
+                double duration = samples.get(section.endSample()).timeS()
+                        - samples.get(section.startSample()).timeS();
+                if (sampleIndex < section.endSample() || sectionElapsedS < duration - 1e-9) break;
+                remainingTimeS = Math.max(0, sectionElapsedS - duration);
+                advanceSection();
+                if (!finished) section = sections.get(sectionIndex);
             }
-            double duration = samples.get(section.endSample()).timeS() - samples.get(section.startSample()).timeS();
-            if (sampleIndex == section.endSample() && sectionElapsedS >= duration - 1e-9) advanceSection();
         } else {
+            updateMeasuredTravel(section, measuredXM, measuredYM);
+            int searchStart = positionIndexes[sectionIndex].endOfCoincidentRun(measuredSampleIndex);
             PositionIndex.SearchResult nearest = positionIndexes[sectionIndex]
-                    .nearest(measuredSampleIndex, measuredXM, measuredYM);
+                    .nearest(searchStart, permittedSampleIndex, measuredXM, measuredYM);
             measuredSampleIndex = nearest.sampleIndex();
             lastSearchSamples = nearest.samplesChecked();
             sampleIndex = Math.min(section.endSample(), measuredSampleIndex + POSITION_LOOKAHEAD_SAMPLES);
-            if (distance(samples.get(section.endSample()), measuredXM, measuredYM) <= END_TOLERANCE_M) {
+            if (measuredSampleIndex == section.endSample()
+                    && distance(samples.get(section.endSample()), measuredXM, measuredYM) <= END_TOLERANCE_M) {
                 sampleIndex = section.endSample();
                 advanceSection();
             }
@@ -74,6 +90,8 @@ public final class BordeauxReferenceFollower {
         sectionIndex = 0;
         sampleIndex = sections.get(0).startSample();
         measuredSampleIndex = sampleIndex;
+        permittedSampleIndex = sampleIndex;
+        hasMeasuredPosition = false;
         sectionElapsedS = 0;
         finished = false;
         lastSearchSamples = 0;
@@ -91,40 +109,94 @@ public final class BordeauxReferenceFollower {
         sectionIndex++;
         sampleIndex = sections.get(sectionIndex).startSample();
         measuredSampleIndex = sampleIndex;
+        permittedSampleIndex = sampleIndex;
+        hasMeasuredPosition = false;
         sectionElapsedS = 0;
+    }
+
+    private void updateMeasuredTravel(BordeauxFollowSection section, double measuredXM, double measuredYM) {
+        double measuredStepM;
+        if (hasMeasuredPosition) {
+            measuredStepM = Math.hypot(measuredXM - lastMeasuredXM, measuredYM - lastMeasuredYM);
+        } else {
+            measuredStepM = distance(samples.get(measuredSampleIndex), measuredXM, measuredYM);
+            hasMeasuredPosition = true;
+        }
+        lastMeasuredXM = measuredXM;
+        lastMeasuredYM = measuredYM;
+        permittedSampleIndex = positionIndexes[sectionIndex]
+                .maximumIndexAtTravel(measuredSampleIndex, measuredStepM + POSITION_PROGRESS_TOLERANCE_M);
     }
 
     private static double distance(BordeauxSample sample, double x, double y) {
         return Math.hypot(sample.xM() - x, sample.yM() - y);
     }
 
-    /** Exact nearest-sample lookup with the same monotonic/tie semantics as a forward scan. */
+    /** Exact nearest-sample lookup inside a monotonic, measured-travel progress window. */
     private static final class PositionIndex {
         private final List<BordeauxSample> samples;
+        private final int startSample;
+        private final double[] travelFromStart;
         private final Node root;
 
         private PositionIndex(List<BordeauxSample> samples, int startSample, int endSample) {
             this.samples = samples;
+            this.startSample = startSample;
             int[] order = new int[endSample - startSample + 1];
             for (int index = 0; index < order.length; index++) order[index] = startSample + index;
+            travelFromStart = new double[order.length];
+            for (int index = 1; index < order.length; index++) {
+                BordeauxSample previous = samples.get(order[index - 1]);
+                BordeauxSample current = samples.get(order[index]);
+                travelFromStart[index] = travelFromStart[index - 1]
+                        + Math.hypot(current.xM() - previous.xM(), current.yM() - previous.yM());
+            }
             root = build(order, 0, order.length, 0);
         }
 
-        private SearchResult nearest(int minimumIndex, double x, double y) {
+        private int maximumIndexAtTravel(int minimumIndex, double maximumTravelM) {
+            int minimumOffset = minimumIndex - startSample;
+            double targetTravelM = travelFromStart[minimumOffset] + maximumTravelM;
+            int low = minimumOffset;
+            int high = travelFromStart.length;
+            while (low < high) {
+                int middle = (low + high) >>> 1;
+                if (travelFromStart[middle] <= targetTravelM) low = middle + 1;
+                else high = middle;
+            }
+            int maximumOffset = Math.max(minimumOffset, low - 1);
+            if (maximumOffset == minimumOffset && maximumOffset + 1 < travelFromStart.length) maximumOffset++;
+            return startSample + maximumOffset;
+        }
+
+        private int endOfCoincidentRun(int minimumIndex) {
+            int minimumOffset = minimumIndex - startSample;
+            double targetTravelM = travelFromStart[minimumOffset] + 1e-9;
+            int low = minimumOffset;
+            int high = travelFromStart.length;
+            while (low < high) {
+                int middle = (low + high) >>> 1;
+                if (travelFromStart[middle] <= targetTravelM) low = middle + 1;
+                else high = middle;
+            }
+            return startSample + Math.max(minimumOffset, low - 1);
+        }
+
+        private SearchResult nearest(int minimumIndex, int maximumIndex, double x, double y) {
             BordeauxSample initial = samples.get(minimumIndex);
             Search search = new Search(minimumIndex,
                     squared(initial.xM() - x) + squared(initial.yM() - y));
-            search(root, minimumIndex, x, y, search);
+            search(root, minimumIndex, maximumIndex, x, y, search);
             return new SearchResult(search.sampleIndex, search.samplesChecked);
         }
 
-        private void search(Node node, int minimumIndex, double x, double y, Search best) {
-            if (node == null || node.maximumIndex < minimumIndex) return;
+        private void search(Node node, int minimumIndex, int maximumIndex, double x, double y, Search best) {
+            if (node == null || node.maximumIndex < minimumIndex || node.minimumIndex > maximumIndex) return;
             double lowerBound = node.distanceSquaredToBounds(x, y);
             if (lowerBound > best.distanceSquared
                     || (lowerBound == best.distanceSquared && node.minimumIndex >= best.sampleIndex)) return;
 
-            if (node.sampleIndex >= minimumIndex) {
+            if (node.sampleIndex >= minimumIndex && node.sampleIndex <= maximumIndex) {
                 BordeauxSample sample = samples.get(node.sampleIndex);
                 double candidate = squared(sample.xM() - x) + squared(sample.yM() - y);
                 best.samplesChecked++;
@@ -141,8 +213,8 @@ public final class BordeauxReferenceFollower {
                 first = node.right;
                 second = node.left;
             }
-            search(first, minimumIndex, x, y, best);
-            search(second, minimumIndex, x, y, best);
+            search(first, minimumIndex, maximumIndex, x, y, best);
+            search(second, minimumIndex, maximumIndex, x, y, best);
         }
 
         private static int compareBounds(Node left, Node right, double x, double y) {

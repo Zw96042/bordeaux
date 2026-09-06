@@ -57,11 +57,12 @@ contain another generator, and every validated fallback route must reach a stati
 ## Drive the explicit progress lifecycle
 
 [`BordeauxRoutineProgress`](../../java/runtime/src/main/java/dev/bordeaux/runtime/BordeauxRoutineProgress.java)
-has six states:
+has seven states:
 
 | Progress | Caller responsibility |
 | --- | --- |
 | `Path` | Load and start the named static path in the robot-owned follower. |
+| `CommandWaiting` | Call `periodic()` until the scheduled command finishes. |
 | `Waiting` | Call `periodic()` again from the normal robot loop. |
 | `Generating` | Keep calling `periodic()`; no partial generated samples are available. |
 | `GeneratedTrajectory` | Start the robot-owned follower with the immutable validated samples. |
@@ -90,19 +91,18 @@ The command-returning runtime that will own this bridge and return one holonomic
 **staged, not shipped**. Current robot code should use `AquitaineRoutineLoop`, a team-owned command
 around that loop, or an existing PathPlanner/Choreo command exposed as an Aquitaine command step.
 
-### Command nodes schedule; they do not await
+### Command nodes finish before the next step
 
-An Aquitaine Command node creates and schedules its WPILib command, then the routine immediately
-continues evaluating subsequent nodes. `BordeauxRoutineRunner` does not wait for that command to
-finish, and its `stop()`, `reset()`, and `close()` methods do not own or cancel commands already
-scheduled by routine nodes. This differs from path events explicitly authored with **Cancel at path
-end**.
+An Aquitaine Command node creates and schedules its WPILib command, then reports `CommandWaiting`.
+Call `periodic()` once per robot loop; the next command or path is exposed only after the scheduler
+reports completion. `stop()`, `reset()`, and `close()` cancel the waiting command. A custom scheduler
+must implement `isScheduled(...)` consistently with its scheduling and cancellation behavior.
 
-Keep completion-sensitive sequencing inside the team's existing top-level command or command group,
-or place a deliberate Wait or path boundary before a later decision/action observes its effects.
-WPILib requirements and interruption rules still apply, so a routine command requiring the
-drivetrain may interrupt the active robot-owned follower. Team code owns any additional cancellation
-policy for routine commands.
+Transition API integrations use `startTransition()`, `completePathTransition(...)`, and
+`periodicTransition()`. Migrate the former routine `periodic()` call to `periodicTransition()` when
+expecting a `Transition`; `periodic()` returns the richer `BordeauxRoutineProgress`.
+WPILib requirements and interruption rules still apply. Path events retain their independent
+**Cancel at path end** policy.
 
 ## Author a bounded generator
 

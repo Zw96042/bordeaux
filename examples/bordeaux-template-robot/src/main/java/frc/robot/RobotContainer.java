@@ -48,10 +48,18 @@ public final class RobotContainer {
         pathDurationS = path.totalTimeS();
     }
 
-    /** Processes time-triggered events and the final tick before path-end cancellation. */
+    /** Simulation-only fallback: estimates progress from time and owns planned completion. */
     public boolean pollBordeauxEvents(double elapsedS) {
+        double plannedFraction = pathDurationS > 0
+                ? Math.max(0, Math.min(1, elapsedS / pathDurationS))
+                : 0;
+        return pollBordeauxEvents(elapsedS, plannedFraction);
+    }
+
+    /** Processes the final event tick using monotonic measured path progress from 0 to 1. */
+    public boolean pollBordeauxEvents(double elapsedS, double measuredFraction) {
         if (eventRunner == null) return false;
-        eventRunner.periodic(elapsedS);
+        eventRunner.periodic(elapsedS, measuredFraction);
         return finishPathIfDue(elapsedS);
     }
 

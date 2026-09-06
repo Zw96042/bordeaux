@@ -199,10 +199,8 @@ follower implementation retains the drivetrain requirement and decides how a sta
 
 A PathPlanner or Choreo pathfinding command may be an ordinary Aquitaine Command step today. It keeps
 that library's controller and safety behavior, but Bordeaux cannot inspect its internal generated
-samples. Aquitaine schedules Command nodes and immediately continues; it does not wait for command
-completion or cancel the command when the routine completes. Make a wrapped auto a deliberate
-terminal action, or gate later motion through team-owned completion state, so the next drivetrain
-step cannot interrupt it unexpectedly. Use an Aquitaine Generated Trajectory step only when the
+samples. Aquitaine waits for each Command node to finish before exposing the next step.
+Stopping or resetting the routine cancels its waiting command. Use an Aquitaine Generated Trajectory step only when the
 provider returns Bordeaux samples for containment.
 
 ## Ownership rules

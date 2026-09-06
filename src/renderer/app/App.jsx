@@ -4,6 +4,7 @@ import * as React from "react";
 import { flushSync } from "react-dom";
 import { FinalPlanning } from "../assets/final-planning";
 import { PathEdit } from "../assets/path-edit";
+import { RoutinePreview } from "../assets/routine-preview";
 import { PathPreview } from "../assets/path-preview";
 import { PathOptimization } from "../assets/path-optimization";
 import { OptimizationPanel } from "../components/OptimizationPanel";
@@ -20,7 +21,7 @@ import { RoutinePanel } from "../components/RoutinePanel";
 import { RoutineWorkspace } from "../components/RoutineWorkspace";
 import { UI } from "../components/ui";
 import { PM } from "../lib/pathMath";
-import { applyBrushDraft, syncBrushSelection } from "../lib/brushEditing";
+import { applyBrushDraft, remapBrushSelection, syncBrushSelection } from "../lib/brushEditing";
 import { agentProposalMatchesPublishedContext } from "../lib/agentProposalContext";
 import { PathLinks } from "../lib/pathLinks";
 import {
@@ -31,6 +32,7 @@ import {
   shouldPresentPlanningError,
 } from "../lib/planningFeedback";
 import { AUTO } from "../lib/routineModel";
+import { enqueuePersistenceAfterPreflight, flushFocusedProjectDraft, noteProjectDraftInput, projectPersistenceStayedCurrent } from "../lib/draftPersistence";
 import { UnitPrefs } from "../lib/unitPreferences";
 import {
   createMarkerId as markerId,
@@ -51,8 +53,85 @@ import { createPlaybackStore } from "../lib/playbackStore";
   function normalizeProject(raw) {
     return PathLinks.reconcile(normalizeProjectData(raw));
   }
+  function duplicatePathForLibrary(source, name) {
+    const duplicate = clone(source);
+    duplicate.id = pathId();
+    duplicate.name = name;
+    duplicate.markers = duplicate.markers.map((marker) => ({ ...marker, id: markerId() }));
+    return duplicate;
+  }
+
+  const EMPTY_ROUTINE_RUN = Object.freeze({ steps: Object.freeze([]), segs: Object.freeze([]), total: 0 });
+  function routinePreviewResult(snapshot, request, active, admissionError = null) {
+    const current = !admissionError && snapshot.status === 'ready' && snapshot.key === request
+      && snapshot.path === request && snapshot.value ? snapshot.value : null;
+    const error = admissionError || (snapshot.status === 'error' && snapshot.errorKey === request
+      && snapshot.errorPath === request ? snapshot.error : null);
+    return { run: current || EMPTY_ROUTINE_RUN, pending: active && !current && !error, error };
+  }
+
+  function requestRoutinePreview(previewer, request, admission, active = true) {
+    if (!active || !admission.allowed) { previewer.cancel(); return false; }
+    previewer.request({ key: request, path: request, ...request, quality: 'final' });
+    return true;
+  }
+
+  function currentPathLength(derivation) {
+    const length = derivation?.current ? derivation.value?.sample?.length : null;
+    return Number.isFinite(length) ? length : null;
+  }
+
+  function selectedAgentProposalPreview(snapshot, candidate, request, plannerId) {
+    if (snapshot.status !== 'ready' || !candidate?.path || snapshot.key !== request
+      || snapshot.path !== candidate.path || snapshot.value?.planner !== plannerId) return [];
+    return [{ id: candidate.id, label: candidate.label, selected: true, valid: candidate.valid !== false, derived: snapshot.value }];
+  }
+
+  function agentProposalPreviewResult(snapshot, candidate, request, plannerId) {
+    const previews = selectedAgentProposalPreview(snapshot, candidate, request, plannerId);
+    const failed = Boolean(snapshot.status === 'error' && candidate?.path
+      && snapshot.errorKey === request && snapshot.errorPath === candidate.path);
+    return { previews, ready: previews.length === 1, pending: Boolean(candidate?.path) && previews.length === 0 && !failed, error: failed ? snapshot.error : null };
+  }
+
+  function canApplyAgentProposalCandidate(proposal, candidate, preview) {
+    if (!proposal || proposal.status !== 'ready') return false;
+    if (proposal.operation === 'configureRobot') return true;
+    return Boolean(candidate?.path && candidate.valid !== false && preview.ready);
+  }
+
+  function requestWaypointPreview(previewer, request, robot, plannerId) {
+    return previewer.request({ key: request, path: request.doc, robot, plannerId, quality: 'final' });
+  }
+
+  function waypointPreviewResult(snapshot, request) {
+    if (!request) return null;
+    const value = snapshot.status === 'ready' && snapshot.key === request && snapshot.path === request.doc ? snapshot.value : null;
+    const failed = snapshot.errorKey === request && snapshot.errorPath === request.doc;
+    return { ...request, derived: value || null, error: failed ? snapshot.error : null, pending: !value && !failed };
+  }
+
+  function pathPreviewResult(snapshot, request) {
+    const value = snapshot.status === 'ready' && snapshot.key === request
+      && snapshot.path === request.doc && snapshot.value?.planner === request.plannerId ? snapshot.value : null;
+    const failed = snapshot.status === 'error' && snapshot.errorKey === request && snapshot.errorPath === request.doc;
+    return { value, error: failed ? snapshot.error : null, pending: !value && !failed };
+  }
 
   const ACCENT = '#3f6fd0';
+
+  const PENDING_PATH_PREVIEW = {
+    sample: { pts: [], length: 0 },
+    prof: { totalTime: 0 },
+    metrics: { head: [] },
+    anchors: [],
+    checks: [],
+    wpFrac: [],
+    wpIdx: [],
+    effRanges: [],
+    mode: 'swerve',
+    rev: false,
+  };
 
   const FIT = { x: 307, y: 7, w: 3285, h: 1569 };
 
@@ -72,10 +151,10 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const finished = !draft && editStore.getLastResolution() === 'finish';
     const bridgeFinishedEdit = finished && editBase.current && (editBase.current === doc || derivedPath !== doc);
     if (!draft && (!finished || (derivedPath === doc && editBase.current !== doc))) editBase.current = null;
-    const draftPreview = draft && preview.path && preview.path.id === draft.id && preview.value
+    const draftPreview = draft && preview.path && preview.path.id === draft.id && preview.value && preview.value.planner === plannerId
       ? { path: preview.path, value: preview.value }
       : null;
-    const committedPreview = !draft && preview.path && preview.path.id === doc.id && preview.value && bridgeFinishedEdit
+    const committedPreview = !draft && preview.path && preview.path.id === doc.id && preview.value && preview.value.planner === plannerId && bridgeFinishedEdit
       ? { path: preview.path, value: preview.value }
       : null;
     const displayed = draftPreview || committedPreview || { path: derivedPath || doc, value: derived };
@@ -106,15 +185,12 @@ import { createPlaybackStore } from "../lib/playbackStore";
   function useFinalPlanning(doc, robot, plannerId, enabled = true) {
     const previewer = useMemo(() => PathPreview.create(), []);
     const planner = useMemo(() => FinalPlanning.create(), []);
-    const [initial] = useState(() => {
-      try { return { path: doc, value: PM.derivePath(doc, robot, 14, plannerId), error: null }; }
-      catch (error) { return { path: doc, value: null, error }; }
-    });
+    const [initial] = useState(() => ({ path: doc, value: null, error: null }));
     const lastValid = useRef(initial.value ? { path: initial.path, value: initial.value } : null);
     const requestedRevision = useRef(0);
     const [interactive, setInteractive] = useState(() => previewer.getSnapshot());
     const [snapshot, setSnapshot] = useState(() => ({
-      status: initial.value ? 'ready' : 'error',
+      status: 'pending',
       key: doc.id,
       path: initial.path,
       value: initial.value,
@@ -176,6 +252,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
     return {
       value: displayed && displayed.value,
       path: displayed && displayed.path,
+      current: Boolean(current) && snapshot.status === 'ready',
       error: snapshot.errorPath === doc ? snapshot.error : null,
       // This hook prepares the selected trajectory; failures are blocking even on initial load.
       errorKind: snapshot.errorPath === doc && snapshot.error ? 'interactive' : null,
@@ -276,8 +353,8 @@ import { createPlaybackStore } from "../lib/playbackStore";
       : { status: enabled ? 'pending' : 'idle', values: {}, error: '' };
   }
 
-  function App() {
-    const [project, setProject] = useState(() => freshProject());
+  function App({ initialProject = null, initialAgentProposal = null } = {}) {
+    const [project, setProject] = useState(() => initialProject || freshProject());
     const plannerId = 'profiledSpline';
     const [activeIdx, setActiveIdx] = useState(0);
     const [sel, setSel] = useState({ kind: null, idx: -1 });
@@ -300,10 +377,10 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const [metric, setMetric] = useState('velocity');
     const [tool, setTool] = useState('select');
     const [brush, setBrush] = useState({ kind: 'push', radius: 0.9, strength: 0.7 });
-    const [waypointPreview, setWaypointPreview] = useState(null);
+    const [waypointPreviewRequest, setWaypointPreviewRequest] = useState(null);
     const [headMenu, setHeadMenu] = useState(null);
     const [dirty, setDirty] = useState(false);
-    const [agentProposal, setAgentProposal] = useState(null);
+    const [agentProposal, setAgentProposal] = useState(initialAgentProposal);
     const [agentCandidateId, setAgentCandidateId] = useState(null);
     const [mcpEnabled, setMcpEnabled] = useState(false);
     const [agentSessionId] = useState(() => 'session_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)));
@@ -333,7 +410,15 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const editStore = useMemo(() => PathEdit.create(), []);
     const playbackStore = useMemo(() => createPlaybackStore(), []);
     const routinePlaybackStore = useMemo(() => createPlaybackStore(), []);
+    const waypointPreviewer = useMemo(() => PathPreview.create(), []);
+    const [waypointPreviewSnapshot, setWaypointPreviewSnapshot] = useState(() => waypointPreviewer.getSnapshot());
+    const agentPreviewer = useMemo(() => PathPreview.create(), []);
+    const [agentPreview, setAgentPreview] = useState(() => agentPreviewer.getSnapshot());
     useEffect(() => () => { playbackStore.destroy(); routinePlaybackStore.destroy(); }, [playbackStore, routinePlaybackStore]);
+    useEffect(() => waypointPreviewer.retain(), [waypointPreviewer]);
+    useEffect(() => waypointPreviewer.subscribe(() => setWaypointPreviewSnapshot(waypointPreviewer.getSnapshot())), [waypointPreviewer]);
+    useEffect(() => agentPreviewer.retain(), [agentPreviewer]);
+    useEffect(() => agentPreviewer.subscribe(() => setAgentPreview(agentPreviewer.getSnapshot())), [agentPreviewer]);
 
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.listRecentJavaProjects !== 'function') return;
@@ -489,6 +574,10 @@ import { createPlaybackStore } from "../lib/playbackStore";
 
     const robot = project.robot;
     const accent = ACCENT;
+    useEffect(() => {
+      if (waypointPreviewRequest) requestWaypointPreview(waypointPreviewer, waypointPreviewRequest, robot, plannerId);
+    }, [waypointPreviewer, waypointPreviewRequest, robot, plannerId]);
+    const waypointPreview = waypointPreviewResult(waypointPreviewSnapshot, waypointPreviewRequest);
 
     const doc = project.paths[activeIdx];
     const docRef = useRef(doc); docRef.current = doc;
@@ -500,6 +589,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const projectHist = useRef({ past: [], future: [] });
     const autosaveRevision = useRef(0);
     const autosaveTimer = useRef(0);
+    const draftInputGeneration = useRef(0);
     const persistenceTail = useRef(Promise.resolve());
     const [, force] = useState(0);
     const updateDirty = useCallback((next) => {
@@ -507,6 +597,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
       setDirty(next);
       if (window.bordeauxAPI && typeof window.bordeauxAPI.setDirty === 'function') window.bordeauxAPI.setDirty(next);
     }, []);
+    const flushProjectDraft = useCallback(() => flushFocusedProjectDraft(document, flushSync), []);
     const markAgentProposalStale = useCallback(() => {
       const current = agentProposalRef.current;
       if (!current || current.status !== 'ready') return;
@@ -542,6 +633,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
       if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
       autosaveTimer.current = 0;
       const persist = () => enqueuePersistence(async () => {
+        if (!flushProjectDraft()) return;
         if (revision !== autosaveRevision.current) return;
         const sourceProject = projectRef.current;
         const editRevision = editStore.getRevision();
@@ -557,7 +649,19 @@ import { createPlaybackStore } from "../lib/playbackStore";
         autosaveTimer.current = 0;
         void persist().catch((error) => console.warn('Could not autosave the Bordeaux project:', error));
       }, 900);
-    }, [editStore, enqueuePersistence, materializeProject, updateDirty]);
+    }, [editStore, enqueuePersistence, flushProjectDraft, materializeProject, updateDirty]);
+
+    useEffect(() => {
+      const onDraftInput = (event) => {
+        if (noteProjectDraftInput(event.target, dirtyRef.current, () => updateDirty(true), scheduleAutosave)) {
+          draftInputGeneration.current += 1;
+        }
+      };
+      // React must record the draft before dirty-state rendering can restore the
+      // controlled input value. Observe after its root input handler has run.
+      document.addEventListener('input', onDraftInput);
+      return () => document.removeEventListener('input', onDraftInput);
+    }, [scheduleAutosave, updateDirty]);
 
     useEffect(() => {
       const activePathId = project.paths[activeIdx] && project.paths[activeIdx].id;
@@ -714,13 +818,13 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const comparedPreview = comparisonMode === 'candidate' ? candidate : comparisonMode === 'normal' && normalReady ? normal.value : null;
     const selectedPreview = comparedPreview || acceptedPreview;
     const derivation = selectedPreview
-      ? { value: selectedPreview, path: doc, pending: false, error: null, errorKind: null }
+      ? { value: selectedPreview, path: doc, current: true, pending: false, error: null, errorKind: null }
       : { ...selectedPlanning, path: selectedPlanning.path === planningPath ? doc : selectedPlanning.path };
     const planningNotice = usePlanningNotice(derivation.error, derivation.errorKind, planningInputRevision, doc.id);
-    if (!derivation.value) throw derivation.error || new Error('Could not derive the active path');
-    const derived = derivation.value;
+    const derived = derivation.value || PENDING_PATH_PREVIEW;
     const derivationDoc = derivation.path || doc;
-    const derivationCurrent = derivationDoc === doc;
+    const derivationCurrent = derivation.current;
+    const reverseDistance = currentPathLength(derivation);
 
     const durationInputs = useMemo(() => project.paths.map((path) => ({
       id: path.id, path, robot, plannerId,
@@ -910,17 +1014,12 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const addWaypoint = useCallback((p, segmentHint, onPath, selectedVisit) => {
       const prepared = prepareWaypointInsertion(p, segmentHint, onPath, selectedVisit);
       if (prepared.previewRequired) {
-        try {
-          const previewDerived = PM.derivePath(prepared.doc, robot, PERSEG, plannerId);
-          const message = 'Splitting this ' + prepared.segmentType + ' may rebuild its geometry. Review the dashed path first.';
-          setWaypointPreview({ ...prepared, derived: previewDerived, plannerId, message });
-        } catch (error) {
-          console.error('Could not preview waypoint insertion:', error);
-        }
+        const message = 'Splitting this ' + prepared.segmentType + ' may rebuild its geometry. Review the dashed path first.';
+        setWaypointPreviewRequest({ ...prepared, plannerId, message });
         return;
       }
       commit(() => prepared.doc);
-    }, [commit, plannerId, prepareWaypointInsertion, robot]);
+    }, [commit, plannerId, prepareWaypointInsertion]);
     const appendWaypoint = useCallback((rawPoint) => {
       const point = clampWorld(rawPoint);
       const candidate = clone(docRef.current);
@@ -961,17 +1060,12 @@ import { createPlaybackStore } from "../lib/playbackStore";
       candidate._selAfter = oldCount;
 
       if (segmentType === 'clothoid') {
-        try {
-          const previewDerived = PM.derivePath(candidate, robot, PERSEG, plannerId);
-          const message = 'The new clothoid join may rebuild the previous turn. Review the dashed path first.';
-          setWaypointPreview({ doc: candidate, index: oldCount, derived: previewDerived, plannerId, message, actionLabel: 'Place endpoint' });
-        } catch (error) {
-          console.error('Could not preview waypoint placement:', error);
-        }
+        const message = 'The new clothoid join may rebuild the previous turn. Review the dashed path first.';
+        setWaypointPreviewRequest({ doc: candidate, index: oldCount, plannerId, message, actionLabel: 'Place endpoint' });
         return;
       }
       commit(() => candidate);
-    }, [commit, plannerId, robot]);
+    }, [commit, plannerId]);
     const setJiggle = useCallback((options) => {
       if (!options) {
         commit((d) => { delete d.waypoints[d.waypoints.length - 1].jiggle; return d; });
@@ -1000,11 +1094,11 @@ import { createPlaybackStore } from "../lib/playbackStore";
       return true;
     }, [commit, derived]);
     const applyWaypointPreview = useCallback(() => {
-      if (!waypointPreview) return;
+      if (!waypointPreview?.derived) return;
       commit(() => waypointPreview.doc);
-      setWaypointPreview(null);
+      setWaypointPreviewRequest(null);
     }, [commit, waypointPreview]);
-    useEffect(() => { setWaypointPreview(null); }, [doc, plannerId]);
+    useEffect(() => { setWaypointPreviewRequest(null); }, [doc, robot, plannerId]);
     useEffect(() => { if (doc._selAfter != null) { select('wp', doc._selAfter); mutate((d) => { delete d._selAfter; return d; }); } }, [doc._selAfter]);
 
     const setWp = useCallback((i, patch) => commit((d) => {
@@ -1217,7 +1311,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
       ] });
     }, [faceWaypoint, select]);
     const duplicateWp = useCallback((i) => commit((d) => duplicateWaypoint(d, i)), [commit]);
-    const reversePath = useCallback(() => commit(reversePathDraft), [commit]);
+    const reversePath = useCallback(() => reverseDistance == null ? undefined : commit((path) => { reversePathDraft(path); return PM.reversePathAnchors(path, reverseDistance); }), [commit, reverseDistance]);
     const reorderWp = useCallback((from, to) => commit((d) => reorderWaypoint(d, from, to)), [commit]);
     const insertWp = useCallback((i) => {
       const pts = derived.sample.pts;
@@ -1228,7 +1322,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
     }, [addWaypoint, derived, doc.waypoints.length]);
     const inspActions = { setWp, toggleTheta, setHandleLen, delWp, setTarget, delTarget, setMarker, delMarker, setRange, setRangeAnchor, delRange, setConstraint, setDoc, select, setTool,
       addTargetMid, addMarkerMid, addRangeMid,
-      setSegMeta, setSegmentHeadingMode, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, reorderWp, insertWp,
+      setSegMeta, setSegmentHeadingMode, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, canReversePath: reverseDistance != null, reorderWp, insertWp,
       setStop, setWait, setTurnInPlace, setTurnInPlaceMeta, setHeadingMode, toggleDriveBackward,
       openInspector: () => setInspectorOpen(true) };
     const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, applyBrush, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginEdit, finishEdit, cancelEdit,
@@ -1288,7 +1382,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
       const source = materializeProject().paths[i]; if (!source) return null;
       finishEdit();
       const name = uniquePathName(source.name + ' copy'), index = i + 1;
-      const cp = { ...clone(source), id: pathId(), name };
+      const cp = duplicatePathForLibrary(source, name);
       setProject((pr) => { const paths = pr.paths.slice(); paths.splice(index, 0, cp); return { ...pr, paths }; });
       resetForPath(index); return { index, name, id: cp.id, folderId: cp.folderId };
     };
@@ -1361,13 +1455,14 @@ import { createPlaybackStore } from "../lib/playbackStore";
     };
     const agentCandidates = agentProposal && Array.isArray(agentProposal.candidates) ? agentProposal.candidates : [];
     const agentCandidate = agentCandidates.find((candidate) => candidate.id === agentCandidateId) || agentCandidates[0] || null;
-    const agentProposalPreviews = useMemo(() => agentCandidates.flatMap((candidate) => {
-      if (!candidate.path) return [];
-      try {
-        return [{ id: candidate.id, label: candidate.label, selected: candidate.id === (agentCandidate && agentCandidate.id), valid: candidate.valid !== false, derived: PM.derivePath(candidate.path, robot, PERSEG, plannerId) }];
+    const agentPreviewRequest = useMemo(() => agentCandidate?.path ? { candidate: agentCandidate, robot, plannerId } : null, [agentCandidate, robot, plannerId]);
+    useEffect(() => {
+      if (agentProposal?.status === 'ready' && agentPreviewRequest) {
+        agentPreviewer.request({ key: agentPreviewRequest, path: agentPreviewRequest.candidate.path, robot, plannerId, quality: 'final' });
       }
-      catch (_) { return []; }
-    }), [agentProposal, agentCandidateId, robot, plannerId]);
+    }, [agentPreviewer, agentProposal, agentPreviewRequest, robot, plannerId]);
+    const agentProposalPreview = agentProposalPreviewResult(agentPreview, agentCandidate, agentPreviewRequest, plannerId);
+    const agentProposalCanApplyCandidate = canApplyAgentProposalCandidate(agentProposal, agentCandidate, agentProposalPreview);
     const rejectAgentProposal = useCallback(() => {
       if (!agentProposal) return;
       if (window.bordeauxAPI && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(agentProposal.id, 'rejected');
@@ -1388,7 +1483,8 @@ import { createPlaybackStore } from "../lib/playbackStore";
       });
       if (!agentProposal || agentProposal.status !== 'ready' || !contextMatches
         || !proposalContext || proposalContext.published !== publishedContext || proposalContext.id !== agentProposal.id
-        || javaProjectState.operation || (agentProposal.blockingIssues && agentProposal.blockingIssues.length)) return;
+        || javaProjectState.operation || !agentProposalCanApplyCandidate
+        || (agentProposal.blockingIssues && agentProposal.blockingIssues.length)) return;
       const before = { project: clone(project), activeIdx };
       let nextIndex = activeIdx;
       let nextProject;
@@ -1412,7 +1508,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
       const applied = { ...agentProposal, status: 'applied', appliedRevision: agentRevision.current + 1 };
       agentProposalRef.current = applied;
       setAgentProposal(applied);
-    }, [agentProposal, agentCandidate, project, activeIdx, agentSessionId, editStore, javaProjectState.operation, updateDirty]);
+    }, [agentProposal, agentCandidate, agentProposalCanApplyCandidate, project, activeIdx, agentSessionId, editStore, javaProjectState.operation, updateDirty]);
 
     const total = derived.prof.totalTime || 0;
     useEffect(() => playbackStore.setTotal(total), [playbackStore, total]);
@@ -1519,7 +1615,9 @@ import { createPlaybackStore } from "../lib/playbackStore";
       writeDoc({ ...doc, optimization: { corridorM: doc.optimization?.corridorM ?? 0.15 } });
     };
 
-    const canReplaceProject = useCallback(() => !dirtyRef.current || confirm('Discard unsaved changes to this project?'), []);
+    // ---- desktop project workflow ----
+    const canReplaceProject = useCallback(() => flushProjectDraft()
+      && (!dirtyRef.current || confirm('Discard unsaved changes to this project?')), [flushProjectDraft]);
     const loadProject = useCallback((incoming) => {
       invalidateScheduledAutosave();
       cancelEdit();
@@ -1568,17 +1666,16 @@ import { createPlaybackStore } from "../lib/playbackStore";
       cancelEdit();
     }, [cancelEdit, invalidateScheduledAutosave]);
     const newProject = useCallback(() => {
-      if (!canReplaceProject()) return;
-      prepareProjectReplacement();
-      return enqueuePersistence(async () => {
+      return enqueuePersistenceAfterPreflight(enqueuePersistence, canReplaceProject, async () => {
+        prepareProjectReplacement();
         if (window.bordeauxAPI) await window.bordeauxAPI.newProject();
         loadProject(freshProject());
       });
     }, [canReplaceProject, enqueuePersistence, loadProject, prepareProjectReplacement]);
     const openProject = useCallback((recentIndex) => {
-      if (!window.bordeauxAPI || !canReplaceProject()) return;
-      prepareProjectReplacement();
-      return enqueuePersistence(async () => {
+      if (!window.bordeauxAPI) return;
+      return enqueuePersistenceAfterPreflight(enqueuePersistence, canReplaceProject, async () => {
+        prepareProjectReplacement();
         try {
           const result = typeof recentIndex === 'number'
             ? await window.bordeauxAPI.openRecentProject(recentIndex)
@@ -1591,20 +1688,25 @@ import { createPlaybackStore } from "../lib/playbackStore";
     }, [canReplaceProject, enqueuePersistence, loadProject, prepareProjectReplacement]);
     const saveProject = useCallback((saveAs) => {
       if (!window.bordeauxAPI) return;
-      return enqueuePersistence(async () => {
+      return enqueuePersistenceAfterPreflight(enqueuePersistence, flushProjectDraft, async () => {
+        const requestedDraftGeneration = draftInputGeneration.current;
         try {
-          const sourceProject = projectRef.current;
-          const editRevision = editStore.getRevision();
+          const source = { project: projectRef.current, editRevision: editStore.getRevision(), draftGeneration: requestedDraftGeneration };
           const result = await window.bordeauxAPI.saveProject(materializeProject(), saveAs === true);
           if (result && result.canceled) return;
-          if (sourceProject === projectRef.current && editRevision === editStore.getRevision()) updateDirty(false);
+          if (projectPersistenceStayedCurrent(source, {
+            project: projectRef.current,
+            editRevision: editStore.getRevision(),
+            draftGeneration: draftInputGeneration.current,
+          })) updateDirty(false);
         } catch (error) {
           alert('Could not save project: ' + (error && error.message ? error.message : error));
         }
       });
-    }, [editStore, enqueuePersistence, materializeProject, updateDirty]);
+    }, [editStore, enqueuePersistence, flushProjectDraft, materializeProject, updateDirty]);
 
     const onExportJava = useCallback(async (destination) => {
+      if (!flushProjectDraft()) return;
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.exportJava !== 'function') {
         setExportError('Java trajectory export is available in the Bordeaux desktop app.');
         return;
@@ -1628,7 +1730,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         setJavaProjectState((current) => ({ ...current, operation: null }));
         setExportError(message);
       }
-    }, [javaProjectState.catalog, materializeProject]);
+    }, [flushProjectDraft, javaProjectState.catalog, materializeProject]);
 
     useEffect(() => {
       if (!window.bordeauxAPI) return undefined;
@@ -1672,7 +1774,11 @@ import { createPlaybackStore } from "../lib/playbackStore";
         }
         const formControl = matches && matches('input,select,textarea,[contenteditable="true"]');
         if (formControl) return;
-        if (page === 'plan' && tool === 'brush' && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === '[' || e.key === ']')) {
+        // Bracket radius nudges sit below the form-control guard so a focused field
+        // (including .numinput, which tool shortcuts deliberately pass through) keeps its
+        // keystrokes. FieldView's visit cycling binds the same keys in the capture phase,
+        // so defer to it when it claimed the event.
+        if (page === 'plan' && tool === 'brush' && !e.defaultPrevented && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === '[' || e.key === ']')) {
           e.preventDefault();
           const direction = e.key === ']' ? 1 : -1;
           setBrush((current) => ({ ...current, radius: Math.max(0.3, Math.min(2.4, +(current.radius + direction * 0.1).toFixed(1))) }));
@@ -1696,7 +1802,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         }
         if (k === 'g') setShowGrid((s) => !s);
         else if (k === 'f') setView(FIT);
-        else if (e.key === 'Escape') { setTool('select'); setHeadMenu(null); setWaypointPreview(null); select(null, -1); }
+        else if (e.key === 'Escape') { setTool('select'); setHeadMenu(null); setWaypointPreviewRequest(null); select(null, -1); }
         else if ((e.key === 'Backspace' || e.key === 'Delete') && sel.kind) {
           if (sel.kind === 'wp') delWp(sel.idx); else if (sel.kind === 'rt') delTarget(sel.idx); else if (sel.kind === 'em') delMarker(sel.idx); else if (sel.kind === 'cr') delRange(sel.idx);
         }
@@ -1732,6 +1838,13 @@ import { createPlaybackStore } from "../lib/playbackStore";
     ].filter(Boolean);
 
 
+    if (!derivation.value) {
+      if (derivation.error) throw derivation.error;
+      return h('main', { className: 'fatal-error', role: 'status', 'aria-live': 'polite' },
+        h('h1', null, 'Preparing path preview'),
+        h('p', null, 'Calculating this path off the UI thread…'));
+    }
+
     return h('div', { className: 'app' },
       h(Panels.Toolbar, { page, setPage: (next) => { finishEdit(); playbackStore.reset(); routinePlaybackStore.reset(); setPage(next); }, editorPage,
         alliance, setAlliance,
@@ -1762,17 +1875,17 @@ import { createPlaybackStore } from "../lib/playbackStore";
             renderLibrary('paths', (secOpen, setSecOpen) => h('div', { style: { height: '100%' }, inert: derivationCurrent ? undefined : '' }, h(Panels.Outline, { open: true, setOpen: () => {}, doc: derivationDoc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot, ready: derivationCurrent }))),
             h('div', { className: 'fieldcol', inert: derivationCurrent ? undefined : '', 'aria-disabled': derivationCurrent ? undefined : true },
               h(Panels.ToolRail, { tool, setTool, brush, setBrush, waypointCount: derivationDoc.waypoints.length }),
-              h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, derivedPath: derivation.path, robot, plannerId, optimizationCorridor: optimizationOpen && normalReady ? { points: normal.value?.sample.pts, widthM: doc.optimization?.corridorM ?? 0.15 } : null, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreviews : [], sel, tool, brush, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, showHandles: true }),
+              h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, derivedPath: derivation.path, robot, plannerId, optimizationCorridor: optimizationOpen && normalReady ? { points: normal.value?.sample.pts, widthM: doc.optimization?.corridorM ?? 0.15 } : null, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreview.previews : [], sel, tool, brush, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, showHandles: true }),
               h('div', { className: 'field-notices' },
               h(FieldStatus, { key: doc.id, notices: fieldNotices }),
               tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
               waypointPreview && h('div', { className: 'insert-preview', role: 'region', 'aria-label': 'Preview waypoint insertion' },
                 h('div', { className: 'insert-preview-copy' },
-                  h('b', null, 'Preview waypoint'),
-                  h('span', null, waypointPreview.message)),
+                  h('b', null, waypointPreview.pending ? 'Preparing waypoint preview' : waypointPreview.error ? 'Waypoint preview unavailable' : 'Preview waypoint'),
+                  h('span', null, waypointPreview.error ? (waypointPreview.error.message || String(waypointPreview.error)) : waypointPreview.message)),
                 h('div', { className: 'insert-preview-actions' },
-                  h('button', { type: 'button', onClick: () => setWaypointPreview(null) }, 'Cancel'),
-                  h('button', { className: 'primary', type: 'button', onClick: applyWaypointPreview }, waypointPreview.actionLabel || 'Insert waypoint'))),
+                  h('button', { type: 'button', onClick: () => setWaypointPreviewRequest(null) }, 'Cancel'),
+                  h('button', { className: 'primary', type: 'button', disabled: !waypointPreview.derived, onClick: applyWaypointPreview }, waypointPreview.actionLabel || 'Insert waypoint'))),
               agentProposal && h('div', { className: 'insert-preview agent-proposal', role: 'region', 'aria-label': 'Agent path proposal' },
                 h('div', { className: 'insert-preview-copy' },
                   h('b', null, agentProposal.operation === 'replace' ? 'Agent repair proposal' : 'Agent path proposal'),
@@ -1781,12 +1894,14 @@ import { createPlaybackStore } from "../lib/playbackStore";
                   agentProposal.status === 'ready' && h('div', { className: 'agent-candidates', role: 'radiogroup', 'aria-label': 'Agent proposal candidates' }, agentCandidates.map((candidate) => h('button', { key: candidate.id, type: 'button', role: 'radio', 'aria-checked': agentCandidate && candidate.id === agentCandidate.id, className: agentCandidate && candidate.id === agentCandidate.id ? 'selected' : '', onClick: () => setAgentCandidateId(candidate.id) }, candidate.label + (candidate.valid === false ? ' · invalid' : candidate.metrics ? ' · ' + candidate.metrics.totalTimeS.toFixed(2) + ' s' : '')))),
                   agentCandidate && agentCandidate.metrics && h('span', null, UnitPrefs.format(agentCandidate.metrics.totalDistanceM, 'm', 2) + ' · ' + UnitPrefs.format(agentCandidate.metrics.minimumClearanceM, 'm', 2) + ' modeled clearance'),
                   agentCandidate && agentCandidate.valid === false && agentCandidate.rejectionReason && h('span', { className: 'agent-proposal-status' }, 'Blocked: ' + agentCandidate.rejectionReason),
+                  agentProposal.status === 'ready' && agentProposal.operation !== 'configureRobot' && agentProposalPreview.pending && h('span', { className: 'agent-proposal-status', role: 'status', 'aria-live': 'polite' }, 'Preparing the selected path preview…'),
+                  agentProposal.status === 'ready' && agentProposal.operation !== 'configureRobot' && agentProposalPreview.error && h('span', { className: 'agent-proposal-status', role: 'alert' }, 'Selected path preview unavailable: ' + (agentProposalPreview.error.message || String(agentProposalPreview.error))),
                   agentProposal.recommendationReason && h('span', null, agentProposal.recommendationReason),
                   agentProposal.advisories && agentProposal.advisories.map((notice, index) => h('span', { key: 'advisory-' + index, className: 'agent-proposal-status' }, notice)),
                   agentProposal.blockingIssues && agentProposal.blockingIssues.map((issue, index) => h('span', { key: 'block-' + index, className: 'agent-proposal-status' }, 'Blocked: ' + issue))),
                 h('div', { className: 'insert-preview-actions' },
                   agentProposal.status === 'ready' && h('button', { type: 'button', onClick: rejectAgentProposal }, 'Reject'),
-                  agentProposal.status === 'ready' && h('button', { className: 'primary', type: 'button', disabled: !agentCandidate || agentCandidate.valid === false || (agentProposal.blockingIssues && agentProposal.blockingIssues.length > 0), onClick: applyAgentProposal }, agentProposal.operation === 'replace' ? 'Apply repair' : 'Add path'))),
+                  agentProposal.status === 'ready' && h('button', { className: 'primary', type: 'button', disabled: !agentProposalCanApplyCandidate || (agentProposal.blockingIssues && agentProposal.blockingIssues.length > 0), onClick: applyAgentProposal }, agentProposal.operation === 'replace' ? 'Apply repair' : 'Add path'))),
               ),
               h(Panels.ConstraintBar, { c: derivationDoc.constraints, robot, onOpen: () => { setOptimizationOpen(false); setComparison(null); select(null, -1); } }),
               h(PlaybackTransport, { store: playbackStore, derived, doc: derivationDoc, metric, setMetric, graphOpen, setGraphOpen }),
@@ -1814,7 +1929,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
     if (tool === 'rotation') return 'Click the path to set a <b>rotation target</b>';
     if (tool === 'marker') return 'Click the path to place an <b>event marker</b>';
     if (tool === 'range') return 'Drag along the path to define a <b>constraint range</b> \u00b7 then edit its limits';
-    if (tool === 'brush') return 'Drag to <b>sculpt Bézier and line segments</b> \u00b7 arcs and clothoids stay locked \u00b7 [ and ] adjust the radius';
+    if (tool === 'brush') return 'Drag to <b>sculpt the path</b> \u00b7 [ and ] adjust the radius';
     return '';
   }
 
@@ -1830,4 +1945,4 @@ import { createPlaybackStore } from "../lib/playbackStore";
     }
   }
 
-export { App, AppErrorBoundary };
+export { App, AppErrorBoundary, agentProposalMatchesPublishedContext, agentProposalPreviewResult, applyBrushDraft, canApplyAgentProposalCandidate, currentPathLength, duplicatePathForLibrary, pathPreviewResult, remapBrushSelection, requestRoutinePreview, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, syncBrushSelection, waypointPreviewResult };

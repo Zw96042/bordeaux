@@ -27,6 +27,7 @@ import { validateProject } from "../shared/validation";
 import { javaCatalogSemanticSignature } from "../shared/agent/catalogSignature";
 
 const MAX_PROPOSALS = 24;
+const MAX_CONCURRENT_ANALYSES = 2;
 const PROPOSAL_TTL_MS = 30 * 60 * 1_000;
 
 function canceledRequestError(): Error {
@@ -289,6 +290,7 @@ export class AgentSessionService {
   private readonly proposals = new Map<string, AgentProposal>();
   private readonly planningAborts = new Set<AbortController>();
   private previewPlanningAbort: AbortController | null = null;
+  private activeAnalyses = 0;
   private previewGeneration = 0;
   private committedPreviewId: string | null = null;
 
@@ -474,6 +476,10 @@ export class AgentSessionService {
   private async executePlanning<T>(job: AgentPlanningJob, snapshot: AgentSessionSnapshot, signal?: AbortSignal): Promise<T> {
     if (signal?.aborted) throw new Error("Agent planning was canceled.");
     const producesPreview = job.kind !== "analyze";
+    if (!producesPreview && this.activeAnalyses >= MAX_CONCURRENT_ANALYSES) {
+      throw new Error(`Bordeaux is already running ${MAX_CONCURRENT_ANALYSES} path analyses. Wait for one to finish and retry.`);
+    }
+    if (!producesPreview) this.activeAnalyses += 1;
     if (producesPreview) this.previewPlanningAbort?.abort();
     const controller = new AbortController();
     this.planningAborts.add(controller);
@@ -488,6 +494,7 @@ export class AgentSessionService {
       }
       return result;
     } finally {
+      if (!producesPreview) this.activeAnalyses -= 1;
       signal?.removeEventListener("abort", onAbort);
       this.planningAborts.delete(controller);
       if (this.previewPlanningAbort === controller) this.previewPlanningAbort = null;

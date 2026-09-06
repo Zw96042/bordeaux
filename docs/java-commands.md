@@ -33,13 +33,19 @@ load the exported stream through the bounded, validated `BordeauxTrajectoryReade
 overload; use the
 validated `readWithRoutine(...)` overload for an exported Auto-tab routine. This preflights field and
 catalog identity plus every exported path/branch before selection. `BordeauxEventRunner` preflights
-event conditions and validates a command invocation when it becomes due. `BordeauxRoutineRunner`
+event conditions and every typed command invocation before execution. `BordeauxRoutineRunner`
 preflights every reachable command and condition; its contained generated-trajectory constructor also
-preflights generator IDs, fallback policy, and fallback arguments. Routines with Wait or
+preflights generator IDs, fallback policy, and fallback arguments. Routine commands run sequentially and report `CommandWaiting` until their scheduler reports
+completion. `reset()`, `stop()`, and `close()` cancel a waiting routine command.
+Transition API callers use `startTransition()`, `completePathTransition(...)`, and
+`periodicTransition()`; migrate their former `periodic()` call to `periodicTransition()`.
+Routines with Wait or
 runtime-generated trajectories use the caller-driven progress API; generated trajectories also
 require robot-owned limits, current pose, field/collision validators, and a safe-stop callback through
 `BordeauxGeneratedTrajectorySafety`. Call `endPath()` when a path ends; only event invocations
 authored with **Cancel at path end** are canceled.
+
+Generated bindings include side-effect-free argument validators automatically. Hand-built `BordeauxCommandRegistry` instances used with event or routine runners must use the four-argument `register(id, parameterNames, validator, factory)` overload; the validator should perform the same `BordeauxArguments` reads as the factory without creating commands or touching robot state. The legacy three-argument overload supports direct `registry.create(...)` calls only and is rejected during autonomous preflight.
 
 ## Contract invariants
 
