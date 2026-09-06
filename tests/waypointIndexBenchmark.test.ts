@@ -1,3 +1,12 @@
+import { createHash } from "node:crypto";
+import { expect, it } from "vitest";
+import { analyzePath } from "../src/shared/agent/pathAnalysis";
+import { buildJavaTrajectory } from "../src/shared/export/javaTrajectory";
+import { getPlanner } from "../src/shared/planners";
+import { profiledSplinePlanner } from "../src/shared/planners/profiledSpline";
+import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
+import type { JavaCommandCatalog } from "../src/shared/types";
+
 const benchmark = process.env.BENCHMARK_WAYPOINT_INDEX === "1" ? it : it.skip;
 
 function fixture(wait = false) {
