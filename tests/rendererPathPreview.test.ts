@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { directPreviewWork, directWorkIsSafe } from "../src/renderer/assets/direct-preview-work";
 import { loadRendererExport } from "./helpers/loadRendererExport";
 
 interface WorkerJob { id: number; quality: "interactive" | "final"; perSegment: number }
@@ -32,11 +33,21 @@ function previewModule(context: Record<string, unknown> = {}) {
       request(input: { path: unknown; robot: unknown; plannerId: string; quality: "interactive" | "final"; key?: string }): number;
       getSnapshot(): { status: string; revision: number; quality: string; path: unknown; value: unknown };
       retain(): () => void;
+      cancel(): void;
       destroy(): void;
     };
     samplesForQuality(quality: string): number;
+    directPreviewIsSafe(path: unknown, perSegment: number): boolean;
   }>(new URL("../src/renderer/assets/path-preview.js", import.meta.url), "PathPreview", {
-    context: { performance, queueMicrotask, setTimeout, clearTimeout, ...context },
+    context: {
+      performance,
+      queueMicrotask,
+      setTimeout,
+      clearTimeout,
+      directPreviewWork,
+      directWorkIsSafe,
+      ...context,
+    },
     replacements: [[
       "return new Worker(new URL('./path-preview-worker.js', import.meta.url), { type: 'module' });",
       "return config.workerFactory();",
@@ -122,6 +133,20 @@ describe("renderer path preview scheduler", () => {
     expect(transport).not.toContainEqual(expect.objectContaining({ source: "worker" }));
   });
 
+  it("reports optimized worker failure instead of publishing a profiled direct fallback", async () => {
+    let directCalls = 0;
+    const preview = previewModule().create({
+      workerFactory: () => { throw new Error("worker unavailable"); },
+      derive: () => { directCalls += 1; return { planner: "profiledSpline" }; },
+    });
+
+    const revision = preview.request({ path: {}, robot: {}, plannerId: "optimizedTrajectory", quality: "final" });
+    await Promise.resolve();
+
+    expect(directCalls).toBe(0);
+    expect(preview.getSnapshot()).toMatchObject({ status: "error", revision });
+  });
+
   it("summarizes timed worker transport without per-job events", () => {
     const bus = benchmarkEventBus("observe");
     const worker = new FakeWorker();
@@ -189,6 +214,27 @@ describe("renderer path preview scheduler", () => {
     expect(worker.terminated).toBe(true);
   });
 
+  it("cancels active and queued work while keeping the scheduler reusable", () => {
+    const workers = [new FakeWorker(), new FakeWorker()];
+    let workerIndex = 0;
+    const preview = previewModule().create({ workerFactory: () => workers[workerIndex++] });
+    const input = { path: {}, robot: {}, plannerId: "profiledSpline", quality: "final" as const };
+    const canceled = preview.request(input);
+    preview.request(input);
+
+    preview.cancel();
+
+    expect(workers[0].terminated).toBe(true);
+    expect(preview.getSnapshot()).toMatchObject({ status: "idle" });
+    workers[0].resolve({ id: canceled, value: { stale: true } });
+    expect(preview.getSnapshot().value).not.toEqual({ stale: true });
+
+    const resumed = preview.request(input);
+    expect(workers[1].jobs).toEqual([expect.objectContaining({ id: resumed })]);
+    workers[1].resolve({ id: resumed, value: { current: true } });
+    expect(preview.getSnapshot()).toMatchObject({ status: "ready", value: { current: true } });
+  });
+
   it("retains exact source provenance until its replacement completes", () => {
     const worker = new FakeWorker();
     const preview = previewModule().create({ workerFactory: () => worker });
@@ -206,6 +252,18 @@ describe("renderer path preview scheduler", () => {
       value: { waypointX: 0 },
     });
     expect(preview.getSnapshot().path).not.toBe(secondPath);
+  });
+
+  it("reports the failed input separately from retained geometry and clears it after recovery", () => {
+    const worker = new FakeWorker();
+    const preview = previewModule().create({ workerFactory: () => worker });
+    const validPath = { id: "path", x: 1 };
+    const failedPath = { id: "path", x: 2 };
+    try {
+      const valid = preview.request({ path: validPath, robot: {}, plannerId: "profiledSpline", quality: "interactive" });
+      worker.resolve({ id: valid, value: { x: 1 } });
+      const failed = preview.request({ path: failedPath, robot: {}, plannerId: "profiledSpline", quality: "interactive" });
+      worker.resolve({ id: failed, error: { message: "Could not derive edited path" } });
       expect(preview.getSnapshot()).toMatchObject({
         status: "error", revision: failed, path: validPath, value: { x: 1 },
         errorPath: failedPath, error: { message: "Could not derive edited path" },
