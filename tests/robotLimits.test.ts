@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { getPlanner } from "../src/shared/planners";
-import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
+import { blankPath, buildWaypoints, createDemoProject, DEFAULT_CONSTRAINTS } from "../src/shared/project/defaults";
 import { effectivePathConstraints, robotHardLimits } from "../src/shared/robotLimits";
+// @ts-expect-error The production preview engine is an intentional JavaScript module.
+import { PM as RendererPM } from "../src/renderer/lib/pathMath";
 
 function physicalRobot() {
   const project = createDemoProject();
@@ -34,21 +36,42 @@ describe("robot hard limits", () => {
     expect(limits.maxAngularAccelDegps2).toBeCloseTo(9.80665 * 180 / Math.PI, 9);
   });
 
-  it("uses the robot envelope globally and lets ranges only tighten it", () => {
+  it.each(["profiledSpline", "optimizedTrajectory"] as const)("%s applies the minimum of authored, robot, and range limits", (plannerId) => {
     const project = physicalRobot();
     const path = project.paths[0];
     path.headingMode = "tangent";
     path.waypoints = buildWaypoints([{ x: 1, y: 1 }, { x: 7, y: 1 }]);
-    path.constraints = { maxVel: 0.1, maxAccel: 0.1, maxDecel: 0.1, maxAngVel: 1, maxAngAccel: 1 };
-
-    const planner = getPlanner("profiledSpline");
+    const planner = getPlanner(plannerId);
     const unrestricted = planner.generate({ path, robot: project.robot });
     expect(Math.max(...unrestricted.samples.map((sample) => sample.velocityMps))).toBeGreaterThan(1);
+
+    path.constraints = { maxVel: 0.5, maxAccel: 0.7, maxDecel: 0.8, maxAngVel: 90, maxAngAccel: 180 };
+    const authored = planner.generate({ path, robot: project.robot });
+    expect(Math.max(...authored.samples.map((sample) => sample.velocityMps))).toBeLessThanOrEqual(0.5001);
+    expect(Math.max(...authored.samples.map((sample) => sample.accelerationMps2))).toBeLessThanOrEqual(0.7001);
+    expect(Math.min(...authored.samples.map((sample) => sample.accelerationMps2))).toBeGreaterThanOrEqual(-0.8001);
 
     const limits = effectivePathConstraints(path.constraints, project.robot);
     path.ranges = [{ anchor: "param", f0: 0, f1: 1, maxVel: 0.35, maxAccel: limits.maxAccel, maxDecel: limits.maxDecel, maxAngVel: limits.maxAngVel, maxAngAccel: limits.maxAngAccel }];
     const constrained = planner.generate({ path, robot: project.robot });
     expect(Math.max(...constrained.samples.map((sample) => sample.velocityMps))).toBeLessThanOrEqual(0.3501);
+  });
+
+  it("initializes new paths from the configured robot without arbitrary default caps", () => {
+    const project = physicalRobot();
+    project.robot.driveModel!.wheelFrictionCoefficient = 1.2;
+    const path = blankPath("Robot defaults", project.robot);
+    const hardLimits = robotHardLimits(project.robot)!;
+    expect(path.constraints.maxAccel).toBe(hardLimits.maxAccelMps2);
+    expect(path.constraints.maxAccel).toBeGreaterThan(DEFAULT_CONSTRAINTS.maxAccel);
+    expect(path.constraints.maxAngAccel).toBe(hardLimits.maxAngularAccelDegps2);
+    expect(effectivePathConstraints(path.constraints, project.robot)).toEqual(path.constraints);
+  });
+
+  it("preserves each authored cap while tightening higher values to the robot envelope", () => {
+    const project = physicalRobot();
+    const hardLimits = robotHardLimits(project.robot)!;
+    const constraints = {
       maxVel: 2,
       maxAccel: 100,
       maxDecel: 1,
