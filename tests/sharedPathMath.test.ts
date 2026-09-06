@@ -1,3 +1,12 @@
+import { describe, expect, it } from "vitest";
+import { sample } from "../src/shared/math/geometry";
+import { buildAnchors, headingAt } from "../src/shared/math/headingAnchors";
+import { effectiveRanges, insertHeadingTargetSamples, remapWaypointRange, waypointFracs } from "../src/shared/math/pathRanges";
+import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
+import type { ConstraintRange, SegmentType } from "../src/shared/types";
+
+const segmentTypes: SegmentType[] = ["line", "arc", "bezier", "clothoid"];
+
 function lineWaypoints() {
   return buildWaypoints([
     { x: 0, y: 1, theta: 0, segType: "line" },
