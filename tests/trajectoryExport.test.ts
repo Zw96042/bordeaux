@@ -159,4 +159,42 @@ describe("native trajectory export", () => {
     project.paths[0].waypoints = project.paths[0].waypoints.slice(0, 1);
     expect(() => buildBdxExport(project)).toThrow();
   });
+      robot: project.robot,
+      perSegment: 56,
+      deadline: "common",
+      deadlineMs: 5_000,
+    });
+
+    expect(preview.error).toBeUndefined();
+    expect(preview.finalFallbackReason).toBeUndefined();
+    expect(buildBdxExport(project).paths[0].samples)
+      .toEqual(preview.value.finalTrajectory.samples);
+  });
+
+  it("exports only physically validated Profiled translation-priority samples", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 2, theta: 0, thetaOn: true, segType: "line" },
+      { x: 5, y: 2, theta: 180, thetaOn: true },
+    ]);
+    path.ranges = [{
+      anchor: "param", f0: 0, f1: 1,
+      maxVel: path.constraints.maxVel,
+      maxAccel: path.constraints.maxAccel,
+      maxDecel: path.constraints.maxDecel,
+      maxAngVel: path.constraints.maxAngVel,
+      maxAngAccel: path.constraints.maxAngAccel,
+      rotationPriority: "translation",
+    }];
+
+    const exported = buildBdxExport(project).paths[0];
+    const validation = validateOptimizedTrajectory(
+      { path, robot: project.robot },
+      exported.samples,
+      { angularKinematics: "sample" },
+    );
+    expect(validation.violations).toEqual([]);
+  });
 });

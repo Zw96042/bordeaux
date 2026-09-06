@@ -1,3 +1,70 @@
+import { expect, it } from "vitest";
+import { getPlanner } from "../src/shared/planners";
+import { profiledSplinePlanner } from "../src/shared/planners/profiledSpline";
+import { applyStationaryActions } from "../src/shared/planners/stationaryActions";
+import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
+
+function mixedActionProject() {
+  const project = createDemoProject();
+  const path = project.paths[0];
+  path.headingMode = "tangent";
+  path.waypoints = buildWaypoints([
+    { x: 2, y: 2, theta: 0, thetaOn: true, segType: "line" },
+    {
+      x: 4, y: 2, theta: 90, thetaOn: true, stop: true, wait: 0.12,
+      segType: "line", segmentHeadingMode: "manual",
+      turnInPlace: { headingDeg: 90, direction: "counterclockwise" },
+    },
+    { x: 6, y: 3, theta: 90, thetaOn: true, stop: true, wait: 0.23, segType: "line" },
+    {
+      x: 8, y: 4, theta: 90, thetaOn: true, stop: true, wait: 0.17,
+      turnInPlace: { headingDeg: 180, direction: "counterclockwise" },
+      jiggle: { distanceM: 0.1, strokes: 3, startDeg: 0, stepDeg: 90, strokeTimeS: 0.4 },
+    },
+  ]);
+  path.markers = [
+    { id: "before", f: 0.2, name: "Before" },
+    { id: "middle", f: 0.55, name: "Middle" },
+    { id: "finish", f: 1, name: "Finish" },
+  ];
+  return project;
+}
+
+function manyWaitProject(waypointCount: number) {
+  const project = createDemoProject();
+  const path = project.paths[0];
+  path.headingMode = "manual";
+  path.waypoints = buildWaypoints(Array.from({ length: waypointCount }, (_, index) => ({
+    x: 0.7 + index * 0.001,
+    y: 4,
+    theta: 0,
+    thetaOn: true,
+    segType: "line" as const,
+    stop: true,
+    wait: 0.01,
+  })));
+  return project;
+}
+
+it("preserves the complete mixed stationary-action timeline", () => {
+  const project = mixedActionProject();
+  const result = getPlanner("profiledSpline").generate({ path: project.paths[0], robot: project.robot });
+  const path = project.paths[0];
+  expect(result.diagnostics.some((issue) => issue.severity === "error")).toBe(false);
+  expect(result.samples.every((sample, index) => sample.i === index)).toBe(true);
+  expect(result.samples.every((sample, index) => index === 0 || sample.t >= result.samples[index - 1].t)).toBe(true);
+  const arrivals = result.waypointSampleIndices!;
+  expect(arrivals.map((index) => [result.samples[index].x, result.samples[index].y]))
+    .toEqual(path.waypoints.map((waypoint) => [waypoint.x, waypoint.y]));
+  const actions = result.stationaryActions!;
+  expect(actions.map(({ kind, waypointIndex }) => [kind, waypointIndex])).toEqual([
+    ["turn", 1], ["wait", 1], ["turn", 2], ["wait", 2], ["turn", 3], ["jiggle", 3], ["wait", 3],
+  ]);
+  for (const action of actions) {
+    expect(action.startTimeS).toBeGreaterThanOrEqual(result.samples[arrivals[action.waypointIndex]].t);
+    expect(action.endTimeS).toBeGreaterThan(action.startTimeS);
+    if (action.kind === "wait") {
+      const duration = action.endTimeS - action.startTimeS;
       expect(duration).toBeGreaterThanOrEqual(path.waypoints[action.waypointIndex].wait! - 1e-9);
       expect(duration).toBeLessThan(path.waypoints[action.waypointIndex].wait! + 0.05);
     }
