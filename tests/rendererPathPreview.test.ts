@@ -206,6 +206,14 @@ describe("renderer path preview scheduler", () => {
       value: { waypointX: 0 },
     });
     expect(preview.getSnapshot().path).not.toBe(secondPath);
+      expect(preview.getSnapshot()).toMatchObject({
+        status: "error", revision: failed, path: validPath, value: { x: 1 },
+        errorPath: failedPath, error: { message: "Could not derive edited path" },
+      });
+      const recovered = preview.request({ path: validPath, robot: {}, plannerId: "profiledSpline", quality: "interactive" });
+      worker.resolve({ id: recovered, value: { x: 1 } });
+      expect(preview.getSnapshot()).toMatchObject({ status: "ready", path: validPath, error: null, errorPath: null });
+    } finally { preview.destroy(); }
   });
 
   it("publishes completed geometry while a newer drag request is queued", () => {
@@ -255,6 +263,103 @@ describe("renderer path preview scheduler", () => {
     expect(workerIndex).toBe(3);
     workers[2].resolve({ id: nextRevision, value: { recovered: "worker" }, durationMs: 1 });
     expect(preview.getSnapshot()).toMatchObject({ status: "ready", revision: nextRevision, value: { recovered: "worker" } });
+  });
+
+  it("does not rerun known-heavy timed-out work on the UI thread", async () => {
+    vi.useFakeTimers();
+    const workers = [new FakeWorker(), new FakeWorker()];
+    let workerIndex = 0;
+    let directCalls = 0;
+    const module = previewModule();
+    const preview = module.create({
+      workerFactory: () => workers[workerIndex++],
+      derive: () => { directCalls += 1; return { unsafe: true }; },
+      timeoutMs: 20,
+    });
+    const path = {
+      waypoints: Array.from({ length: 1600 }, () => ({})),
+      ranges: Array.from({ length: 1600 }, () => ({})),
+    };
+    const revision = preview.request({ path, robot: {}, plannerId: "profiledSpline", quality: "interactive" });
+
+    await vi.advanceTimersByTimeAsync(40);
+    await Promise.resolve();
+
+    expect(module.directPreviewIsSafe(path, 14)).toBe(false);
+    expect(directCalls).toBe(0);
+    expect(preview.getSnapshot()).toMatchObject({ status: "error", revision });
+  });
+
+  it("rejects an 890-waypoint tangent path from direct recovery", () => {
+    const path = {
+      headingMode: "tangent",
+      ranges: [],
+      targets: [],
+      waypoints: Array.from({ length: 890 }, (_, index) => ({
+        x: 1 + index * 0.01,
+        y: 4,
+        theta: 0,
+        thetaOn: index === 0 || index === 889,
+      })),
+    };
+    const module = previewModule();
+
+    expect(module.directPreviewIsSafe(path, 14)).toBe(false);
+    expect(module.directPreviewIsSafe(path, 56)).toBe(false);
+  });
+
+  it("rejects translation-priority recovery regardless of geometry size", () => {
+    const path = {
+      ranges: [{ rotationPriority: "translation" }],
+      waypoints: [{ thetaOn: true }, { thetaOn: true }],
+    };
+
+    expect(previewModule().directPreviewIsSafe(path, 14)).toBe(false);
+  });
+
+  it("rejects transition-heavy direct derivation without ranges", () => {
+    const waypointCount = 1600;
+    const path = {
+      headingMode: "targets",
+      ranges: [],
+      waypoints: Array.from({ length: waypointCount }, (_, index) => {
+        const x = 1 + (index % 100) * 0.01;
+        const y = 1 + Math.floor(index / 100) * 0.01;
+        return {
+          x, y, theta: 0, thetaOn: index === 0 || index === waypointCount - 1,
+          stop: false, linked: true, segType: "line",
+          prevC: { x: x - 0.001, y }, nextC: { x: x + 0.001, y },
+          segmentHeadingMode: index % 2 === 0 ? "manual" : "tangent",
+        };
+      }),
+    };
+    const module = previewModule();
+
+    expect(module.directPreviewIsSafe(path, 14)).toBe(false);
+    expect(module.directPreviewIsSafe(path, 56)).toBe(false);
+  });
+
+  it("rejects maximum-size target-anchor derivation without ranges or transitions", () => {
+    const itemCount = 4096;
+    const path = {
+      id: "target-heavy",
+      name: "Target Heavy",
+      headingMode: "targets",
+      startVel: 0,
+      goalVel: 0,
+      markers: [],
+      ranges: [],
+      waypoints: Array.from({ length: itemCount }, (_, index) => {
+        const x = 1 + index * 0.001;
+        return {
+          x, y: 1, theta: 0, thetaOn: index === 0 || index === itemCount - 1,
+          stop: false, linked: true, segType: "line",
+          prevC: { x: x - 0.0003, y: 1 }, nextC: { x: x + 0.0003, y: 1 },
+        };
+      }),
+      targets: Array.from({ length: itemCount }, (_, index) => ({
+        f: index / (itemCount - 1), deg: index % 360, anchor: "param",
+      })),
     };
     const module = previewModule();
 
