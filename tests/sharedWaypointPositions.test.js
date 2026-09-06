@@ -1,3 +1,32 @@
+import { describe, expect, it } from 'vitest';
+import { PathLinks } from '../src/renderer/lib/pathLinks';
+import { createDemoProject } from '../src/shared/project/defaults';
+import { normalizeProject } from '../src/shared/project/normalize';
+import { validateProject } from '../src/shared/validation';
+
+function fixture() {
+  const project = createDemoProject();
+  const template = project.paths[0];
+  project.paths = ['a', 'b', 'c'].map((id, pi) => ({ ...structuredClone(template), id, name: id, waypoints: [0, 1, 2].map((wi) => {
+    const x = 2 + pi * 3 + wi, y = 2 + pi;
+    return { x, y, theta: pi * 45 + wi * 10, thetaOn: pi !== 1, linked: false, stop: true,
+      prevC: { x: x - 0.2, y: y - 0.3 }, nextC: { x: x + 0.4, y: y + 0.1 } };
+  }) }));
+  project.pathLinks = [];
+  return project;
+}
+const localGeometry = (point) => ({ theta: point.theta, thetaOn: point.thetaOn,
+  prev: [point.prevC.x - point.x, point.prevC.y - point.y], next: [point.nextC.x - point.x, point.nextC.y - point.y] });
+function expectLocal(actual, before) {
+  expect(actual.theta).toBe(before.theta); expect(actual.thetaOn).toBe(before.thetaOn);
+  const geometry = localGeometry(actual);
+  geometry.prev.forEach((value, i) => expect(value).toBeCloseTo(before.prev[i], 10));
+  geometry.next.forEach((value, i) => expect(value).toBeCloseTo(before.next[i], 10));
+}
+function move(project, pathIndex, waypointIndex, x, y) {
+  const before = project.paths[pathIndex], paths = project.paths.slice();
+  paths[pathIndex] = structuredClone(before);
+  paths[pathIndex].waypoints[waypointIndex] = PathLinks.copyPose(before.waypoints[waypointIndex], { x, y });
   return PathLinks.sync({ ...project, paths }, before.id, before);
 }
 
