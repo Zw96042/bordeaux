@@ -1,3 +1,101 @@
+import { describe, expect, it, vi } from "vitest";
+import { PM } from "../src/shared/math/pm";
+import { getPlanner } from "../src/shared/planners";
+import { enforceAngularTiming } from "../src/shared/planners/angularConstraints";
+import { optimizedTrajectoryPlanner } from "../src/shared/planners/optimizedTrajectory";
+import { profiledSplinePlanner } from "../src/shared/planners/profiledSpline";
+import { orderedWaypointSampleIndices } from "../src/shared/planners/waypointSamples";
+import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
+import type { PathDoc, PlannerResult, TrajectorySample } from "../src/shared/types";
+
+function legacyArrivalIndices(path: PathDoc, samples: readonly TrajectorySample[]): number[] {
+  let cursor = 0;
+  return path.waypoints.map((waypoint, waypointIndex) => {
+    let best = cursor;
+    let distance = Infinity;
+    const last = waypointIndex === path.waypoints.length - 1
+      ? samples.length - 1
+      : Math.max(cursor, samples.length - (path.waypoints.length - waypointIndex));
+    for (let index = cursor; index <= last; index += 1) {
+      const candidate = Math.hypot(samples[index].x - waypoint.x, samples[index].y - waypoint.y);
+      if (candidate < distance) { best = index; distance = candidate; }
+    }
+    cursor = best;
+    return best;
+  });
+}
+
+function expectAuthoredArrivals(path: PathDoc, result: PlannerResult): number[] {
+  const arrivals = result.waypointSampleIndices;
+  expect(arrivals).toHaveLength(path.waypoints.length);
+  expect(arrivals![0]).toBe(0);
+  arrivals!.forEach((index, waypointIndex) => {
+    expect(Number.isInteger(index)).toBe(true);
+    expect(index).toBeGreaterThanOrEqual(0);
+    expect(index).toBeLessThan(result.samples.length);
+    if (waypointIndex > 0) expect(index).toBeGreaterThan(arrivals![waypointIndex - 1]);
+    expect(result.samples[index].x).toBeCloseTo(path.waypoints[waypointIndex].x, 4);
+    expect(result.samples[index].y).toBeCloseTo(path.waypoints[waypointIndex].y, 4);
+  });
+  return arrivals!;
+}
+
+function expectWaitAtArrival(path: PathDoc, result: PlannerResult, waypointIndex: number, duration: number) {
+  const arrival = result.samples[result.waypointSampleIndices![waypointIndex]];
+  const wait = result.stationaryActions?.find((action) => action.kind === "wait" && action.waypointIndex === waypointIndex);
+  expect(wait).toBeDefined();
+  expect(wait!.startTimeS).toBeGreaterThanOrEqual(arrival.t - 1e-8);
+  expect(wait!.endTimeS - wait!.startTimeS).toBeGreaterThanOrEqual(duration - 1e-8);
+  expect(wait!.endTimeS - wait!.startTimeS).toBeLessThan(duration + 0.051);
+  const held = result.samples.filter((sample) => sample.t >= wait!.startTimeS - 1e-8 && sample.t <= wait!.endTimeS + 1e-8);
+  expect(held.length).toBeGreaterThan(1);
+  expect(held[0].t).toBeCloseTo(wait!.startTimeS, 6);
+  expect(held.at(-1)!.t).toBeCloseTo(wait!.endTimeS, 6);
+  for (const sample of held) {
+    expect(sample.x).toBeCloseTo(path.waypoints[waypointIndex].x, 4);
+    expect(sample.y).toBeCloseTo(path.waypoints[waypointIndex].y, 4);
+    expect(sample.velocityMps).toBeCloseTo(0, 8);
+  }
+  const nextArrival = result.samples[result.waypointSampleIndices![waypointIndex + 1]];
+  expect(wait!.endTimeS).toBeLessThanOrEqual(nextArrival.t + 1e-8);
+}
+
+describe("shared path indices", () => {
+  it("matches ordered nearest-waypoint arrivals on rounded planner samples", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      { x: 0.7123456, y: 2.1234567, segType: "line" },
+      { x: 5.2345678, y: 4.3456789, segType: "line" },
+      { x: 9.8765432, y: 2.7654321, segType: "line" },
+      { x: 0.7123456, y: 2.1234567 },
+    ]);
+    const samples = getPlanner("profiledSpline").generate({ path, robot: project.robot }).samples;
+
+    expect(orderedWaypointSampleIndices(path.waypoints, samples))
+      .toEqual(legacyArrivalIndices(path, samples));
+  });
+
+  it("preserves consecutive duplicate boundaries at a shared endpoint", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, segType: "clothoid" },
+      { x: 5, y: 5, segType: "clothoid" },
+      { x: 10, y: 2, segType: "clothoid" },
+      { x: 12, y: 6, segType: "line" },
+      { x: 12, y: 6, segType: "line" },
+    ]);
+    const result = getPlanner("profiledSpline").generate({ path, robot: project.robot, samplesPerSegment: 9 });
+    const arrivals = expectAuthoredArrivals(path, result);
+    expect(arrivals.at(-1)).toBe(result.samples.length - 1);
+    expect(arrivals[4]).toBeGreaterThan(arrivals[3]);
+  });
+
+  it("keeps a waited loop departure distinct from its returned duplicate", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
       { x: 1, y: 1, segType: "clothoid" },
       { x: 5, y: 5, segType: "clothoid" },
       { x: 10, y: 2, segType: "clothoid" },
