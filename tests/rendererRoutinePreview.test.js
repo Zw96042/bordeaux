@@ -1,3 +1,108 @@
+    const generateNode = { id: "generated", type: "function", cat: "generate", funcRef: "GeneratePath", preview: generated };
+    const routine = { id: "routine", name: "Collision", nodes: order === "authored-first" ? [pathNode, generateNode] : [generateNode, pathNode] };
+
+    const paths = routinePreview().referencedPaths(routine, project.paths, {});
+    const run = AUTO.buildRun(routine, paths, project.robot, {}, project.plannerId);
+
+    expect(paths).toEqual([authored]);
+    expect(run.segs.find((segment) => segment.nodeId === pathNode.id)?.doc).toBe(authored);
+    expect(run.segs.find((segment) => segment.nodeId === generateNode.id)?.doc).toBe(generated);
+  });
+
+  it("counts unique path and routine assembly work before direct fallback", () => {
+    const path = { id: "path_a" };
+    const routine = { nodes: Array.from({ length: 100 }, (_, index) => ({ id: `node_${index}`, type: "path", ref: path.id })) };
+
+    expect(routinePreview().directRoutineWork(routine, [path])).toBe(1 + 100 * 16 + 250);
+  });
+
+  it("rejects a huge repeated routine even when it references one cheap path", () => {
+    const path = { id: "path_a" };
+    const routine = { nodes: Array.from({ length: 100_000 }, (_, index) => ({ id: `node_${index}`, type: "path", ref: path.id })) };
+
+    expect(routinePreview().directRoutineWork(routine, [path])).toBeGreaterThan(100_000);
+  });
+
+  it("rejects aggregate unique-path work before routine derivation", () => {
+    const { project, routine } = uniquePathFixture();
+    expect(validateProject(project).ok).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(project))).toBeGreaterThan(1024 * 1024);
+    const admission = RoutinePreview.workerRoutineAdmission(routine, project.paths, project.robot, {});
+    expect(admission).toMatchObject({
+      allowed: false,
+      estimate: { work: 1_110_500, outputSamples: 554_500, renderedSamples: 554_500, outputSteps: 100 },
+      error: { name: "RangeError" },
+    });
+
+    const buildRun = vi.fn();
+    expect(processRoutinePreviewJob({ id: 19, routine, paths: project.paths }, buildRun)).toMatchObject({
+      id: 19,
+      error: { name: "RangeError", message: expect.stringMatching(/too large to preview safely/) },
+    });
+    expect(buildRun).not.toHaveBeenCalled();
+  });
+
+  it("admits ordinary repeated paths but bounds per-occurrence rendering", () => {
+    const { project } = uniquePathFixture(1);
+    const repeated = (count) => ({ nodes: Array.from({ length: count }, (_, index) => ({ id: `node_${index}`, type: "path", ref: project.paths[0].id })) });
+
+    expect(RoutinePreview.workerRoutineAdmission(repeated(20), project.paths, project.robot)).toMatchObject({
+      allowed: true,
+      estimate: { outputSamples: 5_545, renderedSamples: 110_900, outputSteps: 20 },
+      error: null,
+    });
+    expect(RoutinePreview.workerRoutineAdmission(repeated(22), project.paths, project.robot)).toMatchObject({
+      allowed: false,
+      estimate: { outputSamples: 5_545, renderedSamples: 121_990, outputSteps: 22 },
+      error: { name: "RangeError" },
+    });
+  });
+
+  it("bounds stationary planner samples before worker allocation", () => {
+    const project = createDemoProject();
+    const routine = project.routines[0];
+    routine.nodes = [{ id: "path_node", type: "path", ref: project.paths[0].id }];
+    project.paths[0].waypoints.at(-1).stop = true;
+    project.paths[0].waypoints.at(-1).wait = 2_400;
+    expect(validateProject(project).ok).toBe(true);
+
+    expect(RoutinePreview.workerRoutineAdmission(routine, project.paths, project.robot)).toMatchObject({
+      allowed: false,
+      estimate: { outputSamples: 240_057 },
+      error: { name: "RangeError" },
+    });
+
+    project.paths[0].waypoints.at(-1).wait = 30;
+    const admitted = RoutinePreview.workerRoutineAdmission(routine, project.paths, project.robot);
+    expect(admitted.allowed).toBe(true);
+    expect(PathPreview.directWorkIsSafe(admitted.estimate.work)).toBe(false);
+  });
+
+  it("admits a small translation-priority path only to the worker", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.headingMode = "manual";
+    path.waypoints[0].theta = 0;
+    path.waypoints[1].theta = 180;
+    path.ranges = [{
+      anchor: "param", f0: 0, f1: 1,
+      maxVel: path.constraints.maxVel, maxAccel: path.constraints.maxAccel, maxDecel: path.constraints.maxDecel,
+      maxAngVel: 180, maxAngAccel: 360, rotationPriority: "translation",
+    }];
+    const routine = project.routines[0];
+    routine.nodes = [{ id: "path_node", type: "path", ref: path.id }];
+    expect(validateProject(project).ok).toBe(true);
+
+    const admission = RoutinePreview.workerRoutineAdmission(routine, project.paths, project.robot);
+    const result = getPlanner("profiledSpline").generate({
+      path,
+      robot: project.robot,
+      samplesPerSegment: 56,
+    });
+    expect(admission.allowed).toBe(true);
+    expect(admission.estimate.outputSamples).toBe(22_457);
+    expect(result.samples.length).toBeLessThanOrEqual(admission.estimate.outputSamples);
+    expect(RoutinePreview.directRoutineWork(routine, project.paths)).toBe(Infinity);
     expect(PathPreview.directWorkIsSafe(RoutinePreview.directRoutineWork(routine, project.paths))).toBe(false);
   });
 
