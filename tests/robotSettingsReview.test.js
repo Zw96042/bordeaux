@@ -1,3 +1,11 @@
+import * as React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { afterEach, describe, expect, it } from 'vitest';
+import { RobotPage } from '../src/renderer/components/RobotPage';
+import { RobotPushDialog } from '../src/renderer/components/RobotPushDialog';
+import { UnitPrefs } from '../src/renderer/lib/unitPreferences';
+import { createDemoProject } from '../src/shared/project/defaults';
+
 const renderConnection = (patch) => renderToStaticMarkup(React.createElement(RobotPushDialog, {
   controller: { open: true, phase: 'idle', host: 'robot.local', port: '22', ...patch },
 }));

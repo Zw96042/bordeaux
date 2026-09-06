@@ -33,6 +33,51 @@ const probe: RobotProbe = {
 };
 
 describe("constrained robot SFTP transport", () => {
+    const field = { id: probe.status.fieldId, revision: probe.status.fieldRevision, coordinateSchemaId: probe.status.fieldCoordinateSchemaId };
+    const contents = JSON.stringify({ schemaVersion: scenario === "schema" ? "unknown" : "bordeaux-trajectory/1.0", catalog, field, paths: [], routine: null });
+    const payloadSha256 = `sha256:${createHash("sha256").update(contents).digest("hex")}`;
+    const revisionId = `sha256:${createHash("sha256").update(JSON.stringify({ protocolVersion: "bordeaux-revision/1.0", payloadSha256, catalog, field })).digest("hex")}`;
+    const empty = scenario === "empty" || scenario === "empty-race";
+    const status = { ...probe.status, activeRevisionRead: scenario === "unsupported" ? undefined : scenario === "unknown-version" ? "bordeaux-active-revision/9.0" : ROBOT_ACTIVE_REVISION_READ_VERSION,
+      activeRevisionId: empty ? null : scenario === "identity" ? `sha256:${"b".repeat(64)}` : revisionId, activePayloadSha256: empty ? null : payloadSha256 };
+    const pairing = confirmRobotPairing({ probe, acceptedHostKeyFingerprint: probe.hostKeyFingerprint, acceptedRuntimeId: probe.status.runtimeId });
+    const reads: RobotRemoteFile[] = [];
+    let closed = false;
+    let statusReads = 0;
+    const session: RobotSftpSession = {
+      hostKeyFingerprint: probe.hostKeyFingerprint,
+      read: async (file, maxBytes) => {
+        reads.push(file);
+        if (file.kind === "status") {
+          statusReads += 1;
+          const changed = statusReads === 2;
+          return Buffer.from(JSON.stringify({ ...status,
+            ...(changed && (scenario === "race" || scenario === "empty-race") ? { activeRevisionId: `sha256:${"c".repeat(64)}`, activePayloadSha256: payloadSha256 } : {}),
+            ...(changed && scenario === "context-race" ? { catalogHash: `sha256:${"d".repeat(64)}` } : {}),
+          }));
+        }
+        expect(file).toEqual({ kind: "activeTrajectory" });
+        expect(maxBytes).toBe(16 * 1024 * 1024);
+        if (scenario === "missing") throw new Error("missing retained baseline");
+        if (scenario === "oversized") return Buffer.alloc(maxBytes + 1);
+        return Buffer.from(scenario === "corrupt" ? "corrupt" : contents);
+      },
+      write: async () => { throw new Error("unexpected write"); },
+      exists: async () => { throw new Error("unexpected exists"); },
+      renameSameDirectory: async () => { throw new Error("unexpected rename"); },
+      remove: async () => { throw new Error("unexpected remove"); },
+      close: async () => { closed = true; },
+    };
+    const transport = new BordeauxRobotTransport(async () => session);
+    if (scenario === "active" || scenario === "empty") {
+      await expect(transport.readActiveRevision(pairing, {})).resolves.toEqual({ status, contents: empty ? null : contents });
+      expect(reads).toEqual(empty ? [{ kind: "status" }, { kind: "status" }] : [{ kind: "status" }, { kind: "activeTrajectory" }, { kind: "status" }]);
+    } else {
+      await expect(transport.readActiveRevision(pairing, {})).rejects.toThrow();
+    }
+    expect(closed).toBe(true);
+  });
+
   it("binds an explicitly accepted host key and runtime identity", () => {
     const pairing = confirmRobotPairing({
       probe,
@@ -86,29 +131,63 @@ describe("constrained robot SFTP transport", () => {
       fingerprint: probe.hostKeyFingerprint,
       status: { ...probe.status, runtimeId: "ec9a6647-01c9-4bb1-a238-018f085ad33f" },
     },
+    {
+      name: "team number",
+      fingerprint: probe.hostKeyFingerprint,
+      status: { ...probe.status, teamNumber: 1234 },
+    },
   ])("requires explicit re-pairing after the $name identity changes", async ({ fingerprint, status }) => {
     const pairing = confirmRobotPairing({
       probe,
       acceptedHostKeyFingerprint: probe.hostKeyFingerprint,
       acceptedRuntimeId: probe.status.runtimeId,
     });
+    let closed = 0;
     const session: RobotSftpSession = {
       hostKeyFingerprint: fingerprint,
-      read: async () => Buffer.from(JSON.stringify(status)),
-      write: async () => undefined,
-      exists: async () => false,
-      renameSameDirectory: async () => undefined,
-      remove: async () => undefined,
-      close: async () => undefined,
+      read: async (file) => {
+        expect(file).toEqual({ kind: "status" });
+        return Buffer.from(JSON.stringify(status));
+      },
+      write: async () => { throw new Error("unexpected write"); },
+      exists: async () => { throw new Error("unexpected acknowledgement read"); },
+      renameSameDirectory: async () => { throw new Error("unexpected rename"); },
+      remove: async () => { throw new Error("unexpected cleanup"); },
+      close: async () => { closed += 1; },
     };
     const transport = new BordeauxRobotTransport(async (request) => {
       expect(request.expectedHostKeyFingerprint).toBe(pairing.hostKeyFingerprint);
       return session;
     });
 
-    await expect(transport.inspect(pairing, { password: "" })).rejects.toMatchObject({
-      code: "re_pair_required",
-    });
+    const credentials = { password: "" };
+    const envelope = {
+      nonce: "push-identity-check",
+      contents: Buffer.from("revision-envelope\n"),
+      sha256: "9e65848c141c882c831950e7093275b6406a9e9d1b0c214d4f6b2ba341ef1ca7",
+    };
+    const expected = {
+      nonce: envelope.nonce,
+      revisionId: `sha256:${"b".repeat(64)}`,
+      payloadSha256: `sha256:${"c".repeat(64)}`,
+      catalogId: probe.status.catalogId,
+      catalogHash: probe.status.catalogHash,
+      supportVersion: probe.status.supportVersion,
+    };
+    const operations = [
+      () => transport.inspect(pairing, credentials),
+      () => transport.readActiveRevision(pairing, credentials),
+      () => transport.stageRevision(pairing, credentials, envelope),
+      () => transport.stageRetention(pairing, credentials, envelope),
+      () => transport.waitForActivation(pairing, credentials, expected),
+      () => transport.waitForRetention(pairing, credentials, {
+        ...expected, action: "pin", expectedActiveRevisionId: null, target: expected,
+      }),
+    ];
+    for (const operation of operations) {
+      await expect(operation()).rejects.toMatchObject({ code: "re_pair_required" });
+    }
+    expect(closed).toBe(operations.length);
   });
 
   it("reads back the exact temporary upload before a same-directory rename", async () => {
