@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createServer } from "node:net";
+import { createHash } from "node:crypto";
 import {
   BordeauxRobotTransport,
   ROBOT_DEPLOYMENT_NAMESPACE,
   ROBOT_PUSH_PROTOCOL_VERSION,
+  ROBOT_ACTIVE_REVISION_READ_VERSION,
   confirmRobotPairing,
   type RobotRemoteFile,
   type RobotProbe,
@@ -33,6 +35,8 @@ const probe: RobotProbe = {
 };
 
 describe("constrained robot SFTP transport", () => {
+  it.each(["active", "empty", "unsupported", "unknown-version", "missing", "corrupt", "oversized", "identity", "schema", "race", "empty-race", "context-race"])("verifies the %s active baseline", async (scenario) => {
+    const catalog = { catalogId: probe.status.catalogId, catalogHash: probe.status.catalogHash, supportVersion: probe.status.supportVersion };
     const field = { id: probe.status.fieldId, revision: probe.status.fieldRevision, coordinateSchemaId: probe.status.fieldCoordinateSchemaId };
     const contents = JSON.stringify({ schemaVersion: scenario === "schema" ? "unknown" : "bordeaux-trajectory/1.0", catalog, field, paths: [], routine: null });
     const payloadSha256 = `sha256:${createHash("sha256").update(contents).digest("hex")}`;

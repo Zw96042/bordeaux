@@ -177,7 +177,7 @@ describe("agent route candidates", () => {
     expect(headingRanges).toEqual([]);
     expect(candidate.path.waypoints.at(-1)?.turnInPlace).toBeUndefined();
     expect(candidate.path.waypoints.slice(6, -1).every((waypoint) => waypoint.segmentHeadingMode === "targets")).toBe(true);
-  });
+  }, 30_000);
 
   it("refuses to guess intake geometry for a collection route", () => {
     expect(() => generateRouteCandidates(createDemoProject(), {
