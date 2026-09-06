@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createUnitPreferences } from "../src/renderer/lib/unitPreferences";
 import { wheelZoomFactor } from "../src/renderer/lib/zoom";
 import { loadRendererExport } from "./helpers/loadRendererExport";
+import { PathEdit } from "../src/renderer/assets/path-edit";
 
 interface PointerEventLike { pointerId: number; clientX?: number; clientY?: number }
 type PointerListener = (event: PointerEventLike) => void;
@@ -86,15 +87,7 @@ describe("renderer utilities", () => {
 
   it("flushes the final coalesced move before a fast drag commits", () => {
     const harness = pointerDragHarness();
-    const edit = loadRendererExport<{
-      create<T>(): {
-        begin(value: T): boolean;
-        update(value: T): boolean;
-        finish(): T | null;
-        getSnapshot(): T | null;
-        subscribe(listener: () => void): () => void;
-      };
-    }>(new URL("../src/renderer/assets/path-edit.js", import.meta.url), "PathEdit").create<{ x: number }>();
+    const edit = PathEdit.create<{ id: string; x: number }>();
     const committed: Array<{ x: number }> = [];
     const snapshots: Array<{ x: number } | null> = [];
     const canceled: number[] = [];
@@ -103,8 +96,8 @@ describe("renderer utilities", () => {
       coalesce: true,
       move: (event) => {
         if (event.clientX === undefined) return;
-        if (!edit.getSnapshot()) edit.begin({ x: 0 });
-        edit.update({ x: event.clientX });
+        if (!edit.getSnapshot()) edit.begin({ id: "draft", x: 0 });
+        edit.update({ id: "draft", x: event.clientX });
       },
       end: () => { const value = edit.finish(); if (value) committed.push(value); },
       cancel: (event) => canceled.push(event.pointerId),
@@ -115,8 +108,8 @@ describe("renderer utilities", () => {
     harness.dispatch("pointerup", { pointerId: 7, clientX: 80 });
     harness.flushFrame();
 
-    expect(committed).toEqual([{ x: 80 }]);
-    expect(snapshots).toEqual([{ x: 80 }, null]);
+    expect(committed).toEqual([{ id: "draft", x: 80 }]);
+    expect(snapshots).toEqual([{ id: "draft", x: 80 }, null]);
     expect(canceled).toEqual([]);
     expect(harness.captureListeners).not.toContain("lostpointercapture");
   });
@@ -145,13 +138,7 @@ describe("renderer utilities", () => {
   });
 
   it("materializes an active path edit for persistence", () => {
-    const edit = loadRendererExport<{
-      create<T extends { id: string }>(): {
-        begin(value: T): boolean;
-        update(value: T): boolean;
-        materialize<P extends { paths: T[] }>(project: P): P;
-      };
-    }>(new URL("../src/renderer/assets/path-edit.js", import.meta.url), "PathEdit").create<{ id: string; x: number }>();
+    const edit = PathEdit.create<{ id: string; x: number }>();
     const project = { name: "demo", paths: [{ id: "a", x: 1 }, { id: "b", x: 2 }] };
     edit.begin(project.paths[0]);
     edit.update({ id: "a", x: 9 });

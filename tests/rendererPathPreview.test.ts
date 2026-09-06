@@ -208,6 +208,26 @@ describe("renderer path preview scheduler", () => {
     expect(preview.getSnapshot().path).not.toBe(secondPath);
   });
 
+  it("reports the failed input separately from retained geometry and clears it after recovery", () => {
+    const worker = new FakeWorker();
+    const preview = previewModule().create({ workerFactory: () => worker });
+    const validPath = { id: "path", x: 1 };
+    const failedPath = { id: "path", x: 2 };
+    try {
+      const valid = preview.request({ path: validPath, robot: {}, plannerId: "profiledSpline", quality: "interactive" });
+      worker.resolve({ id: valid, value: { x: 1 } });
+      const failed = preview.request({ path: failedPath, robot: {}, plannerId: "profiledSpline", quality: "interactive" });
+      worker.resolve({ id: failed, error: { message: "Could not derive edited path" } });
+      expect(preview.getSnapshot()).toMatchObject({
+        status: "error", revision: failed, path: validPath, value: { x: 1 },
+        errorPath: failedPath, error: { message: "Could not derive edited path" },
+      });
+      const recovered = preview.request({ path: validPath, robot: {}, plannerId: "profiledSpline", quality: "interactive" });
+      worker.resolve({ id: recovered, value: { x: 1 } });
+      expect(preview.getSnapshot()).toMatchObject({ status: "ready", path: validPath, error: null, errorPath: null });
+    } finally { preview.destroy(); }
+  });
+
   it("publishes completed geometry while a newer drag request is queued", () => {
     const worker = new FakeWorker();
     const preview = previewModule().create({ workerFactory: () => worker });

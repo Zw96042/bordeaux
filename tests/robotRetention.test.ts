@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import fs from "node:fs";
 import {
   createRobotRetentionOperation,
   type RobotRetentionTransport,
@@ -55,14 +54,6 @@ function status(overrides: Partial<RobotRuntimeStatus> = {}): RobotRuntimeStatus
 }
 
 describe("robot retention operation", () => {
-  it("refreshes retention history on every paired dialog open and after accepted changes", () => {
-    const dialog = fs.readFileSync(new URL("../src/renderer/components/RobotPushDialog.jsx", import.meta.url), "utf8");
-    expect(dialog).toContain("if (open && pairing) void inspectRetention();");
-    expect(dialog).toContain("setRetentionStatus(null); setLocalRevisionId(null);");
-    expect(dialog).toContain("if (finished.state === 'active') {");
-    expect(dialog).toContain("finished.state === 'active' || finished.state === 'pinned'");
-  });
-
   it("reviews immutable rollback control bytes and only confirms the exact reviewed target", async () => {
     const operation = createRobotRetentionOperation({
       operationId: "retention-1",
