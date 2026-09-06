@@ -49,6 +49,23 @@ describe("robot hard limits", () => {
     path.ranges = [{ anchor: "param", f0: 0, f1: 1, maxVel: 0.35, maxAccel: limits.maxAccel, maxDecel: limits.maxDecel, maxAngVel: limits.maxAngVel, maxAngAccel: limits.maxAngAccel }];
     const constrained = planner.generate({ path, robot: project.robot });
     expect(Math.max(...constrained.samples.map((sample) => sample.velocityMps))).toBeLessThanOrEqual(0.3501);
+      maxVel: 2,
+      maxAccel: 100,
+      maxDecel: 1,
+      maxCentripetalAccel: 2,
+      maxAngVel: 60,
+      maxAngAccel: 1000,
+      maxAngDecel: 100,
+      maxJerk: 3,
+      maxAngJerk: 4,
+    };
+    const expected = {
+      ...constraints,
+      maxAccel: hardLimits.maxAccelMps2,
+      maxAngAccel: hardLimits.maxAngularAccelDegps2,
+    };
+    expect(effectivePathConstraints(constraints, project.robot)).toEqual(expected);
+    expect(RendererPM.effectiveConstraints(constraints, project.robot)).toEqual(expected);
   });
 
   it("preserves authored limits until the physical model is complete", () => {

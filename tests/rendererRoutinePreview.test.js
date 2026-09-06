@@ -1,3 +1,56 @@
+import { describe, expect, it, vi } from "vitest";
+import { processRoutinePreviewJob } from "../src/renderer/assets/path-preview-worker";
+import { RoutinePreview } from "../src/renderer/assets/routine-preview";
+import { PathPreview } from "../src/renderer/assets/path-preview";
+import { AUTO } from "../src/renderer/lib/routineModel";
+import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
+import { getPlanner } from "../src/shared/planners";
+import { validateProject } from "../src/shared/validation";
+import { loadRendererExport } from "./helpers/loadRendererExport";
+
+function routinePreview() {
+  return loadRendererExport(new URL("../src/renderer/assets/routine-preview.js", import.meta.url), "RoutinePreview", {
+    context: {
+      AUTO: { walk(nodes, visit) { nodes.forEach(visit); } },
+      directPreviewWork: () => 250,
+    },
+  });
+}
+
+function uniquePathFixture(pathCount = 100) {
+  const project = createDemoProject();
+  const waypoints = buildWaypoints(Array.from({ length: 100 }, (_, index) => ({ x: 1 + index * 0.1, y: 4 })));
+  project.paths = Array.from({ length: pathCount }, (_, index) => ({
+    ...structuredClone(project.paths[0]),
+    id: `path_${index}`,
+    name: `Path ${index}`,
+    headingMode: "tangent",
+    targets: [],
+    ranges: [],
+    waypoints: structuredClone(waypoints),
+  }));
+  project.editor = { ...project.editor, activePathId: project.paths[0].id };
+  const routine = project.routines[0];
+  routine.nodes = project.paths.map((path, index) => ({ id: `node_${index}`, type: "path", ref: path.id }));
+  return { project, routine };
+}
+
+describe("routine preview worker", () => {
+  it("sends only paths referenced by the active routine", () => {
+    const referenced = { id: "path_a" };
+    const unrelated = { id: "path_b", payload: "large" };
+    const routine = { nodes: [{ id: "decision", type: "decision", then: [{ id: "node_a", type: "path", ref: referenced.id }], else: [{ id: "node_b", type: "path", ref: unrelated.id }] }] };
+
+    expect(routinePreview().referencedPaths(routine, [unrelated, referenced], { decision: "then" })).toEqual([referenced]);
+  });
+
+  it.each(["authored-first", "generated-first"])("keeps same-ID generated previews separate from authored paths (%s)", (order) => {
+    const project = createDemoProject();
+    const authored = project.paths[0];
+    const generated = structuredClone(authored);
+    generated.name = "Generated preview";
+    generated.waypoints.forEach((waypoint) => { waypoint.y += 2; waypoint.prevC.y += 2; waypoint.nextC.y += 2; });
+    const pathNode = { id: "authored", type: "path", ref: authored.id };
     const generateNode = { id: "generated", type: "function", cat: "generate", funcRef: "GeneratePath", preview: generated };
     const routine = { id: "routine", name: "Collision", nodes: order === "authored-first" ? [pathNode, generateNode] : [generateNode, pathNode] };
 
