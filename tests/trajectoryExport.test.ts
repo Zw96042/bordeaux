@@ -3,10 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildBdxExport } from "../src/shared/export/bdx";
+import { getPlanner } from "../src/shared/planners";
 import { blankPath, buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
 import { decodeProjectValue, encodeProjectFile } from "../src/shared/project/fileFormat";
 import { readProject, writeProject } from "../src/electron/projectFiles";
 import { validateProject } from "../src/shared/validation";
+import { validateOptimizedTrajectory } from "../src/shared/planners/trajectoryValidation";
+// @ts-expect-error The production worker is an intentional JavaScript module.
+import { processPathPreviewJob } from "../src/renderer/assets/path-preview-worker";
 
 describe("project files", () => {
   it("pins the active field and coordinate revision in new projects", () => {
@@ -58,12 +62,56 @@ describe("project files", () => {
     expect(project.editor?.activePathId).toBe(project.paths[0].id);
   });
 
+  it.each(["metric", "imperial"] as const)("round-trips %s display units without changing path measurements", (unitSystem) => {
+    const project = createDemoProject();
+    project.editor = { ...project.editor, unitSystem };
+
+    const opened = decodeProjectValue(JSON.parse(encodeProjectFile(project).contents)).project;
+
+    expect(opened.editor?.unitSystem).toBe(unitSystem);
+    expect(opened.paths).toEqual(project.paths);
+    expect(opened.robot).toEqual(project.robot);
+  });
+
+  it("accepts older projects without display units", () => {
+    const project = createDemoProject();
+    const opened = decodeProjectValue(project).project;
+    expect(opened.editor?.unitSystem).toBeUndefined();
+    expect(validateProject(opened).ok).toBe(true);
+  });
+
+  it.each(["feet", "Metric", null, 1])("rejects invalid display units %s at the file boundary", (unitSystem) => {
+    const project = createDemoProject();
+    expect(() => decodeProjectValue({ ...project, editor: { ...project.editor, unitSystem } }))
+      .toThrow("$.editor.unitSystem: Display units must be metric or imperial");
+  });
+
   it("migrates old planner IDs to the maintained planner", () => {
     const project = createDemoProject() as unknown as Record<string, unknown>;
     project.plannerId = "removedPlanner";
     const decoded = decodeProjectValue(project);
     expect(decoded.project.plannerId).toBe("profiledSpline");
     expect(decoded.migrated).toBe(true);
+  });
+
+  it("migrates schema 1.0 zero angular deceleration to the legacy fallback", () => {
+    const source = createDemoProject();
+    source.paths[0].constraints.maxAngAccel = 90;
+    source.paths[0].constraints.maxAngDecel = 0;
+    source.paths[0].waypoints.at(-1)!.stop = true;
+    source.paths[0].waypoints.at(-1)!.turnInPlace = { headingDeg: 45, direction: "shortest" };
+
+    const decoded = decodeProjectValue(source);
+
+    expect(decoded.migrated).toBe(true);
+    expect(decoded.project.paths[0].constraints.maxAngDecel).toBe(90);
+    expect(validateProject(decoded.project)).toEqual({ ok: true, issues: [] });
+    for (const plannerId of ["profiledSpline", "optimizedTrajectory"] as const) {
+      decoded.project.plannerId = plannerId;
+      expect(() => getPlanner(plannerId).generate({ path: decoded.project.paths[0], robot: decoded.project.robot }))
+        .not.toThrow();
+      expect(() => buildBdxExport(decoded.project)).not.toThrow();
+    }
   });
 
   it("imports singular routines but keeps canonical project files singular-free", () => {
@@ -94,6 +142,26 @@ describe("project files", () => {
       "$.pathLinks",
     ]));
     expect(() => buildBdxExport(project as unknown as ReturnType<typeof createDemoProject>)).toThrow(/Planner/);
+  });
+
+  it.each([undefined, null, "corrupt", { id: "drive", type: "path", ref: 0 }])(
+    "rejects malformed routine nodes instead of replacing them with an empty routine: %s",
+    (nodes) => {
+      const project = createDemoProject();
+      const routine = { ...project.routines[0], nodes };
+      expect(() => decodeProjectValue({ ...project, routines: [routine] }))
+        .toThrow("$.routines[0].nodes: Routine nodes must be an array");
+    },
+  );
+
+  it.each(["then", "else"])("rejects a malformed %s branch instead of dropping its steps", (branch) => {
+    const project = createDemoProject();
+    const decision = {
+      id: "decision", type: "decision", cond: "ready", thenLabel: "Ready", elseLabel: "Wait",
+      then: [], else: [], [branch]: { id: "drive", type: "path", ref: project.paths[0].id },
+    };
+    expect(() => decodeProjectValue({ ...project, routines: [{ ...project.routines[0], nodes: [decision] }] }))
+      .toThrow(`$.routines[0].nodes[0].${branch}: Routine nodes must be an array`);
   });
 
   it("rejects canonical project state without its field reference", () => {
@@ -142,6 +210,7 @@ describe("native trajectory export", () => {
     expect(exported.routine).toEqual(selectedRoutine);
     expect(exported.paths[0].id).toBe(pathId);
     expect(exported.paths[0].samples.length).toBeGreaterThan(1);
+    expect(exported.paths[0]).not.toHaveProperty("waypointSampleIndices");
     expect(exported.paths[0].samples.every((sample) => Object.values(sample).every(Number.isFinite))).toBe(true);
   });
 
@@ -159,6 +228,28 @@ describe("native trajectory export", () => {
     project.paths[0].waypoints = project.paths[0].waypoints.slice(0, 1);
     expect(() => buildBdxExport(project)).toThrow();
   });
+
+  it("blocks an optimized trajectory that fell back", () => {
+    const project = createDemoProject();
+    project.plannerId = "optimizedTrajectory";
+    project.paths[0].constraints.maxJerk = 4;
+
+    expect(() => buildBdxExport(project)).toThrow(/optimization|jerk|fallback/i);
+  });
+
+  it("exports the same deterministic optimized trajectory shown by final preview", () => {
+    const project = createDemoProject();
+    project.plannerId = "optimizedTrajectory";
+    project.paths[0].headingMode = "targets";
+    project.paths[0].waypoints = buildWaypoints([
+      { x: 7.6, y: 3.5, theta: 0, nextC: { x: 8.38, y: 3.5 } },
+      { x: 9.11, y: 6.85, theta: 0, prevC: { x: 8.33, y: 6.85 } },
+    ]);
+    const preview = processPathPreviewJob({
+      id: 1,
+      quality: "final",
+      plannerId: project.plannerId,
+      path: project.paths[0],
       robot: project.robot,
       perSegment: 56,
       deadline: "common",
