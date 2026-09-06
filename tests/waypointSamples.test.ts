@@ -1,3 +1,108 @@
+      { x: 1, y: 1, segType: "clothoid" },
+      { x: 5, y: 5, segType: "clothoid" },
+      { x: 10, y: 2, segType: "clothoid" },
+      { x: 12, y: 6, segType: "clothoid", stop: true, wait: 1 },
+      { x: 12, y: 6, segType: "line" },
+      { x: 14, y: 3, segType: "line" },
+    ]);
+    const input = { path, robot: project.robot, samplesPerSegment: 9 };
+    const raw = profiledSplinePlanner.generate(input);
+    const final = getPlanner("profiledSpline").generate(input);
+
+    expect(raw.waypointSampleIndices).toEqual([0, 9, 18, 27, 36, 45]);
+    const arrivals = expectAuthoredArrivals(path, final);
+    expectWaitAtArrival(path, final, 3, 1);
+    // A return to the same coordinate remains a separate authored boundary.
+    expect(final.samples[arrivals[4]].t).toBeGreaterThan(final.samples[arrivals[3]].t);
+    expect(final.samples[arrivals[4] + 1].x).not.toBe(12);
+  });
+
+  it("keeps consecutive zero-length waypoint boundaries nondecreasing", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      { x: 1, y: 1, segType: "line" },
+      { x: 4, y: 4, segType: "line" },
+      { x: 4, y: 4, segType: "line" },
+      { x: 4, y: 4, segType: "line" },
+      { x: 8, y: 2, segType: "line" },
+    ]);
+    const samples = profiledSplinePlanner.generate({ path, robot: project.robot, samplesPerSegment: 9 }).samples;
+    const indices = orderedWaypointSampleIndices(path.waypoints, samples);
+
+    expect(indices).toEqual([...indices].sort((first, second) => first - second));
+    expect(indices.map((index) => [samples[index].x, samples[index].y])).toEqual(
+      path.waypoints.map((waypoint) => [waypoint.x, waypoint.y]),
+    );
+  });
+
+  it("does not move a duplicate-waypoint wait to a later crossing", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      { x: 2, y: 2, segType: "line" },
+      { x: 2, y: 2, segType: "line", stop: true, wait: 1 },
+      { x: 1, y: 2, segType: "line" },
+      { x: 3, y: 2, segType: "line" },
+    ]);
+    const input = { path, robot: project.robot, samplesPerSegment: 4 };
+    const raw = profiledSplinePlanner.generate(input);
+    const final = getPlanner("profiledSpline").generate(input);
+
+    expect(orderedWaypointSampleIndices(path.waypoints, raw.samples)).toEqual([0, 4, 8, 12]);
+    const arrivals = expectAuthoredArrivals(path, final);
+    expectWaitAtArrival(path, final, 1, 1);
+    // The wait precedes travel to x=1, rather than moving to the later x=2 crossing.
+    expect(final.samples[arrivals[2]].x).toBe(1);
+    expect(final.samples[arrivals[2]].s).toBeGreaterThan(final.samples[arrivals[1]].s);
+  });
+
+  it("does not move an interior duplicate group to a later crossing", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([
+      { x: 0, y: 2, segType: "line" },
+      { x: 2, y: 2, segType: "line" },
+      { x: 2, y: 2, segType: "line", stop: true, wait: 1 },
+      { x: 1, y: 2, segType: "line" },
+      { x: 3, y: 2, segType: "line" },
+    ]);
+    const input = { path, robot: project.robot, samplesPerSegment: 4 };
+    const raw = profiledSplinePlanner.generate(input);
+    const final = getPlanner("profiledSpline").generate(input);
+
+    expect(orderedWaypointSampleIndices(path.waypoints, raw.samples)).toEqual([0, 4, 8, 12, 16]);
+    const arrivals = expectAuthoredArrivals(path, final);
+    expectWaitAtArrival(path, final, 2, 1);
+    // The wait precedes travel to x=1, rather than moving to the later x=2 crossing.
+    expect(final.samples[arrivals[3]].x).toBe(1);
+    expect(final.samples[arrivals[3]].s).toBeGreaterThan(final.samples[arrivals[2]].s);
+  });
+
+  it.each(["profiledSpline", "optimizedTrajectory"] as const)(
+    "preserves exact boundaries for consecutive duplicate actions in %s",
+    (plannerId) => {
+      const project = createDemoProject();
+      const path = project.paths[0];
+      path.waypoints = buildWaypoints([
+        { x: 0, y: 2, segType: "line" },
+        { x: 2, y: 2, segType: "line" },
+        { x: 2, y: 2, segType: "line", stop: true, wait: 1 },
+        { x: 2, y: 2, segType: "line", stop: true, wait: 2 },
+        { x: 1, y: 2, segType: "line" },
+        { x: 3, y: 2, segType: "line" },
+      ]);
+      const input = { path, robot: project.robot, samplesPerSegment: 4 };
+      const raw = plannerId === "profiledSpline"
+        ? profiledSplinePlanner.generate(input)
+        : optimizedTrajectoryPlanner.generate(input);
+      const final = getPlanner(plannerId).generate(input);
+
+      if (plannerId === "profiledSpline") expect(raw.waypointSampleIndices).toEqual([0, 4, 8, 12, 16, 20]);
+      expectAuthoredArrivals(path, raw);
+      const arrivals = expectAuthoredArrivals(path, final);
+      expectWaitAtArrival(path, final, 2, 1);
+      expectWaitAtArrival(path, final, 3, 2);
       expect(final.samples[arrivals[3]].t).toBeGreaterThanOrEqual(final.samples[arrivals[2]].t + 1 - 1e-8);
       expect(final.samples[arrivals[4]].t).toBeGreaterThanOrEqual(final.samples[arrivals[3]].t + 2 - 1e-8);
     },
