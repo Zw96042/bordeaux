@@ -221,15 +221,30 @@ app.whenReady().then(async () => {
     }
     assert.equal(await enterVelocity(String(maxVelocityBefore)), maxVelocityBefore);
     check('numeric text commits respect bounds and reject nonfinite, malformed, and empty values');
-    await click('[aria-label="Sculpt path"]');
-    const brushRadius = await evaluate(() => Number(document.querySelector('.brush-setting input').value));
+    assert.deepEqual(await evaluate(() => [...document.querySelectorAll('.toolrail-b')].map((button) => button.getAttribute('aria-label'))),
+      ['Select / move', 'Place waypoint', 'Rotation target', 'Event marker', 'Constraint range']);
+    await pointerClick('[aria-label="Place waypoint"]');
     await evaluate(() => document.activeElement.blur());
-    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: ']' });
-    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: ']' });
-    await delay(80);
-    assert.equal(await evaluate(() => Number(document.querySelector('.brush-setting input').value)), +(brushRadius + 0.1).toFixed(1));
-    await click('[aria-label="Select / move"]');
-    check('brush radius shortcut immediately follows the selected tool');
+    for (const code of ['6', 'b']) {
+      await key(code);
+      assert.equal(await evaluate(() => document.querySelector('.toolrail-b.on').getAttribute('aria-label')), 'Place waypoint');
+    }
+    await key('1');
+    assert.equal(await evaluate(() => document.querySelector('.toolrail-b.on').getAttribute('aria-label')), 'Select / move');
+    await evaluate(() => document.querySelector('[aria-label="Select / move"]').focus());
+    await key('Tab'); await key('Space');
+    assert.equal(await evaluate(() => document.querySelector('.toolrail-b.on').getAttribute('aria-label')), 'Place waypoint');
+    await pointerClick('[aria-label="Select / move"]');
+    for (const [width, height] of [[1440, 900], [1100, 720]]) {
+      win.setContentSize(width, height); await delay(100);
+      for (const inspector of ['open', 'closed']) {
+        if (inspector === 'closed') await pointerClick('[aria-label="Hide inspector"]');
+        await fs.writeFile(path.join(output, `editor-tools-${width}-${inspector}.png`), (await win.webContents.capturePage()).toPNG());
+      }
+      await pointerClick('[title="Show inspector"]');
+    }
+    win.setContentSize(1440, 900);
+    check('five editor tools support pointer and keyboard selection; removed sculpt shortcuts preserve the active tool');
     const beforeNudge = structuredClone(saved.paths[0].waypoints[1]);
     await evaluate(() => { const row = document.querySelectorAll('.outline .featselect')[1]; row.click(); row.focus(); });
     win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Right' }); win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Right' });

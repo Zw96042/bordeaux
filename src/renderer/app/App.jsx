@@ -21,7 +21,6 @@ import { RoutinePanel } from "../components/RoutinePanel";
 import { RoutineWorkspace } from "../components/RoutineWorkspace";
 import { UI } from "../components/ui";
 import { PM } from "../lib/pathMath";
-import { applyBrushDraft, remapBrushSelection, syncBrushSelection } from "../lib/brushEditing";
 import { agentProposalMatchesPublishedContext } from "../lib/agentProposalContext";
 import { PathLinks } from "../lib/pathLinks";
 import {
@@ -376,7 +375,6 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const appliedPreview = useRef(null);
     const [metric, setMetric] = useState('velocity');
     const [tool, setTool] = useState('select');
-    const [brush, setBrush] = useState({ kind: 'push', radius: 0.9, strength: 0.7 });
     const [waypointPreviewRequest, setWaypointPreviewRequest] = useState(null);
     const [headMenu, setHeadMenu] = useState(null);
     const [dirty, setDirty] = useState(false);
@@ -581,7 +579,6 @@ import { createPlaybackStore } from "../lib/playbackStore";
 
     const doc = project.paths[activeIdx];
     const docRef = useRef(doc); docRef.current = doc;
-    const selRef = useRef(sel); selRef.current = sel;
     const projectRef = useRef(project); projectRef.current = project;
     const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
     const hist = useRef({ past: [], future: [] });
@@ -940,12 +937,6 @@ import { createPlaybackStore } from "../lib/playbackStore";
       }
       return d;
     }), [mutate]);
-    const applyBrush = useCallback((stroke) => {
-      const result = applyBrushDraft(editStore, docRef.current, stroke);
-      if (!result.changed) return false;
-      syncBrushSelection(selRef, result.beforeWaypoints, result.path.waypoints, select);
-      return true;
-    }, [editStore, select]);
     const prepareWaypointInsertion = useCallback((rawPoint, segmentHint, onPath, selectedVisit) => {
       const p = clampWorld(rawPoint);
       const candidate = clone(docRef.current);
@@ -1322,7 +1313,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
       setSegMeta, setSegmentHeadingMode, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, canReversePath: reverseDistance != null, reorderWp, insertWp,
       setStop, setWait, setTurnInPlace, setTurnInPlaceMeta, setHeadingMode, toggleDriveBackward,
       openInspector: () => setInspectorOpen(true) };
-    const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, applyBrush, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginEdit, finishEdit, cancelEdit,
+    const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginEdit, finishEdit, cancelEdit,
       setWaypointHeading, moveSegmentLookAt, headingMenu, faceWaypoint, delWp, delTarget, delMarker, delRange,
       openInspector: () => setInspectorOpen(true),
       select };
@@ -1762,7 +1753,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
           playbackStore.toggle();
           return;
         }
-        const toolShortcut = !e.metaKey && !e.ctrlKey && !e.altKey && !textEditing && ({ '1': 'select', '2': 'waypoint', '3': 'rotation', '4': 'marker', '5': 'range', '6': 'brush', v: 'select', w: 'waypoint', r: 'rotation', m: 'marker', c: 'range', b: 'brush' })[k];
+        const toolShortcut = !e.metaKey && !e.ctrlKey && !e.altKey && !textEditing && ({ '1': 'select', '2': 'waypoint', '3': 'rotation', '4': 'marker', '5': 'range', v: 'select', w: 'waypoint', r: 'rotation', m: 'marker', c: 'range' })[k];
         if (page === 'plan' && toolShortcut) {
           e.preventDefault();
           if (typeof e.target.blur === 'function') e.target.blur();
@@ -1771,16 +1762,6 @@ import { createPlaybackStore } from "../lib/playbackStore";
         }
         const formControl = matches && matches('input,select,textarea,[contenteditable="true"]');
         if (formControl) return;
-        // Bracket radius nudges sit below the form-control guard so a focused field
-        // (including .numinput, which tool shortcuts deliberately pass through) keeps its
-        // keystrokes. FieldView's visit cycling binds the same keys in the capture phase,
-        // so defer to it when it claimed the event.
-        if (page === 'plan' && tool === 'brush' && !e.defaultPrevented && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === '[' || e.key === ']')) {
-          e.preventDefault();
-          const direction = e.key === ']' ? 1 : -1;
-          setBrush((current) => ({ ...current, radius: Math.max(0.3, Math.min(2.4, +(current.radius + direction * 0.1).toFixed(1))) }));
-          return;
-        }
         if ((e.metaKey || e.ctrlKey) && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
         if ((e.metaKey || e.ctrlKey) && k === 'y') { e.preventDefault(); redo(); return; }
         if (page !== 'plan') return;
@@ -1806,7 +1787,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
       };
       window.addEventListener('keydown', onKey);
       return () => window.removeEventListener('keydown', onKey);
-    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, tool, derivationCurrent, nudgeWp, nudgeFrac, playbackStore]);
+    }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, derivationCurrent, nudgeWp, nudgeFrac, playbackStore]);
 
     const pathIndex = (id) => project.paths.findIndex((path) => path.id === id);
     const renderLibrary = (mode, structure) => h(LibraryRail, {
@@ -1871,8 +1852,8 @@ import { createPlaybackStore } from "../lib/playbackStore";
         : h('main', { className: 'stage stage-plan' },
             renderLibrary('paths', (secOpen, setSecOpen) => h('div', { style: { height: '100%' }, inert: derivationCurrent ? undefined : '' }, h(Panels.Outline, { open: true, setOpen: () => {}, doc: derivationDoc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot, ready: derivationCurrent }))),
             h('div', { className: 'fieldcol', inert: derivationCurrent ? undefined : '', 'aria-disabled': derivationCurrent ? undefined : true },
-              h(Panels.ToolRail, { tool, setTool, brush, setBrush, waypointCount: derivationDoc.waypoints.length }),
-              h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, derivedPath: derivation.path, robot, plannerId, optimizationCorridor: optimizationOpen && normalReady ? { points: normal.value?.sample.pts, widthM: doc.optimization?.corridorM ?? 0.15 } : null, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreview.previews : [], sel, tool, brush, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, showHandles: true }),
+              h(Panels.ToolRail, { tool, setTool }),
+              h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, derivedPath: derivation.path, robot, plannerId, optimizationCorridor: optimizationOpen && normalReady ? { points: normal.value?.sample.pts, widthM: doc.optimization?.corridorM ?? 0.15 } : null, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreview.previews : [], sel, tool, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, showHandles: true }),
               h('div', { className: 'field-notices' },
               h(FieldStatus, { key: doc.id, notices: fieldNotices }),
               tool !== 'select' && !waypointPreview && h('div', { className: 'stage-hint', dangerouslySetInnerHTML: { __html: toolHint(tool) } }),
@@ -1926,7 +1907,6 @@ import { createPlaybackStore } from "../lib/playbackStore";
     if (tool === 'rotation') return 'Click the path to set a <b>rotation target</b>';
     if (tool === 'marker') return 'Click the path to place an <b>event marker</b>';
     if (tool === 'range') return 'Drag along the path to define a <b>constraint range</b> \u00b7 then edit its limits';
-    if (tool === 'brush') return 'Drag to <b>sculpt the path</b> \u00b7 [ and ] adjust the radius';
     return '';
   }
 
@@ -1952,4 +1932,4 @@ function replaceEditedPath(project, edited) {
   return PathLinks.sync({ ...project, paths }, edited.id, before);
 }
 
-export { App, AppErrorBoundary, replaceEditedPath, agentProposalMatchesPublishedContext, agentProposalPreviewResult, applyBrushDraft, canApplyAgentProposalCandidate, currentPathLength, duplicatePathForLibrary, pathPreviewResult, remapBrushSelection, requestRoutinePreview, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, syncBrushSelection, waypointPreviewResult };
+export { App, AppErrorBoundary, replaceEditedPath, agentProposalMatchesPublishedContext, agentProposalPreviewResult, canApplyAgentProposalCandidate, currentPathLength, duplicatePathForLibrary, pathPreviewResult, requestRoutinePreview, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, waypointPreviewResult };
