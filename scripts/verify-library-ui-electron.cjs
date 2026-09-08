@@ -30,6 +30,10 @@ async function click(selector, text) {
   }
 }
 async function pointerClick(selector, modifiers = []) {
+  await wait(() => evaluate((selector) => {
+    const el = document.querySelector(selector);
+    return Boolean(el && !el.disabled && !el.closest('[inert]'));
+  }, selector), 'ready pointer target: ' + selector);
   const point = await evaluate((selector) => {
     const el = document.querySelector(selector);
     if (!el || el.disabled || el.closest('[inert]')) throw new Error('Unavailable pointer target: ' + selector);
