@@ -156,16 +156,22 @@ app.whenReady().then(async () => {
     await click('[aria-label="Hide inspector"]');
     await delay(250); // Wait for the inspector width transition before measuring the field target.
     const headingPoint = await evaluate(() => {
-      const r = document.querySelector('[data-heading-control] circle').getBoundingClientRect();
-      const point = { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
-      const target = document.elementFromPoint(point.x, point.y);
-      if (!target?.closest('[data-heading-control]')) throw new Error('Heading pointer is covered: ' + target?.outerHTML);
-      return point;
+      const circle = document.querySelector('[data-heading-control] circle');
+      const r = circle.getBoundingClientRect();
+      // A selected tangent handle can overlap the center of this heading target.
+      // Use an exposed interior point of the same circle, verified by hit testing.
+      for (const [fx, fy] of [[0.5, 0.5], [0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]]) {
+        const point = { x: Math.round(r.x + r.width * fx), y: Math.round(r.y + r.height * fy) };
+        if (document.elementFromPoint(point.x, point.y) === circle) return point;
+      }
+      throw new Error('Heading pointer has no exposed interior hit target');
     });
     win.webContents.sendInputEvent({ type: 'mouseMove', ...headingPoint });
     win.webContents.sendInputEvent({ type: 'mouseDown', ...headingPoint, button: 'right', clickCount: 1 });
     win.webContents.sendInputEvent({ type: 'mouseUp', ...headingPoint, button: 'right', clickCount: 1 });
     await wait(() => evaluate(() => !!document.querySelector('.ctxmenu')), 'pointer heading menu');
+    await delay(200); // Allow the menu to paint before capturing evidence.
+    await fs.writeFile(path.join(output, 'heading-pointer-menu.png'), (await win.webContents.capturePage()).toPNG());
     for (const code of ['Left', 'Right', 'Delete']) await key(code);
     await key('End'); await key('Space');
     await wait(() => evaluate(() => document.querySelector('.rail-r input') && !document.querySelector('.ctxmenu')), 'exact angle inspector opens from menu Space');
