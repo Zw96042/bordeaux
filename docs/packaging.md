@@ -108,7 +108,7 @@ archive="../bordeaux-release-YYYYMMDD-HHMMSS"
 test -d "$archive" && test ! -e ./release && mv "$archive" ./release
 ```
 
-`dist/`, `dist-electron/`, Java `build/` directories, and `node_modules/` are reproducible from the checked-in sources with `npm ci` and the build commands above. Keep them ignored; remove them only when rebuilding is acceptable.
+`dist/`, `dist-electron/`, and `node_modules/` are reproducible from the checked-in sources with `npm ci` and the build commands above. Keep them ignored; remove them only when rebuilding is acceptable.
 
 Preview stale remote-tracking branches before pruning local references:
 

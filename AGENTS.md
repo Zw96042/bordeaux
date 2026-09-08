@@ -1,26 +1,24 @@
 # Bordeaux
 
-Electron/React desktop editor for robot paths, autonomous routines, and Java command events. Shared trajectory timing must agree across playback, routines, and export; optimization candidates are applied explicitly.
+Electron/React desktop editor for robot paths, autonomous routines, and LabVIEW command events. Shared trajectory timing must agree across playback, routines, and export; optimization candidates are applied explicitly.
 
 ## Where to work
 
 - `src/renderer/`: React UI, browser-domain helpers, assets, and styles.
 - `src/electron/`: desktop integration, project files, robot transports, and workers.
 - `src/shared/`: planner and serialization contracts shared across boundaries.
-- `java/`: robot runtime and support integration.
 - `tests/` and `benchmarks/`: correctness, integration, and planner validation.
-- `docs/trajectory-optimization.md`, `docs/java/index.md`, and `docs/packaging.md`: task-specific workflows.
+- `docs/trajectory-optimization.md`, `docs/labview/index.md`, and `docs/packaging.md`: task-specific workflows.
 
 ## Local commands
 
-Use Node.js >=22.12, npm, and Java 17.
+Use Node.js >=22.12 and npm.
 
 - `npm install`
 - `npm run dev` (builds before starting Electron).
 - `npm test`
 - `npm run typecheck`
 - `npm run build`
-- Java changes: `npm run test:java`; integration changes: `npm run test:java-integration`.
 - Desktop smoke check: `env -u ELECTRON_RUN_AS_NODE npm run test:smoke`.
 
 CI also certifies fields and checks licenses. Packaging/release tasks have their own gates in `docs/packaging.md`; archive large local installers recoverably rather than discarding them.

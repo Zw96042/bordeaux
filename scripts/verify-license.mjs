@@ -50,7 +50,7 @@ requireText("licenses/OFL-1.1.txt", fontLicense, [
 const rights = readRequiredFile("RIGHTS.md");
 requireText("RIGHTS.md", rights, [
   "application source",
-  "Java robot-support source",
+  "LabVIEW integration source",
   "Bordeaux name and product identity",
   "wine-glass mark",
   "No trademark license",
@@ -93,13 +93,6 @@ requireText("README.md", readme, [
   "RIGHTS.md",
 ]);
 
-const javaReadme = readRequiredFile("java/README.md");
-requireText("java/README.md", javaReadme, [
-  "## License",
-  "Apache License 2.0",
-  "../RIGHTS.md",
-]);
-
 const manifest = JSON.parse(readRequiredFile("package.json"));
 if (manifest.license !== "Apache-2.0") throw new Error("package.json license must be Apache-2.0");
 
@@ -115,13 +108,6 @@ const packagedRightsFiles = new Set((manifest.build?.extraResources ?? []).map((
 for (const relativePath of ["LICENSE", "NOTICE", "RIGHTS.md", "licenses/OFL-1.1.txt", "licenses/ssh2-MIT.txt"]) {
   if (!packagedRightsFiles.has(relativePath)) {
     throw new Error(`package.json must include ${relativePath} in build.extraResources`);
-  }
-}
-
-const javaBuild = readRequiredFile("java/build.gradle.kts");
-for (const relativePath of ["LICENSE", "NOTICE", "RIGHTS.md", "licenses/OFL-1.1.txt"]) {
-  if (!javaBuild.includes(`../${relativePath}`)) {
-    throw new Error(`Java support jars must include ${relativePath}`);
   }
 }
 

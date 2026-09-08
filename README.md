@@ -1,19 +1,19 @@
 # Bordeaux
 
-Bordeaux is a lightweight desktop editor for authoring robot paths, autonomous routines, and Java command events. Normal trajectories use shared physics-aware timing and need no optimizer. Optional per-path optimization searches for faster geometry inside an adjustable corridor; compare the candidate and apply it to select the exact trajectory used by playback, routines, and export. See [trajectory optimization](docs/trajectory-optimization.md).
+Bordeaux is a lightweight desktop editor for authoring robot paths, autonomous routines, and robot command events. Normal trajectories use shared physics-aware timing and need no optimizer. Optional per-path optimization searches for faster geometry inside an adjustable corridor; compare the candidate and apply it to select the exact trajectory used by playback, routines, and export. See [trajectory optimization](docs/trajectory-optimization.md).
 
-LabVIEW 4.4 compatibility is preserved separately on the `archive/labview-4.4` branch and is intentionally absent from the main application.
+Bordeaux is a LabVIEW-only planner. Link a `.lvproj` to discover commands and their parameters, then export a selected path as a `.bdx` binary. The [binary contract](docs/labview/binary-format.md) defines the file layout and robot-code boundary.
 
 ## Develop
 
-Requirements: Node.js 22.12+, npm, and Java 17.
+Requirements: Node.js 22.12+ and npm.
 
 ```text
 npm install
 npm run dev
 ```
 
-The renderer source lives in `src/renderer` and builds with Vite to `dist-renderer`. `main.tsx` mounts the React application, feature components live under `components`, browser-side domain helpers under `lib`, and static resources under `assets` and `styles`. Renderer modules use explicit imports; no ordered scripts or application globals are required. Electron and shared planner code also live in `src`; robot-side support lives in `java`.
+The renderer source lives in `src/renderer` and builds with Vite to `dist-renderer`. `main.tsx` mounts the React application, feature components live under `components`, browser-side domain helpers under `lib`, and static resources under `assets` and `styles`. Renderer modules use explicit imports; no ordered scripts or application globals are required. Electron and shared planner code also live in `src`.
 
 ## Verify
 
@@ -30,18 +30,13 @@ Large local installers should be archived outside the worktree instead of discar
 
 Installed GitHub builds update on version-derived beta or production channels; Microsoft Store builds use Store-managed updates. See [desktop packaging](docs/packaging.md) for release workflows and signing requirements.
 
-## Java robot integration
+## LabVIEW integration
 
-Link a GradleRIO project in Bordeaux and use **Install Java Support**. This is the sole supported setup path: it installs bounded runtime/processor jars and a managed Gradle script in the robot project. Start with the [Java integration guide](docs/java/index.md); use [java/README.md](java/README.md) as the runtime API reference.
+Choose a `.lvproj` or its containing folder. Project discovery reads project XML; NI inspection supplies saved VI connector types and parameter defaults. The command catalog contains stable command and condition IDs. Discovery never executes robot VIs.
 
-The optional **Push to Robot** flow is a separate, explicit action: saving never opens a network connection. After a team wires the caller-driven Java mailbox, Bordeaux can pair to the robot over SSH/SFTP on a pit USB, Ethernet, or practice connection, review one immutable revision, stage it with read-back verification, and report it active only after the disabled runtime returns the matching acknowledgment. A compatible runtime also reports its bounded revision history, allowing an author to explicitly pin or roll back to a retained revision with a fresh nonce-bound acknowledgment while disabled; missing history entries cannot be rolled back. SSH/SFTP port 22 is unavailable on the FMS field network.
+Saving a path writes a local `.bdx` file. Binary export requires saved NI type evidence for command parameters; eventless paths can export without a linked catalog. Robot-code VIs read the file and return setpoints and command requests. The caller supplies measured pose, time, lifecycle state and motor/command integration. See [LabVIEW integration](docs/labview/index.md).
 
-The editor now keeps **Paths** and **Routines** in a persistent library beside the field. Select a row to edit, use its actions to rename/duplicate/move it, and use **Push path** or **Push routine** without leaving the editor. Shift selects a range; Cmd/Ctrl selects individual paths for a batch push. Routines open a full flow workspace with a field-preview tab.
-
-A selected push composes a complete revision from verified robot contents: selected paths replace the same IDs, while other paths and the robot’s current routine remain preserved. A routine push explicitly replaces the one deployed routine and includes its static/fallback/linked path dependencies. A local delete never deletes robot content. **Matches robot** describes a recent verified content comparison, not execution; stale or unassociated contents display **Unknown**. **Settings** contains robot connection, display units, and robot configuration. Its connection control opens push history, rollback, diagnostics, and full-project replacement.
-
-Selective pushes require the updated Java mailbox’s `bordeaux-active-revision/1.0` read capability and a deployment baseline with robot-context metadata. After upgrading an older runtime or baseline, review **Replace all robot content** once in the robot connection surface. Older runtimes retain explicit full-project push support; Bordeaux never silently substitutes that operation for **Push path**. A routine without static paths cannot be the first robot snapshot under the existing Java format: push a path first.
-
+Robot push is a separate explicit action. Saving and local deletion do not connect to a robot or remove robot contents. Revision review, readback and matching disabled-runtime acknowledgment remain required where the configured robot receiver supports deployment.
 
 ## Project files
 
@@ -51,8 +46,8 @@ For swerve paths, drag the start heading arrow or edit **Initial robot facing** 
 
 Field feedback uses one compact status with an **Optimize** action when attention is needed; expanded **Details** holds diagnostics. Normal trajectory rebuilding remains automatic.
 
-`.bordeaux.json` files contain all paths, routines, and compact editor restoration metadata, including the selected path and linked Java project bookmark. Java trajectory export writes the bounded `bordeaux-trajectory/1.0` JSON consumed by the robot runtime.
+Open a folder to work there. `.bordeaux` project files retain project settings and editor state, while paths and routines are saved in the opened workspace.
 
 ## License and asset rights
 
-The Bordeaux application and Java robot-support source are licensed under the [Apache License 2.0](LICENSE). The Bordeaux identity and bundled assets are governed separately; [RIGHTS.md](RIGHTS.md) records the trademark boundary, font terms, media rules, and provenance locations. Apache-2.0 does not grant permission to present a fork or product as an official Bordeaux release.
+The Bordeaux application and LabVIEW integration source are licensed under the [Apache License 2.0](LICENSE). The Bordeaux identity and bundled assets are governed separately; [RIGHTS.md](RIGHTS.md) records the trademark boundary, font terms, media rules, and provenance locations. Apache-2.0 does not grant permission to present a fork or product as an official Bordeaux release.

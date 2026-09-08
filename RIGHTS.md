@@ -3,9 +3,8 @@
 ## Apache-2.0 software
 
 Unless a file states otherwise, the Bordeaux application source, build tooling,
-source documentation, and Java robot-support source are licensed under the
-[Apache License 2.0](LICENSE). Packaged copies carry `LICENSE` and `NOTICE`, and
-the two Java support jars carry the same files under `META-INF`.
+source documentation, and LabVIEW integration source are licensed under the
+[Apache License 2.0](LICENSE). Packaged copies carry `LICENSE` and `NOTICE`.
 
 ## Bordeaux identity
 
@@ -70,3 +69,21 @@ beside their source; those records govern the assets they identify and must be
 kept with any public distribution. Package dependency names, versions,
 integrity digests, and declared licenses are recorded in `package-lock.json`;
 each dependency remains under its own license.
+## LabVIEW native dependencies
+
+The LabVIEW native adapter source is application source under Apache-2.0.
+`labview/vendor/nlohmann/json.hpp` is the unmodified nlohmann/json 3.12.0
+single header, obtained from the upstream `v3.12.0` tag. Its SHA-256 is
+`aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63`.
+The MIT license is preserved in `labview/vendor/nlohmann/LICENSE.MIT`
+(SHA-256 `46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603`).
+It provides strict JSON parsing on the JVM-free runtime and avoids maintaining
+a second bespoke JSON parser on the robot.
+
+Windows native libraries statically link the MinGW/GCC runtime support used by
+the documented compiler. `labview/vendor/mingw-w64-copyright.txt`,
+`labview/vendor/GPL-3.txt`, and `labview/vendor/GCC-RUNTIME-EXCEPTION.txt` preserve
+the applicable notices and runtime exception. The build copies these notices
+into every native bundle. NI software and NI-generated wrapper VIs are not
+included in the current bundle; valid VI generation and NI execution remain
+explicit verification gates.

@@ -62,11 +62,11 @@ Projects may add optional team vocabulary without changing the project schema ve
 
 Named regions use `kind: "region"` and `bounds: { "xMin", "xMax", "yMin", "yMax" }`; routing uses the region center. Strategy coordinates use Bordeaux project coordinates and are validated against the field.
 
-An end action is accepted only from an authoritative generated Java command catalog. The command must be runtime-ready and explicitly advertise the requested semantic tag. If more than one command advertises the same tag, the project must provide one `actionBindings` entry. When the user requests an action such as shooting but no binding exists, the agent sends `endActionIntent`; Bordeaux preserves it as a pending endpoint marker and allows valid path geometry to be added. Java export remains blocked until that marker has an authoritative command binding, so the action is neither silently dropped nor falsely presented as executable.
+An end action is accepted only from an authoritative generated LabVIEW command catalog. The command must be runtime-ready and explicitly advertise the requested semantic tag. If more than one command advertises the same tag, the project must provide one `actionBindings` entry. When the user requests an action such as shooting but no binding exists, the agent sends `endActionIntent`; Bordeaux preserves it as a pending endpoint marker and allows valid path geometry to be added. LabVIEW export remains blocked until that marker has an authoritative command binding, so the action is neither silently dropped nor falsely presented as executable.
 
 ## MCP surface
 
-- Resources: current session, robot planning profile, 2026 field pack, the path-authoring contract, linked Java commands, detailed path analysis, the current proposal, full proposals, and individual proposal candidates.
+- Resources: current session, robot planning profile, 2026 field pack, the path-authoring contract, linked LabVIEW commands, detailed path analysis, the current proposal, full proposals, and individual proposal candidates.
 - Read-only tools: `inspect_session`, `inspect_robot_profile`, `resolve_field_terms`, `analyze_path`, and `get_proposal`.
 - Preview tools: `propose_robot_profile`, `plan_path`, and `repair_path`.
 
