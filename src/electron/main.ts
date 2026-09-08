@@ -1,59 +1,48 @@
 import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, clipboard, dialog, ipcMain, Menu } from "electron";
 import { autoUpdater as updateClient } from "electron-updater";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { javaTrajectoryFileName } from "../shared/export/javaTrajectory";
-import { buildJavaRevision } from "../shared/export/javaRevision";
-import type { RobotPushScope } from "../shared/export/javaDeployment";
-import { hasDeploymentReceipt, readDeploymentReceipts, saveDeploymentReceipt, sameDeploymentRevision } from "./deploymentReceipts";
-import { javaCatalogSemanticSignature } from "../shared/agent/catalogSignature";
-import type { BordeauxProject, JavaCommandCatalog, JavaIntegrationStatus } from "../shared/types";
+import { robotCatalogSemanticSignature } from "../shared/agent/catalogSignature";
+import type { BordeauxProject, RobotCommandCatalog, RobotIntegrationStatus } from "../shared/types";
 import type { AgentSessionSnapshot } from "../shared/agent/types";
+import { createDemoProject } from "../shared/project/defaults";
 import { validateProject } from "../shared/validation";
-import { discoverJavaProject, readableJavaProjectError } from "./javaProject";
+import { prepareBdxBindings } from "./bdxBindings";
+import { buildBdxOffThread } from "./bdxWorkerClient";
+import { buildLabviewCatalog, resolveLabviewProject } from "./labviewProject";
+import { inspectLabviewCommands, withCachedLabviewCommands } from "./labviewNiInspection";
+function readableRobotProjectError(error: unknown, name = "LabVIEW project"): Error { return new Error(`${name}: ${error instanceof Error ? error.message : String(error)}`); }
+import { discoverRobotProject, type RobotProjectRuntime } from "./robotProjectRuntime";
 import {
-  type JavaProjectBookmark,
-  readJavaProjectBookmarks,
-  rememberJavaProject,
-  summarizeJavaProjectBookmarks,
-  writeJavaProjectBookmarks,
-} from "./javaProjectBookmarks";
-import { readProject, saveTargetForOpenedProject, writeBufferAtomically, writeProject } from "./projectFiles";
+  type RobotProjectBookmark,
+  readRobotProjectBookmarks,
+  rememberRobotProject,
+  summarizeRobotProjectBookmarks,
+  writeRobotProjectBookmarks,
+} from "./robotProjectBookmarks";
+import { readProject, saveTargetForOpenedProject, writeBufferAtomically, openProjectFolder, autosaveProjectFolder, projectFileName } from "./projectFiles";
 import { readRecentProjectFiles, rememberRecentProject, writeRecentProjectFiles } from "./recentProjectFiles";
-import {
-  applyJavaSupportInstall,
-  cancelJavaCatalogBuild,
-  inspectJavaSupport,
-  installPreviewSummary,
-  prepareJavaSupportInstall,
-  runJavaCatalogBuild,
-} from "./javaSupport";
 import { AgentBridgeClient, AgentBridgeServer } from "./agentBridge";
 import { appUpdateChannel, AppUpdateController, usesGitHubAppUpdates } from "./appUpdates";
 import {
   DiagnosticBundleCapability,
   buildDiagnosticBundle,
   diagnosticFieldPin,
-  reduceRobotAcknowledgement,
   saveDiagnosticPreview,
   type DiagnosticBundleInput,
   type DiagnosticRobotAcknowledgement,
 } from "./diagnosticBundle";
 import { AgentSessionService } from "./agentSession";
-import { buildJavaTrajectoryOffThread, compareJavaDeploymentOffThread, buildJavaDeploymentOffThread } from "./javaTrajectoryWorkerClient";
 import { runAgentPlanningInWorker } from "./agentPlanningWorkerClient";
 import { quitAfterMcpInputEnds } from "./mcpStdioLifecycle";
 import { serveBordeauxMcp } from "../mcp/server";
 import { RobotPairingController, readRobotPairing, writeRobotPairing } from "./robotPairings";
-import { createRobotPushOperation, type RobotPushOperation, type RobotPushProgress } from "./robotPush";
-import { createRobotRetentionOperation, type RobotRetentionOperation, type RobotRetentionProgress } from "./robotRetention";
 import { connectRobotSftp } from "./robotSsh2Session";
 import {
   BordeauxRobotTransport,
   type RobotEndpoint,
-  type RobotPairing,
 } from "./robotSftpTransport";
 
 function ignoreClosedStandardStream(error: NodeJS.ErrnoException): void {
@@ -66,6 +55,8 @@ process.stderr.on("error", ignoreClosedStandardStream);
 let mainWindow: BrowserWindow | null = null;
 let recentFiles: string[] = [];
 let currentProjectPath: string | null = null;
+let currentProjectFolder: string | null = null;
+function projectLocation() { return { folderPath: currentProjectFolder, projectPath: currentProjectPath }; }
 let projectTargetGeneration = 0;
 let dirty = false;
 let allowClose = false;
@@ -76,21 +67,16 @@ let backgroundServicesReadyForExit = false;
 let finalQuitInProgress = false;
 
 let smokeCloseGuardTriggered = false;
-let linkedJavaProjectPath: string | null = null;
-let linkedJavaProjectBookmarkId: string | null = null;
-let linkedJavaCatalog: JavaCommandCatalog | null = null;
-let linkedJavaIntegration: JavaIntegrationStatus | null = null;
-let javaConnectionGeneration = 0;
-let javaProjectBookmarks: JavaProjectBookmark[] = [];
+let linkedRobotProjectPath: string | null = null;
+let linkedLabviewProjectFile: string | null = null;
+let labviewInspectionInProgress = false;
+let linkedRobotProjectBookmarkId: string | null = null;
+let linkedRobotCatalog: RobotCommandCatalog | null = null;
+let linkedRobotIntegration: RobotIntegrationStatus | null = null;
+let robotConnectionGeneration = 0;
+let robotProjectBookmarks: RobotProjectBookmark[] = [];
 let robotPairings = new RobotPairingController();
 const robotTransport = new BordeauxRobotTransport(connectRobotSftp);
-type PendingRobotOperation =
-  | { kind: "push"; operation: RobotPushOperation; pairing: RobotPairing; projectGeneration: number; javaGeneration: number; receiptProject: string }
-  | { kind: "retention"; operation: RobotRetentionOperation; pairing: RobotPairing; projectGeneration: number; javaGeneration: number };
-type ActiveRobotOperation = { operationId: string; controller: AbortController; kind: PendingRobotOperation["kind"] };
-let pendingRobotOperation: PendingRobotOperation | null = null;
-let activeRobotPush: ActiveRobotOperation | null = null;
-let robotPushPreparationGeneration = 0;
 const diagnosticBundleCapability = new DiagnosticBundleCapability();
 let lastDiagnosticRobotAcknowledgement: DiagnosticRobotAcknowledgement = { state: "not-observed" };
 const smokeDirectory = process.env.BORDEAUX_SMOKE_DIRECTORY;
@@ -99,15 +85,14 @@ const enableMcpAccessOnLaunch = process.argv.includes("--enable-mcp-access");
 let agentBridge: AgentBridgeServer | null = null;
 const proposalReceipts = new Map<string, { resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
 
-function clearLinkedJavaProject(): void {
-  javaConnectionGeneration += 1;
-  linkedJavaProjectPath = null;
-  linkedJavaProjectBookmarkId = null;
-  linkedJavaCatalog = null;
-  linkedJavaIntegration = null;
-  pendingRobotOperation = null;
-  robotPushPreparationGeneration += 1;
-  agentSessions.refreshJavaCatalog();
+function clearLinkedRobotProject(): void {
+  robotConnectionGeneration += 1;
+  linkedRobotProjectPath = null;
+  linkedLabviewProjectFile = null;
+  linkedRobotProjectBookmarkId = null;
+  linkedRobotCatalog = null;
+  linkedRobotIntegration = null;
+  agentSessions.refreshRobotCatalog();
 }
 
 function rejectProposalReceipts(message: string): void {
@@ -135,7 +120,7 @@ const agentSessions = new AgentSessionService(
     mainWindow.webContents.send("agent:proposal", proposal);
     return receipt;
   },
-  () => linkedJavaCatalog,
+  () => linkedRobotCatalog,
   runAgentPlanningInWorker,
 );
 
@@ -261,9 +246,9 @@ function assertTrustedSender(event: Electron.IpcMainInvokeEvent | Electron.IpcMa
   }
 }
 
-function javaProjectBookmarksFile(): string {
+function robotProjectBookmarksFile(): string {
   const directory = smokeDirectory ?? app.getPath("userData");
-  return path.join(directory, "java-projects.json");
+  return path.join(directory, "robot-projects.json");
 }
 
 function recentProjectsFile(): string {
@@ -276,101 +261,83 @@ function robotPairingFile(): string {
   return path.join(directory, "robot-pairing.json");
 }
 
-function javaSupportArtifactsDirectory(): string {
-  return app.isPackaged ? path.join(process.resourcesPath, "java") : path.resolve(__dirname, "../../java/dist");
+
+
+
+
+function labviewDiscoveryCacheDirectory(): string {
+  return path.join(smokeDirectory ?? app.getPath("userData"), "labview-discovery");
 }
 
-async function rememberLinkedJavaProject(projectPath: string, projectName: string): Promise<{ bookmarkId: string; warning?: string }> {
-  javaProjectBookmarks = rememberJavaProject(javaProjectBookmarks, projectPath, projectName);
-  const bookmarkId = javaProjectBookmarks[0].id;
+async function rememberLinkedRobotProject(projectPath: string, projectName: string, runtime: RobotProjectRuntime): Promise<{ bookmarkId: string; warning?: string }> {
+  robotProjectBookmarks = rememberRobotProject(robotProjectBookmarks, projectPath, projectName, new Date(), runtime);
+  const bookmarkId = robotProjectBookmarks[0].id;
   try {
-    await writeJavaProjectBookmarks(javaProjectBookmarksFile(), javaProjectBookmarks);
+    await writeRobotProjectBookmarks(robotProjectBookmarksFile(), robotProjectBookmarks);
     return { bookmarkId };
   } catch (error) {
-    console.warn("Could not save Java project bookmarks:", error);
+    console.warn("Could not save Robot project bookmarks:", error);
     return { bookmarkId, warning: "The project is linked for this session, but Bordeaux could not save it to Recent projects." };
   }
 }
 
-async function connectJavaProject(projectPath: string) {
-  const generation = ++javaConnectionGeneration;
-  const canonicalPath = await fs.promises.realpath(projectPath);
-  const discoveredCatalog = await discoverJavaProject(canonicalPath);
-  const catalog: JavaCommandCatalog = {
+async function connectRobotProject(projectPath: string, runtime: RobotProjectRuntime, inspectedCatalog?: RobotCommandCatalog) {
+  const generation = ++robotConnectionGeneration;
+  const selectedPath = await fs.promises.realpath(projectPath);
+  const labviewProject = runtime === "labview" ? await resolveLabviewProject(selectedPath) : null;
+  const canonicalPath = labviewProject?.root ?? selectedPath;
+  const exactSelection = labviewProject?.projectFile ?? selectedPath;
+  const diskCatalog = await discoverRobotProject(exactSelection, runtime);
+  const discoveredCatalog = inspectedCatalog ?? (runtime === "labview"
+    ? await withCachedLabviewCommands(exactSelection, diskCatalog, labviewDiscoveryCacheDirectory())
+    : diskCatalog);
+  const catalog: RobotCommandCatalog = {
     ...discoveredCatalog,
-    semanticFingerprint: `sha256:${createHash("sha256").update(javaCatalogSemanticSignature(discoveredCatalog), "utf8").digest("hex")}`,
+    semanticFingerprint: `sha256:${createHash("sha256").update(robotCatalogSemanticSignature(discoveredCatalog), "utf8").digest("hex")}`,
   };
-  let integration: JavaIntegrationStatus;
-  let integrationWarning: string | undefined;
-  try {
-    integration = await inspectJavaSupport(canonicalPath, catalog, javaSupportArtifactsDirectory());
-  } catch (error) {
-    integration = {
-      installed: false,
-      generatedCatalog: catalog.authoritative === true,
-      ...(catalog.catalogHash ? { catalogHash: catalog.catalogHash } : {}),
-      buildFile: "build.gradle",
-      wrapperAvailable: false,
-    };
-    integrationWarning = error instanceof Error ? error.message : String(error);
-  }
-  const remembered = await rememberLinkedJavaProject(canonicalPath, catalog.projectName);
-  if (generation !== javaConnectionGeneration) throw new Error("Java project connection was superseded by another project");
-  linkedJavaProjectPath = canonicalPath;
-  linkedJavaProjectBookmarkId = remembered.bookmarkId;
-  linkedJavaCatalog = catalog;
-  linkedJavaIntegration = integration;
-  agentSessions.refreshJavaCatalog();
+  const integration: RobotIntegrationStatus = {
+    installed: catalog.authoritative === true,
+    generatedCatalog: catalog.authoritative === true,
+    supportVersion: catalog.supportVersion,
+    ...(catalog.catalogHash ? { catalogHash: catalog.catalogHash } : {}),
+    buildFile: "bordeaux-catalog.json",
+    runtime: "labview",
+    wrapperAvailable: true,
+  };
+  const integrationWarning: string | undefined = undefined;
+  const remembered = await rememberLinkedRobotProject(exactSelection, catalog.projectName, runtime);
+  if (generation !== robotConnectionGeneration) throw new Error("LabVIEW project connection was superseded by another project");
+  linkedRobotProjectPath = canonicalPath;
+  linkedLabviewProjectFile = labviewProject?.projectFile ?? null;
+  linkedRobotProjectBookmarkId = remembered.bookmarkId;
+  linkedRobotCatalog = catalog;
+  linkedRobotIntegration = integration;
+  agentSessions.refreshRobotCatalog();
   return {
     catalog,
     integration,
     bookmarkId: remembered.bookmarkId,
-    recentProjects: summarizeJavaProjectBookmarks(javaProjectBookmarks),
+    recentProjects: summarizeRobotProjectBookmarks(robotProjectBookmarks),
     ...((remembered.warning || integrationWarning) ? { warning: [remembered.warning, integrationWarning].filter(Boolean).join(" ") } : {}),
   };
 }
 
-async function replaceJavaProject(projectPath: string) {
-  const pending = connectJavaProject(projectPath);
-  const generation = javaConnectionGeneration;
+async function replaceRobotProject(projectPath: string, runtime: RobotProjectRuntime) {
+  const pending = connectRobotProject(projectPath, runtime);
+  const generation = robotConnectionGeneration;
   try {
     return await pending;
   } catch (error) {
-    if (generation === javaConnectionGeneration) clearLinkedJavaProject();
+    if (generation === robotConnectionGeneration) clearLinkedRobotProject();
     throw error;
   }
 }
 
-async function assertSafeJavaExportTarget(projectRoot: string, fileName: string): Promise<string> {
-  const relativeDirectory = path.join("src", "main", "deploy", "bordeaux");
-  let current = projectRoot;
-  for (const component of relativeDirectory.split(path.sep)) {
-    current = path.join(current, component);
-    try {
-      const stat = await fs.promises.lstat(current);
-      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Java export path ${path.relative(projectRoot, current)} must be a regular directory`);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-  }
-  await fs.promises.mkdir(path.join(projectRoot, relativeDirectory), { recursive: true });
-  const directory = await fs.promises.realpath(path.join(projectRoot, relativeDirectory));
-  if (directory !== projectRoot && !directory.startsWith(`${projectRoot}${path.sep}`)) throw new Error("Java export destination escaped the linked project");
-  const target = path.join(directory, fileName);
+async function robotExportTargetSnapshot(target: string): Promise<string> {
   try {
     const stat = await fs.promises.lstat(target);
-    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Existing Java export target must be a regular file");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  return target;
-}
-
-async function javaExportTargetSnapshot(target: string): Promise<string> {
-  try {
-    const stat = await fs.promises.lstat(target);
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Existing Java export target must be a regular file");
-    if (stat.size > 64 * 1024 * 1024) throw new Error("Existing Java export target exceeds the 64 MiB safety limit");
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Existing Robot export target must be a regular file");
+    if (stat.size > 64 * 1024 * 1024) throw new Error("Existing Robot export target exceeds the 64 MiB safety limit");
     const hash = createHash("sha256").update(await fs.promises.readFile(target)).digest("hex");
     return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${hash}`;
   } catch (error) {
@@ -386,7 +353,7 @@ function handle(channel: string, listener: (event: Electron.IpcMainInvokeEvent, 
   });
 }
 
-function diagnosticCatalog(catalog: JavaCommandCatalog | null): DiagnosticBundleInput["catalog"] {
+function diagnosticCatalog(catalog: RobotCommandCatalog | null): DiagnosticBundleInput["catalog"] {
   if (!catalog?.authoritative || !catalog.catalogId || !catalog.catalogHash || !catalog.supportVersion
     || (catalog.generatedSchemaVersion !== "1.0" && catalog.generatedSchemaVersion !== "1.1" && catalog.generatedSchemaVersion !== "1.2" && catalog.generatedSchemaVersion !== "1.3")) {
     return null;
@@ -433,8 +400,9 @@ function createWindow() {
     window.show();
     if (appUpdates?.available && !updateCheckTimer) {
       updateCheckTimer = setTimeout(() => {
-        updateCheckTimer = null;
         void appUpdates?.check(false);
+        updateCheckTimer = setInterval(() => { void appUpdates?.check(false); }, 6 * 60 * 60 * 1000);
+        updateCheckTimer.unref();
       }, 10_000);
       updateCheckTimer.unref();
     }
@@ -516,7 +484,7 @@ function createWindow() {
         await new Promise((resolve) => setTimeout(resolve, 50));
         window.close();
         await new Promise((resolve) => setTimeout(resolve, 50));
-        const filesWritten = fs.existsSync(path.join(smokeDirectory, "project.bordeaux.json")) && fs.existsSync(path.join(smokeDirectory, "java-project", "src", "main", "deploy", "bordeaux", "Smoke-edited.bordeaux.json"));
+        const filesWritten = fs.existsSync(path.join(smokeDirectory, "project.bordeaux")) && fs.existsSync(path.join(smokeDirectory, "Smoke.bdx")) && fs.existsSync(path.join(smokeDirectory, "Paths")) && fs.existsSync(path.join(smokeDirectory, "Routines"));
         result.filesWritten = filesWritten;
         result.closeGuard = smokeCloseGuardTriggered && !window.isDestroyed();
         clearInterval(inputTimer);
