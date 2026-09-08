@@ -633,7 +633,7 @@ input,select{font-family:inherit}
 .rt-panel-status.planning .rt-panel-status-dot{background:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 13%,transparent)}
 .rt-panel-status.error{color:#efaaa6;border-color:color-mix(in srgb,var(--bad) 35%,var(--line))}.rt-panel-status.error .rt-panel-status-dot{background:var(--bad)}
 .rt-panel-summary{display:flex;align-items:center;gap:0;margin-top:11px;color:var(--txt-2);font-size:10.5px}
-.rt-panel-summary span+span::before{content:'·';margin:0 7px;color:var(--txt-3)}
+.rt-panel-summary{gap:14px}.rt-panel-summary span+span::before{content:none}
 .rt-panel-head p{margin:7px 0 0;max-width:38ch;color:var(--txt-3);font-size:10px;line-height:1.4;text-wrap:pretty}
 .rt-scroll{flex:1;overflow-y:auto;overflow-x:hidden;padding:10px 10px 22px;scrollbar-width:thin}
 .rt-list{display:flex;flex-direction:column}
@@ -916,12 +916,21 @@ button.cbar:hover{background:var(--bg-2)!important}
 @media only screen and (min-device-pixel-ratio:2),only screen and (min-resolution:192dpi){.pathlib-panel{--pathlib-rule:.5px}}
 @media (max-width:700px){.pathlib-panel{width:min(296px,calc(100% - 48px))}}
 
-/* Java command discovery and typed marker parameters. */
+/* Robot command discovery and typed marker parameters. */
 .cmd-project{display:flex;flex-direction:column;gap:9px;margin:0 0 10px;padding:11px;border:1px solid rgb(255 255 255 / .09);border-radius:9px;background:rgb(255 255 255 / .018);isolation:isolate}
-.cmd-project-head{display:grid;grid-template-columns:30px minmax(0,1fr);align-items:center;gap:9px;min-width:0}.cmd-project-icon{width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:7px;background:var(--accent-soft);color:var(--accent);pointer-events:none}.cmd-project-copy{min-width:0;display:flex;flex-direction:column;gap:2px}.cmd-project-copy strong,.cmd-project-copy span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cmd-project-copy strong{color:var(--txt);font-size:11.5px;font-weight:600}.cmd-project-copy span{color:var(--txt-3);font-size:9.5px}
+.cmd-project-head{display:grid;grid-template-columns:30px minmax(0,1fr);align-items:center;gap:9px;min-width:0}.cmd-project-icon{width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:7px;background:var(--accent-soft);color:var(--accent);pointer-events:none}.cmd-project-copy{min-width:0;display:flex;flex-direction:column;gap:2px}.cmd-project-copy strong,.cmd-project-copy span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cmd-project-copy strong{white-space:normal;overflow-wrap:anywhere;color:var(--txt);font-size:11.5px;font-weight:600}.cmd-project-copy span{color:var(--txt-3);font-size:9.5px}
 .cmd-project-state{display:flex;align-items:center;gap:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--txt-3);font-size:9.5px;font-weight:550}.cmd-project-state i{width:6px;height:6px;flex:0 0 6px;border-radius:50%;background:var(--warn)}.cmd-project-state.ready{color:color-mix(in srgb,var(--accent) 72%,white)}.cmd-project-state.ready i{background:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 12%,transparent)}
 .cmd-project-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:8px;border-top:1px solid rgb(255 255 255 / .07)}.cmd-project-summary{min-width:0;display:flex;flex-direction:column;gap:2px}.cmd-project-count{color:var(--txt-3);font:9px var(--mono);font-variant-numeric:tabular-nums}.cmd-project-actions{display:flex;align-items:center;gap:3px}.cmd-iconbtn{width:40px;height:40px;display:flex;align-items:center;justify-content:center;border-radius:7px;color:var(--txt-3);transition:color .14s ease-out,background-color .14s ease-out,transform .08s ease-out}.cmd-iconbtn:disabled{cursor:not-allowed;opacity:.38;transform:none}.cmd-primary-action{width:100%;min-height:40px;padding:0 12px;border-radius:7px;background:color-mix(in srgb,var(--accent) 16%,var(--bg-2));color:color-mix(in srgb,var(--accent) 72%,white);font-size:11px;font-weight:600;transition:background-color .14s ease-out,color .14s ease-out,transform .08s ease-out}.cmd-primary-action:disabled{cursor:not-allowed;opacity:.45;transform:none}.cmd-cancel-action{align-self:flex-start;color:var(--txt-3);font-size:10px;text-decoration:underline;text-underline-offset:3px}
 .cmd-project-switcher{padding-top:8px;border-top:1px solid rgb(255 255 255 / .07)}.cmd-project-warning{color:#d8bd88;font-size:10px;line-height:1.4}
+.labview-inspection,.labview-sources{color:var(--txt-2);font-size:11px;line-height:1.45;min-width:0}
+.labview-sources{margin:10px 0}
+.labview-sources summary,.labview-source-warnings summary{padding:7px 0;cursor:pointer;font-weight:550;overflow-wrap:anywhere}
+.labview-sources summary:focus-visible,.labview-source-warnings summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.labview-sources .fieldlabel{display:block}.labview-sources .textinput{display:block;margin-top:5px}
+.labview-source-list{max-height:260px;overflow:auto;scrollbar-width:thin}
+.labview-source-row{display:flex;flex-direction:column;gap:3px;padding:8px 0;border-bottom:1px solid rgb(255 255 255 / .07);overflow-wrap:anywhere}
+.labview-source-row strong{font-size:11px;font-weight:550}.labview-source-meta{font-size:10px;color:var(--txt-3);overflow-wrap:anywhere}
+.labview-source-warnings ul{padding-left:16px;margin:4px 0}.labview-source-warnings li{margin:5px 0;overflow-wrap:anywhere}
 .cmd-project-error{margin:6px 0;color:#e89a96;font-size:10.5px;line-height:1.45;overflow-wrap:anywhere}
 .cmd-project-notice{margin:6px 0;color:var(--txt-2);font-size:10.5px;line-height:1.45;overflow-wrap:anywhere}
 .cmd-command-editor{margin-top:12px}.cmd-command-editor>.fieldlabel{margin-top:0}.cmd-command-description{margin:0;color:var(--txt-2);font-size:11px;line-height:1.45;text-wrap:pretty}
@@ -1065,3 +1074,24 @@ summary:hover::after { color: var(--accent-2); text-decoration: underline; text-
 .endpoint-speed .numrow{min-width:0}
 
 .linkable-name{display:flex;flex-direction:column;gap:5px;margin-bottom:10px;font-size:12px;color:var(--txt-2)}
+
+/* Editing controls stay fixed under the pointer, including during graph expansion. */
+.app button:active,.app .cmd-choice:active span{transform:none}
+.stage-plan .transport{transition:none}
+.stage-plan .viewctl{transition:none;will-change:auto;bottom:110px;transform:none}
+.stage-plan .viewctl.graph-open{bottom:264px;transform:none}
+@container (max-width:420px){.stage-plan .viewctl{bottom:110px}.stage-plan .viewctl.graph-open{bottom:264px}}
+.app ul,.app ol{list-style:none;padding-left:0}
+.app .featdot,.app .rt-brdot{display:none}
+
+.keyboard-help{margin:auto;padding:22px;width:460px;max-width:calc(100vw - 32px);max-height:calc(100vh - 48px);overflow:auto;color:var(--txt);background:var(--bg-1);border:1px solid var(--line-2);border-radius:12px;box-shadow:0 24px 80px #0008}
+.keyboard-help::backdrop{background:#0008}
+.keyboard-help header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.keyboard-help h2{font-size:16px;font-weight:600;margin:0}
+.keyboard-help header button{width:30px;height:30px;font-size:20px}
+.keyboard-help table{width:100%;border-collapse:collapse;font-size:12px}
+.keyboard-help td{padding:6px 0;border-bottom:1px solid var(--line)}
+.keyboard-help td:last-child{text-align:right;white-space:nowrap;padding-left:16px}
+.keyboard-help kbd{font:11px var(--mono);color:var(--txt-2)}
+.keyboard-help p{color:var(--txt-3);font-size:11px;line-height:1.5;margin:16px 0 0}
+@container (max-width:700px){.timeline-summary{display:none}}

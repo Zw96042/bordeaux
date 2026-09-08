@@ -2,7 +2,7 @@
 function hex2rgb(hx: string) { return [parseInt(hx.slice(1, 3), 16), parseInt(hx.slice(3, 5), 16), parseInt(hx.slice(5, 7), 16)]; }
 
 const RAMPS_M: Record<string, Array<[number, string]>> = {
-  velocity:  [[0, '#3f6fd0'], [0.4, '#2fa36b'], [0.7, '#d28f37'], [1, '#cf4f4a']],
+  velocity:  [[0, '#31516e'], [0.5, '#488db4'], [1, '#a2e3eb']],
   accel:     [[0, '#3f6fd0'], [0.5, '#4d535e'], [1, '#cf4f4a']],
   angvel:    [[0, '#343d47'], [0.5, '#2f8fa6'], [1, '#5fcfe6']],
   curvature: [[0, '#39342b'], [0.5, '#a87c30'], [1, '#edbf5c']],
