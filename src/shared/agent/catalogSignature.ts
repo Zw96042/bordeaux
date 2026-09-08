@@ -1,9 +1,9 @@
 import type {
   CommandArgumentValue,
-  JavaCommandCatalog,
-  JavaCommandDescriptor,
-  JavaCommandParameter,
-  JavaValueSchema,
+  RobotCommandCatalog,
+  RobotCommandDescriptor,
+  RobotCommandParameter,
+  RobotValueSchema,
 } from "../types";
 
 function compareText(left: string, right: string): number {
@@ -20,10 +20,10 @@ function normalizeArgument(value: CommandArgumentValue): CommandArgumentValue {
   return Object.fromEntries(Object.keys(value).sort().map((key) => [key, normalizeArgument(value[key])])) as CommandArgumentValue;
 }
 
-function semanticSchema(schema: JavaValueSchema): unknown {
+function semanticSchema(schema: RobotValueSchema): unknown {
   return {
     kind: schema.kind,
-    javaType: schema.javaType,
+    valueType: schema.valueType,
     // The first enum value is the generated default when a parameter has no explicit default.
     enumValues: schema.enumValues ? [...schema.enumValues] : [],
     element: schema.element ? semanticSchema(schema.element) : null,
@@ -34,7 +34,7 @@ function semanticSchema(schema: JavaValueSchema): unknown {
   };
 }
 
-function semanticParameter(parameter: JavaCommandParameter): unknown {
+function semanticParameter(parameter: RobotCommandParameter): unknown {
   return {
     name: parameter.name,
     label: parameter.label ?? null,
@@ -45,13 +45,13 @@ function semanticParameter(parameter: JavaCommandParameter): unknown {
       : { present: false },
     min: parameter.min ?? null,
     max: parameter.max ?? null,
-    javaType: parameter.javaType,
+    valueType: parameter.valueType,
     role: parameter.role,
     schema: semanticSchema(parameter.schema),
   };
 }
 
-function semanticCommand(command: JavaCommandDescriptor): unknown {
+function semanticCommand(command: RobotCommandDescriptor): unknown {
   return {
     id: command.id,
     label: command.label,
@@ -67,8 +67,8 @@ function semanticCommand(command: JavaCommandDescriptor): unknown {
   };
 }
 
-/** Canonical semantic content used to bind end-action proposals to a Java catalog. */
-export function javaCatalogSemanticSignature(catalog: JavaCommandCatalog | null): string {
+/** Canonical semantic content used to bind end-action proposals to a Robot catalog. */
+export function robotCatalogSemanticSignature(catalog: RobotCommandCatalog | null): string {
   if (!catalog) return "null";
   const commands = catalog.commands
     .map((command) => ({ command, semantic: semanticCommand(command) }))

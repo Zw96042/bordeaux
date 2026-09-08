@@ -1,6 +1,6 @@
 import type { PathProposal } from "../../shared/agent/types";
 
-type ProposalContext = Pick<PathProposal, "baseSessionId" | "baseRevision" | "baseActivePathId" | "baseJavaCatalogFingerprint">;
+type ProposalContext = Pick<PathProposal, "baseSessionId" | "baseRevision" | "baseActivePathId" | "baseRobotCatalogFingerprint">;
 interface PublishedContext {
   revision: number;
   project: object;
@@ -8,7 +8,7 @@ interface PublishedContext {
   editRevision: number;
 }
 interface CurrentContext extends Omit<PublishedContext, "revision"> {
-  javaCatalogFingerprint?: string | null;
+  robotCatalogFingerprint?: string | null;
   hasDraft: boolean;
 }
 
@@ -26,6 +26,6 @@ export function agentProposalMatchesPublishedContext(
     && publishedContext.project === currentContext.project
     && publishedContext.activePathId === currentContext.activePathId
     && publishedContext.editRevision === currentContext.editRevision
-    && (!proposal.baseJavaCatalogFingerprint || proposal.baseJavaCatalogFingerprint === currentContext.javaCatalogFingerprint)
+    && (!proposal.baseRobotCatalogFingerprint || proposal.baseRobotCatalogFingerprint === currentContext.robotCatalogFingerprint)
     && !currentContext.hasDraft);
 }

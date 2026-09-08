@@ -21,13 +21,13 @@ describe("renderer agent proposal context", () => {
       baseSessionId: "session_a",
       baseRevision: 4,
       baseActivePathId: "path_a",
-      baseJavaCatalogFingerprint: "catalog_a",
+      baseRobotCatalogFingerprint: "catalog_a",
     };
     const current = {
       project: publishedProject,
       activePathId: "path_a",
       editRevision: 8,
-      javaCatalogFingerprint: "catalog_a",
+      robotCatalogFingerprint: "catalog_a",
       hasDraft: false,
     };
 
@@ -37,6 +37,6 @@ describe("renderer agent proposal context", () => {
       project: { name: "Opened before delayed publication" },
     })).toBe(false);
     expect(agentProposalMatchesPublishedContext({ ...proposal, baseActivePathId: "path_b" }, "session_a", published, current)).toBe(false);
-    expect(agentProposalMatchesPublishedContext(proposal, "session_a", published, { ...current, javaCatalogFingerprint: "catalog_b" })).toBe(false);
+    expect(agentProposalMatchesPublishedContext(proposal, "session_a", published, { ...current, robotCatalogFingerprint: "catalog_b" })).toBe(false);
   });
 });
