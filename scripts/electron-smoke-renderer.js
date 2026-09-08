@@ -53,15 +53,14 @@
     && motorAutosave.project.robot.driveModel?.motorFreeRpm === 5676
     && motorAutosave.project.robot.maxSpeed > 4;
   const validation = await window.bordeauxAPI.validateProject(project);
-  const javaConnection = await window.bordeauxAPI.linkJavaProject();
-  const installedJavaConnection = await window.bordeauxAPI.installJavaSupport();
-  const builtJavaConnection = await window.bordeauxAPI.buildJavaCatalog();
-  const recentJavaProjects = await window.bordeauxAPI.listRecentJavaProjects();
-  const reopenedJavaConnection = await window.bordeauxAPI.openRecentJavaProject(recentJavaProjects[0].id);
+  const robotConnection = await window.bordeauxAPI.linkRobotProject();
+  const builtRobotConnection = await window.bordeauxAPI.buildRobotCatalog();
+  const recentRobotProjects = await window.bordeauxAPI.listRecentRobotProjects();
+  const reopenedRobotConnection = await window.bordeauxAPI.openRecentRobotProject(recentRobotProjects[0].id);
   const secondPath = structuredClone(project.paths[0]);
   secondPath.id = 'path_smoke_second'; secondPath.name = 'Smoke second';
   secondPath.markers = [];
-  const persistedProject = { ...project, paths: [...project.paths, secondPath], editor: { activePathId: secondPath.id, javaProjectBookmarkId: recentJavaProjects[0].id } };
+  const persistedProject = { ...project, paths: [...project.paths, secondPath], editor: { activePathId: secondPath.id, robotProjectBookmarkId: recentRobotProjects[0].id } };
   [...document.querySelectorAll('.pageswitch button')].find((button) => button.textContent.trim() === 'Editor')?.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
   [...document.querySelectorAll('.library-tabs button')].find((button) => button.textContent.trim() === 'Paths')?.click();
@@ -71,30 +70,25 @@
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   await addMarker(0.4);
-  for (let attempt = 0; attempt < 100 && !document.querySelector('button[aria-label="Choose Java project"], .cmd-primary-action'); attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  const linkButton = document.querySelector('button[aria-label="Choose Java project"]')
-    || [...document.querySelectorAll('.cmd-primary-action')].find((button) => button.textContent.trim() === 'Choose Java project');
-  linkButton?.click();
-  for (let attempt = 0; attempt < 50 && document.getElementById('event-marker-command')?.disabled; attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+  const findLinkButton = () => [...document.querySelectorAll('.ctxinsp button')]
+    .find((button) => button.textContent.trim() === 'Choose LabVIEW project');
+  await waitFor(findLinkButton, 'LabVIEW project link action');
+  const linkButton = findLinkButton();
+  linkButton.click();
+  await waitFor(() => document.getElementById('event-marker-command')?.disabled === false, 'command search enabled');
   const commandPicker = document.getElementById('event-marker-command');
   const setInputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-  commandPicker?.click();
-  for (let attempt = 0; attempt < 50 && !document.querySelector('#event-marker-command-listbox [role="option"]'); attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  const commandOptions = [...document.querySelectorAll('#event-marker-command-listbox [role="option"]')];
-  const commandSearch = document.getElementById('event-marker-command-search');
-  const smokeCommandOption = commandOptions.find((option) => option.getAttribute('data-value') === 'frc.robot.SmokeCommand');
-  if (smokeCommandOption) {
-    smokeCommandOption.click();
-    for (let attempt = 0; attempt < 100 && !document.getElementById('event-command-param-tags'); attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  }
+  const commandOptions = [...document.querySelectorAll('#event-marker-command-results [role="option"]')];
+  const commandSearch = commandPicker;
+  // The inline browser searches command labels and parameter metadata even in small catalogs.
+  setInputValue.call(commandSearch, 'Smoke Count');
+  commandSearch.dispatchEvent(new Event('input', { bubbles: true }));
+  await waitFor(() => document.querySelectorAll('#event-marker-command-results [role="option"]').length === 1, 'command and parameter search');
+  const smokeCommandOption = [...document.querySelectorAll('#event-marker-command-results [role="option"]')]
+    .find((option) => option.querySelector('strong')?.textContent === 'Smoke Command');
+  if (!smokeCommandOption) throw new Error('Smoke Command was not found by command and parameter search');
+  smokeCommandOption.click();
+  await waitFor(() => document.getElementById('event-command-param-tags'), 'selected command parameters');
   const jsonParameter = document.getElementById('event-command-param-tags');
   const exactIntegerParameter = document.getElementById('event-command-param-sequence');
   const smokeParametersPresent = Boolean(document.getElementById('event-command-param-count') && jsonParameter && exactIntegerParameter);
@@ -123,7 +117,7 @@
     exactIntegerParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   }
-  await waitFor(() => exactIntegerParameter?.getAttribute('aria-invalid') === 'true', 'out-of-range long rejected');
+  await waitFor(() => exactIntegerParameter?.getAttribute('aria-invalid') === 'true', 'out-of-range I64 rejected');
   const longRangeRejected = exactIntegerParameter?.getAttribute('aria-invalid') === 'true';
   if (exactIntegerParameter) {
     setInputValue.call(exactIntegerParameter, '9007199254740993');
@@ -132,17 +126,14 @@
     exactIntegerParameter.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   }
-  await waitFor(() => exactIntegerParameter?.getAttribute('aria-invalid') === 'false', 'exact long accepted');
-  document.getElementById('event-marker-command')?.click();
-  for (let attempt = 0; attempt < 50 && !document.querySelector('#event-marker-command-listbox [role="option"]'); attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  const largeEnumCommandOption = [...document.querySelectorAll('#event-marker-command-listbox [role="option"]')]
-    .find((option) => option.getAttribute('data-value') === 'frc.robot.LargeEnumCommand');
-  largeEnumCommandOption?.click();
-  for (let attempt = 0; attempt < 50 && !document.getElementById('event-command-param-mode'); attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+  await waitFor(() => exactIntegerParameter?.getAttribute('aria-invalid') === 'false', 'exact I64 accepted');
+  document.querySelector('.cmd-command-editor .choice-change')?.click();
+  await waitFor(() => document.querySelector('#event-marker-command-results [role="option"]'), 'change command browser');
+  const largeEnumCommandOption = [...document.querySelectorAll('#event-marker-command-results [role="option"]')]
+    .find((option) => option.querySelector('strong')?.textContent === 'Choose Autonomous Mode');
+  if (!largeEnumCommandOption) throw new Error('Large enum command was not available');
+  largeEnumCommandOption.click();
+  await waitFor(() => document.getElementById('event-command-param-mode'), 'large enum parameter');
   const largeEnumPicker = document.getElementById('event-command-param-mode');
   largeEnumPicker?.click();
   for (let attempt = 0; attempt < 50 && !document.querySelector('#event-command-param-mode-listbox [role="option"]'); attempt++) {
@@ -165,13 +156,13 @@
   for (let attempt = 0; attempt < 50 && document.getElementById('event-command-param-mode-value')?.textContent !== 'MODE_150'; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  const javaUi = {
-    markerInspector: Boolean(document.querySelector('.cmd-project')),
+  const robotUi = {
+    markerInspector: Boolean(document.querySelector('section[aria-label="Marker command"]') && document.querySelector('.cmd-project-copy')?.textContent.includes('SmokeRobot')),
     linkAction: Boolean(linkButton),
     commandEnabled: Boolean(commandPicker && !commandPicker.disabled),
     commandOptions: commandOptions.length,
-    searchHiddenForSmallCatalog: !commandSearch,
-    recentHiddenForSingleProject: !document.getElementById('event-marker-java-project'),
+    commandSearch: commandSearch?.getAttribute('role') === 'combobox',
+    recentHiddenForSingleProject: !document.getElementById('event-marker-robot-project'),
     cancelSwitch: Boolean(document.getElementById('event-command-cancel') && document.querySelector('.cmd-toggle-track')),
     parameter: smokeParametersPresent,
     jsonShapeRejected,
@@ -194,11 +185,13 @@
   const eventMarkerAutosave = markerAutosave.project.paths[0].markers.length === 2
     && markerAutosave.project.paths[0].markers[1].name === 'event2';
   await window.bordeauxAPI.newProject();
-  let staleJavaExportRejected = false;
-  try { await window.bordeauxAPI.exportJava(persistedProject, 'linked'); }
-  catch (error) { staleJavaExportRejected = String(error && error.message || error).includes('Link a Java robot project'); }
-  await window.bordeauxAPI.openRecentJavaProject(recentJavaProjects[0].id);
-  const javaExported = await window.bordeauxAPI.exportJava(persistedProject, 'linked');
+  let missingTypeEvidenceRejected = false;
+  try { await window.bordeauxAPI.exportBdx(persistedProject, persistedProject.paths[0].id); }
+  catch (error) { missingTypeEvidenceRejected = /NI|catalog|command/i.test(String(error && error.message || error)); }
+  await window.bordeauxAPI.openRecentRobotProject(recentRobotProjects[0].id);
+  const eventless = structuredClone(persistedProject);
+  eventless.paths[0].markers = [];
+  const exportedBdx = await window.bordeauxAPI.exportBdx(eventless, eventless.paths[0].id);
   const saved = await window.bordeauxAPI.saveProject(persistedProject, true);
   const restored = await window.bordeauxAPI.restoreLastProject();
   await window.bordeauxAPI.newProject();
@@ -218,15 +211,18 @@
   const routineDuplicateSelected = document.querySelector('.library-current-name')?.textContent === 'New routine copy';
   const multiRoutineUi = routineLibraryOpened && newRoutineSelected && routineDuplicateSelected;
   document.querySelector('.library-rename')?.requestSubmit();
-  document.querySelector('.library-connection')?.click();
   await new Promise((resolve) => setTimeout(resolve, 0));
+  const pushRoutineButton = [...document.querySelectorAll('.library-push button')].find((button) => button.textContent.trim() === 'Push routine');
+  if (!pushRoutineButton) throw new Error('Routine push action was not available');
+  pushRoutineButton.click();
+  await waitFor(() => document.querySelector('[aria-labelledby="robot-push-title"]')?.open, 'robot delivery dialog');
   const robotPushDialog = document.querySelector('[aria-labelledby="robot-push-title"]');
   const robotPushUi = Boolean(robotPushDialog
-    && robotPushDialog.textContent.includes('Saving your project never sends robot data')
-    && robotPushDialog.querySelector('input[placeholder="roborio-2468-frc.local"]')
-    && robotPushDialog.querySelector('button[aria-label="Close robot connection"]'));
+    && robotPushDialog.textContent.includes('Robot delivery unavailable')
+    && !robotPushDialog.querySelector('input[placeholder="roborio-2468-frc.local"]')
+    && robotPushDialog.querySelector('button[aria-label="Close robot delivery"]'));
   window.bordeauxAPI.setDirty(true);
   const probe = document.createElement('script'); probe.textContent = 'window.__bordeauxInlineScriptRan = true'; document.head.appendChild(probe);
-  const editorRestored = opened.project.editor?.activePathId === secondPath.id && opened.project.editor?.javaProjectBookmarkId === recentJavaProjects[0].id;
-  return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), fatalError: document.querySelector('.fatal-error')?.textContent || '', unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, validation: validation.ok, motorPreset, eventMarkerAutosave, multiRoutineUi, robotPushUi, javaDiscovery: javaConnection.catalog.projectName === 'SmokeRobot' && javaConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), javaInstalled: installedJavaConnection.integration.installed, javaBuilt: builtJavaConnection.catalog.authoritative === true && builtJavaConnection.catalog.catalogHash === reopenedJavaConnection.catalog.catalogHash, javaRecent: recentJavaProjects.length === 1 && reopenedJavaConnection.catalog.projectName === 'SmokeRobot', javaUi, staleJavaExportRejected, javaExported: javaExported.exported && javaExported.eventCount === 1, restored: restored.project.name === persistedProject.name, roundTrip: saved.saved && opened.project.name === persistedProject.name && opened.project.routines.find((routine) => routine.id === opened.project.activeRoutineId)?.nodes[0]?.ref === 'path_smoke' && !('routine' in opened.project), editorRestored, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
+  const editorRestored = opened.project.editor?.activePathId === secondPath.id && opened.project.editor?.robotProjectBookmarkId === recentRobotProjects[0].id;
+  return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), fatalError: document.querySelector('.fatal-error')?.textContent || '', unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, validation: validation.ok, motorPreset, eventMarkerAutosave, multiRoutineUi, robotPushUi, robotDiscovery: robotConnection.catalog.projectName === 'SmokeRobot' && robotConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), robotBuilt: builtRobotConnection.catalog.authoritative === true && builtRobotConnection.catalog.catalogHash === reopenedRobotConnection.catalog.catalogHash, robotRecent: recentRobotProjects.length === 1 && reopenedRobotConnection.catalog.projectName === 'SmokeRobot', robotUi, missingTypeEvidenceRejected, eventlessBdxExported: exportedBdx.exported && exportedBdx.eventCount === 0, restored: restored.project.name === persistedProject.name, roundTrip: saved.saved && opened.project.name === persistedProject.name && opened.project.routines.find((routine) => routine.id === opened.project.activeRoutineId)?.nodes[0]?.ref === 'path_smoke' && !('routine' in opened.project), editorRestored, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
 })();
