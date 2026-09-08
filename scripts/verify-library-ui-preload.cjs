@@ -1,9 +1,10 @@
 const { contextBridge, ipcRenderer } = require('electron');
 const noop = () => () => undefined;
 contextBridge.exposeInMainWorld('bordeauxAPI', {
+  robotDeliveryCapabilities: { pathPush: true, routinePush: true }, // Mock receiver for generic delivery UI coverage only.
   platform: 'linux', restoreLastProject: () => ipcRenderer.invoke('library:restore'),
   saveProject: (project) => ipcRenderer.invoke('library:save', project), autosaveProject: async () => ({ saved: false }),
-  setDirty: () => undefined, listRecentJavaProjects: async () => [], getMcpStatus: async () => ({ enabled: false }), getActiveAgentProposal: async () => null,
+  setDirty: () => undefined, listRecentRobotProjects: async () => [], getMcpStatus: async () => ({ enabled: false }), getActiveAgentProposal: async () => null,
   onMcpStatus: noop, onAgentProposal: noop, onMenuCommand: noop, onRobotPushState: noop,
   getRobotPairing: async () => ({ teamNumber: 2468, endpoint: { host: 'fixture', port: 22 }, runtimeId: 'fixture-runtime' }),
   previewBetaDiagnostic: (project) => ipcRenderer.invoke('library:diagnostic-preview', project),

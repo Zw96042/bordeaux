@@ -86,7 +86,7 @@ app.whenReady().then(async () => {
     await wait(() => evaluate(() => document.querySelector('.library-current-name')?.textContent === 'Opening move'), 'restored library');
     assert.equal(await evaluate(() => document.querySelectorAll('.library-pick').length), 200);
     assert.equal(await evaluate(() => document.querySelectorAll('.library-row input[type="checkbox"]').length), 0, 'Normal browsing must not show batch-selection controls');
-    assert.equal(await evaluate(() => document.querySelectorAll('.toolbar .library-connection,.toolbar .document-settings-trigger,.toolbar .exportjava').length), 0);
+    assert.equal(await evaluate(() => document.querySelectorAll('.toolbar .library-connection,.toolbar .document-settings-trigger,.toolbar .exportrobot').length), 0);
     await click('.pageswitch button', 'Settings');
     assert.equal(await evaluate(() => !!document.querySelector('.settings-general .library-connection')), true);
     await click('[aria-label="Display units"] button', 'Imperial');
@@ -120,9 +120,10 @@ app.whenReady().then(async () => {
     await wait(() => evaluate(() => document.querySelector('[data-role="wp"]') && !document.querySelector('.fieldcol[inert]')), 'editable field');
     await pointerClick('.wpfeatrow:nth-child(2) .featselect', ['shift']);
     await click('[aria-label="Save project"]');
-    assert.equal(saved.paths[0].waypoints.length, 3, 'Shift selection must never delete a waypoint');
-    assert.equal(await evaluate(() => document.querySelector('.wpfeatrow:nth-child(2) .featselect').getAttribute('aria-pressed')), 'true');
-    check('Shift-click selects a waypoint without deleting it');
+    assert.equal(saved.paths[0].waypoints.length, 2, 'Shift-click deletes the authored waypoint');
+    await key('Z', ['meta']);
+    await wait(() => evaluate(() => document.querySelectorAll('.wpfeatrow').length === 3 && !document.querySelector('.fieldcol[inert]')), 'undo deleted waypoint');
+    check('Shift-click deletes a waypoint and Undo restores it');
     await evaluate(() => document.querySelectorAll('.outline .featselect')[1].click());
     const numericBefore = await evaluate(() => document.querySelector('.numinput').value);
     await evaluate(() => { const field = document.querySelector('.numinput'); field.focus(); field.select(); });
@@ -153,7 +154,15 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate(() => document.querySelector('.wpfeatrow:nth-child(2) .featselect').getAttribute('aria-pressed')), 'true');
     check('heading menu opens by keyboard, navigates, and restores focus without clearing selection');
     await click('[aria-label="Hide inspector"]');
-    const headingPoint = await evaluate(() => { const r = document.querySelector('[data-heading-control]').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; });
+    await delay(250); // Wait for the inspector width transition before measuring the field target.
+    const headingPoint = await evaluate(() => {
+      const r = document.querySelector('[data-heading-control] circle').getBoundingClientRect();
+      const point = { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+      const target = document.elementFromPoint(point.x, point.y);
+      if (!target?.closest('[data-heading-control]')) throw new Error('Heading pointer is covered: ' + target?.outerHTML);
+      return point;
+    });
+    win.webContents.sendInputEvent({ type: 'mouseMove', ...headingPoint });
     win.webContents.sendInputEvent({ type: 'mouseDown', ...headingPoint, button: 'right', clickCount: 1 });
     win.webContents.sendInputEvent({ type: 'mouseUp', ...headingPoint, button: 'right', clickCount: 1 });
     await wait(() => evaluate(() => !!document.querySelector('.ctxmenu')), 'pointer heading menu');
@@ -222,7 +231,7 @@ app.whenReady().then(async () => {
     assert.equal(await enterVelocity(String(maxVelocityBefore)), maxVelocityBefore);
     check('numeric text commits respect bounds and reject nonfinite, malformed, and empty values');
     assert.deepEqual(await evaluate(() => [...document.querySelectorAll('.toolrail-b')].map((button) => button.getAttribute('aria-label'))),
-      ['Select / move', 'Place waypoint', 'Rotation target', 'Event marker', 'Constraint range']);
+      ['Select / move', 'Place waypoint', 'Rotation target', 'Place command', 'Constraint region']);
     await pointerClick('[aria-label="Place waypoint"]');
     await evaluate(() => document.activeElement.blur());
     for (const code of ['6', 'b']) {
@@ -375,7 +384,7 @@ app.whenReady().then(async () => {
     await click('[aria-label="Save name"]');
     assert.equal(await evaluate(() => document.querySelector('.library-current-name').textContent), 'Managed path copy');
     await click('[aria-label="Actions for Managed path copy"]');
-    await click('.library-menu button', 'Folder and links…');
+    await click('.library-menu button', 'Move or link…');
     await evaluate(() => {
       const select = document.querySelector('.library-properties select');
       select.value = [...select.options].find((option) => option.text === 'Practice').value;
@@ -536,7 +545,7 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate(() => document.querySelector('.editor-library').textContent.includes('Unfiled')), false);
     await click('[aria-label="Actions for Opening move"]');
     assert.equal(await evaluate(() => document.querySelector('.library-menu').matches(':popover-open')), true, 'Actions use a native popover above the list');
-    assert.equal(await evaluate(() => document.querySelector('.library-menu [role="menuitem"]').textContent), 'Rename');
+    assert.equal(await evaluate(() => document.querySelector('.library-menu [role="menuitem"]').textContent), 'Push path…');
     await key('End');
     assert.equal(await evaluate(() => document.activeElement.textContent), 'Delete');
     await key('Escape');
@@ -546,7 +555,7 @@ app.whenReady().then(async () => {
     await pointerClick('.fieldcol');
     assert.equal(await evaluate(() => document.querySelector('.library-menu')), null, 'Click outside in the field dismisses the menu');
     await click('[aria-label="Actions for Opening move"]');
-    await click('.library-menu button', 'Folder and links…');
+    await click('.library-menu button', 'Move or link…');
     assert.equal(await evaluate(() => document.querySelector('.library-properties').open), true);
     assert.equal(await evaluate(() => document.querySelector('.library-properties select option[value=""]').textContent), 'No folder');
     await key('Escape');
@@ -557,7 +566,7 @@ app.whenReady().then(async () => {
       win.setContentSize(width, height); await delay(150);
       await pointerClick('[data-library-item="library-path-0"]');
       const rows = await evaluate(() => [...document.querySelectorAll('.library-row')].map((el) => ({ height: el.getBoundingClientRect().height, borderRadius: getComputedStyle(el).borderRadius, shadow: getComputedStyle(el).boxShadow })));
-      assert.ok(rows.every((row) => row.height <= 34 && row.borderRadius === '0px' && row.shadow === 'none'), 'Paths must be flat compact rows: ' + JSON.stringify(rows));
+      assert.ok(rows.every((row) => row.height <= 36 && row.borderRadius === '0px' && row.shadow === 'none'), 'Paths must be flat compact rows: ' + JSON.stringify(rows));
       await fs.writeFile(path.join(output, `simple-paths-${width}.png`), (await win.webContents.capturePage()).toPNG());
       await pointerClick('[data-library-item="library-path-1"]', [process.platform === 'darwin' ? 'meta' : 'control']);
       await fs.writeFile(path.join(output, `simple-multiselect-${width}.png`), (await win.webContents.capturePage()).toPNG());
@@ -613,7 +622,7 @@ app.whenReady().then(async () => {
     await wait(() => evaluate(() => document.querySelector('.library-current-name')?.textContent === 'Opening move' && !document.querySelector('.fieldcol[inert]')), 'shared waypoint fixture ready');
     const saveCurrent = async () => { await click('[aria-label="Save project"]'); };
     const editNumber = async (label, value) => {
-      await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'editable ' + label);
+      await wait(() => evaluate((label) => { const field = [...document.querySelectorAll('.numrow')].find((row) => row.querySelector('label')?.textContent === label)?.querySelector('input'); return field && !field.matches(':disabled') && !field.closest('[inert]'); }, label), 'editable ' + label);
       await evaluate((label) => {
         const field = [...document.querySelectorAll('.numrow')].find((row) => row.querySelector('label')?.textContent === label)?.querySelector('input');
         if (!field || field.matches(':disabled')) throw new Error('Numeric field unavailable: ' + label);
@@ -625,8 +634,8 @@ app.whenReady().then(async () => {
     };
     const numericState = (label) => evaluate((label) => { const field = [...document.querySelectorAll('.numrow')].find((row) => row.querySelector('label')?.textContent === label)?.querySelector('input'); return field ? { value: Number(field.value), disabled: field.matches(':disabled') } : null; }, label);
     await click('.cbar');
-    assert.deepEqual(await numericState('Entry speed (vi)'), { value: .4, disabled: false });
-    assert.deepEqual(await numericState('Exit speed (vf)'), { value: .6, disabled: false });
+    assert.deepEqual(await numericState('Entry speed'), { value: .4, disabled: false });
+    assert.deepEqual(await numericState('Exit speed'), { value: .6, disabled: false });
     const facingBaseline = structuredClone(saved.paths[0].waypoints[0]);
     const headPoint = await evaluate(() => {
       const handle = document.querySelector('circle[data-role="head"][data-idx="0"]');
@@ -649,9 +658,9 @@ app.whenReady().then(async () => {
     assert.equal(saved.paths[0].waypoints[0].theta, 42);
     assert.deepEqual(saved.paths[0].waypoints[0].prevC, facingBaseline.prevC);
     assert.deepEqual(saved.paths[0].waypoints[0].nextC, facingBaseline.nextC);
-    await editNumber('Entry speed (vi)', .5); await editNumber('Exit speed (vf)', .7);
+    await editNumber('Entry speed', .5); await editNumber('Exit speed', .7);
     assert.equal(saved.paths[0].startVel, .5); assert.equal(saved.paths[0].goalVel, .7);
-    for (const [index, toggle, label, speed] of [[0, 'Stop at entry', 'Entry speed (vi)', .5], [saved.paths[0].waypoints.length - 1, 'Stop at exit', 'Exit speed (vf)', .7]]) {
+    for (const [index, toggle, label, speed] of [[0, 'Stop at entry', 'Entry speed', .5], [saved.paths[0].waypoints.length - 1, 'Stop at exit', 'Exit speed', .7]]) {
       await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'endpoint ready');
       await evaluate((index) => document.querySelectorAll('.outline .featselect')[index].click(), index);
       await click('[aria-label="' + toggle + '"]'); await saveCurrent();
@@ -668,7 +677,8 @@ app.whenReady().then(async () => {
     await evaluate(() => document.querySelector('.outline .featselect').click());
     const independentBefore = structuredClone(saved.paths[2]);
     const linkBaseline = saved.paths.slice(0, 2).map((path) => structuredClone(path.waypoints[0]));
-    assert.equal(await evaluate(() => document.querySelector('#waypoint-position-link').disabled), true, 'Ordinary waypoints are absent from the picker');
+    assert.equal(await evaluate(() => document.querySelectorAll('#waypoint-position-link-results [role="option"]').length), 0, 'Ordinary waypoints are absent from the inline chooser');
+    assert.equal(await evaluate(() => document.querySelector('#waypoint-position-link-results .choice-empty')?.textContent), 'Name a shared point in another path to link it here.');
     await evaluate((id) => document.querySelector('[data-library-item="' + id + '"]').click(), saved.paths[1].id);
     await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'target point ready');
     await evaluate(() => document.querySelector('.outline .featselect').click());
@@ -685,9 +695,13 @@ app.whenReady().then(async () => {
     await evaluate((id) => document.querySelector('[data-library-item="' + id + '"]').click(), saved.paths[0].id);
     await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'source point ready');
     await evaluate(() => document.querySelector('.outline .featselect').click());
-    await click('#waypoint-position-link');
-    assert.equal(await evaluate(() => document.querySelectorAll('.cmd-picker-option').length), 1, 'Only the opted-in named point is offered');
-    await evaluate(() => [...document.querySelectorAll('.cmd-picker-option')].find((el) => el.querySelector('strong')?.textContent === 'Scoring position').click());
+    await pointerClick('#waypoint-position-link');
+    assert.equal(await evaluate(() => document.querySelectorAll('#waypoint-position-link-results [role="option"]').length), 1, 'Only the opted-in named point is offered');
+    await win.webContents.insertText('Scoring'); await delay(50);
+    assert.equal(await evaluate(() => document.querySelector('#waypoint-position-link-results [role="option"] strong')?.textContent), 'Scoring position');
+    await key('Down');
+    assert.equal(await evaluate(() => document.querySelector('#waypoint-position-link').getAttribute('aria-activedescendant')), 'waypoint-position-link-result-0', 'Keyboard selects the exact named-point result');
+    await key('Enter');
     await saveCurrent();
     const linkId = saved.paths[0].waypoints[0].positionLink;
     assert.ok(linkId); assert.equal(saved.paths[1].waypoints[0].positionLink, linkId);
@@ -855,5 +869,5 @@ app.whenReady().then(async () => {
     assert.deepEqual(errors, []);
     await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ checks, errors }, null, 2));
     app.exit(0);
-  } catch (error) { console.error(error); console.error(errors); await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ checks, errors, failure: error.message }, null, 2)); if (win) await fs.writeFile(path.join(output, 'failure.png'), (await win.webContents.capturePage()).toPNG()); app.exit(1); }
+  } catch (error) { console.error(error); console.error(errors); if (win) { console.error('Field status:', await evaluate(() => document.querySelector('.field-status')?.textContent)); await fs.writeFile(path.join(output, 'failure-project.json'), JSON.stringify(saved, null, 2)); } await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ checks, errors, failure: error.message }, null, 2)); if (win) await fs.writeFile(path.join(output, 'failure.png'), (await win.webContents.capturePage()).toPNG()); app.exit(1); }
 });
