@@ -71,6 +71,9 @@ function LibraryMenu({ menu, close, children }) {
     const onToggle = (event) => { if (event.newState === 'closed') close(false); };
     element.addEventListener('toggle', onToggle);
     element.showPopover();
+    const bounds = element.getBoundingClientRect();
+    element.style.top = Math.max(8, Math.min(menu.top, window.innerHeight - bounds.height - 8)) + 'px';
+    element.style.left = Math.max(8, Math.min(menu.left, window.innerWidth - bounds.width - 8)) + 'px';
     element.querySelector('button:not(:disabled)')?.focus();
     return () => element.removeEventListener('toggle', onToggle);
   }, []);
@@ -102,7 +105,7 @@ function PathProperties({ item, project, actions, close }) {
     h('footer', null, h('button', { type: 'button', onClick: close }, 'Done')));
 }
 
-function EditorLibrary({ mode, prefs, update, project, routines, activePathId, activeRoutineId, onMode, onPath, onRoutine, actions, times, controller }) {
+function EditorLibrary({ mode, prefs, update, project, routines, activePathId, activeRoutineId, onMode, onPath, onRoutine, actions, times, controller, projectLocation, saveState, onOpenFolder, onSaveProject, onRetrySave }) {
   const pathsMode = mode === 'paths';
   const items = pathsMode ? project.paths : routines;
   const activeId = pathsMode ? activePathId : activeRoutineId;
@@ -184,12 +187,13 @@ function EditorLibrary({ mode, prefs, update, project, routines, activePathId, a
         h('button', { className: 'library-pick', type: 'button', 'data-library-item': item.id, 'aria-current': item.id === activeId ? 'true' : undefined, 'aria-pressed': selected.includes(item.id), title: item.name + '\n' + status.detail,
           onClick: (event) => choose(item, event), onDoubleClick: () => rename(kind, item),
           onKeyDown: (event) => {
+            if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); remove(kind, item); return; }
             if (event.key === 'F2') { event.preventDefault(); rename(kind, item); return; }
             if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
             event.preventDefault(); const rows = [...root.current.querySelectorAll('[data-library-item]')]; const index = rows.indexOf(event.currentTarget);
             const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 : Math.max(0, Math.min(rows.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)));
             rows[next]?.focus(); const nextItem = items.find((value) => value.id === rows[next]?.dataset.libraryItem); if (nextItem) choose(nextItem, event);
-          } }, h('span', { className: 'library-name' }, item.name),
+          } }, h(Icon, { name: pathsMode ? 'route' : 'branch', size: 14 }), h('span', { className: 'library-name' }, item.name),
           h('span', { className: 'library-meta', title: pathsMode ? durationTitle : status.label + ': ' + status.detail }, pathsMode ? durationText : AUTO.countSteps(item) + (AUTO.countSteps(item) === 1 ? ' step' : ' steps'))),
         h('button', { className: 'library-more', type: 'button', 'aria-label': 'Actions for ' + item.name, 'aria-haspopup': 'menu', 'aria-expanded': menu?.id === item.id, onClick: (event) => openMenu(event, kind, item) }, '…')));
   };
@@ -214,6 +218,14 @@ function EditorLibrary({ mode, prefs, update, project, routines, activePathId, a
   } },
     h('div', { className: 'library-tabs', role: 'tablist', 'aria-label': 'Library' }, ['paths', 'routines'].map((tab) => h('button', { key: tab, type: 'button', role: 'tab', 'aria-selected': tab === mode, tabIndex: tab === mode ? 0 : -1,
       onClick: () => { if (tab !== mode) onMode(tab); }, onKeyDown: (event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); onMode(pathsMode ? 'routines' : 'paths'); requestAnimationFrame(() => document.querySelector('.library-tabs [aria-selected="true"]')?.focus()); } } }, tab === 'paths' ? 'Paths' : 'Routines'))),
+    h('div', { className: 'library-location' },
+      h('button', { type: 'button', className: 'library-location-folder', onClick: onOpenFolder, title: projectLocation?.folderPath || 'Choose where paths and routines are saved', 'aria-label': projectLocation?.folderPath ? 'Open another project folder' : 'Open project folder' },
+        h(Icon, { name: 'folder', size: 14 }), h('span', null, projectLocation?.folderPath?.split(/[\\/]/).filter(Boolean).pop() || 'Open folder')),
+      h('div', { className: 'library-save-status', role: saveState?.status === 'error' ? 'alert' : 'status' },
+        saveState?.status === 'error' ? h(React.Fragment, null, h('span', { title: saveState.error }, saveState.error), h('button', { type: 'button', onClick: onRetrySave }, 'Retry save'))
+          : saveState?.status === 'saving' ? 'Saving…'
+          : projectLocation?.folderPath ? h(React.Fragment, null, h('span', null, 'Autosave on'), !projectLocation.projectPath && h('button', { type: 'button', onClick: onSaveProject }, 'Save project settings'))
+          : 'Choose a folder to autosave files')),
     h('div', { className: 'library-tools' },
       h('button', { type: 'button', onClick: () => create(pathsMode ? 'path' : 'routine', () => pathsMode ? actions.addPath(active?.folderId) : actions.addRoutine()) }, h(Icon, { name: 'plus', size: 13 }), pathsMode ? 'New path' : 'New routine'),
       pathsMode && h('button', { type: 'button', title: 'New folder', 'aria-label': 'New folder', onClick: () => create('folder', actions.addFolder) }, h(Icon, { name: 'folder', size: 14 }))),
@@ -223,15 +235,20 @@ function EditorLibrary({ mode, prefs, update, project, routines, activePathId, a
       !visible.length ? h('div', { className: 'library-empty' }, query ? 'No matching names.' : pathsMode ? 'Create a path to get started.' : 'Create a routine to get started.') : pathsMode && !query ? [...folders.map(group), ...visible.filter((item) => !item.folderId).map(row)] : visible.map(row)),
     h('div', { className: 'library-push' },
       h('div', { className: 'library-selection', role: 'status' },
-        h('span', { className: 'library-current-name', title: pushName }, pathsMode && selected.length > 1 ? selected.length + ' paths selected' + (selected.some((id) => !visible.some((item) => item.id === id)) ? ' · includes hidden' : '') : pushName),
+        h('span', { className: 'library-current-name', title: pushName }, pathsMode && selected.length > 1 ? selected.length + ' paths selected' + (selected.some((id) => !visible.some((item) => item.id === id)) ? ', includes hidden' : '') : pushName),
         pathsMode && selected.length > 1 && h('button', { type: 'button', onClick: () => update({ checked: [activeId], selectionActiveId: activeId }) }, 'Clear')),
       h('button', { type: 'button', disabled: controller.busy || !active || controller.desktopAvailable === false, onClick: () => controller.requestPush(pathsMode ? { kind: 'paths', pathIds: selected } : { kind: 'routine', routineId: active.id }) }, h(Icon, { name: 'share', size: 13 }), pathsMode ? selected.length > 1 ? 'Push ' + selected.length + ' paths' : 'Push path' : 'Push routine'),
-      pathsMode && h('span', { className: 'library-selection-hint' }, 'Shift for a range · ⌘ / Ctrl for multiple')),
+      pathsMode && h('span', { className: 'library-selection-hint' }, 'Shift: select range. ⌘ / Ctrl: select multiple.')),
     menu && menuItem && h(LibraryMenu, { key: menu.id, menu, close: closeMenu },
+      menu.kind !== 'folder' && menuButton(pathsMode ? 'Push path…' : 'Push routine…', () => {
+        setMenu(null); controller.requestPush(pathsMode ? { kind: 'paths', pathIds: [menuItem.id] } : { kind: 'routine', routineId: menuItem.id });
+      }, { disabled: controller.busy || controller.desktopAvailable === false }),
+      menu.kind === 'path' && menuButton('Export BDX…', () => { const pathId = menuItem.id; setMenu(null); actions.exportPath(pathId); }, { disabled: controller.desktopAvailable === false }),
+      menu.kind !== 'folder' && h('hr'),
       menuButton('Rename', () => rename(menu.kind, menuItem)),
       menu.kind !== 'folder' && menuButton('Duplicate', () => create(menu.kind, () => pathsMode ? actions.duplicatePath(menuItem.id) : actions.duplicateRoutine(menuItem.id))),
       menu.kind === 'path' && menuButton('Append path', () => create('path', () => actions.appendPath(menuItem.id))),
-      menu.kind === 'path' && menuButton('Folder and links…', () => { setPropertiesId(menuItem.id); setMenu(null); }),
+      menu.kind === 'path' && menuButton('Move or link…', () => { setPropertiesId(menuItem.id); setMenu(null); }),
       menu.kind === 'folder' && menuButton('New path', () => create('path', () => actions.addPath(menuItem.id))),
       h('hr'), menuButton(menu.kind === 'folder' ? 'Delete folder' : 'Delete', () => remove(menu.kind, menuItem), { className: 'danger', disabled: menu.kind !== 'folder' && items.length <= 1 })),
     properties && h(PathProperties, { item: properties, project, actions, close: () => { setPropertiesId(null); focusRow(propertiesId); } }));
