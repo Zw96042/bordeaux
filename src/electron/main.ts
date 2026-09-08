@@ -535,23 +535,20 @@ function buildMenu() {
         { label: "Open Recent", submenu: recentSubmenu },
         { type: "separator" },
         { label: "Save", accelerator: "CmdOrCtrl+S", click: () => sendCommand("save-project") },
+        { label: "Open Folder…", accelerator: "CmdOrCtrl+Shift+O", click: () => sendCommand("open-folder") },
         { label: "Save As...", accelerator: "CmdOrCtrl+Shift+S", click: () => sendCommand("save-project-as") },
         { type: "separator" },
-        { label: "Export Java Trajectory…", accelerator: "CmdOrCtrl+E", click: () => sendCommand("export-java") },
+        { label: "Export selected path as BDX…", accelerator: "CmdOrCtrl+E", click: () => sendCommand("export-bdx") },
         { type: "separator" },
         process.platform === "darwin" ? { role: "close" } : { role: "quit" },
       ],
     },
     {
-      label: "Java",
+      label: "Robot",
       submenu: [
-        { label: "Link Robot Project…", click: () => sendCommand("java-link") },
-        { label: "Install or Update Support…", click: () => sendCommand("java-install") },
-        { label: "Build Command Catalog…", click: () => sendCommand("java-build") },
-        { label: "Cancel Catalog Build", click: () => sendCommand("java-cancel-build") },
+        { label: "Link Robot Project…", click: () => sendCommand("robot-link") },
+        { label: "Build Command Catalog…", click: () => sendCommand("robot-build") },
         { type: "separator" },
-        { label: "Export to Robot Project…", click: () => sendCommand("export-java") },
-        { label: "Save Java JSON As…", click: () => sendCommand("export-java-save-as") },
       ],
     },
     {
@@ -599,18 +596,35 @@ function buildMenu() {
 }
 
 async function openProjectFile(filePath: string) {
+  if ((await fs.promises.lstat(filePath)).isDirectory()) return activateProjectFolder(filePath);
+  if (/\.(path|routine)$/i.test(filePath) && ["Paths", "Routines"].includes(path.basename(path.dirname(filePath)))) {
+    const folder = path.dirname(path.dirname(filePath));
+    if (fs.existsSync(path.join(folder, ".bordeaux-workspace.json"))) {
+      const opened = await activateProjectFolder(folder);
+      const item = JSON.parse(await fs.promises.readFile(filePath, "utf8"));
+      if (opened.project.paths.some((entry) => entry.id === item.id)) opened.project.editor = { ...opened.project.editor, activePathId: item.id };
+      if (opened.project.routines.some((entry) => entry.id === item.id)) opened.project.activeRoutineId = item.id;
+      return opened;
+    }
+  }
   const decoded = await readProject(filePath);
-  const { project } = decoded;
-  clearLinkedJavaProject();
+  let { project } = decoded;
+  const folder = path.dirname(filePath);
+  if (fs.existsSync(path.join(folder, ".bordeaux-workspace.json"))) {
+    const recovered = await openProjectFolder(folder);
+    if (recovered.project && recovered.projectPath && path.resolve(recovered.projectPath) === path.resolve(filePath)) project = recovered.project;
+  }
+  clearLinkedRobotProject();
   await rememberFile(filePath);
   activateProjectTarget(saveTargetForOpenedProject(filePath, decoded));
   dirty = false;
-  return { project };
+  currentProjectFolder = path.dirname(filePath);
+  return { project, location: projectLocation() };
 }
 
 handle("project:open", async () => {
-  if (smokeDirectory) return openProjectFile(path.join(smokeDirectory, "project.bordeaux.json"));
-  const result = await dialog.showOpenDialog(mainWindow!, { title: "Open Bordeaux Project or Path", properties: ["openFile"], filters: [{ name: "Bordeaux Project", extensions: ["json", "path"] }] });
+  if (smokeDirectory) return openProjectFile(path.join(smokeDirectory, "project.bordeaux"));
+  const result = await dialog.showOpenDialog(mainWindow!, { title: "Open Bordeaux Project or Path", properties: ["openFile"], filters: [{ name: "Bordeaux Project", extensions: ["bordeaux", "path", "json"] }] });
   if (result.canceled || !result.filePaths[0]) return null;
   return openProjectFile(result.filePaths[0]);
 });
