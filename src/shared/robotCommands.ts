@@ -2,10 +2,10 @@ import type {
   BordeauxProject,
   CommandArgumentValue,
   CommandInvocation,
-  JavaCommandCatalog,
-  JavaCommandDescriptor,
-  JavaCommandParameter,
-  JavaValueSchema,
+  RobotCommandCatalog,
+  RobotCommandDescriptor,
+  RobotCommandParameter,
+  RobotValueSchema,
   ValidationIssue,
 } from "./types";
 import { activeRoutine } from "./project/routines";
@@ -14,26 +14,23 @@ const MAX_SCHEMA_DEPTH = 24;
 const MAX_ARRAY_ITEMS = 1_024;
 const MAX_MAP_ENTRIES = 256;
 
-function simpleJavaType(javaType: string): string {
-  return javaType.split(".").at(-1) ?? javaType;
+function integerRange(valueType: string): readonly [number, number] | null {
+  const ranges: Record<string, readonly [number, number]> = {
+    I8: [-128, 127], U8: [0, 255], I16: [-32768, 32767], U16: [0, 65535],
+    I32: [-2147483648, 2147483647], U32: [0, 4294967295],
+  };
+  return ranges[valueType] ?? null;
 }
 
-function integerRange(javaType: string): readonly [number, number] | null {
-  const simple = simpleJavaType(javaType);
-  if (simple === "byte" || simple === "Byte") return [-128, 127];
-  if (simple === "short" || simple === "Short") return [-32768, 32767];
-  if (simple === "int" || simple === "Integer") return [-2147483648, 2147483647];
-  return null;
-}
-
-function exactIntegerError(value: unknown, javaType: string): string | null {
+function exactIntegerError(value: unknown, valueType: string): string | null {
   if (typeof value !== "string" || !/^[+-]?\d+$/.test(value)) return "must be a whole number written as digits";
   if (value.length > 1_024) return "cannot exceed 1024 characters";
-  const simple = simpleJavaType(javaType);
-  if (simple === "long" || simple === "Long") {
-    const parsed = BigInt(value);
-    if (parsed < -9223372036854775808n || parsed > 9223372036854775807n) return "must fit the signed 64-bit long range";
-  }
+  const ranges: Record<string, readonly [bigint, bigint]> = {
+    I64: [-9223372036854775808n, 9223372036854775807n], U64: [0n, 18446744073709551615n], U32: [0n, 4294967295n],
+  };
+  const range = ranges[valueType];
+  const parsed = BigInt(value);
+  if (range && (parsed < range[0] || parsed > range[1])) return `must fit the ${valueType === "I64" ? "signed 64-bit" : valueType === "U64" ? "unsigned 64-bit" : "unsigned 32-bit"} range`;
   return null;
 }
 
@@ -77,19 +74,19 @@ export function compareExactDecimals(left: string, right: string): number {
   return a.sign < 0 ? -magnitude : magnitude;
 }
 
-export function javaSchemaValueError(value: unknown, schema: JavaValueSchema, valuePath = "Value", depth = 0): string | null {
+export function robotSchemaValueError(value: unknown, schema: RobotValueSchema, valuePath = "Value", depth = 0): string | null {
   if (depth > MAX_SCHEMA_DEPTH) return `${valuePath} exceeds the supported nesting depth`;
   if (value === undefined) return `${valuePath} is required`;
   if (schema.kind === "opaque") return isJsonValue(value, depth) ? null : `${valuePath} must be JSON-compatible`;
-  if (schema.kind === "optional") return value === null ? null : javaSchemaValueError(value, schema.element!, valuePath, depth + 1);
+  if (schema.kind === "optional") return value === null ? null : robotSchemaValueError(value, schema.element!, valuePath, depth + 1);
   if (schema.kind === "boolean") return typeof value === "boolean" ? null : `${valuePath} must be true or false`;
   if (schema.kind === "integer") {
     if (!Number.isSafeInteger(value)) return `${valuePath} must be a safe whole number`;
-    const range = integerRange(schema.javaType);
-    return !range || ((value as number) >= range[0] && (value as number) <= range[1]) ? null : `${valuePath} is outside the range for ${schema.javaType}`;
+    const range = integerRange(schema.valueType);
+    return !range || ((value as number) >= range[0] && (value as number) <= range[1]) ? null : `${valuePath} is outside the range for ${schema.valueType}`;
   }
   if (schema.kind === "integerString") {
-    const error = exactIntegerError(value, schema.javaType);
+    const error = exactIntegerError(value, schema.valueType);
     return error ? `${valuePath} ${error}` : null;
   }
   if (schema.kind === "decimalString") {
@@ -103,7 +100,7 @@ export function javaSchemaValueError(value: unknown, schema: JavaValueSchema, va
     if (!Array.isArray(value)) return `${valuePath} must be a JSON array`;
     if (value.length > MAX_ARRAY_ITEMS) return `${valuePath} cannot contain more than ${MAX_ARRAY_ITEMS} items`;
     for (let index = 0; index < value.length; index += 1) {
-      const error = javaSchemaValueError(value[index], schema.element!, `${valuePath}[${index}]`, depth + 1);
+      const error = robotSchemaValueError(value[index], schema.element!, `${valuePath}[${index}]`, depth + 1);
       if (error) return error;
     }
     return null;
@@ -112,7 +109,7 @@ export function javaSchemaValueError(value: unknown, schema: JavaValueSchema, va
     if (!isObject(value)) return `${valuePath} must be a JSON object with string keys`;
     if (Object.keys(value).length > MAX_MAP_ENTRIES) return `${valuePath} cannot contain more than ${MAX_MAP_ENTRIES} entries`;
     for (const [key, item] of Object.entries(value)) {
-      const error = javaSchemaValueError(item, schema.value!, `${valuePath}.${key}`, depth + 1);
+      const error = robotSchemaValueError(item, schema.value!, `${valuePath}.${key}`, depth + 1);
       if (error) return error;
     }
     return null;
@@ -124,7 +121,7 @@ export function javaSchemaValueError(value: unknown, schema: JavaValueSchema, va
     const extra = Object.keys(value).find((key) => !names.has(key));
     if (extra) return `${valuePath}.${extra} is not part of the discovered type`;
     for (const field of fields) {
-      const error = javaSchemaValueError(value[field.name], field.schema, `${valuePath}.${field.name}`, depth + 1);
+      const error = robotSchemaValueError(value[field.name], field.schema, `${valuePath}.${field.name}`, depth + 1);
       if (error) return error;
     }
     return null;
@@ -144,7 +141,7 @@ function isJsonValue(value: unknown, depth: number): boolean {
   return isObject(value) && Object.keys(value).length <= MAX_MAP_ENTRIES && Object.values(value).every((item) => isJsonValue(item, depth + 1));
 }
 
-export function defaultJavaSchemaValue(schema: JavaValueSchema, depth = 0): CommandArgumentValue {
+export function defaultRobotSchemaValue(schema: RobotValueSchema, depth = 0): CommandArgumentValue {
   if (depth > MAX_SCHEMA_DEPTH) return null;
   if (schema.kind === "boolean") return false;
   if (schema.kind === "integer" || schema.kind === "number") return 0;
@@ -155,21 +152,21 @@ export function defaultJavaSchemaValue(schema: JavaValueSchema, depth = 0): Comm
   if (schema.kind === "map" || schema.kind === "opaque") return {};
   if (schema.kind === "optional") return null;
   if (schema.kind === "object") {
-    return Object.fromEntries((schema.fields ?? []).map((field) => [field.name, defaultJavaSchemaValue(field.schema, depth + 1)]));
+    return Object.fromEntries((schema.fields ?? []).map((field) => [field.name, defaultRobotSchemaValue(field.schema, depth + 1)]));
   }
   return null;
 }
 
-export function defaultJavaCommandArguments(command: JavaCommandDescriptor): Record<string, CommandArgumentValue> {
+export function defaultRobotCommandArguments(command: RobotCommandDescriptor): Record<string, CommandArgumentValue> {
   return Object.fromEntries(command.parameters
     .filter((parameter) => parameter.role === "argument")
     .map((parameter) => [
       parameter.name,
-      Object.hasOwn(parameter, "defaultValue") ? parameter.defaultValue! : defaultJavaSchemaValue(parameter.schema),
+      Object.hasOwn(parameter, "defaultValue") ? parameter.defaultValue! : defaultRobotSchemaValue(parameter.schema),
     ]));
 }
 
-function parameterLimitError(value: CommandArgumentValue, parameter: JavaCommandParameter): string | null {
+function parameterLimitError(value: CommandArgumentValue, parameter: RobotCommandParameter): string | null {
   if (parameter.min === undefined && parameter.max === undefined) return null;
   if (parameter.schema.kind === "integerString" && typeof value === "string" && /^[+-]?\d+$/.test(value)) {
     const comparable = BigInt(value);
@@ -191,14 +188,22 @@ function parameterLimitError(value: CommandArgumentValue, parameter: JavaCommand
   return null;
 }
 
-export function javaParameterValueError(value: unknown, parameter: JavaCommandParameter): string | null {
-  const schemaError = javaSchemaValueError(value, parameter.schema, parameter.label || parameter.name);
+export function robotParameterValueError(value: unknown, parameter: RobotCommandParameter): string | null {
+  const schemaError = robotSchemaValueError(value, parameter.schema, parameter.label || parameter.name);
   return schemaError ?? parameterLimitError(value as CommandArgumentValue, parameter);
 }
 
-export function javaInvocationErrors(invocation: CommandInvocation, command: JavaCommandDescriptor): string[] {
+export function robotInvocationErrors(invocation: CommandInvocation, command: RobotCommandDescriptor): string[] {
   const errors: string[] = [];
-  if (command.runtimeReady !== true) errors.push(`${command.label} has no generated robot binding; build the annotated catalog first`);
+  if (command.runtimeReady !== true) errors.push(command.labviewLegacy
+    ? `${command.label} cannot export yet because LabVIEW command execution is not connected`
+    : `${command.label} has no generated robot binding; build the command catalog first`);
+  return [...errors, ...commandInvocationValueErrors(invocation, command)];
+}
+
+/** Validate wire values without granting runtime binding authority. */
+export function commandInvocationValueErrors(invocation: CommandInvocation, command: RobotCommandDescriptor): string[] {
+  const errors: string[] = [];
   const parameters = command.parameters.filter((parameter) => parameter.role === "argument");
   const names = new Set(parameters.map((parameter) => parameter.name));
   for (const name of Object.keys(invocation.arguments)) {
@@ -206,13 +211,14 @@ export function javaInvocationErrors(invocation: CommandInvocation, command: Jav
   }
   for (const parameter of parameters) {
     const value = invocation.arguments[parameter.name];
-    const error = javaParameterValueError(value, parameter);
+    const error = robotParameterValueError(value, parameter);
     if (error) errors.push(error);
   }
   return errors;
 }
 
-export function validateProjectJavaInvocations(project: BordeauxProject, catalog: JavaCommandCatalog | null): ValidationIssue[] {
+/** Caller owns binding readiness; this validates the complete selected command/graph contract. */
+export function validateProjectRobotInvocations(project: BordeauxProject, catalog: RobotCommandCatalog | null, commandErrors = commandInvocationValueErrors): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const commands = new Map((catalog?.commands ?? []).map((command) => [command.id, command]));
   const conditions = new Map((catalog?.conditions ?? []).map((condition) => [condition.id, condition]));
@@ -240,11 +246,11 @@ export function validateProjectJavaInvocations(project: BordeauxProject, catalog
       validateCondition(marker.schedule.conditionId, `${base}.schedule.conditionId`, "Event schedule");
     }
     if (marker.actionIntent && !marker.invocation) {
-      issues.push({ path: `${base}.actionIntent`, message: `Action ${marker.actionIntent.semanticTag} is still an intent; bind it to a generated Java command before export`, severity: "error" });
+      issues.push({ path: `${base}.actionIntent`, message: `Action ${marker.actionIntent.semanticTag} is still an intent; bind it to a registered robot command before export`, severity: "error" });
       return;
     }
     if (!marker.invocation && marker.cmd && marker.cmd !== "none") {
-      issues.push({ path: `${base}.cmd`, message: `Legacy command ${marker.cmd} must be replaced with a generated Java invocation before export`, severity: "error" });
+      issues.push({ path: `${base}.cmd`, message: `Legacy command ${marker.cmd} must be replaced with a registered robot invocation before export`, severity: "error" });
       return;
     }
     if (!marker.invocation) return;
@@ -261,7 +267,7 @@ export function validateProjectJavaInvocations(project: BordeauxProject, catalog
         severity: "error",
       });
     }
-    for (const message of javaInvocationErrors(marker.invocation, command)) {
+    for (const message of commandErrors(marker.invocation, command)) {
       issues.push({ path: invocationBase, message, severity: "error" });
     }
   }));
@@ -373,7 +379,7 @@ export function validateProjectJavaInvocations(project: BordeauxProject, catalog
           Object.keys(argumentRecord).filter((name) => !names.has(name)).forEach((name) =>
             issues.push({ path: `${base}.arguments.${name}`, message: `${name} is not an input of ${generator.label}`, severity: "error" }));
           generator.inputs.forEach((input) => {
-            const message = javaParameterValueError(argumentRecord[input.name], input);
+            const message = robotParameterValueError(argumentRecord[input.name], input);
             if (message) issues.push({ path: `${base}.arguments.${input.name}`, message, severity: "error" });
           });
         }
@@ -420,7 +426,7 @@ export function validateProjectJavaInvocations(project: BordeauxProject, catalog
         issues.push({ path: `${base}.invocation.commandId`, message: `Command ${String(typedInvocation.commandId)} is not in the linked generated catalog`, severity: "error" });
         return;
       }
-      javaInvocationErrors(typedInvocation, command).forEach((message) =>
+      commandErrors(typedInvocation, command).forEach((message) =>
         issues.push({ path: `${base}.invocation`, message, severity: "error" }));
     });
   };
