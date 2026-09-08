@@ -5,9 +5,9 @@ dist-renderer/
 release/
 release-*/
 .benchmark-results/
-java/.gradle/
-java/**/build/
-java/dist/
+labview/build/
+labview/dist/
+labview/**/__pycache__/
 .DS_Store
 npm-debug.log*
 **/Bordeaux-relaunch-backup-*.bordeaux.json

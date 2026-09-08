@@ -12,7 +12,7 @@ const requiredEntries = [
   "package.json",
   repositoryManifest.main,
   "dist-electron/electron/agentPlanningWorker.js",
-  "dist-electron/electron/javaTrajectoryWorker.js",
+  "dist-electron/electron/bdxWorker.js",
   rendererEntry,
   "node_modules/@modelcontextprotocol/server/package.json",
   "node_modules/electron-updater/package.json",
@@ -20,13 +20,12 @@ const requiredEntries = [
   "node_modules/zod/package.json",
 ];
 const requiredResources = [
-  "java/bordeaux-processor.jar",
-  "java/bordeaux-runtime.jar",
   "LICENSE",
   "NOTICE",
   "RIGHTS.md",
   "licenses/OFL-1.1.txt",
   "licenses/ssh2-MIT.txt",
+  "labview-inspection/InspectCommands.ps1",
 ];
 
 function collectArchives(target, archives) {
@@ -66,12 +65,19 @@ for (const archive of archives) {
   const entries = listPackage(archive, { isPack: false })
     .map((entry) => entry.replace(/^[/\\]+/, "").replaceAll("\\", "/"));
   const entrySet = new Set(entries);
+  const staleOutput = entries.find((entry) => entry.startsWith('dist-electron/') && entry.endsWith('.js')
+    && !fs.existsSync(path.resolve('src', entry.slice('dist-electron/'.length).replace(/\.js$/, '.ts'))));
+  if (staleOutput) throw new Error(`${archive} contains compiled output with no source: ${staleOutput}`);
   for (const required of requiredEntries) {
     if (!entrySet.has(required)) throw new Error(`${archive} is missing required entry: ${required}`);
   }
   const optionalNativeSshEntry = entries.find((entry) => /^(?:node_modules\/(?:buildcheck|cpu-features|nan))(?:\/|$)/.test(entry));
   if (optionalNativeSshEntry) {
     throw new Error(`${archive} contains an excluded optional ssh2 native accelerator: ${optionalNativeSshEntry}`);
+  }
+  const unusedMcpEsmEntry = entries.find((entry) => /^node_modules\/@modelcontextprotocol\/(?:core|server)\/.*\.mjs$/.test(entry));
+  if (unusedMcpEsmEntry) {
+    throw new Error(`${archive} contains an unused ESM MCP dependency variant: ${unusedMcpEsmEntry}`);
   }
 
   const forbidden = entries.find((entry) =>
