@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
-import { generatedCatalogHash, parseGeneratedJavaCatalog } from "../src/electron/javaGeneratedCatalog";
-import { validateProjectJavaInvocations } from "../src/shared/javaCommands";
-import { buildJavaTrajectory } from "../src/shared/export/javaTrajectory";
+import { generatedCatalogHash, parseGeneratedRobotCatalog } from "../src/electron/robotGeneratedCatalog";
+import { validateProjectRobotInvocations } from "../src/shared/robotCommands";
+import { buildRobotTrajectory } from "../src/shared/export/robotTrajectory";
 import { createDemoProject } from "../src/shared/project/defaults";
-import type { JavaBuiltInDescriptor, JavaCommandCatalog, JavaTrajectoryGeneratorDescriptor, RoutineGeneratedTrajectoryNode } from "../src/shared/types";
+import type { RobotBuiltInDescriptor, RobotCommandCatalog, RobotTrajectoryGeneratorDescriptor, RoutineGeneratedTrajectoryNode } from "../src/shared/types";
 // @ts-expect-error Routine authoring remains a legacy JavaScript module.
 import { AUTO } from "../src/renderer/lib/routineModel";
 
@@ -12,22 +12,22 @@ type GeneratedFallbackNode = Extract<RoutineGeneratedTrajectoryNode["fallback"],
 const generatedFallbackIsNonRecursive: RoutineGeneratedTrajectoryNode extends GeneratedFallbackNode ? never : true = true;
 void generatedFallbackIsNonRecursive;
 
-const wait: JavaBuiltInDescriptor = {
+const wait: RobotBuiltInDescriptor = {
   id: "bordeaux.wait", kind: "wait", label: "Wait", description: "Pause the routine before its next step.",
-  parameters: [{ name: "durationS", label: "Duration", description: "Time to wait before continuing the routine.", unit: "s", defaultValue: 1, min: 0.02, max: 15, role: "argument", javaType: "double", schema: { kind: "number", javaType: "double" } }],
+  parameters: [{ name: "durationS", label: "Duration", description: "Time to wait before continuing the routine.", unit: "s", defaultValue: 1, min: 0.02, max: 15, role: "argument", valueType: "DBL", schema: { kind: "number", valueType: "DBL" } }],
 };
 
-function generator(): JavaTrajectoryGeneratorDescriptor {
+function generator(): RobotTrajectoryGeneratorDescriptor {
   return {
     id: "robot.DynamicPaths#toPose", label: "Drive to pose", description: "Builds a bounded route at runtime.", aliases: ["dynamic-route"], semanticTags: ["runtime-path"],
     ownerType: "robot.DynamicPaths", member: "toPose",
     inputs: [
-      { name: "avoidObstacles", label: "Avoid obstacles", javaType: "boolean", role: "argument", schema: { kind: "boolean", javaType: "boolean" } },
-      { name: "maxSpeed", label: "Maximum speed", unit: "m/s", min: 0.1, max: 4.5, javaType: "double", role: "argument", schema: { kind: "number", javaType: "double" } },
+      { name: "avoidObstacles", label: "Avoid obstacles", valueType: "Boolean", role: "argument", schema: { kind: "boolean", valueType: "Boolean" } },
+      { name: "maxSpeed", label: "Maximum speed", unit: "m/s", min: 0.1, max: 4.5, valueType: "DBL", role: "argument", schema: { kind: "number", valueType: "DBL" } },
     ],
     preview: { kind: "runtimeDynamic" }, fallbackPolicy: "validatedBranch",
     limits: { timeoutMs: 50, maxSamples: 1024, maxDurationS: 8, maxDistanceM: 20, maxVelocityMps: 5, maxAccelerationMps2: 10, maxCentripetalAccelerationMps2: 8, maxAngularVelocityRadps: 12, maxAngularAccelerationRadps2: 40, minClearanceM: 0.2 },
-    source: { file: "robot/DynamicPaths.java", line: 1 },
+    source: { file: "robot/DynamicPaths.vi", line: 1 },
   };
 }
 
@@ -38,8 +38,8 @@ function rawCatalog() {
   return value;
 }
 
-function catalog(): JavaCommandCatalog {
-  const parsed = parseGeneratedJavaCatalog(rawCatalog());
+function catalog(): RobotCommandCatalog {
+  const parsed = parseGeneratedRobotCatalog(rawCatalog());
   return { projectName: "Competition robot", sourceFileCount: 1, scannedAt: new Date(0).toISOString(), authoritative: true, warnings: [], generatedSchemaVersion: parsed.schemaVersion, catalogId: parsed.catalogId, supportVersion: parsed.supportVersion, catalogHash: parsed.catalogHash, commands: parsed.commands, conditions: parsed.conditions, builtIns: parsed.builtIns, trajectoryGenerators: parsed.trajectoryGenerators };
 }
 
@@ -48,11 +48,11 @@ describe("generated trajectory capabilities", () => {
     expect(generatedCatalogHash([])).toBe("sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945");
     expect(generatedCatalogHash([], [])).toBe("sha256:45e19f016ce40429d044f7df00e8346d758614439087138ceb3436f8acc2e473");
     expect(generatedCatalogHash([], [], [{ id: "bordeaux.wait" }])).toBe("sha256:db2bceabd50d28c829f24f78dc81c9d616c2f312ac3a6a5ec2633418f365eaa7");
-    expect(parseGeneratedJavaCatalog(rawCatalog())).toMatchObject({ schemaVersion: "1.3", supportVersion: "0.4.0", trajectoryGenerators: [{ id: "robot.DynamicPaths#toPose", preview: { kind: "runtimeDynamic" } }] });
+    expect(parseGeneratedRobotCatalog(rawCatalog())).toMatchObject({ schemaVersion: "1.3", supportVersion: "0.4.0", trajectoryGenerators: [{ id: "robot.DynamicPaths#toPose", preview: { kind: "runtimeDynamic" } }] });
 
     const changed = rawCatalog();
     changed.trajectoryGenerators[0].limits.maxDistanceM = 21;
-    expect(() => parseGeneratedJavaCatalog(changed)).toThrow(/hash does not match/i);
+    expect(() => parseGeneratedRobotCatalog(changed)).toThrow(/hash does not match/i);
   });
 
   it.each([
@@ -60,12 +60,12 @@ describe("generated trajectory capabilities", () => {
     ["excessive timeout", (value: any) => { value.trajectoryGenerators[0].limits.timeoutMs = 101; }, /timeoutMs/i],
     ["free-form reference", (value: any) => { value.trajectoryGenerators[0].funcRef = "makeAnything"; }, /unexpected.*funcRef/i],
     ["fabricated preview", (value: any) => { value.trajectoryGenerators[0].preview.points = [{ x: 1, y: 2 }]; }, /preview/i],
-    ["unsafe source path", (value: any) => { value.trajectoryGenerators[0].source.file = "../Secrets.java"; }, /source path/i],
+    ["unsafe source path", (value: any) => { value.trajectoryGenerators[0].source.file = "../Secrets.vi"; }, /source path/i],
     ["invalid fallback policy", (value: any) => { value.trajectoryGenerators[0].fallbackPolicy = "continue"; }, /fallback/i],
   ])("rejects %s even when the supplied hash covers it", (_name, mutate, message) => {
     const value: any = rawCatalog(); mutate(value);
     value.catalogHash = generatedCatalogHash(value.commands, value.conditions, value.builtIns, value.trajectoryGenerators);
-    expect(() => parseGeneratedJavaCatalog(value)).toThrow(message);
+    expect(() => parseGeneratedRobotCatalog(value)).toThrow(message);
   });
 
   it.each([
@@ -77,42 +77,42 @@ describe("generated trajectory capabilities", () => {
   ])("rejects %s outside its runtime bound", (name, invalid) => {
     const value: any = rawCatalog(); value.trajectoryGenerators[0].limits[name] = invalid;
     value.catalogHash = generatedCatalogHash(value.commands, value.conditions, value.builtIns, value.trajectoryGenerators);
-    expect(() => parseGeneratedJavaCatalog(value)).toThrow(new RegExp(name));
+    expect(() => parseGeneratedRobotCatalog(value)).toThrow(new RegExp(name));
   });
 
   it("rejects excessive, unsorted, duplicate, nonscalar, and unbounded inputs", () => {
     const invalidCases: Array<(value: any) => void> = [
-      (value) => { value.trajectoryGenerators[0].inputs = Array.from({ length: 17 }, (_, index) => ({ name: `p${String(index).padStart(2, "0")}`, javaType: "boolean", role: "argument", schema: { kind: "boolean", javaType: "boolean" } })); },
+      (value) => { value.trajectoryGenerators[0].inputs = Array.from({ length: 17 }, (_, index) => ({ name: `p${String(index).padStart(2, "0")}`, valueType: "Boolean", role: "argument", schema: { kind: "boolean", valueType: "Boolean" } })); },
       (value) => { value.trajectoryGenerators[0].inputs.reverse(); },
       (value) => { value.trajectoryGenerators[0].inputs[1].name = value.trajectoryGenerators[0].inputs[0].name; },
-      (value) => { value.trajectoryGenerators[0].inputs[0].schema = { kind: "string", javaType: "String" }; value.trajectoryGenerators[0].inputs[0].javaType = "String"; },
-      (value) => { value.trajectoryGenerators[0].inputs[0] = { name: "avoidObstacles", javaType: "Mode", role: "argument", schema: { kind: "enum", javaType: "Mode", enumValues: ["Z", "A"] } }; },
+      (value) => { value.trajectoryGenerators[0].inputs[0].schema = { kind: "string", valueType: "String" }; value.trajectoryGenerators[0].inputs[0].valueType = "String"; },
+      (value) => { value.trajectoryGenerators[0].inputs[0] = { name: "avoidObstacles", valueType: "Mode", role: "argument", schema: { kind: "enum", valueType: "Mode", enumValues: ["Z", "A"] } }; },
     ];
     for (const mutate of invalidCases) {
       const value: any = rawCatalog(); mutate(value);
       value.catalogHash = generatedCatalogHash(value.commands, value.conditions, value.builtIns, value.trajectoryGenerators);
-      expect(() => parseGeneratedJavaCatalog(value)).toThrow(/16 inputs|sorted|unique|scalar|enum values/i);
+      expect(() => parseGeneratedRobotCatalog(value)).toThrow(/16 inputs|sorted|unique|scalar|enum values/i);
     }
   });
 
   it("accepts an exactly bounded BigDecimal input without converting its values to binary floats", () => {
     const value: any = rawCatalog();
-    value.trajectoryGenerators[0].inputs.push({ name: "tolerance", javaType: "java.math.BigDecimal", role: "argument", min: "0.00000000000000000001", max: "0.00000000000000000002", schema: { kind: "decimalString", javaType: "java.math.BigDecimal" } });
+    value.trajectoryGenerators[0].inputs.push({ name: "tolerance", valueType: "robot.math.BigDecimal", role: "argument", min: "0.00000000000000000001", max: "0.00000000000000000002", schema: { kind: "decimalString", valueType: "robot.math.BigDecimal" } });
     value.catalogHash = generatedCatalogHash(value.commands, value.conditions, value.builtIns, value.trajectoryGenerators);
 
-    expect(parseGeneratedJavaCatalog(value).trajectoryGenerators[0].inputs[2]).toMatchObject({ name: "tolerance", min: "0.00000000000000000001", max: "0.00000000000000000002" });
+    expect(parseGeneratedRobotCatalog(value).trajectoryGenerators[0].inputs[2]).toMatchObject({ name: "tolerance", min: "0.00000000000000000001", max: "0.00000000000000000002" });
   });
 
   it("rejects unsorted generator IDs and IDs colliding with commands or conditions", () => {
     const unsorted: any = rawCatalog();
     unsorted.trajectoryGenerators.unshift({ ...structuredClone(unsorted.trajectoryGenerators[0]), id: "z.generator" });
     unsorted.catalogHash = generatedCatalogHash(unsorted.commands, unsorted.conditions, unsorted.builtIns, unsorted.trajectoryGenerators);
-    expect(() => parseGeneratedJavaCatalog(unsorted)).toThrow(/sorted by unique ID/i);
+    expect(() => parseGeneratedRobotCatalog(unsorted)).toThrow(/sorted by unique ID/i);
 
     const collision: any = rawCatalog();
-    collision.conditions = [{ id: generator().id, label: "Collision", ownerType: "robot.Conditions", member: "collision", source: { file: "robot/Conditions.java", line: 1 } }];
+    collision.conditions = [{ id: generator().id, label: "Collision", ownerType: "robot.Conditions", member: "collision", source: { file: "robot/Conditions.vi", line: 1 } }];
     collision.catalogHash = generatedCatalogHash(collision.commands, collision.conditions, collision.builtIns, collision.trajectoryGenerators);
-    expect(() => parseGeneratedJavaCatalog(collision)).toThrow(/collides/i);
+    expect(() => parseGeneratedRobotCatalog(collision)).toThrow(/collides/i);
   });
 
   it("exports a typed generated node with its validated static fallback branch", () => {
@@ -121,22 +121,22 @@ describe("generated trajectory capabilities", () => {
     const node: RoutineGeneratedTrajectoryNode = { id: "dynamic", type: "generatedTrajectory", generatorId: generator().id, arguments: { avoidObstacles: true, maxSpeed: 3 }, fallback: { type: "branch", nodes: [{ id: "fallback-path", type: "path", ref: pathId }] } };
     project.routines[0].nodes = [node];
 
-    expect(validateProjectJavaInvocations(project, catalog())).toEqual([]);
-    expect(buildJavaTrajectory(project, catalog()).document.routine?.nodes).toEqual([node]);
+    expect(validateProjectRobotInvocations(project, catalog())).toEqual([]);
+    expect(buildRobotTrajectory(project, catalog()).document.routine?.nodes).toEqual([node]);
   });
 
   it("rejects policy mismatches, nested generators, invalid inputs, duplicate IDs, and fallback leaves without a path", () => {
     const project = createDemoProject();
     const dynamic: any = { id: "dynamic", type: "generatedTrajectory", generatorId: generator().id, arguments: { avoidObstacles: "yes", maxSpeed: 3 }, fallback: { type: "branch", nodes: [{ id: "dynamic", type: "function", cat: "command", invocation: { commandId: "missing", arguments: {} } }] } };
     project.routines[0].nodes = [dynamic];
-    expect(validateProjectJavaInvocations(project, catalog()).map((issue) => issue.message).join("\n")).toMatch(/true or false|unique|exported static path/i);
+    expect(validateProjectRobotInvocations(project, catalog()).map((issue) => issue.message).join("\n")).toMatch(/true or false|unique|exported static path/i);
 
     dynamic.arguments.avoidObstacles = true;
     dynamic.fallback.nodes = [{ id: "nested", type: "generatedTrajectory", generatorId: generator().id, arguments: {}, fallback: { type: "safeStop" } }];
-    expect(validateProjectJavaInvocations(project, catalog()).map((issue) => issue.message).join("\n")).toMatch(/nested generated/i);
+    expect(validateProjectRobotInvocations(project, catalog()).map((issue) => issue.message).join("\n")).toMatch(/nested generated/i);
 
     dynamic.fallback = { type: "safeStop" };
-    expect(validateProjectJavaInvocations(project, catalog()).map((issue) => issue.message).join("\n")).toMatch(/validatedBranch/i);
+    expect(validateProjectRobotInvocations(project, catalog()).map((issue) => issue.message).join("\n")).toMatch(/validatedBranch/i);
   });
 
   it("bounds fallback branches to 128 nodes and eight decision levels", () => {
@@ -145,19 +145,19 @@ describe("generated trajectory capabilities", () => {
     const dynamic: any = { id: "dynamic", type: "generatedTrajectory", generatorId: generator().id, arguments: { avoidObstacles: true, maxSpeed: 3 }, fallback: { type: "branch", nodes: [] } };
     project.routines[0].nodes = [dynamic];
     dynamic.fallback.nodes = [...Array.from({ length: 128 }, (_, index) => ({ id: `wait-${index}`, type: "builtin", builtinId: "bordeaux.wait", arguments: { durationS: 0.02 } })), { id: "path", type: "path", ref: pathId }];
-    expect(validateProjectJavaInvocations(project, catalog()).map((issue) => issue.message)).toContain("Generated trajectory fallback cannot exceed 128 nodes");
+    expect(validateProjectRobotInvocations(project, catalog()).map((issue) => issue.message)).toContain("Generated trajectory fallback cannot exceed 128 nodes");
 
     let branch: any[] = [{ id: "path", type: "path", ref: pathId }];
     for (let depth = 0; depth < 9; depth += 1) branch = [{ id: `decision-${depth}`, type: "decision", cond: "missing", thenLabel: "yes", elseLabel: "no", then: branch, else: [{ id: `else-path-${depth}`, type: "path", ref: pathId }] }];
     dynamic.fallback.nodes = branch;
-    expect(validateProjectJavaInvocations(project, catalog()).map((issue) => issue.message)).toContain("Generated trajectory fallback cannot exceed 8 decision levels");
+    expect(validateProjectRobotInvocations(project, catalog()).map((issue) => issue.message)).toContain("Generated trajectory fallback cannot exceed 8 decision levels");
   });
 
   it("labels a known node as runtime-dynamic without fabricating preview geometry or chooser availability", () => {
     const node: RoutineGeneratedTrajectoryNode = { id: "dynamic", type: "generatedTrajectory", generatorId: generator().id, arguments: { avoidObstacles: true, maxSpeed: 3 }, fallback: { type: "safeStop" } };
     expect(AUTO.AUTHORABLE_STEPS.map((step: { id: string }) => step.id)).not.toContain("generatedTrajectory");
     expect(AUTO.authorableSteps(catalog()).map((step: { id: string }) => step.id)).not.toContain("generatedTrajectory");
-    expect(AUTO.nodeTitle(node, [], catalog())).toBe("Drive to pose · Runtime dynamic");
+    expect(AUTO.nodeTitle(node, [], catalog())).toBe("Drive to pose, Runtime dynamic");
     expect(AUTO.nodeDeploymentState(node, catalog())).toMatchObject({ deployable: true, dynamic: true });
     const run = AUTO.buildRun({ nodes: [node] }, [], {}, {}, "profiledSpline", catalog());
     expect(run).toMatchObject({ total: 0, segs: [], steps: [{ kind: "dynamic", dur: 0, dynamic: true }] });
@@ -165,9 +165,9 @@ describe("generated trajectory capabilities", () => {
     const app = fs.readFileSync(new URL("../src/renderer/app/App.jsx", import.meta.url), "utf8");
     const panel = fs.readFileSync(new URL("../src/renderer/components/RoutinePanel.jsx", import.meta.url), "utf8");
     const inspector = fs.readFileSync(new URL("../src/renderer/components/RoutineInspector.jsx", import.meta.url), "utf8");
-    expect(app).toContain("AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId, javaProjectState.catalog, routinePlans)");
+    expect(app).toContain("AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId, robotProjectState.catalog, routinePlans)");
     expect(panel).toContain("A.nodeDeploymentState(node, catalog)");
     expect(panel).toContain("A.nodeTitle(node, paths, catalog)");
-    expect(inspector).toContain("A.nodeDeploymentState(node, javaProject && javaProject.catalog)");
+    expect(inspector).toContain("A.nodeDeploymentState(node, robotProject && robotProject.catalog)");
   });
 });
