@@ -1767,7 +1767,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
           playbackStore.toggle();
           return;
         }
-        const toolShortcut = !e.metaKey && !e.ctrlKey && !e.altKey && !textEditing && ({ '1': 'select', '2': 'waypoint', '3': 'rotation', '4': 'marker', '5': 'range', v: 'select', w: 'waypoint', r: 'rotation', m: 'marker', c: 'range' })[k];
+        const toolShortcut = !e.metaKey && !e.ctrlKey && !e.altKey && !textEditing && TOOL_SHORTCUTS[k];
         if (page === 'plan' && toolShortcut) {
           e.preventDefault();
           if (typeof e.target.blur === 'function') e.target.blur();
@@ -1796,6 +1796,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         else if (k === 'f') setView(FIT);
         else if (e.key === 'Escape') { setTool('select'); setHeadMenu(null); setWaypointPreviewRequest(null); select(null, -1); }
         else if ((e.key === 'Backspace' || e.key === 'Delete') && sel.kind) {
+          e.preventDefault();
           if (sel.kind === 'wp') delWp(sel.idx); else if (sel.kind === 'rt') delTarget(sel.idx); else if (sel.kind === 'em') delMarker(sel.idx); else if (sel.kind === 'cr') delRange(sel.idx);
         }
       };
@@ -1804,13 +1805,13 @@ import { createPlaybackStore } from "../lib/playbackStore";
     }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, derivationCurrent, nudgeWp, nudgeFrac, playbackStore]);
 
     const pathIndex = (id) => project.paths.findIndex((path) => path.id === id);
-    const renderLibrary = (mode, structure) => h(LibraryRail, {
+    const renderLibrary = (mode, structure) => h(LibraryRail, { projectLocation, saveState, onOpenFolder: openProjectFolder, onSaveProject: () => saveProject(false), onRetrySave: () => scheduleAutosave(true),
       key: projectKey + ':' + mode, preferenceKey: libraryPreferenceKey, mode, project, routines,
       activePathId: doc.id, activeRoutineId: routine.id, times,
       onMode: (next) => next === 'paths' ? setActive(activeIdx) : setActiveRoutine(routine.id),
       onPath: (id) => { const index = pathIndex(id); if (index >= 0) setActive(index); }, onRoutine: setActiveRoutine,
       controller: { ...pushController, requestPush: (scope) => { flushSync(() => finishEdit()); pushController.requestPush(scope); } },
-      actions: { addPath, appendPath, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine,
+      actions: { addPath, appendPath, addRoutine, duplicateRoutine, deleteRoutine, renameRoutine, exportPath: onExportBdx,
         duplicatePath: (id) => dupPath(pathIndex(id)), deletePath: (id) => delPath(pathIndex(id)), renamePath: (id, name) => renamePath(pathIndex(id), name),
         addFolder: addPathFolder, renameFolder: renamePathFolder, deleteFolder: deletePathFolder,
         movePath: (id, folderId) => movePathToFolder(pathIndex(id), folderId), linkPath: setPathLink },
@@ -1818,13 +1819,14 @@ import { createPlaybackStore } from "../lib/playbackStore";
 
     const selNode = (page === 'auto' && routineSel) ? AUTO.findNode(routine, routineSel) : null;
     const fieldNotices = [
+      bdxNotice && { id: 'bdx-export', label: 'BDX exported', detail: bdxNotice, action: { label: 'Dismiss', onClick: () => setBdxNotice('') } },
       exportError && { id: 'export', error: true, label: 'Export failed', detail: exportError,
         action: { label: 'Dismiss', onClick: () => setExportError('') } },
       planningNotice && !(optimizationOpen && normalError) && { id: 'planning', error: planningNotice.kind === 'interactive',
         label: planningNotice.kind === 'interactive' ? 'Trajectory unavailable' : 'Interactive preview',
         detail: planningNotice.message + (planningNotice.kind === 'interactive' ? ' Undo or adjust the geometry to try again.' : ''),
         action: !optimizationOpen ? { label: 'Optimize', onClick: () => setOptimizationOpen(true) } : undefined },
-      !selectedPreview && !normalReady && !normal.error && { id: 'loading', label: 'Preparing trajectory…', detail: 'Preview timing is provisional until planning finishes.' },
+      showPlanningProgress && !selectedPreview && !normalReady && !normal.error && { id: 'loading', label: 'Preparing trajectory…', detail: 'Preview timing is provisional until planning finishes.' },
       !optimizationOpen && currentOptimization && selectedReady && !accepted && { id: 'optimization', error: true, label: 'Optimization unavailable', detail: 'The saved optimization could not be validated. Review it before using this path.',
         action: { label: 'Optimize', onClick: () => setOptimizationOpen(true) } },
     ].filter(Boolean);
@@ -1840,9 +1842,9 @@ import { createPlaybackStore } from "../lib/playbackStore";
     return h('div', { className: 'app' },
       h(Panels.Toolbar, { page, setPage: (next) => { finishEdit(); playbackStore.reset(); routinePlaybackStore.reset(); setPage(next); }, editorPage,
         alliance, setAlliance,
-        onOpen: openProject, onSave: saveProject, onUndo: undo, onRedo: redo,
+        onOpen: openProject, onOpenFolder: openProjectFolder, onSave: saveProject, onUndo: undo, onRedo: redo,
         optimizationOpen, toggleOptimization, optimizationApplied: Boolean(accepted) }),
-      h(RobotPushDialog, { controller: pushController }),
+      h(RobotPushDialog, { controller: pushController, onExportBdx }),
       h(DiagnosticBundleDialog, { getProject: materializeProject, targetSelector: '.robot-connection-diagnostics', onOpen: pushController.close, renderKey: pushController.open + ':' + pushController.phase }),
       page === 'robot'
         ? h('main', { className: 'page-main' }, h(RobotPage, { robot, setRobot, unitSystem, setUnitSystem, pushController, mcpEnabled, agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
@@ -1851,7 +1853,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
             renderLibrary('routines', null),
             h(RoutineWorkspace, {
               routine,
-              flow: h(RoutinePanelPlayback, { key: routine.id, embedded: true, collapsedIds: routineCollapsed[projectKey + ':' + routine.id] || [], onCollapsedIdsChange: (ids) => setRoutineCollapsed((current) => ({ ...current, [projectKey + ':' + routine.id]: ids })), store: routinePlaybackStore, routine, run, paths: project.paths, selId: routineSel, onSelect: setRoutineSel, acq, catalog: javaProjectState.catalog }),
+              flow: h(RoutinePanelPlayback, { key: routine.id, embedded: true, collapsedIds: routineCollapsed[projectKey + ':' + routine.id] || [], onCollapsedIdsChange: (ids) => setRoutineCollapsed((current) => ({ ...current, [projectKey + ':' + routine.id]: ids })), store: routinePlaybackStore, routine, run, paths: project.paths, selId: routineSel, onSelect: setRoutineSel, acq, catalog: robotProjectState.catalog }),
               field: h(React.Fragment, null,
                 h(RoutineFieldPlayback, { store: routinePlaybackStore, run, selectedId: routineSel, doc, derived, sel: { kind: null, idx: -1 }, tool: 'select', view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: autoFieldActions }),
                 h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
