@@ -632,17 +632,22 @@ import { createPlaybackStore } from "../lib/playbackStore";
         if (revision !== autosaveRevision.current) return;
         const sourceProject = projectRef.current;
         const editRevision = editStore.getRevision();
+        setSaveState({ status: 'saving', error: '' });
         const result = await window.bordeauxAPI.autosaveProject(materializeProject());
+        if (revision === autosaveRevision.current) {
+          if (result?.location) setProjectLocation(result.location);
+          setSaveState(result?.error ? { status: 'error', error: result.error } : { status: result?.saved ? 'saved' : 'draft', error: '' });
+        }
         if (revision === autosaveRevision.current && sourceProject === projectRef.current
           && editRevision === editStore.getRevision() && !editStore.getSnapshot() && result && result.saved) updateDirty(false);
       });
       if (immediate === true) {
-        void persist().catch((error) => console.warn('Could not autosave the Bordeaux project:', error));
+        void persist().catch((error) => { if (revision === autosaveRevision.current) setSaveState({ status: 'error', error: error.message || String(error) }); });
         return;
       }
       autosaveTimer.current = window.setTimeout(() => {
         autosaveTimer.current = 0;
-        void persist().catch((error) => console.warn('Could not autosave the Bordeaux project:', error));
+        void persist().catch((error) => { if (revision === autosaveRevision.current) setSaveState({ status: 'error', error: error.message || String(error) }); });
       }, 900);
     }, [editStore, enqueuePersistence, flushProjectDraft, materializeProject, updateDirty]);
 
@@ -1651,6 +1656,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
           updateDirty(true);
           return;
         }
+        if (result.location) setProjectLocation(result.location);
         loadProject(result.project);
       }).catch((error) => console.warn('Could not restore the last project:', error));
       return () => { active = false; };
@@ -1663,21 +1669,35 @@ import { createPlaybackStore } from "../lib/playbackStore";
       return enqueuePersistenceAfterPreflight(enqueuePersistence, canReplaceProject, async () => {
         prepareProjectReplacement();
         if (window.bordeauxAPI) await window.bordeauxAPI.newProject();
+        setProjectLocation(null); setSaveState({ status: 'draft', error: '' });
         loadProject(freshProject());
       });
     }, [canReplaceProject, enqueuePersistence, loadProject, prepareProjectReplacement]);
     const openProject = useCallback((recentIndex) => {
       if (!window.bordeauxAPI) return;
       return enqueuePersistenceAfterPreflight(enqueuePersistence, canReplaceProject, async () => {
-        prepareProjectReplacement();
         try {
           const result = typeof recentIndex === 'number'
             ? await window.bordeauxAPI.openRecentProject(recentIndex)
             : await window.bordeauxAPI.openProject();
-          if (result) loadProject(result.project);
+          if (result) { prepareProjectReplacement(); setProjectLocation(result.location || null); setSaveState({ status: 'saved', error: '' }); loadProject(result.project); }
         } catch (error) {
           alert('Could not open project: ' + (error && error.message ? error.message : error));
         }
+      });
+    }, [canReplaceProject, enqueuePersistence, loadProject, prepareProjectReplacement]);
+    const openProjectFolder = useCallback(() => {
+      if (!window.bordeauxAPI?.openProjectFolder) return;
+      return enqueuePersistenceAfterPreflight(enqueuePersistence, canReplaceProject, async () => {
+        try {
+          const result = await window.bordeauxAPI.openProjectFolder();
+          if (result) {
+            prepareProjectReplacement();
+            setProjectLocation(result.location);
+            setSaveState({ status: result.location?.projectPath ? 'saved' : 'draft', error: '' });
+            loadProject(result.project);
+          }
+        } catch (error) { setSaveState({ status: 'error', error: error.message || String(error) }); }
       });
     }, [canReplaceProject, enqueuePersistence, loadProject, prepareProjectReplacement]);
     const saveProject = useCallback((saveAs) => {
@@ -1686,62 +1706,50 @@ import { createPlaybackStore } from "../lib/playbackStore";
         const requestedDraftGeneration = draftInputGeneration.current;
         try {
           const source = { project: projectRef.current, editRevision: editStore.getRevision(), draftGeneration: requestedDraftGeneration };
+          setSaveState({ status: 'saving', error: '' });
           const result = await window.bordeauxAPI.saveProject(materializeProject(), saveAs === true);
-          if (result && result.canceled) return;
+          if (result && result.canceled) { setSaveState({ status: 'idle', error: '' }); return; }
+          if (result?.location) setProjectLocation(result.location);
+          setSaveState({ status: 'saved', error: '' });
           if (projectPersistenceStayedCurrent(source, {
             project: projectRef.current,
             editRevision: editStore.getRevision(),
             draftGeneration: draftInputGeneration.current,
           })) updateDirty(false);
         } catch (error) {
-          alert('Could not save project: ' + (error && error.message ? error.message : error));
+          setSaveState({ status: 'error', error: error.message || String(error) });
         }
       });
     }, [editStore, enqueuePersistence, flushProjectDraft, materializeProject, updateDirty]);
 
-    const onExportJava = useCallback(async (destination) => {
+    const onExportBdx = useCallback(async (pathId) => {
       if (!flushProjectDraft()) return;
-      if (!window.bordeauxAPI || typeof window.bordeauxAPI.exportJava !== 'function') {
-        setExportError('Java trajectory export is available in the Bordeaux desktop app.');
-        return;
-      }
-      if (!javaProjectState.catalog) {
-        setExportError('Link a Java robot project before exporting Java trajectory JSON.');
-        return;
-      }
-      setExportError('');
-      setJavaProjectState((current) => ({ ...current, operation: 'export', error: '', notice: '' }));
+      if (!window.bordeauxAPI?.exportBdx) { setExportError('BDX export is available in the Bordeaux desktop app.'); return; }
+      const selected = typeof pathId === 'string' ? pathId : docRef.current?.id;
+      if (!selected) { setExportError('Select a path before exporting BDX.'); return; }
+      setExportError(''); setBdxNotice('');
+      setRobotProjectState((current) => ({ ...current, operation: 'export' }));
       try {
-        const result = await window.bordeauxAPI.exportJava(materializeProject(), destination === 'saveAs' ? 'saveAs' : 'linked');
-        setJavaProjectState((current) => ({
-          ...current,
-          operation: null,
-          notice: result && result.exported ? 'Exported Java trajectory to ' + result.relativePath + '.' : '',
-        }));
-        setExportError('');
-      } catch (error) {
-        const message = error && error.message ? error.message : String(error);
-        setJavaProjectState((current) => ({ ...current, operation: null }));
-        setExportError(message);
-      }
-    }, [flushProjectDraft, javaProjectState.catalog, materializeProject]);
+        const result = await window.bordeauxAPI.exportBdx(materializeProject(), selected);
+        if (result?.exported) setBdxNotice('Saved ' + result.relativePath + ', ' + result.sampleCount + ' samples, ' + result.eventCount + ' events. Local export complete; robot code checks compatibility before execution.');
+      } catch (error) { setExportError(robotProjectError(error)); }
+      finally { setRobotProjectState((current) => ({ ...current, operation: null })); }
+    }, [flushProjectDraft, materializeProject]);
 
     useEffect(() => {
       if (!window.bordeauxAPI) return undefined;
       return window.bordeauxAPI.onMenuCommand(({ command, payload }) => {
         if (command === 'new-project') void newProject();
         else if (command === 'open-project') void openProject();
+        else if (command === 'open-folder') void openProjectFolder();
         else if (command === 'open-recent') void openProject(payload);
         else if (command === 'save-project') void saveProject(false);
         else if (command === 'save-project-as') void saveProject(true);
-        else if (command === 'export-java') void onExportJava('linked');
-        else if (command === 'export-java-save-as') void onExportJava('saveAs');
-        else if (command === 'java-link') void linkJavaProject();
-        else if (command === 'java-install') void installJavaSupport();
-        else if (command === 'java-build') void buildJavaCatalog();
-        else if (command === 'java-cancel-build') void cancelJavaCatalogBuild();
+        else if (command === 'export-bdx') void onExportBdx();
+        else if (command === 'robot-link') void linkRobotProject();
+        else if (command === 'robot-build') void buildRobotCatalog();
       });
-    }, [newProject, openProject, saveProject, onExportJava, linkJavaProject, installJavaSupport, buildJavaCatalog, cancelJavaCatalogBuild]);
+    }, [newProject, openProject, openProjectFolder, saveProject, onExportBdx, linkRobotProject, buildRobotCatalog]);
 
     useEffect(() => {
       const onKey = (e) => {
