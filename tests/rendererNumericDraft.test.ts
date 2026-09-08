@@ -133,7 +133,7 @@ function commandNumberInput(onChange: (value: number) => void): ElementNode {
     label: "Count",
     value: 2,
     integer: true,
-    javaType: "int",
+    valueType: "I32",
     parameter: { min: 1, max: 9 },
     onChange,
   }))!;

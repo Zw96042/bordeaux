@@ -171,13 +171,13 @@ describe("project files", () => {
     expect(validateProject(project).issues).toContainEqual(expect.objectContaining({ path: "$.field", severity: "error" }));
   });
 
-  it("atomically round-trips the selected path and Java bookmark", async () => {
+  it("atomically round-trips the selected path and Robot bookmark", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-project-test-"));
     const file = path.join(directory, "project.bordeaux.json");
     const project = createDemoProject();
     const second = blankPath("Second");
     project.paths.push(second);
-    project.editor = { activePathId: second.id, javaProjectBookmarkId: "a".repeat(20) };
+    project.editor = { activePathId: second.id, robotProjectBookmarkId: "a".repeat(20) };
     await writeProject(file, project);
     const opened = await readProject(file);
     expect(opened.project.editor).toEqual(project.editor);

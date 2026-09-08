@@ -27,7 +27,7 @@ export function OptimizationPanel({ path, paths, state, candidate, accepted, sta
   const distance = (value) => `${(value * (unitSystem === 'imperial' ? 3.280839895 : 1)).toFixed(2)} ${unitSystem === 'imperial' ? 'ft' : 'm'}`;
   const outcome = searching ? `Optimizing… ${Math.max(0, (now - entry.startedAt) / 1000).toFixed(1)} s`
     : state.running ? 'Optimizing another path…'
-    : improved ? `${seconds(gain)} faster · ${(gain / baseTime * 100).toFixed(1)}%`
+    : improved ? `${seconds(gain)} faster, ${(gain / baseTime * 100).toFixed(1)}%`
     : stale ? 'Needs update'
     : details?.termination === 'unsupported' ? 'Normal only'
     : result ? 'No meaningful gain'

@@ -51,7 +51,7 @@ import { UI } from "./ui";
       A.AUTHORABLE_STEPS.map((step) => {
         const unavailable = step.id === 'wait' && !waitAvailable;
         return h('button', { key: step.id, className: 'rt-ch-row', type: 'button', disabled: unavailable,
-          title: unavailable ? 'Build and link a generated Java catalog with bordeaux.wait to add Wait.' : undefined,
+          title: unavailable ? 'Build and link a generated Robot catalog with bordeaux.wait to add Wait.' : undefined,
           onClick: () => !unavailable && onPick(step.type, step.cat) },
         h('span', { className: 'rt-ch-ic', style: { color: step.color } }, h(Icon, { name: step.icon, size: 16 })),
         h('span', { className: 'rt-ch-main' }, h('span', { className: 'rt-ch-t' }, step.label),
@@ -94,7 +94,7 @@ import { UI } from "./ui";
       icon = 'info'; color = '#d2655f'; kindCls = 'fn'; tag = 'Legacy — cannot deploy'; meta = deployment.legacy ? 'Replace or remove this legacy step before export' : 'This unsupported step can be removed but cannot deploy';
     } else if (node.type === 'path') {
       const doc = paths.find((path) => path.id === node.ref); icon = 'route'; color = 'var(--accent)'; kindCls = 'path';
-      if (seg) meta = fmt(seg.t1 - seg.t0) + '  ·  ' + UnitPrefs.format(seg.deriv.sample.length, 'm', 2);
+      if (seg) meta = fmt(seg.t1 - seg.t0) + ' ,  ' + UnitPrefs.format(seg.deriv.sample.length, 'm', 2);
       else if (!doc) meta = 'Choose a path';
       else if (!previewIncluded) meta = 'Skipped in this preview';
       else if (run.planningStatus === 'error') meta = 'Preview unavailable';
@@ -105,11 +105,11 @@ import { UI } from "./ui";
     } else if (node.type === 'builtin') {
       icon = 'pause'; color = '#cf962f'; kindCls = 'fn'; tag = 'Wait'; meta = fmt(node.arguments && node.arguments.durationS) + ' pause';
     } else if (node.type === 'generatedTrajectory') {
-      icon = 'route'; color = '#cf962f'; kindCls = 'fn'; tag = 'Runtime dynamic'; meta = 'Generated and validated on the robot · no desktop preview';
+      icon = 'route'; color = '#cf962f'; kindCls = 'fn'; tag = 'Runtime dynamic'; meta = 'Generated and validated on the robot, no desktop preview';
     } else {
       const C = A.CATS[node.cat] || { icon: 'info', color: '#d2655f', label: 'Unknown step' }; icon = C.icon; color = C.color; kindCls = 'fn';
       tag = C.label;
-      if (node.cat === 'generate') meta = (seg ? fmt(seg.t1 - seg.t0) + ' · ' : '') + 'runtime · ' + node.trigger;
+      if (node.cat === 'generate') meta = (seg ? fmt(seg.t1 - seg.t0) + ', ' : '') + 'runtime, ' + node.trigger;
       else meta = node.trigger;
     }
     const isDecision = node.type === 'decision';

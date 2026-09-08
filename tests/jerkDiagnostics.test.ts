@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildBdxExport } from "../src/shared/export/bdx";
-import { buildJavaTrajectory } from "../src/shared/export/javaTrajectory";
+import { buildRobotTrajectory } from "../src/shared/export/robotTrajectory";
 import { getPlanner } from "../src/shared/planners";
 import { addJerkDiagnostics } from "../src/shared/planners/jerkDiagnostics";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
-import type { JavaCommandCatalog, PlannerResult, TrajectoryPlannerId, TrajectorySample } from "../src/shared/types";
+import type { RobotCommandCatalog, PlannerResult, TrajectoryPlannerId, TrajectorySample } from "../src/shared/types";
 
 const PLANNERS: TrajectoryPlannerId[] = ["profiledSpline", "optimizedTrajectory"];
 
@@ -57,7 +57,7 @@ function movingProject() {
   return project;
 }
 
-function generatedCatalog(): JavaCommandCatalog {
+function generatedCatalog(): RobotCommandCatalog {
   return {
     projectName: "CompetitionRobot",
     sourceFileCount: 1,
@@ -146,25 +146,25 @@ describe("final trajectory jerk diagnostics", () => {
     });
   });
 
-  it.each(PLANNERS)("blocks native and Java export when %s violates maxJerk", (plannerId) => {
+  it.each(PLANNERS)("blocks native and Robot export when %s violates maxJerk", (plannerId) => {
     const project = movingProject();
     project.plannerId = plannerId;
     project.paths[0].headingMode = "tangent";
     project.paths[0].constraints.maxJerk = 0.1;
 
     expect(() => buildBdxExport(project)).toThrow(/Linear jerk|nonzero translational jerk/);
-    expect(() => buildJavaTrajectory(project, generatedCatalog())).toThrow(/Linear jerk|nonzero translational jerk/);
+    expect(() => buildRobotTrajectory(project, generatedCatalog())).toThrow(/Linear jerk|nonzero translational jerk/);
   });
 
-  it.each(PLANNERS)("exports angular-jerk-compliant native and Java samples from %s", (plannerId) => {
+  it.each(PLANNERS)("exports angular-jerk-compliant native and Robot samples from %s", (plannerId) => {
     const project = movingProject();
     project.plannerId = plannerId;
     project.paths[0].headingMode = "manual";
     project.paths[0].constraints.maxAngJerk = 1;
 
     const native = buildBdxExport(project).paths[0];
-    const java = buildJavaTrajectory(project, generatedCatalog()).document.paths[0];
+    const robot = buildRobotTrajectory(project, generatedCatalog()).document.paths[0];
     expect(measuredAngularJerk(native.samples)).toBeLessThanOrEqual(1 + 1e-9);
-    expect(measuredAngularJerk(java.samples)).toBeLessThanOrEqual(1 + 1e-9);
+    expect(measuredAngularJerk(robot.samples)).toBeLessThanOrEqual(1 + 1e-9);
   });
 });

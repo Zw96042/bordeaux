@@ -33,6 +33,6 @@ describe("authoritative routine conditions", () => {
   it("wires the linked catalog's condition options into the routine inspector", () => {
     const appSource = fs.readFileSync(path.join(process.cwd(), "src/renderer/app/App.jsx"), "utf8");
 
-    expect(appSource).toContain("conditionOptions: AUTO.authoritativeConditions(javaProjectState.catalog)");
+    expect(appSource).toContain("conditionOptions: AUTO.authoritativeConditions(robotProjectState.catalog)");
   });
 });

@@ -3,22 +3,22 @@ import path from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { buildJavaTrajectory } from "../src/shared/export/javaTrajectory";
-import { validateProjectJavaInvocations } from "../src/shared/javaCommands";
+import { buildRobotTrajectory } from "../src/shared/export/robotTrajectory";
+import { validateProjectRobotInvocations } from "../src/shared/robotCommands";
 import { createDemoProject } from "../src/shared/project/defaults";
-import type { JavaCommandCatalog } from "../src/shared/types";
+import type { RobotCommandCatalog } from "../src/shared/types";
 // @ts-expect-error Routine authoring remains a legacy JavaScript module.
 import { AUTO } from "../src/renderer/lib/routineModel";
 // @ts-expect-error The routine inspector is a JavaScript component.
 import { StepInspector } from "../src/renderer/components/RoutineInspector";
 
-function catalog(): JavaCommandCatalog {
+function catalog(): RobotCommandCatalog {
   return {
     projectName: "Safety robot", sourceFileCount: 1, scannedAt: new Date(0).toISOString(),
     authoritative: true, generatedSchemaVersion: "1.2", catalogId: "safety-robot", supportVersion: "0.3.0", catalogHash: `sha256:${"a".repeat(64)}`,
-    commands: [{ id: "robot.Commands#score", label: "Score", ownerType: "robot.Commands", member: "score", kind: "factory", confidence: "confirmed", runtimeReady: true, parameters: [], source: { file: "Commands.java", line: 1 } }],
-    conditions: [{ id: "robot.Conditions#ready", label: "Ready", ownerType: "robot.Conditions", member: "ready", source: { file: "Conditions.java", line: 1 } }],
-    builtIns: [{ id: "bordeaux.wait", kind: "wait", label: "Wait", description: "Pause the routine before its next step.", parameters: [{ name: "durationS", label: "Duration", description: "Time to wait before continuing the routine.", unit: "s", defaultValue: 1, min: 0.02, max: 15, role: "argument", javaType: "double", schema: { kind: "number", javaType: "double" } }] }],
+    commands: [{ id: "robot.Commands#score", label: "Score", ownerType: "robot.Commands", member: "score", kind: "factory", confidence: "confirmed", runtimeReady: true, parameters: [], source: { file: "Commands.vi", line: 1 } }],
+    conditions: [{ id: "robot.Conditions#ready", label: "Ready", ownerType: "robot.Conditions", member: "ready", source: { file: "Conditions.vi", line: 1 } }],
+    builtIns: [{ id: "bordeaux.wait", kind: "wait", label: "Wait", description: "Pause the routine before its next step.", parameters: [{ name: "durationS", label: "Duration", description: "Time to wait before continuing the routine.", unit: "s", defaultValue: 1, min: 0.02, max: 15, role: "argument", valueType: "DBL", schema: { kind: "number", valueType: "DBL" } }] }],
     warnings: [],
   };
 }
@@ -39,7 +39,7 @@ describe("routine export safety", () => {
   it("still renders a supported command and reports a missing catalog entry", () => {
     const markup = renderToStaticMarkup(createElement(StepInspector, {
       node: { id: "command", type: "function", cat: "command", invocation: { commandId: "missing", arguments: {} } },
-      acq: {}, run: { segs: [] }, javaProject: { catalog: catalog() },
+      acq: {}, run: { segs: [] }, robotProject: { catalog: catalog() },
     }));
 
     expect(markup).toContain("Delete command");
@@ -68,7 +68,7 @@ describe("routine export safety", () => {
       ],
     }] as never;
 
-    const issues = validateProjectJavaInvocations(project, catalog());
+    const issues = validateProjectRobotInvocations(project, catalog());
     expect(issues.map((issue) => issue.path)).toEqual(expect.arrayContaining([
       "$.routines[0].nodes[0].then[0]",
       "$.routines[0].nodes[0].else[0]",
@@ -76,7 +76,7 @@ describe("routine export safety", () => {
       "$.routines[0].nodes[0].else[2].arguments",
       "$.routines[0].nodes[0].else[3].invocation.arguments",
     ]));
-    expect(() => buildJavaTrajectory(project, catalog())).toThrow(/nodes\[0\]\.then\[0\][\s\S]*nodes\[0\]\.else\[2\]\.arguments/);
+    expect(() => buildRobotTrajectory(project, catalog())).toThrow(/nodes\[0\]\.then\[0\][\s\S]*nodes\[0\]\.else\[2\]\.arguments/);
   });
 
   it("does not let an inactive legacy routine block the routine selected for export", () => {
@@ -85,8 +85,8 @@ describe("routine export safety", () => {
     project.routines.push({ id: "active", name: "Safe", nodes: [{ id: "path", type: "path", ref: project.paths[0].id }] });
     project.activeRoutineId = "active";
 
-    expect(validateProjectJavaInvocations(project, catalog())).toEqual([]);
-    expect(buildJavaTrajectory(project, catalog()).document.routine?.name).toBe("Safe");
+    expect(validateProjectRobotInvocations(project, catalog())).toEqual([]);
+    expect(buildRobotTrajectory(project, catalog()).document.routine?.name).toBe("Safe");
   });
 
   it("keeps the chooser closed and marks unsupported nodes as migration work", () => {

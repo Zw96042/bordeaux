@@ -255,7 +255,7 @@ import "../styles/settings.css";
       setRobot({ footprintPreset: preset, footprint: footprintFor('trapezoid', robot.w, robot.l, preset) });
     };
     const customVerticesEditor = shape === 'custom' && h('div', { className: 'rp-vertices rp-preview-vertices' },
-      h('div', { className: 'rp-vertexhead' }, h('span', null, 'Custom convex vertices'), h('span', null, '+X forward · +Y left')),
+      h('div', { className: 'rp-vertexhead' }, h('span', null, 'Custom convex vertices'), h('span', null, '+X forward, +Y left')),
       footprint.map((point, index) => h('div', { className: 'rp-vertex' + (selectedVertex === index ? ' selected' : ''), key: index, onClick: () => setSelectedVertex(index) },
         h('span', null, index + 1),
         h('div', { className: 'rp-vertex-coordinate' }, h('span', null, 'X'), h(BigNum, { label: `Vertex ${index + 1} X`, unit: 'm', value: point.x, precision: 3, onChange: (value) => updateVertex(index, 'x', value) })),

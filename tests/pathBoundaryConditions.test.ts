@@ -4,12 +4,12 @@ import { describe, expect, it } from "vitest";
 import { createDemoProject, buildWaypoints } from "../src/shared/project/defaults";
 import { setWaypointFacing } from "../src/renderer/lib/pathEditing";
 import { getPlanner } from "../src/shared/planners";
-import { buildJavaTrajectory } from "../src/shared/export/javaTrajectory";
-import type { JavaCommandCatalog } from "../src/shared/types";
+import { buildRobotTrajectory } from "../src/shared/export/robotTrajectory";
+import type { RobotCommandCatalog } from "../src/shared/types";
 // @ts-expect-error The inspector is a JavaScript component.
 import { ContextInspector } from "../src/renderer/components/ContextInspector";
 
-const catalog: JavaCommandCatalog = { projectName: "Boundary robot", sourceFileCount: 0, scannedAt: "", warnings: [], commands: [], authoritative: true, generatedSchemaVersion: "1.3", catalogId: "boundary-robot", supportVersion: "0.4.0", catalogHash: `sha256:${"a".repeat(64)}` };
+const catalog: RobotCommandCatalog = { projectName: "Boundary robot", sourceFileCount: 0, scannedAt: "", warnings: [], commands: [], authoritative: true, generatedSchemaVersion: "1.3", catalogId: "boundary-robot", supportVersion: "0.4.0", catalogHash: `sha256:${"a".repeat(64)}` };
 function movingProject() {
   const project = createDemoProject();
   project.paths[0].waypoints = buildWaypoints([{ x: 2, y: 4, theta: 90, segType: "line" }, { x: 5, y: 4, theta: 90 }]);
@@ -31,7 +31,7 @@ describe("path entry and exit conditions", () => {
     expect(result.samples.at(-1)!.velocityMps).toBeCloseTo(0.8, 4);
     expect(result.samples[1].x).toBeGreaterThan(result.samples[0].x);
     expect(result.samples.every((sample) => Math.abs(sample.y - 4) < 1e-8)).toBe(true);
-    const exported = buildJavaTrajectory(project, catalog).document.paths[0];
+    const exported = buildRobotTrajectory(project, catalog).document.paths[0];
     expect(exported.samples[0].headingRad).toBeCloseTo(Math.PI / 2, 4);
     expect(exported.samples[0].velocityMps).toBeCloseTo(1.2, 4);
     expect(exported.samples.at(-1)!.velocityMps).toBeCloseTo(0.8, 4);
@@ -48,14 +48,14 @@ describe("path entry and exit conditions", () => {
   });
   it("keeps tank facing on its travel tangent while honoring moving endpoint speeds", () => {
     const project = movingProject(); project.robot.drive = "tank";
-    const exported = buildJavaTrajectory(project, catalog).document.paths[0];
+    const exported = buildRobotTrajectory(project, catalog).document.paths[0];
     expect(exported.samples[0].headingRad).toBeCloseTo(0, 4);
     expect(exported.samples[0].velocityMps).toBeCloseTo(1.2, 4);
     expect(exported.samples.at(-1)!.velocityMps).toBeCloseTo(0.8, 4);
   });
   it("honors explicit endpoint stops and exposes the reason speeds are zero", () => {
     const project = movingProject(); project.paths[0].waypoints[0].stop = true; project.paths[0].waypoints[1].stop = true;
-    const exported = buildJavaTrajectory(project, catalog).document.paths[0];
+    const exported = buildRobotTrajectory(project, catalog).document.paths[0];
     expect(exported.samples[0].velocityMps).toBe(0);
     expect(exported.samples.at(-1)!.velocityMps).toBe(0);
     const summary = markup(project);
@@ -68,8 +68,8 @@ describe("path entry and exit conditions", () => {
   it("makes facing and scalar boundary speeds discoverable in path summary", () => {
     const summary = markup(movingProject());
     expect(summary).toContain("Initial robot facing");
-    expect(summary).toContain("Entry speed (vi)");
-    expect(summary).toContain("Exit speed (vf)");
+    expect(summary).toContain("Entry speed");
+    expect(summary).toContain("Exit speed");
     expect(summary).toContain("Edit facing without changing the path.");
   });
   it.each(["tangent", "lookAt"] as const)("edits initial facing directly while preserving geometry in %s mode", (mode) => {
@@ -85,6 +85,6 @@ describe("path entry and exit conditions", () => {
     expect(path.waypoints[0].segmentHeadingMode).toBe("manual");
     expect(path.waypoints[1].segmentHeadingMode).toBeUndefined();
     expect(path.waypoints.map(({ x, y, prevC, nextC }) => ({ x, y, prevC, nextC }))).toEqual(geometry);
-    expect(buildJavaTrajectory(project, catalog).document.paths[0].samples[0].headingRad).toBeCloseTo(42 * Math.PI / 180, 4);
+    expect(buildRobotTrajectory(project, catalog).document.paths[0].samples[0].headingRad).toBeCloseTo(42 * Math.PI / 180, 4);
   });
 });

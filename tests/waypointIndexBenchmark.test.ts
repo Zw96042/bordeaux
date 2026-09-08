@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
 import { analyzePath } from "../src/shared/agent/pathAnalysis";
-import { buildJavaTrajectory } from "../src/shared/export/javaTrajectory";
+import { buildRobotTrajectory } from "../src/shared/export/robotTrajectory";
 import { getPlanner } from "../src/shared/planners";
 import { profiledSplinePlanner } from "../src/shared/planners/profiledSpline";
 import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
-import type { JavaCommandCatalog } from "../src/shared/types";
+import type { RobotCommandCatalog } from "../src/shared/types";
 
 const benchmark = process.env.BENCHMARK_WAYPOINT_INDEX === "1" ? it : it.skip;
 
@@ -47,7 +47,7 @@ function turnFixture() {
   return project;
 }
 
-const catalog: JavaCommandCatalog = {
+const catalog: RobotCommandCatalog = {
   projectName: "BenchmarkRobot",
   sourceFileCount: 1,
   scannedAt: "2026-08-12T00:00:00.000Z",
@@ -75,7 +75,7 @@ benchmark("indexes 600 ordered waypoint arrivals and heading anchors", () => {
     plan: () => getPlanner("profiledSpline").generate({ path: project.paths[0], robot: project.robot }),
     wait: () => getPlanner("profiledSpline").generate({ path: waitProject.paths[0], robot: waitProject.robot }),
     analysis: () => analyzePath(project, project.paths[0].id),
-    java: () => buildJavaTrajectory(project, catalog),
+    robot: () => buildRobotTrajectory(project, catalog),
     turns: () => profiledSplinePlanner.generate({ path: turnProject.paths[0], robot: turnProject.robot }),
   };
   const output: Record<string, { samplesMs: number[]; digest: string }> = {};
@@ -95,7 +95,7 @@ benchmark("indexes 600 ordered waypoint arrivals and heading anchors", () => {
     plan: "e02433cba19cbf3dff443d4d8d09b337947bd81b02d5be55b2f27328b78b84f6",
     wait: "8caae49ba5e6ace94057c513b84809a0769b3c03fef53c13d362d0c5e6647367",
     analysis: "2597f248ea0908902496331e16151a285b4629557d2f85b8d4600e029f537048",
-    java: "9b448b8e5afbcfa30a9c74d16d6066e6ee67c4f7f2dbb47edd5ee638305dd8b7",
+    robot: "9b448b8e5afbcfa30a9c74d16d6066e6ee67c4f7f2dbb47edd5ee638305dd8b7",
     turns: "bebd661950a3b4cb7474d33b9a33c5ac8b8e74fad5740c525b44a40b80eded50",
   });
   console.log(JSON.stringify(output));

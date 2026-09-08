@@ -499,13 +499,13 @@ import { headingTransitionWindows, headingTransitionGoals, smoothHeadingTransiti
     }
     const at = (index) => pts[index].s / totalS;
     if (constraints.maxAccel > 0 && accelPeak > constraints.maxAccel * 1.025)
-      checks.push({ f: at(accelAt), kind: 'constraint', level: 'warning', text: 'Acceleration exceeds limit \u00b7 ' + accelPeak.toFixed(1) + ' m/s\u00b2' });
+      checks.push({ f: at(accelAt), kind: 'constraint', level: 'warning', text: 'Acceleration exceeds limit, ' + accelPeak.toFixed(1) + ' m/s\u00b2' });
     const maxDecel = constraints.maxDecel > 0 ? constraints.maxDecel : constraints.maxAccel;
     if (maxDecel > 0 && decelPeak > maxDecel * 1.025)
-      checks.push({ f: at(decelAt), kind: 'constraint', level: 'warning', text: 'Deceleration exceeds limit \u00b7 ' + decelPeak.toFixed(1) + ' m/s\u00b2' });
+      checks.push({ f: at(decelAt), kind: 'constraint', level: 'warning', text: 'Deceleration exceeds limit, ' + decelPeak.toFixed(1) + ' m/s\u00b2' });
     const omegaLimit = (constraints.maxAngVel || 0) * D2R;
     if (omegaLimit > 0 && omegaPeak > omegaLimit * 1.025)
-      checks.push({ f: at(omegaAt), kind: 'constraint', level: 'warning', text: 'Angular velocity exceeds limit \u00b7 ' + (omegaPeak / D2R).toFixed(0) + '\u00b0/s' });
+      checks.push({ f: at(omegaAt), kind: 'constraint', level: 'warning', text: 'Angular velocity exceeds limit, ' + (omegaPeak / D2R).toFixed(0) + '\u00b0/s' });
 
     if (curvaturePeak > 1e-6 && constraints.maxVel > 0 && constraints.maxAccel > 0) {
       const cornerAcceleration = constraints.maxCentripetalAccel != null ? constraints.maxCentripetalAccel : constraints.maxAccel;
@@ -726,7 +726,7 @@ import { headingTransitionWindows, headingTransitionGoals, smoothHeadingTransiti
           kind: 'performance',
           level: 'note',
           text: accelerationLimited
-            ? 'Angular acceleration limits speed · add more distance between heading anchors'
+            ? 'Angular acceleration limits speed, add more distance between heading anchors'
             : 'Angular velocity limits speed through this stretch',
         });
       }
