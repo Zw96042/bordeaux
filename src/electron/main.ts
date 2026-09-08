@@ -647,122 +647,120 @@ handle("project:restoreLast", async () => {
 handle("project:new", () => {
   activateProjectTarget(null);
   dirty = false;
-  clearLinkedJavaProject();
+  clearLinkedRobotProject();
 });
+
+handle("project:location", () => projectLocation());
+handle("project:openFolder", async () => {
+  const result = await dialog.showOpenDialog(mainWindow!, { title: "Open Bordeaux Folder", properties: ["openDirectory", "createDirectory"] });
+  if (result.canceled || !result.filePaths[0]) return null;
+  return activateProjectFolder(result.filePaths[0]);
+});
+
+async function activateProjectFolder(folder: string) {
+  const opened = await openProjectFolder(folder);
+  const project = opened.project ?? { ...createDemoProject(), name: path.basename(folder) };
+  clearLinkedRobotProject();
+  activateProjectTarget(opened.projectPath);
+  currentProjectFolder = folder;
+  await rememberFile(folder);
+  dirty = false;
+  return { project, location: projectLocation() };
+}
 
 handle("project:save", async (_event, project, rawSaveAs) => {
   const validation = validateProject(project);
   if (!validation.ok) throw new Error(validation.issues.map((item) => `${item.path}: ${item.message}`).join("\n"));
   const sourceGeneration = projectTargetGeneration;
   let target = rawSaveAs === true ? null : currentProjectPath;
+  let createProject = false;
   if (!target) {
-    if (smokeDirectory) target = path.join(smokeDirectory, "project.bordeaux.json");
-    else {
-    const projectName = project && typeof project === "object" && "name" in project && typeof project.name === "string" ? project.name : "project";
-    const result = await dialog.showSaveDialog(mainWindow!, { title: "Save Bordeaux Project", defaultPath: `${projectName || "project"}.bordeaux.json`, filters: [{ name: "Bordeaux Project", extensions: ["json"] }] });
-    if (result.canceled || !result.filePath) return { canceled: true };
-    target = result.filePath;
+    const defaultName = projectFileName((project as BordeauxProject).name || "Project");
+    if (smokeDirectory) target = path.join(smokeDirectory, "project.bordeaux");
+    else if (currentProjectFolder && rawSaveAs !== true) {
+      target = path.join(currentProjectFolder, defaultName);
+      createProject = true;
+      // A blank-folder Save must not silently replace a file created elsewhere.
+      try { await fs.promises.lstat(target); throw new Error("A project with that name already exists. Use Save As to choose a different name."); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    } else {
+      const result = await dialog.showSaveDialog(mainWindow!, { title: "Save Bordeaux Project", defaultPath: currentProjectFolder ? path.join(currentProjectFolder, defaultName) : defaultName, filters: [{ name: "Bordeaux Project", extensions: ["bordeaux"] }] });
+      if (result.canceled || !result.filePath) return { canceled: true };
+      target = result.filePath;
+      if (!target.toLowerCase().endsWith(".bordeaux")) target += ".bordeaux";
     }
   }
-  await writeProject(target, project);
+  await autosaveProjectFolder(path.dirname(target), project, target, { allowRetarget: rawSaveAs === true, createProject });
   await rememberFile(target);
   if (sourceGeneration === projectTargetGeneration && currentProjectPath !== target) activateProjectTarget(target);
-  // The renderer owns edit revisions and acknowledges a clean save through
-  // project:setDirty only if the project stayed unchanged during this write.
-  return { saved: true };
+  return { saved: true, location: projectLocation() };
 });
 
 handle("project:autosave", async (_event, project) => {
-  const target = currentProjectPath;
-  if (!target) return { saved: false };
+  const folder = currentProjectFolder;
+  if (!folder) return { saved: false, location: projectLocation() };
   const validation = validateProject(project);
-  if (!validation.ok) return { saved: false };
+  if (!validation.ok) return { saved: false, error: "Finish the invalid field before saving.", location: projectLocation() };
   try {
-    await writeProject(target, project);
-    return { saved: true };
-  } catch {
-    // Autosave is best-effort. Keep the renderer dirty so an explicit save or
-    // close prompt can recover without turning a background write into an IPC error.
-    return { saved: false };
+    await autosaveProjectFolder(folder, project, currentProjectPath);
+    return { saved: true, location: projectLocation() };
+  } catch (error) {
+    return { saved: false, error: error instanceof Error ? error.message : String(error), location: projectLocation() };
   }
 });
 
-handle("project:exportJava", async (_event, rawProject, rawDestination) => {
-  if (!linkedJavaProjectPath || !linkedJavaCatalog || !linkedJavaIntegration) throw new Error("Link a Java robot project before exporting robot JSON");
-  const connectionGeneration = javaConnectionGeneration;
-  const projectRoot = linkedJavaProjectPath;
-  const bookmarkId = linkedJavaProjectBookmarkId;
-  const catalog = linkedJavaCatalog;
-  const integration = linkedJavaIntegration;
-  const assertConnectionUnchanged = () => {
-    if (javaConnectionGeneration !== connectionGeneration
-      || linkedJavaProjectPath !== projectRoot
-      || linkedJavaProjectBookmarkId !== bookmarkId
-      || linkedJavaCatalog !== catalog) {
-      throw new Error("The linked Java project changed during export; review the project and export again");
-    }
+handle("project:exportBdx", async (_event, rawProject, rawPathId) => {
+  if (typeof rawPathId !== "string" || !rawPathId.trim()) throw new Error("Select a path before exporting BDX");
+  const project = rawProject as BordeauxProject;
+  const generation = robotConnectionGeneration, projectGeneration = projectTargetGeneration;
+  const projectFile = linkedLabviewProjectFile, bookmark = linkedRobotProjectBookmarkId;
+  if (projectFile && project.editor?.robotProjectBookmarkId !== bookmark) throw new Error("The linked LabVIEW project does not match this Bordeaux project");
+  const assertCurrent = () => {
+    if (generation !== robotConnectionGeneration || projectGeneration !== projectTargetGeneration || projectFile !== linkedLabviewProjectFile || bookmark !== linkedRobotProjectBookmarkId) throw new Error("The selected project changed during BDX export; export again");
   };
-  if (!integration.installed) throw new Error("Install Bordeaux Java support in the linked robot project before exporting");
-  if (integration.supportVersion !== catalog.supportVersion) throw new Error("Installed Java support and the generated catalog do not match; reinstall support and rebuild the catalog");
-  const submittedBookmarkId = (rawProject as BordeauxProject).editor?.javaProjectBookmarkId;
-  if (!submittedBookmarkId || submittedBookmarkId !== bookmarkId) {
-    throw new Error("The linked Java project does not match this Bordeaux project; relink it before exporting");
+  const hasCommands = project.paths.find((candidate) => candidate.id === rawPathId)?.markers.some((marker) => marker.invocation);
+  const bindingOptions = { projectFile: hasCommands ? projectFile : null, inspectionCacheDirectory: labviewDiscoveryCacheDirectory() };
+  const bindings = await prepareBdxBindings(bindingOptions);
+  const built = await buildBdxOffThread({ project, selection: { kind: "path", id: rawPathId }, bindings });
+  assertCurrent();
+  const result = smokeDirectory ? { canceled: false, filePath: path.join(smokeDirectory, "Smoke.bdx") } : await dialog.showSaveDialog(mainWindow!, {
+    title: "Export selected path as BDX",
+    defaultPath: built.fileName, filters: [{ name: "Bordeaux binary path", extensions: ["bdx"] }],
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  const target = result.filePath.toLowerCase().endsWith(".bdx") ? result.filePath : result.filePath + ".bdx";
+  const before = await robotExportTargetSnapshot(target);
+  if (before !== "missing") {
+    const review = await dialog.showMessageBox(mainWindow!, { type: "question", title: "Replace BDX file?", message: path.basename(target),
+      detail: `${built.sampleCount} samples · ${built.eventCount} events · ${built.bytes.length} bytes\nThis writes a local path file. Robot code validates compatibility before execution.`,
+      buttons: ["Cancel", "Replace"], defaultId: 0, cancelId: 0 });
+    if (review.response !== 1) return { canceled: true };
   }
-  const destination = rawDestination === "saveAs" ? "saveAs" : "linked";
-  const built = await buildJavaTrajectoryOffThread(rawProject as BordeauxProject, catalog);
-  assertConnectionUnchanged();
-  let target: string;
-  let relativePath: string;
-  if (destination === "saveAs") {
-    if (smokeDirectory) {
-      target = path.join(smokeDirectory, "java-export.bordeaux.json");
-    } else {
-      const result = await dialog.showSaveDialog(mainWindow!, {
-        title: "Save Bordeaux Java Trajectory",
-        defaultPath: javaTrajectoryFileName((rawProject as BordeauxProject).name),
-        filters: [{ name: "Bordeaux Java Trajectory", extensions: ["json"] }],
-      });
-      if (result.canceled || !result.filePath) return { canceled: true };
-      target = result.filePath;
-    }
-    relativePath = path.basename(target);
-  } else {
-    target = await assertSafeJavaExportTarget(projectRoot, javaTrajectoryFileName((rawProject as BordeauxProject).name));
-    relativePath = path.relative(projectRoot, target);
-    const targetSnapshot = await javaExportTargetSnapshot(target);
-    if (!smokeDirectory) {
-      const result = await dialog.showMessageBox(mainWindow!, {
-        type: "question",
-        title: "Export Java trajectory",
-        message: `Export ${built.pathCount} path${built.pathCount === 1 ? "" : "s"} and ${built.eventCount} event${built.eventCount === 1 ? "" : "s"}?`,
-        detail: `${relativePath}\n${Buffer.byteLength(built.contents, "utf8").toLocaleString()} bytes · SHA-256 ${built.sha256.slice(0, 12)}…\n\nGradleRIO deploys files under src/main/deploy with robot code. Bordeaux will not deploy the robot.`,
-        buttons: ["Cancel", "Export"],
-        defaultId: 1,
-        cancelId: 0,
-      });
-      if (result.response !== 1) return { canceled: true };
-      assertConnectionUnchanged();
-      target = await assertSafeJavaExportTarget(projectRoot, path.basename(target));
-      if (await javaExportTargetSnapshot(target) !== targetSnapshot) throw new Error("Java export target changed while the preview was open; review and export again");
-    }
-  }
-  assertConnectionUnchanged();
-  await writeBufferAtomically(target, Buffer.from(built.contents, "utf8"));
-  return { exported: true, relativePath, pathCount: built.pathCount, eventCount: built.eventCount, sha256: built.sha256 };
+  const currentBindings = await prepareBdxBindings(bindingOptions);
+  assertCurrent();
+  if (currentBindings.definitionJson !== bindings.definitionJson) throw new Error("NI binding evidence changed during BDX export; review and export again");
+  if (await robotExportTargetSnapshot(target) !== before) throw new Error("BDX destination changed during review; export again");
+  await writeBufferAtomically(target, built.bytes);
+  return { exported: true, relativePath: path.basename(target), sha256: built.sha256,
+    pathCount: built.pathCount, eventCount: built.eventCount, sampleCount: built.sampleCount };
 });
 
 handle("diagnostics:preview", async (_event, rawProject) => {
-  const catalog = diagnosticCatalog(linkedJavaCatalog);
+  const catalog = diagnosticCatalog(linkedRobotCatalog);
   let fieldPin = diagnosticFieldPin(rawProject);
   let exportStatus: DiagnosticBundleInput["export"] = { state: "unavailable" };
   let routinePreflight: DiagnosticBundleInput["routinePreflight"] = { state: "unavailable", issueCount: 0 };
-  const linkedProjectMatches = Boolean(linkedJavaProjectBookmarkId
+  const linkedProjectMatches = Boolean(linkedRobotProjectBookmarkId
     && rawProject && typeof rawProject === "object"
-    && (rawProject as BordeauxProject).editor?.javaProjectBookmarkId === linkedJavaProjectBookmarkId);
-  if (catalog && linkedJavaCatalog && linkedJavaIntegration?.installed
-    && linkedJavaIntegration.supportVersion === linkedJavaCatalog.supportVersion && linkedProjectMatches) {
+    && (rawProject as BordeauxProject).editor?.robotProjectBookmarkId === linkedRobotProjectBookmarkId);
+  if (catalog && linkedRobotCatalog && linkedRobotIntegration?.installed
+    && linkedRobotIntegration.supportVersion === linkedRobotCatalog.supportVersion && linkedProjectMatches) {
     try {
-      const built = await buildJavaTrajectoryOffThread(rawProject as BordeauxProject, linkedJavaCatalog);
+      const project = rawProject as BordeauxProject;
+      const selected = project.paths.find((item) => item.id === project.editor?.activePathId) ?? project.paths[0];
+      if (!selected) throw new Error("Select a path before preparing export diagnostics");
+      const bindings = await prepareBdxBindings({ projectFile: selected.markers.some((marker) => marker.invocation) ? linkedLabviewProjectFile : null, inspectionCacheDirectory: labviewDiscoveryCacheDirectory() });
+      const built = await buildBdxOffThread({ project, selection: { kind: "path", id: selected.id }, bindings });
       fieldPin = {
         id: built.document.field.id,
         revision: built.document.field.revision,
