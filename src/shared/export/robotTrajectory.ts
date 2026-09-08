@@ -1,10 +1,9 @@
-import { createHash } from "node:crypto";
 import { buildBdxExport, buildBdxExportWithPlannerResults } from "./bdx";
 import { DEFAULT_SAMPLES_PER_SEGMENT } from "../planners/limits";
-import { validateProjectJavaInvocations } from "../javaCommands";
+import { robotInvocationErrors, validateProjectRobotInvocations } from "../robotCommands";
 import { activeRoutine } from "../project/routines";
 import { orderedWaypointSampleIndices } from "../planners/waypointSamples";
-import type { BordeauxProject, CommandInvocation, FollowMode, JavaCommandCatalog, PathDoc, RoutineFallbackNode, RoutineNode, TrajectorySample } from "../types";
+import type { BordeauxProject, CommandInvocation, FollowMode, RobotCommandCatalog, PathDoc, RoutineFallbackNode, RoutineNode, TrajectorySample } from "../types";
 
 const MAX_SAMPLE_COUNT = 100_000;
 const MAX_EVENT_COUNT = 2_000;
@@ -13,7 +12,7 @@ const MAX_ROUTINE_NODE_COUNT = 2_000;
 const MAX_JSON_NESTING_DEPTH = 40;
 const MAX_EXPORT_BYTES = 16 * 1024 * 1024;
 
-export interface JavaTrajectoryEvent {
+export interface RobotTrajectoryEvent {
   eventId: string;
   name: string;
   timeS: number;
@@ -27,26 +26,25 @@ export interface JavaTrajectoryEvent {
   conditionId?: string;
 }
 
-export interface JavaTrajectoryPath {
+export interface RobotTrajectoryPath {
   id: string;
   name: string;
   planner: string;
   totalTimeS: number;
   totalDistanceM: number;
   samples: TrajectorySample[];
-  followSections: JavaFollowSection[];
-  events: JavaTrajectoryEvent[];
+  followSections: RobotFollowSection[];
+  events: RobotTrajectoryEvent[];
 }
 
-export interface JavaFollowSection {
+export interface RobotFollowSection {
   segmentIndex: number;
   mode: FollowMode;
   startSample: number;
   endSample: number;
 }
 
-export interface JavaTrajectoryDocument {
-  schemaVersion: "bordeaux-trajectory/1.0";
+export interface RobotTrajectoryDocument {
   generator: "bordeaux";
   catalog: {
     schemaVersion: "1.0" | "1.1" | "1.2" | "1.3";
@@ -63,19 +61,17 @@ export interface JavaTrajectoryDocument {
   };
   field: ReturnType<typeof buildBdxExport>["field"];
   robot: ReturnType<typeof buildBdxExport>["robot"];
-  routine: JavaTrajectoryRoutine | null;
-  paths: JavaTrajectoryPath[];
+  routine: RobotTrajectoryRoutine | null;
+  paths: RobotTrajectoryPath[];
 }
 
-interface JavaTrajectoryRoutine {
+interface RobotTrajectoryRoutine {
   name: string;
   nodes: RoutineNode[];
 }
 
-export interface BuiltJavaTrajectory {
-  document: JavaTrajectoryDocument;
-  contents: string;
-  sha256: string;
+export interface BuiltRobotTrajectory {
+  document: RobotTrajectoryDocument;
   pathCount: number;
   eventCount: number;
   sampleCount: number;
@@ -85,11 +81,11 @@ function followSections(
   path: PathDoc,
   samples: readonly TrajectorySample[],
   waypointSampleIndices?: readonly number[],
-): JavaFollowSection[] {
+): RobotFollowSection[] {
   const boundaries = waypointSampleIndices?.length === path.waypoints.length
     ? waypointSampleIndices
     : orderedWaypointSampleIndices(path.waypoints, samples);
-  const sections: JavaFollowSection[] = [];
+  const sections: RobotFollowSection[] = [];
   path.waypoints.slice(0, -1).forEach((waypoint, segmentIndex) => {
     const start = boundaries[segmentIndex];
     const end = boundaries[segmentIndex + 1];
@@ -126,7 +122,7 @@ function serializedByteLengthAtMost(value: unknown, limit: number): number {
     if (item === null || typeof item === "boolean") return add(item === null ? 4 : item ? 4 : 5);
     if (typeof item === "number") return add(Buffer.byteLength(Number.isFinite(item) ? String(item) : "null", "utf8"));
     if (typeof item === "string") return add(Buffer.byteLength(JSON.stringify(item), "utf8"));
-    if (typeof item === "bigint") throw new TypeError("Cannot serialize BigInt in a Java trajectory");
+    if (typeof item === "bigint") throw new TypeError("Cannot serialize BigInt in a Robot trajectory");
     if (Array.isArray(item)) {
       if (!add(1)) return false;
       for (let index = 0; index < item.length; index += 1) {
@@ -151,7 +147,7 @@ function serializedByteLengthAtMost(value: unknown, limit: number): number {
 
 function assertExportSize(value: unknown): void {
   if (serializedByteLengthAtMost(value, MAX_EXPORT_BYTES) > MAX_EXPORT_BYTES) {
-    throw new Error(`Java trajectory export exceeds ${MAX_EXPORT_BYTES} bytes`);
+    throw new Error(`Robot trajectory export exceeds ${MAX_EXPORT_BYTES} bytes`);
   }
 }
 
@@ -160,7 +156,7 @@ function assertJsonNestingDepth(value: unknown): void {
     if (item === null || typeof item !== "object") return;
     const nextDepth = depth + 1;
     if (nextDepth > MAX_JSON_NESTING_DEPTH) {
-      throw new Error(`Java trajectory export exceeds JSON nesting depth of ${MAX_JSON_NESTING_DEPTH}`);
+      throw new Error(`Robot trajectory export exceeds JSON nesting depth of ${MAX_JSON_NESTING_DEPTH}`);
     }
     const children = Array.isArray(item) ? item : Object.values(item as Record<string, unknown>);
     children.forEach((child) => visit(child, nextDepth));
@@ -168,7 +164,7 @@ function assertJsonNestingDepth(value: unknown): void {
   visit(value, 0);
 }
 
-function deployableRoutine(project: BordeauxProject, pathIds: Set<string>): JavaTrajectoryRoutine | null {
+function deployableRoutine(project: BordeauxProject, pathIds: Set<string>): RobotTrajectoryRoutine | null {
   const routine = activeRoutine(project);
   if (!routine) return null;
   let nodeCount = 0;
@@ -177,9 +173,9 @@ function deployableRoutine(project: BordeauxProject, pathIds: Set<string>): Java
   function nodes(source: RoutineNode[]): RoutineNode[] {
     return source.map((node) => {
       nodeCount += 1;
-      if (nodeCount > MAX_ROUTINE_NODE_COUNT) throw new Error(`Java trajectory export exceeds ${MAX_ROUTINE_NODE_COUNT} routine nodes`);
+      if (nodeCount > MAX_ROUTINE_NODE_COUNT) throw new Error(`Robot trajectory export exceeds ${MAX_ROUTINE_NODE_COUNT} routine nodes`);
       if (node.type === "path") {
-        if (!pathIds.has(node.ref)) throw new Error(`Routine path ${node.ref} is not Java-exportable`);
+        if (!pathIds.has(node.ref)) throw new Error(`Routine path ${node.ref} is not exportable`);
         return { id: node.id, type: "path", ref: node.ref };
       }
       if (node.type === "decision") {
@@ -189,7 +185,7 @@ function deployableRoutine(project: BordeauxProject, pathIds: Set<string>): Java
       if (node.type === "builtin") {
         if (node.builtinId !== "bordeaux.wait" || !Number.isFinite(node.arguments.durationS) || node.arguments.durationS < 0.02 || node.arguments.durationS > 15
           || Object.keys(node.arguments).length !== 1) {
-          throw new Error(`Routine built-in ${node.id} is invalid for Java export`);
+          throw new Error(`Routine built-in ${node.id} is invalid for Robot export`);
         }
         return { id: node.id, type: "builtin", builtinId: "bordeaux.wait", arguments: { durationS: node.arguments.durationS } };
       }
@@ -205,7 +201,7 @@ function deployableRoutine(project: BordeauxProject, pathIds: Set<string>): Java
         };
       }
       if (node.cat !== "command" || !node.invocation) {
-        throw new Error(`Routine function ${node.id} is simulation-only; use a bound Command step for Java export`);
+        throw new Error(`Routine function ${node.id} is simulation-only; use a bound Command step for Robot export`);
       }
       return { id: node.id, type: "function", cat: "command", title: node.title, invocation: node.invocation };
     });
@@ -213,7 +209,7 @@ function deployableRoutine(project: BordeauxProject, pathIds: Set<string>): Java
   return { name: routine.name, nodes: nodes(routine.nodes) };
 }
 
-function assertRoutineNodeCount(routine: JavaTrajectoryRoutine | null): void {
+function assertRoutineNodeCount(routine: RobotTrajectoryRoutine | null): void {
   if (!routine) return;
   let count = 0;
   const pending = [...routine.nodes];
@@ -221,7 +217,7 @@ function assertRoutineNodeCount(routine: JavaTrajectoryRoutine | null): void {
     const node = pending.pop()!;
     count += 1;
     if (count > MAX_ROUTINE_NODE_COUNT) {
-      throw new Error(`Java trajectory export exceeds ${MAX_ROUTINE_NODE_COUNT} routine nodes`);
+      throw new Error(`Robot trajectory export exceeds ${MAX_ROUTINE_NODE_COUNT} routine nodes`);
     }
     if (node.type === "decision") pending.push(...node.then, ...node.else);
     if (node.type === "generatedTrajectory" && node.fallback.type === "branch") pending.push(...node.fallback.nodes);
@@ -237,26 +233,24 @@ function projectForStaticPlanning(project: BordeauxProject): BordeauxProject {
   return { ...project, routines: project.routines.map((routine) => ({ ...routine, nodes: staticNodes(routine.nodes) })) };
 }
 
-export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaCommandCatalog): BuiltJavaTrajectory {
-  if (!catalog.authoritative || (catalog.generatedSchemaVersion !== "1.0" && catalog.generatedSchemaVersion !== "1.1" && catalog.generatedSchemaVersion !== "1.2" && catalog.generatedSchemaVersion !== "1.3") || !catalog.catalogId || !catalog.supportVersion || !catalog.catalogHash) {
-    throw new Error("Build the annotated Java command catalog before exporting robot JSON");
-  }
-  const invocationIssues = validateProjectJavaInvocations(project, catalog);
+/** Compile the shared model; executable binding trust belongs to the calling export boundary. */
+export function buildRobotTrajectory(project: BordeauxProject, catalog: RobotCommandCatalog, options: { requireGeneratedBindings?: boolean } = {}): BuiltRobotTrajectory {
+  const invocationIssues = validateProjectRobotInvocations(project, catalog, options.requireGeneratedBindings ? robotInvocationErrors : undefined);
   if (invocationIssues.length > 0) throw new Error(invocationIssues.map((item) => `${item.path}: ${item.message}`).join("\n"));
   const sourcePaths = project.paths.filter((path) => path.exportable !== false);
-  if (sourcePaths.length === 0) throw new Error("Java trajectory export requires at least one exportable path");
+  if (sourcePaths.length === 0) throw new Error("Robot trajectory export requires at least one exportable path");
   if (sourcePaths.length > MAX_PATH_COUNT) {
-    throw new Error(`Java trajectory export exceeds ${MAX_PATH_COUNT} paths`);
+    throw new Error(`Robot trajectory export exceeds ${MAX_PATH_COUNT} paths`);
   }
   let baseSampleCount = 0;
   for (const path of sourcePaths) {
     baseSampleCount += Math.max(0, path.waypoints.length - 1) * DEFAULT_SAMPLES_PER_SEGMENT + 1;
-    if (baseSampleCount > MAX_SAMPLE_COUNT) throw new Error(`Java trajectory export exceeds ${MAX_SAMPLE_COUNT} samples`);
+    if (baseSampleCount > MAX_SAMPLE_COUNT) throw new Error(`Robot trajectory export exceeds ${MAX_SAMPLE_COUNT} samples`);
   }
   let eventCount = 0;
   for (const path of sourcePaths) {
     eventCount += path.markers.reduce((count, marker) => count + (marker.invocation ? 1 : 0), 0);
-    if (eventCount > MAX_EVENT_COUNT) throw new Error(`Java trajectory export exceeds ${MAX_EVENT_COUNT} events`);
+    if (eventCount > MAX_EVENT_COUNT) throw new Error(`Robot trajectory export exceeds ${MAX_EVENT_COUNT} events`);
   }
   const routine = deployableRoutine(project, new Set(sourcePaths.map((path) => path.id)));
   if (routine && routine.nodes.some(function containsBuiltIn(node): boolean {
@@ -267,10 +261,10 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
   assertRoutineNodeCount(routine);
   const preflightDocument = {
     catalog: {
-      schemaVersion: catalog.generatedSchemaVersion,
-      catalogId: catalog.catalogId,
-      supportVersion: catalog.supportVersion,
-      catalogHash: catalog.catalogHash,
+      schemaVersion: catalog.generatedSchemaVersion ?? "1.3",
+      catalogId: catalog.catalogId ?? "",
+      supportVersion: catalog.supportVersion ?? "",
+      catalogHash: catalog.catalogHash ?? "",
     },
     robot: project.robot,
     routine,
@@ -293,10 +287,10 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
   // the exported routine below retains the generated node itself.
   const { document: native, plannerResults } = buildBdxExportWithPlannerResults(projectForStaticPlanning(project));
   let sampleCount = 0;
-  const paths: JavaTrajectoryPath[] = [];
+  const paths: RobotTrajectoryPath[] = [];
   native.paths.forEach((path, pathIndex) => {
     sampleCount += path.samples.length;
-    if (sampleCount > MAX_SAMPLE_COUNT) throw new Error(`Java trajectory export exceeds ${MAX_SAMPLE_COUNT} samples`);
+    if (sampleCount > MAX_SAMPLE_COUNT) throw new Error(`Robot trajectory export exceeds ${MAX_SAMPLE_COUNT} samples`);
     const sourceMarkers = new Map(sourcePaths[pathIndex].markers.map((marker) => [marker.id, marker]));
     const events = path.markers.flatMap((marker) => {
       if (!marker.invocation) return [];
@@ -317,7 +311,7 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
         ...(source?.schedule?.endTimeS === undefined ? {} : { endTimeS: source.schedule.endTimeS }),
         ...(source?.schedule?.conditionId ? { conditionId: source.schedule.conditionId } : {}),
       }];
-    }).sort((left, right) => left.timeS - right.timeS || left.eventId.localeCompare(right.eventId));
+    }).sort((left, right) => left.timeS - right.timeS || (options.requireGeneratedBindings ? left.eventId.localeCompare(right.eventId) : 0));
     paths.push({
       id: path.id,
       name: path.name,
@@ -329,14 +323,13 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
       events,
     });
   });
-  const document: JavaTrajectoryDocument = {
-    schemaVersion: "bordeaux-trajectory/1.0",
+  const document: RobotTrajectoryDocument = {
     generator: "bordeaux",
     catalog: {
-      schemaVersion: catalog.generatedSchemaVersion,
-      catalogId: catalog.catalogId,
-      supportVersion: catalog.supportVersion,
-      catalogHash: catalog.catalogHash,
+      schemaVersion: catalog.generatedSchemaVersion ?? "1.3",
+      catalogId: catalog.catalogId ?? "",
+      supportVersion: catalog.supportVersion ?? "",
+      catalogHash: catalog.catalogHash ?? "",
     },
     field: native.field,
     units: native.units,
@@ -346,22 +339,10 @@ export function buildJavaTrajectory(project: BordeauxProject, catalog: JavaComma
   };
   assertJsonNestingDepth(document);
   assertExportSize(document);
-  const contents = `${JSON.stringify(document, null, 2)}\n`;
-  if (Buffer.byteLength(contents, "utf8") > MAX_EXPORT_BYTES) throw new Error(`Java trajectory export exceeds ${MAX_EXPORT_BYTES} bytes`);
   return {
     document,
-    contents,
-    sha256: createHash("sha256").update(contents, "utf8").digest("hex"),
     pathCount: paths.length,
     eventCount,
     sampleCount,
   };
-}
-
-export function javaTrajectoryFileName(projectName: string): string {
-  const base = projectName.normalize("NFKD")
-    .replace(/[^A-Za-z0-9._-]+/g, "-")
-    .replace(/^[._-]+|[._-]+$/g, "")
-    .slice(0, 80);
-  return `${base || "autonomous"}.bordeaux.json`;
 }
