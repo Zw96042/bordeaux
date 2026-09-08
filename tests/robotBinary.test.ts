@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { BinaryWriter, crc32, encodeBinaryEnvelope } from "../src/shared/export/binaryCodec";
 import { buildRobotBinary, encodeBdxArgument } from "../src/shared/export/robotBinary";
 import { bdxBindingsFromCatalog } from "../src/electron/bdxBindings";
 import { binaryWriterFixture } from "./fixtures/binaryWriterFixture";
 import { buildWaypoints } from "../src/shared/project/defaults";
 import { buildCanonicalPathState } from "../src/shared/planners/pathState";
+import * as pathState from "../src/shared/planners/pathState";
+import * as trajectory from "../src/shared/export/robotTrajectory";
 
 const build = (fixture = binaryWriterFixture()) => buildRobotBinary(fixture.project, { kind: "path", id: fixture.path.id }, fixture.bindings);
 
@@ -84,12 +86,69 @@ describe("direct VI binary path", () => {
   });
 });
 
+// Linux CI differed from the Mac fixtures by at most two ULP in sample doubles. Check its numerical
+// agreement separately, then feed canonical numbers through the real serializer
+// so the golden check still covers every byte, including lengths, CRC and SHA.
+function buildAgainstGolden(fixture: ReturnType<typeof binaryWriterFixture>, golden: Uint8Array) {
+  const built = build(fixture), actual = inspect(built.bytes), expected = inspect(golden);
+  const agree = (value: number, reference: number) => {
+    expect(Math.abs(value - reference)).toBeLessThanOrEqual(2 * Number.EPSILON * Math.max(1, Math.abs(reference)));
+    return reference;
+  };
+  expect(actual.samples.length).toBe(expected.samples.length);
+  expect(actual.events.length).toBe(expected.events.length);
+  const document = structuredClone(built.document), selected = document.paths[0];
+  selected.totalTimeS = agree(selected.totalTimeS, expected.totals[0]);
+  selected.totalDistanceM = agree(selected.totalDistanceM, expected.totals[1]);
+  const canonical = buildCanonicalPathState(fixture.path, selected.samples);
+  const sampleKeys = ["t", "s", "f", "x", "y", "headingRad", null, "velocityMps", "accelerationMps2", "angularVelocityRadps", "curvatureInvM"] as const;
+  selected.samples.forEach((sample, index) => {
+    sampleKeys.forEach((key, column) => {
+      const value = agree(actual.samples[index][column], expected.samples[index][column]);
+      if (key) sample[key] = value;
+      else canonical.points[index].tangentRad = value;
+    });
+  });
+  selected.events.forEach((event, index) => {
+    event.timeS = agree(event.timeS, expected.events[index].schedule[0]);
+    if (event.endTimeS !== undefined) event.endTimeS = agree(event.endTimeS, expected.events[index].schedule[3]);
+  });
+  const trajectorySpy = vi.spyOn(trajectory, "buildRobotTrajectory").mockReturnValue({ ...built, document });
+  const canonicalSpy = vi.spyOn(pathState, "buildCanonicalPathState").mockReturnValue(canonical);
+  try { return build(fixture); }
+  finally { trajectorySpy.mockRestore(); canonicalSpy.mockRestore(); }
+}
+
+it("tolerates planner rounding while rejecting meaningful changes to golden sample values", () => {
+  const fixture = binaryWriterFixture(false, false), golden = Buffer.from(build(fixture).bytes);
+  const secondSampleTime = 32 + 4 + golden.readUInt32BE(32) + 4 + 11 * 8;
+  golden.writeBigUInt64BE(golden.readBigUInt64BE(secondSampleTime) + 1n, secondSampleTime);
+  golden.writeUInt32BE(crc32(golden.subarray(32)), 20);
+  expect(Buffer.from(buildAgainstGolden(fixture, golden).bytes)).toEqual(golden);
+  golden.writeDoubleBE(golden.readDoubleBE(secondSampleTime) + 1e-7, secondSampleTime);
+  golden.writeUInt32BE(crc32(golden.subarray(32)), 20);
+  expect(() => buildAgainstGolden(fixture, golden)).toThrow();
+});
+
+it("keeps golden header, CRC and non-planner metadata comparisons exact", () => {
+  const fixture = binaryWriterFixture(false, false), original = Buffer.from(build(fixture).bytes);
+  for (const offset of [0, 20, 40]) {
+    const corrupted = Buffer.from(original);
+    corrupted[offset] ^= 1;
+    const rebuilt = buildAgainstGolden(fixture, corrupted);
+    expect(Buffer.from(rebuilt.bytes)).not.toEqual(corrupted);
+  }
+});
+
 // Deliberate regeneration: BORDEAUX_UPDATE_BDX_FIXTURES=1 npx vitest run tests/robotBinary.test.ts
 it("matches the direct-VI golden files and normalized fixture evidence", () => {
   const directory = path.resolve("labview/tests/fixtures/binary");
   const manifest: unknown[] = [];
   for (const [name, curved, events] of [["straight-empty", false, false], ["straight-events", false, true], ["curve-events", true, true]] as const) {
-    const fixture = binaryWriterFixture(curved, events), built = build(fixture), decoded = inspect(built.bytes);
+    const fixture = binaryWriterFixture(curved, events);
+    const built = process.env.BORDEAUX_UPDATE_BDX_FIXTURES === "1" ? build(fixture)
+      : buildAgainstGolden(fixture, fs.readFileSync(path.join(directory, name + ".bdx")));
+    const decoded = inspect(built.bytes);
     const expected = JSON.stringify({ format: "BDXLV1", testOnly: true, sha256: built.sha256, byteLength: built.bytes.length,
       metadata: { pathId: decoded.strings[0], pathName: decoded.strings[1], plannerId: decoded.strings[2], fieldId: decoded.strings[3], fieldRevision: decoded.strings[4], coordinateSchemaId: decoded.strings[5], commandCatalogId: decoded.strings[6], commandCatalogHash: decoded.strings[7], driveType: 0,
         totalTimeS: decoded.totals[0], totalDistanceM: decoded.totals[1], robotWidthM: decoded.totals[2], robotLengthM: decoded.totals[3], robotMaxSpeedMps: decoded.totals[4] },
@@ -102,5 +161,7 @@ it("matches the direct-VI golden files and normalized fixture evidence", () => {
   if (process.env.BORDEAUX_UPDATE_BDX_FIXTURES === "1") {
     fs.writeFileSync(path.join(directory, "manifest.json"), JSON.stringify({ format: "BDXLV1", testOnly: true, fixtures: manifest }, null, 2) + "\n");
     fs.writeFileSync(path.join(directory, "TEST-ONLY.command-types.json"), binaryWriterFixture().bindings.definitionJson + "\n");
+  } else {
+    expect(JSON.parse(fs.readFileSync(path.join(directory, "manifest.json"), "utf8"))).toEqual({ format: "BDXLV1", testOnly: true, fixtures: manifest });
   }
 });
