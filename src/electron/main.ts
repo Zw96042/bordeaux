@@ -773,7 +773,7 @@ handle("diagnostics:preview", async (_event, rawProject) => {
         eventCount: built.eventCount,
         sampleCount: built.sampleCount,
       };
-      routinePreflight = { state: "passed", issueCount: 0 };
+      routinePreflight = { state: "unavailable", issueCount: 0 };
     } catch (error) {
       exportStatus = { state: "invalid" };
       routinePreflight = { state: "failed", issueCount: diagnosticIssueCount(error) };
@@ -813,92 +813,85 @@ handle("diagnostics:save", async (_event, previewId) => {
 });
 
 handle("project:validate", (_event, project) => validateProject(project));
-handle("javaProject:listRecent", () => summarizeJavaProjectBookmarks(javaProjectBookmarks));
-handle("javaProject:link", async () => {
+handle("robotProject:listRecent", () => summarizeRobotProjectBookmarks(robotProjectBookmarks));
+handle("robotProject:link", async () => {
   let selectedPath: string | undefined;
   if (smokeDirectory) {
-    selectedPath = path.join(smokeDirectory, "java-project");
+    selectedPath = path.join(smokeDirectory, "robot-project", "SmokeRobot.lvproj");
   } else {
     const result = await dialog.showOpenDialog(mainWindow!, {
-      title: "Link Java Robot Project",
+      title: "Link LabVIEW robot project",
       buttonLabel: "Link Project",
-      properties: ["openDirectory"],
+      properties: ["openFile", "openDirectory"],
+      filters: [{ name: "LabVIEW Project", extensions: ["lvproj"] }],
     });
     if (result.canceled || !result.filePaths[0]) return null;
     selectedPath = result.filePaths[0];
   }
   try {
-    return await replaceJavaProject(selectedPath);
-  } catch (error) {
-    throw readableJavaProjectError(error, "Selected Java project");
-  }
-});
-handle("javaProject:openRecent", async (_event, rawId) => {
-  if (typeof rawId !== "string" || rawId.length > 64) throw new Error("Recent Java project selection is invalid");
-  const bookmark = javaProjectBookmarks.find((item) => item.id === rawId);
-  if (!bookmark) throw new Error("Recent Java project is no longer available");
-  try {
-    return await replaceJavaProject(bookmark.projectPath);
-  } catch (error) {
-    throw readableJavaProjectError(error, bookmark.projectName);
-  }
-});
-handle("javaProject:refresh", async () => {
-  if (!linkedJavaProjectPath) throw new Error("Link a Java robot project before refreshing commands");
-  try {
-    return await connectJavaProject(linkedJavaProjectPath);
-  } catch (error) {
-    const bookmark = javaProjectBookmarks.find((item) => item.id === linkedJavaProjectBookmarkId);
-    throw readableJavaProjectError(error, bookmark?.projectName);
-  }
-});
-handle("javaProject:installSupport", async () => {
-  if (!linkedJavaProjectPath) throw new Error("Link a Java robot project before installing Java support");
-  try {
-    const preview = await prepareJavaSupportInstall(linkedJavaProjectPath, javaSupportArtifactsDirectory());
-    const summary = installPreviewSummary(preview);
-    if (!smokeDirectory) {
-      const result = await dialog.showMessageBox(mainWindow!, {
-        type: "warning",
-        title: summary.replacing ? "Update Bordeaux Java support" : "Install Bordeaux Java support",
-        message: summary.replacing ? "Replace the managed Bordeaux support files?" : "Add Bordeaux support to this GradleRIO project?",
-        detail: `Bordeaux will ${summary.replacing ? "replace its managed block in" : "add one managed block to"} ${summary.buildFile}, preserve a one-time backup, and write:\n\n${summary.files.join("\n")}\n\nIt will not modify RobotContainer or deploy robot code.`,
-        buttons: ["Cancel", summary.replacing ? "Update Support" : "Install Support"],
-        defaultId: 0,
-        cancelId: 0,
-      });
-      if (result.response !== 1) return null;
+    const runtime: RobotProjectRuntime = "labview";
+    if ((await fs.promises.stat(selectedPath)).isDirectory()) {
+      const projects = (await fs.promises.readdir(selectedPath, { withFileTypes: true }))
+        .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".lvproj"));
+      if (projects.length > 1) {
+        const project = await dialog.showOpenDialog(mainWindow!, {
+          title: "Choose LabVIEW project",
+          buttonLabel: "Link project",
+          defaultPath: selectedPath,
+          properties: ["openFile"],
+          filters: [{ name: "LabVIEW project", extensions: ["lvproj"] }],
+        });
+        if (project.canceled || !project.filePaths[0]) return null;
+        selectedPath = project.filePaths[0];
+      }
     }
-    await applyJavaSupportInstall(preview);
-    return connectJavaProject(linkedJavaProjectPath);
+    return runtime ? await replaceRobotProject(selectedPath, runtime) : null;
   } catch (error) {
-    throw readableJavaProjectError(error, "Linked Java project");
+    throw readableRobotProjectError(error, "Selected robot project");
   }
 });
-handle("javaProject:buildCatalog", async () => {
-  if (!linkedJavaProjectPath) throw new Error("Link a Java robot project before building its command catalog");
-  if (!linkedJavaIntegration?.installed) throw new Error("Install Bordeaux Java support before building the command catalog");
-  if (!smokeDirectory) {
-    const result = await dialog.showMessageBox(mainWindow!, {
-      type: "warning",
-      title: "Trust and build Java catalog",
-      message: "Run the linked project’s Gradle wrapper?",
-      detail: "This executes the fixed bordeauxCatalog task. Gradle build scripts are code and may access your computer or network. Only continue if you trust this robot project.",
-      buttons: ["Cancel", "Run Build"],
-      defaultId: 0,
-      cancelId: 0,
-    });
-    if (result.response !== 1) return null;
-  }
+handle("robotProject:openRecent", async (_event, rawId) => {
+  if (typeof rawId !== "string" || rawId.length > 64) throw new Error("Recent robot project selection is invalid");
+  const bookmark = robotProjectBookmarks.find((item) => item.id === rawId);
+  if (!bookmark) throw new Error("Recent robot project is no longer available");
   try {
-    await runJavaCatalogBuild(linkedJavaProjectPath);
-    return connectJavaProject(linkedJavaProjectPath);
+    return await replaceRobotProject(bookmark.projectPath, bookmark.runtime);
   } catch (error) {
-    console.error("Java catalog build failed");
-    throw readableJavaProjectError(error, "Linked Java project");
+    throw readableRobotProjectError(error, bookmark.projectName);
   }
 });
-handle("javaProject:cancelBuild", () => ({ canceled: cancelJavaCatalogBuild() }));
+handle("robotProject:refresh", async () => {
+  if (!linkedRobotProjectPath) throw new Error("Link a robot project before refreshing commands");
+  try {
+    return await connectRobotProject(linkedLabviewProjectFile ?? linkedRobotProjectPath, "labview");
+  } catch (error) {
+    const bookmark = robotProjectBookmarks.find((item) => item.id === linkedRobotProjectBookmarkId);
+    throw readableRobotProjectError(error, bookmark?.projectName);
+  }
+});
+handle("robotProject:inspectLabview", async () => {
+  const selection = linkedLabviewProjectFile;
+  if (!selection || linkedRobotCatalog?.runtime !== "labview") throw new Error("Link a LabVIEW project before inspecting commands");
+  if (labviewInspectionInProgress) throw new Error("LabVIEW command inspection is already in progress");
+  const generation = robotConnectionGeneration;
+  labviewInspectionInProgress = true;
+  try {
+    const inspected = await inspectLabviewCommands(selection, labviewDiscoveryCacheDirectory());
+    if (generation !== robotConnectionGeneration || selection !== linkedLabviewProjectFile) throw new Error("The linked project changed during command inspection");
+    return await connectRobotProject(selection, "labview", inspected);
+  } finally {
+    labviewInspectionInProgress = false;
+  }
+});
+handle("robotProject:buildCatalog", async () => {
+  if (!linkedRobotProjectPath) throw new Error("Link a LabVIEW project before building its command catalog");
+  const root = linkedRobotProjectPath;
+  const generation = robotConnectionGeneration;
+  await buildLabviewCatalog(linkedLabviewProjectFile ?? root);
+  if (generation !== robotConnectionGeneration || root !== linkedRobotProjectPath) throw new Error("The linked project changed during catalog build");
+  return connectRobotProject(linkedLabviewProjectFile ?? root, "labview");
+});
+
 handle("robot:getPairing", () => robotPairings.current());
 handle("robot:probe", async (_event, rawEndpoint) => {
   const endpoint = rawEndpoint as RobotEndpoint;
