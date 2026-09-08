@@ -22,6 +22,7 @@ export function useRobotPushController({ getProject, projectKey, catalogKey: sup
   const [refreshing, setRefreshing] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
+  const [unavailable, setUnavailable] = useState(null);
   const [adoptBaseline, setAdoptBaseline] = useState(false);
   const [clock, setClock] = useState(Date.now);
   const intent = useRef(null);
@@ -33,10 +34,13 @@ export function useRobotPushController({ getProject, projectKey, catalogKey: sup
   const state = useRef(null);
   const api = typeof window === 'undefined' ? undefined : window.bordeauxAPI;
   const desktopAvailable = Boolean(api?.prepareRobotPush);
+  const capabilities = api?.robotDeliveryCapabilities;
+  const deliveryAvailable = capabilities?.pathPush === true || capabilities?.routinePush === true;
   const busy = confirming || ['probing', 'pairing', 'preparing', 'retention-preparing', 'uploading', 'uploaded'].includes(phase) || (phase === 'staged' && !result);
   state.current = { phase, preview, retentionPreview, result, busy, confirming };
 
   useEffect(() => {
+    if (!deliveryAvailable) return;
     let live = true;
     api?.getRobotPairing?.().then((saved) => {
       if (!live) return;
@@ -55,9 +59,10 @@ export function useRobotPushController({ getProject, projectKey, catalogKey: sup
     const current = state.current;
     if (current.preview && current.phase === 'review') void api?.cancelRobotPush(current.preview.operationId).catch(() => undefined);
     if (current.retentionPreview && current.phase === 'retention-review') void api?.cancelRobotRetention(current.retentionPreview.operationId).catch(() => undefined);
+    if (current.phase === 'unavailable') return;
     if (!current.confirming && (!sending(current.phase) || current.result)) {
       setPreview(null); setRetentionPreview(null); setResult(null); setPhase('idle');
-      setError('The project or Java catalog changed. Review the update again.');
+      setError('The project or Robot catalog changed. Review the update again.');
     }
   }, [projectKey, catalogKey]);
 
@@ -97,6 +102,7 @@ export function useRobotPushController({ getProject, projectKey, catalogKey: sup
     }
   };
   const refreshStatus = async () => {
+    if (!deliveryAvailable) return;
     if (!desktopAvailable || !pairing || refreshing) return;
     const request = ++inspectGeneration.current;
     const captured = clone(projectRef.current());
@@ -116,13 +122,24 @@ export function useRobotPushController({ getProject, projectKey, catalogKey: sup
       catch { /* The original, specific read error remains visible. */ }
     } finally { if (request === inspectGeneration.current) setRefreshing(false); }
   };
+  const showUnavailable = (scope) => {
+    generation.current += 1; inspectGeneration.current += 1;
+    const routine = scope?.kind === 'routine';
+    const pathId = scope?.kind === 'paths' && scope.pathIds?.length === 1 ? scope.pathIds[0] : null;
+    intent.current = null;
+    setUnavailable({ kind: routine ? 'routine' : 'path', pathId, reason: routine
+      ? 'Routine delivery needs a compatible LabVIEW receiver. Your routine stays saved in this project.'
+      : 'Robot delivery needs a compatible LabVIEW BDX receiver. You can export the path file locally.' });
+    setPreview(null); setRetentionPreview(null); setProbe(null); setResult(null); setError(''); setRefreshing(false); setPhase('unavailable'); show();
+  };
   const openConnection = () => {
+    if (!deliveryAvailable) { showUnavailable(null); return; }
     show();
     if (!state.current.busy && !state.current.preview && !state.current.retentionPreview) setError('');
     if (pairing) void refreshStatus();
   };
   const prepareCaptured = async () => {
-    if (!intent.current || !desktopAvailable) return;
+    if (!intent.current || !desktopAvailable || !deliveryAvailable) return;
     const captured = intent.current;
     const request = ++generation.current;
     setPhase('preparing'); setPreview(null); setRetentionPreview(null); setResult(null); setError(''); setAdoptBaseline(false);
@@ -136,6 +153,9 @@ export function useRobotPushController({ getProject, projectKey, catalogKey: sup
   };
   const requestPush = async (scope) => {
     if (!desktopAvailable) return;
+    const supported = scope?.kind === 'routine' ? capabilities?.routinePush === true : scope?.kind === 'paths' ? capabilities?.pathPush === true : capabilities?.pathPush === true && capabilities?.routinePush === true;
+    if (!supported) { showUnavailable(scope); return; }
+    setUnavailable(null);
     if (state.current.busy || confirmationLock.current) { show(); return; }
     const old = state.current;
     if (old.preview && old.phase === 'review') await api.cancelRobotPush(old.preview.operationId);
@@ -145,6 +165,7 @@ export function useRobotPushController({ getProject, projectKey, catalogKey: sup
     if (pairing) await prepareCaptured(); else setPhase('idle');
   };
   const probeRobot = async () => {
+    if (!deliveryAvailable) { showUnavailable(null); return; }
     const request = ++generation.current;
     setPhase('probing'); setError(''); setProbe(null);
     try {
@@ -153,6 +174,7 @@ export function useRobotPushController({ getProject, projectKey, catalogKey: sup
     } catch (failure) { if (request === generation.current) { setPhase('idle'); setError(errorMessage(failure)); } }
   };
   const confirmPairing = async () => {
+    if (!deliveryAvailable) return;
     if (!probe) return;
     setPhase('pairing'); setError('');
     try {
@@ -185,6 +207,7 @@ export function useRobotPushController({ getProject, projectKey, catalogKey: sup
     } catch (failure) { setError(errorMessage(failure)); }
   };
   const prepareRetention = async (action, target) => {
+    if (!deliveryAvailable) { showUnavailable(null); return; }
     if (state.current.busy) return;
     const request = ++generation.current;
     intent.current = null; setPhase('retention-preparing'); setPreview(null); setRetentionPreview(null); setResult(null); setError('');
@@ -225,10 +248,10 @@ export function useRobotPushController({ getProject, projectKey, catalogKey: sup
     return deploymentItemStatus(inspection?.comparison?.[list]?.[id], inspection?.keys?.[list]?.[id],
       deploymentInputKey(projectRef.current(), kind, id, context.current.catalogKey), inspection?.verifiedAt, clock);
   };
-  const connectionLabel = busy ? (phase === 'staged' ? 'Awaiting robot' : 'Robot · Working')
-    : !pairing ? 'Connect robot' : status ? 'Team ' + pairing.teamNumber : 'Team ' + pairing.teamNumber + ' · Not checked';
+  const connectionLabel = !deliveryAvailable ? 'Robot delivery unavailable' : busy ? (phase === 'staged' ? 'Awaiting robot' : 'Robot, Working')
+    : !pairing ? 'Connect robot' : status ? 'Team ' + pairing.teamNumber : 'Team ' + pairing.teamNumber + ', Not checked';
   return { open, close, pairing, probe, host, setHost, port, setPort, phase, preview, retentionPreview, status, inspection,
-    refreshing, result, error, adoptBaseline, setAdoptBaseline, desktopAvailable, busy, connectionLabel, itemStatus,
+    refreshing, result, error, unavailable, deliveryAvailable, adoptBaseline, setAdoptBaseline, desktopAvailable, busy, connectionLabel, itemStatus,
     requestPush, openConnection, refreshStatus, probeRobot, confirmPairing, confirmPush, cancel, prepareRetention,
     confirmRetention, chooseAnotherRobot, connectionHome, retry: () => intent.current && requestPush(intent.current.scope) };
 }

@@ -8,13 +8,21 @@ const detail = (label, value) => h('div', { key: label }, h('dt', null, label), 
 const action = (label, onClick, props = {}) => h('button', { type: 'button', onClick, ...props }, label);
 const names = (items) => items?.length ? items.join(', ') : 'None';
 
-export function RobotPushDialog({ controller: c }) {
+export function RobotPushDialog({ controller: c, onExportBdx }) {
   const dialog = React.useRef(null);
   React.useEffect(() => {
     const element = dialog.current;
     if (c.open && !element.open) element.showModal();
     else if (!c.open && element.open) element.close();
   }, [c.open]);
+  if (c.phase === 'unavailable') return h('dialog', {
+    ref: dialog, className: 'robot-push-dialog robot-manager', 'aria-labelledby': 'robot-push-title',
+    onCancel: (event) => { event.preventDefault(); c.close(); },
+  }, h('header', null, h('h2', { id: 'robot-push-title' }, 'Robot delivery unavailable'),
+    action('×', c.close, { className: 'robot-push-close', 'aria-label': 'Close robot delivery' })),
+    h('section', { className: 'robot-push-section' }, h('p', null, c.unavailable?.reason || 'A compatible LabVIEW receiver is needed before sending files.'),
+      h('div', { className: 'robot-push-actions' }, action('Close', c.close),
+        c.unavailable?.pathId && onExportBdx && action('Export path as BDX', () => { c.close(); onExportBdx(c.unavailable.pathId); }, { className: 'primary' }))));
   const summary = c.preview?.summary;
   const review = c.phase === 'review' && c.preview;
   const retentionReview = c.phase === 'retention-review' && c.retentionPreview;
@@ -48,7 +56,7 @@ export function RobotPushDialog({ controller: c }) {
       !c.status?.retention && h('p', null, 'Refresh to load history. Older runtimes may not support retained revisions.'),
       c.status?.retention && h('ul', { className: 'robot-retention-list' }, c.status.retention.revisions.map((entry) => h('li', { key: entry.revisionId },
         h('div', null, h('strong', { title: entry.revisionId }, shortHash(entry.revisionId)),
-          h('p', null, [entry.revisionId === c.status.activeRevisionId ? 'Active' : '', entry.pinned ? 'Pinned' : '', entry.availability === 'missing' ? 'Missing on robot' : 'Retained'].filter(Boolean).join(' · '))),
+          h('p', null, [entry.revisionId === c.status.activeRevisionId ? 'Active' : '', entry.pinned ? 'Pinned' : '', entry.availability === 'missing' ? 'Missing on robot' : 'Retained'].filter(Boolean).join(', '))),
         entry.availability === 'retained' && h('div', { className: 'robot-retention-actions' },
           action(entry.pinned ? 'Pinned' : 'Pin', () => c.prepareRetention('pin', entry), { disabled: entry.pinned }),
           action('Roll back', () => c.prepareRetention('rollback', entry), { disabled: entry.revisionId === c.status.activeRevisionId })))))),
@@ -61,7 +69,7 @@ export function RobotPushDialog({ controller: c }) {
     h('dl', { className: 'robot-push-details compact' }, detail('Send to', c.preview.robot),
       detail('Adds', names(summary?.addedNames)), detail('Updates', names(summary?.updatedNames)),
       detail('Other paths', summary?.kind === 'project' ? 'Replaced by this project’s exportable paths' : (summary?.preservedPathCount || 0) + ' preserved'),
-      detail('Routine', summary?.kind === 'paths' ? (summary.routine ? summary.routine + ' · graph preserved' : 'None added') : (summary?.routine || 'None')),
+      detail('Routine', summary?.kind === 'paths' ? (summary.routine ? summary.routine + ', graph preserved' : 'None added') : (summary?.routine || 'None')),
       summary?.kind !== 'paths' && summary?.previousRoutine && detail('Replaces routine', summary.previousRoutine)),
     summary?.kind === 'paths' && summary.routine && h('p', null, 'If this routine uses an updated path, its motion will use the new path.'),
     Boolean(summary?.dependencyNames?.length) && h('p', null, 'Includes required paths: ' + names(summary.dependencyNames)),
@@ -70,7 +78,7 @@ export function RobotPushDialog({ controller: c }) {
       h('input', { type: 'checkbox', checked: c.adoptBaseline, onChange: (event) => c.setAdoptBaseline(event.target.checked) }),
       h('span', null, 'Use the robot’s current revision as this project’s baseline. Preserve its other content.')),
     h('details', { className: 'robot-history' }, h('summary', null, 'Technical details'),
-      h('dl', { className: 'robot-push-details' }, detail('Project', c.preview.project), detail('Catalog', c.preview.catalog), detail('Revision', c.preview.revision), detail('Payload hash', c.preview.payloadHash), detail('Transfer', c.preview.size.toLocaleString() + ' bytes · SFTP over SSH'))),
+      h('dl', { className: 'robot-push-details' }, detail('Project', c.preview.project), detail('Catalog', c.preview.catalog), detail('Revision', c.preview.revision), detail('Payload hash', c.preview.payloadHash), detail('Transfer', c.preview.size.toLocaleString() + ' bytes, SFTP over SSH'))),
     h('p', null, 'This reviewed snapshot is fixed. Later edits stay local. The robot must remain disabled to accept it.'),
     h('div', { className: 'robot-push-actions' }, action('Cancel', c.cancel), action(summary?.kind === 'project' ? 'Replace robot content' : summary?.kind === 'routine' ? 'Push routine' : 'Push ' + (summary?.pathIds?.length === 1 ? 'path' : (summary?.pathIds?.length || '') + ' paths'), c.confirmPush,
       { className: 'primary', disabled: c.busy || (c.preview.adoptionRequired && !c.adoptBaseline) })));
