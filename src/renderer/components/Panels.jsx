@@ -1,3 +1,5 @@
+import { KeyboardHelp } from './KeyboardHelp';
+import { PathLinks } from '../lib/pathLinks';
 import * as React from "react";
 import { PointerDrag } from "../hooks/usePointerDrag";
 import { PM } from "../lib/pathMath";
@@ -22,11 +24,13 @@ import { UI } from "./ui";
           h('button', { className: page === 'robot' ? 'on' : '', type: 'button', 'aria-current': page === 'robot' ? 'page' : undefined, onClick: () => setPage('robot') }, h(Icon, { name: 'gear', size: 15 }), 'Settings'))),
 
       h('div', { className: 'tb-right' },
+        h(KeyboardHelp),
         plan && h(React.Fragment, null,
           h('div', { className: 'tbdiv' }),
           h('button', { type: 'button', className: 'qbtn optimizer-toggle', 'aria-expanded': optimizationOpen, onClick: toggleOptimization }, optimizationApplied ? 'Optimized' : 'Optimize')),
         h(React.Fragment, null,
-          h('button', { className: 'qbtn tb-file', type: 'button', title: 'Open project', 'aria-label': 'Open project', onClick: props.onOpen }, 'Open'),
+          h('button', { className: 'qbtn tb-file', type: 'button', title: 'Open project (⌘O)', 'aria-label': 'Open project', onClick: props.onOpen }, 'Open'),
+          h('button', { className: 'qbtn tb-file', type: 'button', title: 'Open folder (⌘⇧O)', 'aria-label': 'Open project folder', onClick: props.onOpenFolder }, h(Icon, { name: 'folder', size: 14 })),
           h('button', { className: 'qbtn tb-file', type: 'button', title: 'Save project (⌘S)', 'aria-label': 'Save project', onClick: () => props.onSave(false) }, 'Save')),
         (plan || page === 'auto') && h(React.Fragment, null,
           h(IconBtn, { icon: 'undo', onClick: onUndo, title: 'Undo  (\u2318Z)' }),
@@ -40,8 +44,8 @@ import { UI } from "./ui";
     { id: 'select', icon: 'select', label: 'Select / move', key: '1', alternateKey: 'V' },
     { id: 'waypoint', icon: 'waypoint', label: 'Place waypoint', key: '2', alternateKey: 'W' },
     { id: 'rotation', icon: 'rotation', label: 'Rotation target', key: '3', alternateKey: 'R' },
-    { id: 'marker', icon: 'flag2', label: 'Event marker', key: '4', alternateKey: 'M' },
-    { id: 'range', icon: 'gauge', label: 'Constraint range', key: '5', alternateKey: 'C' },
+    { id: 'marker', icon: 'flag2', label: 'Place command', key: '4', alternateKey: 'M' },
+    { id: 'range', icon: 'gauge', label: 'Constraint region', key: '5', alternateKey: 'C' },
   ];
   function ToolRail({ tool, setTool }) {
     return h('div', { className: 'toolrail' }, TOOLS.map((t) =>
@@ -73,7 +77,7 @@ import { UI } from "./ui";
     if (actions.openInspector) actions.openInspector();
   };
 
-  function WaypointList({ wps, sel, actions, ready }) {
+  function WaypointList({ wps, names, sel, actions, ready }) {
     const [drag, setDrag] = useState(null);
     const rows = useRef([]);
     const reorderFocus = useRef(null);
@@ -101,7 +105,7 @@ import { UI } from "./ui";
       pointerDrag.start(e, { move: mv, end: up, cancel: () => setDrag(null) });
     };
     return h('div', { className: 'wplist' + (drag ? ' dragging' : '') }, wps.map((w, i) => {
-      const label = i === 0 ? 'Start' : i === wps.length - 1 ? 'End' : 'Waypoint ' + i;
+      const label = names[i];
       const mid = i !== 0 && i !== wps.length - 1;
       const bp = behPill(w);
       const cls = 'featrow wpfeatrow' + (sel.kind === 'wp' && sel.idx === i ? ' sel' : '') + (drag && drag.from === i ? ' dragging' : '') + (drag && drag.over === i && drag.from !== i ? ' over' : '');
@@ -114,7 +118,7 @@ import { UI } from "./ui";
           reorderFocus.current = { wps, target, trigger: event.currentTarget };
           actions.reorderWp(i, target);
         } }, h(Icon, { name: 'drag', size: 13 })),
-        h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'wp' && sel.idx === i, onClick: () => actions.select('wp', i), onDoubleClick: (e) => inspectItem(actions, 'wp', i, e) },
+        h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'wp' && sel.idx === i, onClick: (event) => { if (event.shiftKey && wps.length > 2) actions.delWp(i); else actions.select('wp', i); }, onDoubleClick: (e) => inspectItem(actions, 'wp', i, e) },
           h('span', { className: 'featdot ' + (w.stop ? 'r sq' : i === 0 ? 'g' : i === wps.length - 1 ? 'r' : 'b') }),
           h('span', { className: 'featnm', title: label }, label),
           h('span', { className: 'featdetails' },
@@ -125,9 +129,9 @@ import { UI } from "./ui";
     }));
   }
 
-  function SegmentList({ wps, sel, actions }) {
+  function SegmentList({ wps, names, sel, actions }) {
     if (wps.length < 2) return h('div', { className: 'featempty' }, 'Add a second waypoint to form a segment');
-    const name = (k) => k === 0 ? 'Start' : k === wps.length - 1 ? 'End' : 'Waypoint ' + k;
+    const name = (k) => names[k];
     const typeName = (id) => (PM.SEGTYPES.find((s) => s.id === id) || PM.SEGTYPES[2]).label;
     return h(React.Fragment, null, wps.slice(0, -1).map((w, i) =>
       h('div', { key: i, className: 'featrow segfeatrow' + (sel.kind === 'seg' && sel.idx === i ? ' sel' : '') },
@@ -138,9 +142,10 @@ import { UI } from "./ui";
           h('span', { className: 'featmeta' }, typeName(w.segType))))));
   }
 
-  function Outline({ open, setOpen, doc, derived, sel, actions, secOpen, setSecOpen, robot, ready }) {
+  function Outline({ open, setOpen, project, doc, derived, sel, actions, secOpen, setSecOpen, robot, ready }) {
     const tog = (k) => setSecOpen((o) => ({ ...o, [k]: !o[k] }));
     const wps = doc.waypoints;
+    const names = wps.map((_, index) => PathLinks.waypointName(project, doc, index));
     if (!open) {
       return h('button', { className: 'outline-tab', type: 'button', title: 'Show outline', onClick: () => setOpen(true) },
         h(Icon, { name: 'zones', size: 16 }), h('span', null, 'Outline'));
@@ -151,23 +156,23 @@ import { UI } from "./ui";
         h('button', { className: 'mini', type: 'button', title: 'Hide outline', 'aria-label': 'Hide outline', onClick: () => setOpen(false) }, h('span', { className: 'rot90' }, h(Icon, { name: 'chevron', size: 15 })))),
       h('div', { className: 'outline-scroll' },
         h(Section, { icon: 'waypoint', title: 'Waypoints', count: wps.length, open: secOpen.wp, onToggle: () => tog('wp') },
-          h(WaypointList, { key: doc.id, wps, sel, actions, ready })),
+          h(WaypointList, { key: doc.id, wps, names, sel, actions, ready })),
         h(Section, { icon: 'route', title: 'Segments', count: Math.max(0, wps.length - 1), open: !!secOpen.sg, onToggle: () => tog('sg') },
-          h(SegmentList, { wps, sel, actions })),
-        h(Section, { icon: 'rotation', title: 'Rotation Targets', count: doc.targets.length, open: secOpen.rt, onToggle: () => tog('rt') },
+          h(SegmentList, { wps, names, sel, actions })),
+        h(Section, { icon: 'rotation', title: 'Rotation targets', count: doc.targets.length, open: secOpen.rt, onToggle: () => tog('rt') },
           doc.targets.length === 0 ? h('div', { className: 'featempty' }, 'Press R, then click the path') :
             doc.targets.map((t, i) => h('div', { key: i, className: 'featrow' + (sel.kind === 'rt' && sel.idx === i ? ' sel' : '') },
-              h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'rt' && sel.idx === i, onClick: () => actions.select('rt', i), onDoubleClick: (e) => inspectItem(actions, 'rt', i, e) }, h('span', { className: 'featdot n' }), h('span', { className: 'featnm' }, t.deg.toFixed(0) + '\u00b0'), h('span', { className: 'featmeta' }, t.anchor === 'dist' ? UnitPrefs.format(t.d != null ? t.d : PM.featureFraction(t, derived.sample) * derived.sample.length, 'm', 1) : (PM.featureFraction(t, derived.sample) * 100).toFixed(0) + '%')),
+              h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'rt' && sel.idx === i, onClick: (event) => { if (event.shiftKey) actions.delTarget(i); else actions.select('rt', i); }, onDoubleClick: (e) => inspectItem(actions, 'rt', i, e) }, h('span', { className: 'featdot n' }), h('span', { className: 'featnm' }, t.deg.toFixed(0) + '\u00b0'), h('span', { className: 'featmeta' }, t.anchor === 'dist' ? UnitPrefs.format(t.d != null ? t.d : PM.featureFraction(t, derived.sample) * derived.sample.length, 'm', 1) : (PM.featureFraction(t, derived.sample) * 100).toFixed(0) + '%')),
               h('button', { className: 'featdel', 'aria-label': 'Delete rotation target', title: 'Delete', onClick: () => actions.delTarget(i) }, h(Icon, { name: 'trash', size: 12 }))))),
-        h(Section, { icon: 'flag2', title: 'Event Markers', count: doc.markers.length, open: secOpen.em, onToggle: () => tog('em') },
+        h(Section, { icon: 'flag2', title: 'Commands', count: doc.markers.length, open: secOpen.em, onToggle: () => tog('em') },
           doc.markers.length === 0 ? h('div', { className: 'featempty' }, 'Press M, then click the path') :
             doc.markers.map((m, i) => h('div', { key: i, className: 'featrow' + (sel.kind === 'em' && sel.idx === i ? ' sel' : '') },
-              h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'em' && sel.idx === i, onClick: () => actions.select('em', i), onDoubleClick: (e) => inspectItem(actions, 'em', i, e) }, h('span', { className: 'featdot n' }), h('span', { className: 'featnm', title: m.name }, m.name), h('span', { className: 'featmeta' }, m.anchor === 'dist' ? UnitPrefs.format(m.d != null ? m.d : PM.featureFraction(m, derived.sample) * derived.sample.length, 'm', 1) : (PM.featureFraction(m, derived.sample) * 100).toFixed(0) + '%')),
+              h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'em' && sel.idx === i, onClick: (event) => { if (event.shiftKey) actions.delMarker(i); else actions.select('em', i); }, onDoubleClick: (e) => inspectItem(actions, 'em', i, e) }, h('span', { className: 'featdot n' }), h('span', { className: 'featnm', title: m.name }, m.name), h('span', { className: 'featmeta' }, m.anchor === 'dist' ? UnitPrefs.format(m.d != null ? m.d : PM.featureFraction(m, derived.sample) * derived.sample.length, 'm', 1) : (PM.featureFraction(m, derived.sample) * 100).toFixed(0) + '%')),
               h('button', { className: 'featdel', 'aria-label': 'Delete event marker ' + m.name, title: 'Delete', onClick: () => actions.delMarker(i) }, h(Icon, { name: 'trash', size: 12 }))))),
-        h(Section, { icon: 'gauge', title: 'Constraint Ranges', count: (doc.ranges || []).length, open: secOpen.cr !== false, onToggle: () => tog('cr') },
+        h(Section, { icon: 'gauge', title: 'Constraint regions', count: (doc.ranges || []).length, open: secOpen.cr !== false, onToggle: () => tog('cr') },
           (doc.ranges || []).length === 0 ? h('div', { className: 'featempty' }, 'Press C, then drag the path') :
             doc.ranges.map((rg, i) => { const effective = (derived.effRanges && derived.effRanges[i]) || rg; const summary = constraintRangeSummary(rg, doc.constraints, robot); const rangeLabel = summary ? summary.text : (rg.name || 'Constraint range'); const rangeMeta = rg.anchor === 'dist' ? UnitPrefs.fromCanonical(Math.min(effective.f0, effective.f1) * derived.sample.length, 'm').toFixed(1) + '\u2013' + UnitPrefs.format(Math.max(effective.f0, effective.f1) * derived.sample.length, 'm', 1) : rg.anchor === 'wp' && rg.t0 != null && rg.t1 != null ? 'S' + ((rg.w0 || 0) + 1) + ' ' + Math.round(rg.t0 * 100) + '% \u2013 S' + ((rg.w1 || 0) + 1) + ' ' + Math.round(rg.t1 * 100) + '%' : rg.anchor === 'wp' ? 'Waypoint ' + Math.min(rg.w0 || 0, rg.w1 || 0) + '\u2013' + Math.max(rg.w0 || 0, rg.w1 || 0) : (Math.min(effective.f0, effective.f1) * 100).toFixed(0) + '\u2013' + (Math.max(effective.f0, effective.f1) * 100).toFixed(0) + '%'; return h('div', { key: i, className: 'featrow' + (sel.kind === 'cr' && sel.idx === i ? ' sel' : '') },
-              h('button', { className: 'featselect', type: 'button', 'aria-label': 'Constraint range, ' + (summary ? summary.ariaLabel : rangeLabel) + ', ' + rangeMeta, 'aria-pressed': sel.kind === 'cr' && sel.idx === i, onClick: () => actions.select('cr', i), onDoubleClick: (e) => inspectItem(actions, 'cr', i, e) }, h('span', { className: 'featdot w' }), h('span', { className: 'featnm' }, rangeLabel), h('span', { className: 'featmeta' }, rangeMeta)),
+              h('button', { className: 'featselect', type: 'button', 'aria-label': 'Constraint range, ' + (summary ? summary.ariaLabel : rangeLabel) + ', ' + rangeMeta, 'aria-pressed': sel.kind === 'cr' && sel.idx === i, onClick: (event) => { if (event.shiftKey) actions.delRange(i); else actions.select('cr', i); }, onDoubleClick: (e) => inspectItem(actions, 'cr', i, e) }, h('span', { className: 'featdot w' }), h('span', { className: 'featnm' }, rangeLabel), h('span', { className: 'featmeta' }, rangeMeta)),
               h('button', { className: 'featdel', 'aria-label': 'Delete constraint range', title: 'Delete', onClick: () => actions.delRange(i) }, h(Icon, { name: 'trash', size: 12 }))); }))));
   }
 
@@ -226,7 +231,7 @@ import { UI } from "./ui";
       }));
       const targets = ((doc && doc.targets) || []).map((target, index) => ({
         key: 'target-' + index,
-        label: 'Rotation target ' + (index + 1) + ' · ' + Number(target.deg || 0).toFixed(0) + '°',
+        label: 'Rotation target ' + (index + 1) + ', ' + Number(target.deg || 0).toFixed(0) + '°',
         left: percentAt(PM.featureFraction(target, derived.sample)),
       }));
       const ranges = (derived.effRanges || []).map((range, index) => {
@@ -235,7 +240,7 @@ import { UI } from "./ui";
       });
       const waypoints = (derived.wpFrac || []).slice(1, -1).map((fraction, index) => ({
         key: 'waypoint-' + index,
-        label: 'Waypoint ' + (index + 2) + (((doc && doc.waypoints && doc.waypoints[index + 1] || {}).stop) ? ' · stop' : ''),
+        label: PathLinks.waypointName(null, doc, index + 1) + (((doc && doc.waypoints && doc.waypoints[index + 1] || {}).stop) ? ', stop' : ''),
         left: percentAt(fraction),
         stop: !!(doc && doc.waypoints && doc.waypoints[index + 1] && doc.waypoints[index + 1].stop),
       }));
@@ -246,7 +251,7 @@ import { UI } from "./ui";
       timeline.markers.length ? timeline.markers.length + (timeline.markers.length === 1 ? ' event' : ' events') : '',
       timeline.targets.length ? timeline.targets.length + (timeline.targets.length === 1 ? ' target' : ' targets') : '',
       timeline.ranges.length ? timeline.ranges.length + (timeline.ranges.length === 1 ? ' range' : ' ranges') : '',
-    ].filter(Boolean).join(' · ');
+    ].filter(Boolean).join(', ');
     const timelineTicks = [0, 0.25, 0.5, 0.75, 1].map((fraction) => ({
       fraction,
       label: (total * fraction).toFixed(total < 10 ? 2 : 1) + 's',

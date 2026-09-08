@@ -7,7 +7,7 @@ For renderer changes, review the affected workflow in the built app before calli
 - Use sentence-case labels. Distinguish groups with spacing and weight; avoid uppercase microheaders, repeated badges, and nested containers that do not help a decision.
 - Keep primary item names readable. Move secondary metadata below a name or allow wrapping before truncating it. A tooltip does not replace a usable label.
 - Align shared content and action columns. Reserve action space so hover, selection, and async values do not move labels. Inspect visible text, not only bounding boxes.
-- Give each action one predictable meaning. Selection gestures must not delete objects. Create spatial features through deliberate placement on the field.
+- Give each action one predictable meaning. Plain selection must not delete objects. Shift-click explicitly deletes authored field and outline features; library Shift selection remains a range gesture. Create spatial features through deliberate placement on the field.
 - Keep ordinary successful background work quiet. Separate loading, failure, and ready states; errors get one explanation and a usable recovery action.
 - Show units consistently wherever the same quantity appears. Convert at the display/input boundary, preserving canonical stored values.
 - Reuse the existing menu, dialog, row, and field patterns. Check their actual token definitions and keyboard behavior before introducing another variant.
