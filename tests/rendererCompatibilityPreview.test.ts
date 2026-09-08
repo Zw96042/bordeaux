@@ -108,12 +108,13 @@ describe("renderer application", () => {
     expect(fs.existsSync(new URL("../src/renderer/legacy", import.meta.url))).toBe(false);
   });
 
-  it("presents deliberate optimization and Java export", () => {
+  it("presents deliberate optimization and BDX export", () => {
     const panels = fs.readFileSync(new URL("../src/renderer/components/Panels.jsx", import.meta.url), "utf8");
     const app = fs.readFileSync(new URL("../src/renderer/app/App.jsx", import.meta.url), "utf8");
     expect(panels).toContain("optimizationApplied ? 'Optimized' : 'Optimize'");
     expect(panels).not.toContain("function PlannerFamily");
-    expect(app).toContain("exportJava");
+    expect(app).toContain("exportBdx");
+    expect(app).not.toContain("exportRobot");
     expect(panels).not.toMatch(/LabVIEW|labview|\.bdx/);
     expect(app).toContain("normalizeProjectData(raw)");
   });
@@ -152,13 +153,13 @@ describe("renderer application", () => {
     expect(app).not.toContain("setPlannerId");
   });
 
-  it("persists and restores the selected path and Java project bookmark", () => {
+  it("persists and restores the selected path and Robot project bookmark", () => {
     const app = fs.readFileSync(new URL("../src/renderer/app/App.jsx", import.meta.url), "utf8");
-    expect(app).toContain("javaProjectBookmarkId: result.bookmarkId");
+    expect(app).toContain("robotProjectBookmarkId: result.bookmarkId");
     expect(app).toContain("activePathId }" );
     expect(app).toContain("const requestedPathId = next.editor && next.editor.activePathId");
-    expect(app).toContain("openRecentJavaProject(next.editor.javaProjectBookmarkId, javaGeneration)");
-    expect(app).toContain("javaRestoreGeneration.current !== generation");
+    expect(app).toContain("openRecentRobotProject(next.editor.robotProjectBookmarkId, robotGeneration)");
+    expect(app).toContain("robotRestoreGeneration.current !== generation");
     expect(app).toContain("window.bordeauxAPI.autosaveProject");
   });
 
@@ -228,8 +229,9 @@ describe("renderer application", () => {
   it("offers clustered tool aliases and preserves the established shortcuts", () => {
     const app = fs.readFileSync(new URL("../src/renderer/app/App.jsx", import.meta.url), "utf8");
     const panels = fs.readFileSync(new URL("../src/renderer/components/Panels.jsx", import.meta.url), "utf8");
-    expect(app).toContain("'1': 'select', '2': 'waypoint', '3': 'rotation', '4': 'marker', '5': 'range'");
-    expect(app).toContain("v: 'select', w: 'waypoint', r: 'rotation', m: 'marker', c: 'range'");
+    expect(app).toContain("TOOL_SHORTCUTS[k]");
+    const shortcuts = fs.readFileSync(new URL("../src/renderer/components/KeyboardHelp.jsx", import.meta.url), "utf8");
+    for (const [key, tool] of Object.entries({ v: 'select', w: 'waypoint', r: 'rotation', m: 'marker', c: 'range' })) expect(shortcuts).toContain(key + ": '" + tool + "'");
     expect(panels).toContain("alternateKey: 'V'");
     expect(panels).toContain("alternateKey: 'C'");
   });
