@@ -10,15 +10,15 @@ The supplied draft has a silent audio track. Record the voiceover below, then re
 | 00:13–00:19 | Play the move back before the robot does. Time, distance, and direction remain visible together. | Marker crosses the score point; timeline remains in view. |
 | 00:19–00:24.5 | Then review that path as one part of the complete autonomous run before export. | Marker reaches the final waypoint. |
 | 00:24.5–00:28.5 | In Aquitaine, connect paths, commands, waits, and sensor decisions together. | Routine feature card. |
-| 00:28.5–00:32.5 | Validate typed Java events through a versioned handoff, without deploying. | Java feature card. |
+| 00:28.5–00:32.5 | Validate typed LabVIEW events through a versioned handoff, without deploying. | LabVIEW feature card. |
 | 00:32.5–00:35.5 | Bordeaux. Draw the path. Know the run. | End card with repository URL. |
 | 00:35.5–00:37.5 | — | Hold the final card in silence for legibility. |
 
 ## 15-second cut
 
-**Voiceover:** “A path is more than a line. Bordeaux keeps robot limits, trajectory playback, autonomous routines, and typed Java events in one inspectable project. Available in beta. Draw the path. Know the run.”
+**Voiceover:** “A path is more than a line. Bordeaux keeps robot limits, trajectory playback, autonomous routines, and typed LabVIEW events in one inspectable project. Available in beta. Draw the path. Know the run.”
 
-Picture order: title (2 s) → planner playback (7 s) → Aquitaine (2 s) → Java (2 s) → end card (2 s).
+Picture order: title (2 s) → planner playback (7 s) → Aquitaine (2 s) → LabVIEW (2 s) → end card (2 s).
 
 ## Six-second bumper
 

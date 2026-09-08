@@ -18,7 +18,7 @@ The generator creates both SVG source and PNG export for:
 
 - Horizontal dark/light wordmarks, stacked lockup, and monochrome mark
 - 1200×630 Open Graph, 1080 square, 1080×1920 story, 1280×720 thumbnail, and 1200 quote card
-- Plan, Aquitaine, and Java product feature cards
+- Plan, Aquitaine, and LabVIEW product feature cards
 - 1920×1080 title, chapter, end, and transparent lower-third cards
 - 2560×1440 desktop and 1290×2796 mobile wallpapers
 
@@ -41,9 +41,9 @@ Other requirements: Node.js, Python 3, FFmpeg/FFprobe, and `rsvg-convert`. Sourc
 
 ## Recommended release set
 
-1. Website hero and social unfurl: `assets/social/og-1200x630.png`
 2. Main feed announcement: `assets/social/square-1080x1080.png`
-3. Story/Reel cover: `assets/social/story-1080x1920.png`
 4. YouTube thumbnail: `assets/social/youtube-thumbnail-1280x720.png`
 5. Launch film: record the shots in `video/shot-list.csv`, then replace the code-built walkthrough in the supplied edit using `video/edit-notes.md`.
 6. Startup choice: use the Blender-rendered **Spill / Route** for first launch and **Precision Lock** for repeat sessions. **Ribbon Flight** is the more editorial launch-media option. Review all three in `../prototypes/startup-animations/index.html`.
+
+Retired language-specific launch artwork is preserved in the pre-refresh backup. Regenerate the current asset source before publishing a new launch campaign.

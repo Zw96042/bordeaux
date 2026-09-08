@@ -55,8 +55,8 @@ if [[ -f "$startup_master" ]]; then
     -t 4 -an -c:v libx264 -preset slow -crf 18 -pix_fmt yuv420p -r 30 \
     "$work_dir/01-title.mp4"
 else
-  echo "Spill / Route master not found; using the static title-card fallback." >&2
-  make_still_clip "$script_dir/assets/video/title-card-1920x1080.png" 4 "$work_dir/01-title.mp4"
+  echo "Spill / Route master not found; using the static plan-card fallback." >&2
+  make_still_clip "$script_dir/assets/video/chapter-plan-1920x1080.png" 4 "$work_dir/01-title.mp4"
 fi
 make_still_clip "$script_dir/assets/video/chapter-plan-1920x1080.png" 2.5 "$work_dir/02-plan.mp4"
 
@@ -66,7 +66,6 @@ make_still_clip "$script_dir/assets/video/chapter-plan-1920x1080.png" 2.5 "$work
   -an -c:v libx264 -preset slow -crf 18 -pix_fmt yuv420p -r 30 "$work_dir/03-demo.mp4"
 
 make_still_clip "$script_dir/assets/product/feature-routines-1600x900.png" 4 "$work_dir/04-routines.mp4"
-make_still_clip "$script_dir/assets/product/feature-java-1600x900.png" 4 "$work_dir/05-java.mp4"
 make_still_clip "$script_dir/assets/video/end-card-1920x1080.png" 5 "$work_dir/06-end.mp4"
 
 printf "file '%s'\n" \
@@ -74,7 +73,6 @@ printf "file '%s'\n" \
   "$work_dir/02-plan.mp4" \
   "$work_dir/03-demo.mp4" \
   "$work_dir/04-routines.mp4" \
-  "$work_dir/05-java.mp4" \
   "$work_dir/06-end.mp4" > "$work_dir/concat.txt"
 
 "$ffmpeg_bin" -hide_banner -loglevel error -y \

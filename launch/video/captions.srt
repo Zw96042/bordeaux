@@ -24,7 +24,7 @@ In Aquitaine, connect paths, commands, waits, and sensor decisions together.
 
 7
 00:00:28,500 --> 00:00:32,500
-Validate typed Java events through a versioned handoff, without deploying.
+Validate typed LabVIEW events through a versioned handoff, without deploying.
 
 8
 00:00:32,500 --> 00:00:35,500

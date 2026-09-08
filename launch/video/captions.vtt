@@ -19,7 +19,7 @@ Then review that path as one part of the complete autonomous run before export.
 In Aquitaine, connect paths, commands, waits, and sensor decisions together.
 
 00:28.500 --> 00:32.500
-Validate typed Java events through a versioned handoff, without deploying.
+Validate typed LabVIEW events through a versioned handoff, without deploying.
 
 00:32.500 --> 00:35.500
 Bordeaux. Draw the path. Know the run.

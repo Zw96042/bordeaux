@@ -6,7 +6,7 @@
 
 ## Short deck
 
-Bordeaux is a focused desktop editor for authoring FRC robot paths, autonomous routines, physical constraints, and typed Java command events in one inspectable project.
+Bordeaux is a focused desktop editor for authoring FRC robot paths, autonomous routines, physical constraints, and typed LabVIEW command events in one inspectable project.
 
 ## Announcement
 
@@ -20,7 +20,7 @@ Bordeaux brings three connected workspaces into one desktop tool:
 - **Aquitaine** — compose complete autonomous routines from paths, commands, waits, stationary actions, and sensor decisions.
 - **Robot** — describe the drivetrain, bumper footprint, geometry, gearing, mass, units, and physical limits used to preview and bound motion.
 
-For Java teams, Bordeaux can install managed support files after a preview, discover annotated command factories through a deterministic catalog, validate typed arguments, and export a versioned JSON contract. It does not edit `RobotContainer`, and it does not deploy robot code.
+For LabVIEW teams, Bordeaux can install managed support files after a preview, discover LabVIEW command factories through a deterministic catalog, validate typed arguments, and export a versioned JSON contract. It does not edit `RobotContainer`, and it does not deploy robot code.
 
 Agent access is optional and off by default. When enabled, planning produces a small ranked set of bounded candidates. Every proposed change remains staged behind explicit Apply and Reject controls in the editor.
 

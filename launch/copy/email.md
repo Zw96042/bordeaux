@@ -4,7 +4,7 @@
 
 1. Bordeaux beta: draw the path, know the run
 2. Meet Bordeaux, a focused FRC autonomous editor
-3. From waypoint to Java handoff—inside one project
+3. From waypoint to LabVIEW handoff—inside one project
 
 ## Preheader
 
@@ -24,7 +24,7 @@ In the current beta, you can:
 - play trajectories back on the field and inspect timing;
 - compose full autonomous routines in Aquitaine;
 - model the drivetrain and robot footprint;
-- connect typed Java command events through a versioned export contract; and
+- connect typed LabVIEW command events through a versioned export contract; and
 - review every agent proposal before applying it.
 
 Bordeaux never edits `RobotContainer` and never deploys robot code. It is beta software, so validate every exported trajectory in simulation and on a safely controlled robot before relying on it in competition.

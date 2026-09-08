@@ -18,7 +18,7 @@ For the final release, replace this synthesized walkthrough with a real packaged
 
 Show the Aquitaine sequence as one vertical chain: Path → Command → Decision. The cut should make it obvious the path is now part of a larger run.
 
-## 5. Java handoff — 0:28.5–0:32.5
+## 5. LabVIEW handoff — 0:28.5–0:32.5
 
 Show the annotation and a visible validation state. Do not show a deploy button or imply Bordeaux changes team-owned robot wiring.
 
