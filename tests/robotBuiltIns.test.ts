@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { generatedCatalogHash, parseGeneratedJavaCatalog } from "../src/electron/javaGeneratedCatalog";
+import { generatedCatalogHash, parseGeneratedRobotCatalog } from "../src/electron/robotGeneratedCatalog";
 import { createDemoProject } from "../src/shared/project/defaults";
 import { validateProject } from "../src/shared/validation";
-import { buildJavaTrajectory } from "../src/shared/export/javaTrajectory";
-import type { JavaBuiltInDescriptor, JavaCommandCatalog, RoutineBuiltInNode } from "../src/shared/types";
+import { buildRobotTrajectory } from "../src/shared/export/robotTrajectory";
+import type { RobotBuiltInDescriptor, RobotCommandCatalog, RoutineBuiltInNode } from "../src/shared/types";
 // @ts-expect-error Routine authoring remains a legacy JavaScript module.
 import { AUTO } from "../src/renderer/lib/routineModel";
 
-const wait: JavaBuiltInDescriptor = {
+const wait: RobotBuiltInDescriptor = {
   id: "bordeaux.wait",
   kind: "wait",
   label: "Wait",
@@ -23,12 +23,12 @@ const wait: JavaBuiltInDescriptor = {
     min: 0.02,
     max: 15,
     role: "argument",
-    javaType: "double",
-    schema: { kind: "number", javaType: "double" },
+    valueType: "DBL",
+    schema: { kind: "number", valueType: "DBL" },
   }],
 };
 
-function generatedCatalog(): JavaCommandCatalog {
+function generatedCatalog(): RobotCommandCatalog {
   return {
     projectName: "Competition robot",
     sourceFileCount: 1,
@@ -38,8 +38,8 @@ function generatedCatalog(): JavaCommandCatalog {
     catalogId: "competition-robot",
     supportVersion: "0.3.0",
     catalogHash: `sha256:${"a".repeat(64)}`,
-    commands: [{ id: "robot.Auto#score", label: "Score", ownerType: "robot.Auto", member: "score", kind: "factory", confidence: "confirmed", runtimeReady: true, parameters: [], source: { file: "Auto.java", line: 1 } }],
-    conditions: [{ id: "robot.Conditions#ready", label: "Ready", ownerType: "robot.Conditions", member: "ready", source: { file: "Conditions.java", line: 1 } }],
+    commands: [{ id: "robot.Auto#score", label: "Score", ownerType: "robot.Auto", member: "score", kind: "factory", confidence: "confirmed", runtimeReady: true, parameters: [], source: { file: "Auto.vi", line: 1 } }],
+    conditions: [{ id: "robot.Conditions#ready", label: "Ready", ownerType: "robot.Conditions", member: "ready", source: { file: "Conditions.vi", line: 1 } }],
     builtIns: [wait],
     warnings: [],
   };
@@ -59,13 +59,13 @@ describe("Bordeaux-owned routine built-ins", () => {
       builtIns: [wait],
     };
 
-    expect(parseGeneratedJavaCatalog(catalog)).toMatchObject({
+    expect(parseGeneratedRobotCatalog(catalog)).toMatchObject({
       schemaVersion: "1.2",
       builtIns: [wait],
     });
 
-    expect(() => parseGeneratedJavaCatalog({ ...catalog, builtIns: undefined })).toThrow(/exact Bordeaux-owned built-in/i);
-    expect(() => parseGeneratedJavaCatalog({ ...catalog, builtIns: [{ ...wait, label: "Delay" }] })).toThrow(/built-in/i);
+    expect(() => parseGeneratedRobotCatalog({ ...catalog, builtIns: undefined })).toThrow(/exact Bordeaux-owned built-in/i);
+    expect(() => parseGeneratedRobotCatalog({ ...catalog, builtIns: [{ ...wait, label: "Delay" }] })).toThrow(/built-in/i);
   });
 
   it("returns an isolated built-in descriptor for each parsed catalog", () => {
@@ -80,10 +80,10 @@ describe("Bordeaux-owned routine built-ins", () => {
       conditions,
       builtIns: [wait],
     };
-    const first = parseGeneratedJavaCatalog(catalog);
+    const first = parseGeneratedRobotCatalog(catalog);
     (first.builtIns[0] as unknown as { label: string }).label = "Mutated";
 
-    expect(parseGeneratedJavaCatalog(catalog).builtIns[0].label).toBe("Wait");
+    expect(parseGeneratedRobotCatalog(catalog).builtIns[0].label).toBe("Wait");
   });
 
   it("requires a bounded, exact Wait argument in project routines", () => {
@@ -106,18 +106,18 @@ describe("Bordeaux-owned routine built-ins", () => {
   it("serializes Wait only against the 1.2 generated contract", () => {
     const project = createDemoProject();
     project.routines[0].nodes = [{ id: "wait", type: "builtin", builtinId: "bordeaux.wait", arguments: { durationS: 0.25 } }];
-    expect(buildJavaTrajectory(project, generatedCatalog()).document.routine?.nodes).toEqual([
+    expect(buildRobotTrajectory(project, generatedCatalog()).document.routine?.nodes).toEqual([
       { id: "wait", type: "builtin", builtinId: "bordeaux.wait", arguments: { durationS: 0.25 } },
     ]);
 
     const legacy = generatedCatalog();
     legacy.generatedSchemaVersion = "1.1";
     legacy.supportVersion = "0.2.0";
-    expect(() => buildJavaTrajectory(project, legacy)).toThrow(/schema 1\.2/i);
+    expect(() => buildRobotTrajectory(project, legacy)).toThrow(/schema 1\.2/i);
 
     const missing = generatedCatalog();
     missing.builtIns = [];
-    expect(() => buildJavaTrajectory(project, missing)).toThrow(/bordeaux\.wait/i);
+    expect(() => buildRobotTrajectory(project, missing)).toThrow(/bordeaux\.wait/i);
   });
 
   it("serializes a path, generated condition, Wait, and command in one routine", () => {
@@ -133,7 +133,7 @@ describe("Bordeaux-owned routine built-ins", () => {
       else: [],
     }];
 
-    const root = buildJavaTrajectory(project, generatedCatalog()).document.routine!.nodes[0] as { then: unknown[] };
+    const root = buildRobotTrajectory(project, generatedCatalog()).document.routine!.nodes[0] as { then: unknown[] };
     expect(root.then).toEqual([
       { id: "wait", type: "builtin", builtinId: "bordeaux.wait", arguments: { durationS: 0.25 } },
       expect.objectContaining({ id: "score", type: "function", cat: "command" }),
