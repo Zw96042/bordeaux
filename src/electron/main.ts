@@ -136,11 +136,7 @@ function showUpdateMessage(options: Electron.MessageBoxOptions): Promise<Electro
 }
 
 function stopBackgroundServices(): Promise<void> {
-  cancelJavaCatalogBuild(true);
-  activeRobotPush?.controller.abort();
-  pendingRobotOperation = null;
   diagnosticBundleCapability.clear();
-  robotPushPreparationGeneration += 1;
   rejectProposalReceipts("Bordeaux is shutting down.");
   if (backgroundShutdownPromise) return backgroundShutdownPromise;
   const bridge = agentBridge;
@@ -160,6 +156,10 @@ function createAppUpdateController(): AppUpdateController {
   if (supported) nativeAutoUpdater.on("before-quit-for-update", () => { allowClose = true; });
   const packaged = app.isPackaged;
   return new AppUpdateController(packaged && supported ? updateClient : null, {
+    available: async (version, releaseNotes) => {
+      const result = await showUpdateMessage({ type: "info", title: "Bordeaux update available", message: `Bordeaux ${version} is available`, detail: releaseNotes, buttons: ["Later", "Download Update"], defaultId: 0, cancelId: 0, noLink: true });
+      return result.response === 1 ? "download" : "later";
+    },
     unavailable: (currentVersion) => showUpdateMessage({
       type: "info",
       title: "Bordeaux updates",
@@ -224,9 +224,8 @@ function createAppUpdateController(): AppUpdateController {
 
 function activateProjectTarget(filePath: string | null): void {
   currentProjectPath = filePath;
+  currentProjectFolder = filePath ? path.dirname(filePath) : null;
   projectTargetGeneration += 1;
-  pendingRobotOperation = null;
-  robotPushPreparationGeneration += 1;
 }
 
 async function rememberFile(filePath: string) {
@@ -1253,10 +1252,10 @@ if (ownsDesktopInstance) app.whenReady().then(async () => {
     return;
   }
   try {
-    javaProjectBookmarks = await readJavaProjectBookmarks(javaProjectBookmarksFile());
+    robotProjectBookmarks = await readRobotProjectBookmarks(robotProjectBookmarksFile());
   } catch (error) {
-    javaProjectBookmarks = [];
-    console.warn("Could not load Java project bookmarks:", error);
+    robotProjectBookmarks = [];
+    console.warn("Could not load Robot project bookmarks:", error);
   }
   try {
     recentFiles = await readRecentProjectFiles(recentProjectsFile());
