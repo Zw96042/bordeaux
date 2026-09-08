@@ -1,4 +1,6 @@
+import { PathLinks } from "../lib/pathLinks";
 import { SharedWaypointPosition } from "./SharedWaypointPosition";
+import { LabviewCommandInspection, LabviewProjectSources } from "./LabviewProjectSources";
 import * as React from "react";
 import { AUTO } from "../lib/routineModel";
 import { PM } from "../lib/pathMath";
@@ -7,7 +9,7 @@ import { FIELD_DIMS } from "./FieldView";
 import { UI } from "./ui";
 
   const h = React.createElement;
-  const { Num, Toggle, Seg, Icon, Dropdown, constraintRangeSummary } = UI;
+  const { Num, Toggle, Seg, Icon, Dropdown, ChoiceBrowser, constraintRangeSummary } = UI;
   const { FIELD_W, FIELD_H } = FIELD_DIMS;
 
   const HEAD_MODES = [{ v: 'manual', label: 'Manual' }, { v: 'tangent', label: 'Tangent' }, { v: 'targets', label: 'Targets' }];
@@ -65,26 +67,20 @@ import { UI } from "./ui";
     return String(value).replace(/[^A-Za-z0-9_-]+/g, '-');
   }
 
-  function simpleJavaName(value) {
+  function simpleRobotName(value) {
     return String(value || '').split('.').pop() || String(value || '');
   }
 
-  function javaIntegerRange(javaType) {
-    const simple = String(javaType || '').split('.').pop();
-    if (simple === 'byte' || simple === 'Byte') return [-128, 127];
-    if (simple === 'short' || simple === 'Short') return [-32768, 32767];
-    if (simple === 'int' || simple === 'Integer') return [-2147483648, 2147483647];
-    return null;
+  function robotIntegerRange(valueType) {
+    return { I8: [-128, 127], U8: [0, 255], I16: [-32768, 32767], U16: [0, 65535], I32: [-2147483648, 2147483647], U32: [0, 4294967295] }[valueType] || null;
   }
 
-  function exactIntegerStringError(value, javaType) {
+  function exactIntegerStringError(value, valueType) {
     if (typeof value !== 'string' || !/^[+-]?\d+$/.test(value)) return 'must be a whole number written as digits.';
     if (value.length > 1024) return 'cannot exceed 1024 characters.';
-    const simple = String(javaType || '').split('.').pop();
-    if (simple === 'long' || simple === 'Long') {
-      const parsed = BigInt(value);
-      if (parsed < BigInt('-9223372036854775808') || parsed > BigInt('9223372036854775807')) return 'must fit the signed 64-bit long range.';
-    }
+    const parsed = BigInt(value);
+    if (valueType === 'I64' && (parsed < -9223372036854775808n || parsed > 9223372036854775807n)) return 'must fit the signed 64-bit range.';
+    if (valueType === 'U64' && (parsed < 0n || parsed > 18446744073709551615n)) return 'must fit the unsigned 64-bit range.';
     return '';
   }
 
@@ -107,18 +103,18 @@ import { UI } from "./ui";
     if (schema.kind === 'boolean') return typeof value === 'boolean' ? '' : location + ' must be true or false.';
     if (schema.kind === 'integer') {
       if (!Number.isSafeInteger(value)) return location + ' must be a safe whole number.';
-      const range = javaIntegerRange(schema.javaType);
-      return !range || (value >= range[0] && value <= range[1]) ? '' : location + ' is outside the range for ' + schema.javaType + '.';
+      const range = robotIntegerRange(schema.valueType);
+      return !range || (value >= range[0] && value <= range[1]) ? '' : location + ' is outside the range for ' + schema.valueType + '.';
     }
     if (schema.kind === 'integerString') {
-      const error = exactIntegerStringError(value, schema.javaType);
+      const error = exactIntegerStringError(value, schema.valueType);
       return error ? location + ' ' + error : '';
     }
     if (schema.kind === 'decimalString') {
       const error = exactDecimalStringError(value);
       return error ? location + ' ' + error : '';
     }
-    if (schema.kind === 'number') return typeof value === 'number' && Number.isFinite(value) ? '' : location + ' must be a finite number.';
+    if (schema.kind === 'number') return typeof value !== 'number' || !Number.isFinite(value) ? location + ' must be a finite number.' : schema.valueType === 'SGL' && !Number.isFinite(Math.fround(value)) ? location + ' must fit the SGL range.' : '';
     if (schema.kind === 'string') return typeof value === 'string' ? '' : location + ' must be text.';
     if (schema.kind === 'enum') return typeof value === 'string' && (schema.enumValues || []).includes(value) ? '' : location + ' must be one of the discovered enum values.';
     if (schema.kind === 'array') {
@@ -194,21 +190,23 @@ import { UI } from "./ui";
     return a.sign < 0 ? -magnitude : magnitude;
   }
 
-  function parameterMetadata(parameter, javaType) {
-    if (!parameter) return javaType;
-    return [javaType, parameter.unit, parameter.description].filter(Boolean).join(' · ');
+  function parameterMetadata(parameter, valueType) {
+    if (!parameter) return valueType;
+    return [valueType, parameter.unit, parameter.description].filter(Boolean).join(' / ');
   }
 
-  function NumberValueEditor({ id, label, value, integer, javaType, parameter, onChange }) {
+  function NumberValueEditor({ id, label, value, integer, valueType, parameter, onChange }) {
     const formatted = Number.isFinite(value) ? String(value) : '';
     const [draft, setDraft] = React.useState(formatted);
     const [error, setError] = React.useState('');
     React.useEffect(() => { setDraft(formatted); setError(''); }, [formatted, id]);
     const validate = (next, commit) => {
       const parsed = Number(next);
-      const range = integer ? javaIntegerRange(javaType) : null;
+      const range = integer ? robotIntegerRange(valueType) : null;
       const message = next.trim() === '' || !Number.isFinite(parsed)
         ? 'Enter a finite number.'
+        : valueType === 'SGL' && !Number.isFinite(Math.fround(parsed))
+          ? 'Enter a value within the SGL range.'
         : integer && !Number.isSafeInteger(parsed)
           ? 'Enter a whole number.'
           : range && (parsed < range[0] || parsed > range[1])
@@ -240,17 +238,17 @@ import { UI } from "./ui";
         onBlur: (event) => validate(event.currentTarget.value, true),
         onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(event.currentTarget.value, true); event.currentTarget.blur(); } },
       }),
-      h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, javaType)),
+      h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, valueType)),
       error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
   }
 
-  function IntegerStringValueEditor({ id, label, value, javaType, parameter, onChange }) {
+  function IntegerStringValueEditor({ id, label, value, valueType, parameter, onChange }) {
     const formatted = typeof value === 'string' ? value : '';
     const [draft, setDraft] = React.useState(formatted);
     const [error, setError] = React.useState('');
     React.useEffect(() => { setDraft(formatted); setError(''); }, [formatted, id]);
     const validate = (next, commit) => {
-      const exactError = exactIntegerStringError(next.trim(), javaType);
+      const exactError = exactIntegerStringError(next.trim(), valueType);
       let message = exactError ? 'Value ' + exactError : '';
       if (!message && parameter && parameter.min != null && BigInt(next.trim()) < BigInt(parameter.min)) message = 'Enter a value of at least ' + parameter.min + '.';
       if (!message && parameter && parameter.max != null && BigInt(next.trim()) > BigInt(parameter.max)) message = 'Enter a value of at most ' + parameter.max + '.';
@@ -278,11 +276,11 @@ import { UI } from "./ui";
         onBlur: (event) => validate(event.currentTarget.value, true),
         onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(event.currentTarget.value, true); event.currentTarget.blur(); } },
       }),
-      h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, javaType + ' · exact integer')),
+      h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, valueType + ', exact integer')),
       error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
   }
 
-  function DecimalStringValueEditor({ id, label, value, javaType, parameter, onChange }) {
+  function DecimalStringValueEditor({ id, label, value, valueType, parameter, onChange }) {
     const formatted = typeof value === 'string' ? value : '';
     const [draft, setDraft] = React.useState(formatted);
     const [error, setError] = React.useState('');
@@ -316,12 +314,12 @@ import { UI } from "./ui";
         onBlur: (event) => validate(event.currentTarget.value, true),
         onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(event.currentTarget.value, true); event.currentTarget.blur(); } },
       }),
-      h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, javaType + ' · exact decimal')),
+      h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, valueType + ', exact decimal')),
       error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
   }
 
   function JsonValueEditor({ id, label, value, schema, onChange }) {
-    const javaType = schema && schema.javaType ? schema.javaType : 'unknown';
+    const valueType = schema && schema.valueType ? schema.valueType : 'unknown';
     const formatted = JSON.stringify(value == null ? {} : value, null, 2);
     const [draft, setDraft] = React.useState(formatted);
     const [error, setError] = React.useState('');
@@ -360,38 +358,38 @@ import { UI } from "./ui";
         onBlur: (event) => validate(event.currentTarget.value, true),
         onKeyDown: (event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); validate(event.currentTarget.value, true); } },
       }),
-      h('span', { id: id + '-type', className: 'cmd-param-type' }, javaType + ' · JSON' + (schema && schema.kind === 'opaque' ? ' · opaque custom values remain editable as JSON' : '')),
+      h('span', { id: id + '-type', className: 'cmd-param-type' }, valueType + ', JSON' + (schema && schema.kind === 'opaque' ? '. Custom values use JSON' : '')),
       error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
   }
 
   function CommandParameterEditor({ id, label, schema, parameter, value, onChange, depth }) {
     const level = depth || 0;
     const current = value === undefined ? (parameter ? parameterDefaultValue(parameter) : defaultSchemaValue(schema, level)) : value;
-    if (!schema || level > 16) return h(JsonValueEditor, { id, label, value: current, schema: schema || { kind: 'opaque', javaType: 'unknown' }, onChange });
+    if (!schema || level > 16) return h(JsonValueEditor, { id, label, value: current, schema: schema || { kind: 'opaque', valueType: 'unknown' }, onChange });
     if (schema.kind === 'boolean') {
       return h('label', { className: 'cmd-check-row', htmlFor: id },
-        h('span', null, h('strong', null, label), h('small', null, parameterMetadata(parameter, schema.javaType))),
+        h('span', null, h('strong', null, label), h('small', null, parameterMetadata(parameter, schema.valueType))),
         h('input', { id, type: 'checkbox', checked: !!current, onChange: (event) => onChange(event.target.checked) }));
     }
     if (schema.kind === 'integer' || schema.kind === 'number') {
-      return h(NumberValueEditor, { id, label, value: current, integer: schema.kind === 'integer', javaType: schema.javaType, parameter, onChange });
+      return h(NumberValueEditor, { id, label, value: current, integer: schema.kind === 'integer', valueType: schema.valueType, parameter, onChange });
     }
     if (schema.kind === 'integerString') {
-      return h(IntegerStringValueEditor, { id, label, value: current, javaType: schema.javaType, parameter, onChange });
+      return h(IntegerStringValueEditor, { id, label, value: current, valueType: schema.valueType, parameter, onChange });
     }
     if (schema.kind === 'decimalString') {
-      return h(DecimalStringValueEditor, { id, label, value: current, javaType: schema.javaType, parameter, onChange });
+      return h(DecimalStringValueEditor, { id, label, value: current, valueType: schema.valueType, parameter, onChange });
     }
     if (schema.kind === 'string') {
       return h('div', { className: 'cmd-param' },
         h('label', { className: 'fieldlabel', htmlFor: id }, label),
         h('input', { id, className: 'textinput cmd-param-input', type: 'text', value: typeof current === 'string' ? current : '', spellCheck: false, autoComplete: 'off', 'data-lpignore': 'true', 'data-1p-ignore': true, onChange: (event) => onChange(event.target.value) }),
-        h('span', { className: 'cmd-param-type' }, parameterMetadata(parameter, schema.javaType)));
+        h('span', { className: 'cmd-param-type' }, parameterMetadata(parameter, schema.valueType)));
     }
     if (schema.kind === 'enum') {
       const options = schema.enumValues || [];
-      if (options.length > 0 && options.length <= 4) {
-        return h('fieldset', { className: 'cmd-choice-group', title: schema.javaType },
+      if (options.length > 0 && options.length <= 3 && options.every((option) => option.length <= 12)) {
+        return h('fieldset', { className: 'cmd-choice-group', title: schema.valueType },
           h('legend', { className: 'fieldlabel' }, label),
           h('div', { className: 'cmd-choice-grid', style: { '--choice-count': options.length } },
             options.map((option) => h('label', { className: 'cmd-choice', key: option },
@@ -413,7 +411,7 @@ import { UI } from "./ui";
       return h('fieldset', { className: 'cmd-param-group' },
         h('legend', null, label),
         h('label', { className: 'cmd-check-row', htmlFor: id + '-enabled' },
-          h('span', null, h('strong', null, 'Set value'), h('small', null, schema.javaType)),
+          h('span', null, h('strong', null, 'Set value'), h('small', null, schema.valueType)),
           h('input', { id: id + '-enabled', type: 'checkbox', checked: enabled, onChange: (event) => onChange(event.target.checked ? defaultSchemaValue(schema.element, level + 1) : null) })),
         enabled && h(CommandParameterEditor, { id: id + '-value', label: 'Value', schema: schema.element, value: current, onChange, depth: level + 1 }));
     }
@@ -421,7 +419,7 @@ import { UI } from "./ui";
       const objectValue = current && typeof current === 'object' && !Array.isArray(current) ? current : {};
       return h('fieldset', { className: 'cmd-param-group' },
         h('legend', null, label),
-        h('div', { className: 'cmd-param-type' }, schema.javaType),
+        h('div', { className: 'cmd-param-type' }, schema.valueType),
         (schema.fields || []).map((field) => h(CommandParameterEditor, {
           key: field.name,
           id: id + '-' + safeControlId(field.name),
@@ -438,7 +436,7 @@ import { UI } from "./ui";
   const JIGGLE_DEFAULTS = { distanceM: 0.03, strokes: 8, startDeg: 45, stepDeg: -45, strokeTimeS: 0.08 };
 
   function ContextInspector(props) {
-    const { doc, sel, derived, actions, drive, robot, javaProject, onClose } = props;
+    const { doc, sel, derived, actions, drive, robot, robotProject, onClose } = props;
     const [moreLimits, setMoreLimits] = React.useState(false);
     const [moreRangeLimits, setMoreRangeLimits] = React.useState(false);
     const [jiggleDistance, setJiggleDistance] = React.useState(JIGGLE_DEFAULTS.distanceM);
@@ -448,6 +446,7 @@ import { UI } from "./ui";
     const [jiggleStrokeTime, setJiggleStrokeTime] = React.useState(JIGGLE_DEFAULTS.strokeTimeS);
     const [jiggleError, setJiggleError] = React.useState(false);
     const wps = doc.waypoints;
+    const waypointLabel = (index) => PathLinks.waypointName(props.project, doc, index);
     const pathLimits = PM.effectiveConstraints(doc.constraints, robot);
     const isTank = drive === 'tank';
     const n = wps.length;
@@ -458,13 +457,13 @@ import { UI } from "./ui";
     const facingOffset = doc.driveBackward ? 180 : 0;
     const endpointSpeed = (index) => {
       const start = index === 0, waypoint = wps[index], stopped = !!waypoint?.stop;
-      const label = start ? 'Entry speed (vi)' : 'Exit speed (vf)';
+      const label = start ? 'Entry speed' : 'Exit speed';
       return h('div', { className: 'endpoint-speed' },
         h('fieldset', { disabled: stopped, style: { border: 0, margin: 0, padding: 0, minWidth: 0 } },
           h(Num, { label, value: stopped ? 0 : (start ? doc.startVel : doc.goalVel) || 0, unit: 'm/s', min: 0, max: pathLimits.maxVel,
             onChange: (value) => { if (!stopped) actions.setDoc(start ? { startVel: value } : { goalVel: value }); } })),
         stopped && h('button', { type: 'button', className: 'morebtn', onClick: () => actions.select('wp', index) },
-          start ? 'Stopped at entry · edit start' : 'Stopped at exit · edit end'));
+          start ? 'Stopped at entry' : 'Stopped at exit'));
     };
     const initialFacing = () => {
       const followsLaw = firstHeadingMode === 'tangent' || firstHeadingMode === 'lookAt';
@@ -490,7 +489,7 @@ import { UI } from "./ui";
     let icon = 'route', title = '', tag = null, body = null;
 
     if (!sel.kind) {
-      icon = 'route'; title = doc.name || 'Path'; tag = 'summary';
+      icon = 'route'; title = doc.name || 'Path';
       body = h(React.Fragment, null,
         h('div', { className: 'qrow' },
           h('button', { className: 'qbtn', type: 'button', disabled: !actions.canReversePath, title: actions.canReversePath ? 'Reverse waypoint order and traverse the route from the opposite end' : 'Waiting for the current path preview', onClick: () => actions.reversePath() }, h(Icon, { name: 'shuffle', size: 14 }), 'Swap start/end'),
@@ -541,7 +540,7 @@ import { UI } from "./ui";
           h('span', { className: 'inrow-l' }, 'Pin heading here', h('small', null, 'otherwise it interpolates')),
           h(Toggle, { on: !!w.thetaOn, ariaLabel: 'Pin heading at waypoint', onChange: (v) => actions.toggleTheta(i, v) })),
         w.thetaOn && h(Num, { label: 'Heading \u03b8', value: w.theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v }) }));
-      icon = 'waypoint'; title = wpName(i, n); tag = isAnchor ? 'anchor' : null;
+      icon = 'waypoint'; title = waypointLabel(i);
       body = h(React.Fragment, null,
         h('div', { className: 'grid2' },
           h(Num, { label: 'X', value: w.x, unit: 'm', onChange: (v) => actions.setWp(i, { x: v }) }),
@@ -620,7 +619,7 @@ import { UI } from "./ui";
     else if (sel.kind === 'seg' && wps[sel.idx] && wps[sel.idx + 1]) {
       const i = sel.idx;
       const st = segNorm(wps[i].segType);
-      icon = 'route'; title = 'Segment'; tag = wpName(i, n) + ' \u2192 ' + wpName(i + 1, n);
+      icon = 'route'; title = waypointLabel(i) + ' \u2192 ' + waypointLabel(i + 1);
       let segLen = 0, minR = Infinity, dur = 0;
       if (derived.wpFrac && derived.sample.pts.length > 1) {
         const total = derived.sample.length || 1;
@@ -634,7 +633,6 @@ import { UI } from "./ui";
       const affecting = (doc.ranges || []).map((rg, ri) => ({ rg, ri, ef: (derived.effRanges && derived.effRanges[ri]) || rg }))
         .filter((x) => { const lo = Math.min(x.ef.f0, x.ef.f1), hi = Math.max(x.ef.f0, x.ef.f1); return hi >= segLo && lo <= segHi; });
       body = h(React.Fragment, null,
-        h('div', { className: 'fieldlabel first' }, wpName(i, n) + ' \u2192 ' + wpName(i + 1, n)),
         Stat3([
           { v: UnitPrefs.format(segLen, 'm', 2), k: 'Length' },
           { v: isFinite(minR) ? UnitPrefs.format(minR, 'm', 2) : '\u221e', k: 'Min radius', color: isFinite(minR) && minR < 0.7 ? 'var(--bad)' : null },
@@ -644,13 +642,13 @@ import { UI } from "./ui";
         h(Seg, { value: st, options: PM.SEGTYPES.map((type) => ({ v: type.id, label: type.label, title: type.hint })), ariaLabel: 'Path type', onChange: (v) => actions.setSegMeta(i, { segType: v }) }),
         h('div', { className: 'fieldlabel' }, 'Timing'),
         h(Seg, { value: wps[i].segmentFollowMode || 'inherit', ariaLabel: 'Segment follow mode', options: [
-          { v: 'inherit', label: 'Default', title: 'Use the path default' },
+          { v: 'inherit', label: 'Use path', title: 'Use the path timing' },
           { v: 'time', label: 'Time', title: 'Advance from the robot clock' },
           { v: 'position', label: 'Position', title: 'Advance from measured field position' },
         ], onChange: (v) => actions.setSegMeta(i, { segmentFollowMode: v === 'inherit' ? undefined : v }) }),
         !isTank && h(React.Fragment, null,
           h('div', { className: 'fieldlabel' }, 'Facing'),
-          h(Seg, { value: wps[i].segmentHeadingMode || 'inherit', options: [{ v: 'inherit', label: 'Default', title: 'Use path default (' + HEAD_MODES.find((mode) => mode.v === headingMode).label + ')' }, ...HEAD_MODES, { v: 'lookAt', label: 'Look at' }], ariaLabel: 'Heading on this segment', className: 'seg-heading', onChange: (v) => actions.setSegmentHeadingMode(i, v) })),
+          h(Seg, { value: wps[i].segmentHeadingMode || headingMode, options: [...HEAD_MODES, { v: 'lookAt', label: 'Look at' }], ariaLabel: 'Heading on this segment', className: 'seg-heading', onChange: (v) => actions.setSegmentHeadingMode(i, v) })),
         !isTank && wps[i].segmentHeadingMode === 'lookAt' && wps[i].segmentLookAt && h(React.Fragment, null,
           h('div', { className: 'grid2 compact-fields' },
             h(Num, { label: 'Target X', value: wps[i].segmentLookAt.x, unit: 'm', min: 0, max: FIELD_W, onChange: (v) => actions.setSegmentLookAt(i, { x: v }) }),
@@ -663,7 +661,7 @@ import { UI } from "./ui";
               const summary = constraintRangeSummary(x.rg, pathLimits, robot);
               const label = summary ? summary.text : (x.rg.name || 'Constraint range');
               return h('button', { key: x.ri, className: 'segrange', type: 'button', 'aria-label': 'Open constraint range, ' + (summary ? summary.ariaLabel : label), onClick: () => actions.select('cr', x.ri) },
-                h('span', { className: 'segrange-dot' }), label, summary && x.rg.name ? h('span', { className: 'segrange-nm' }, x.rg.name) : null);
+                h(Icon, { name: 'gauge', size: 13 }), label, summary && x.rg.name ? h('span', { className: 'segrange-nm' }, x.rg.name) : null);
             })),
         h('button', { className: 'qbtn wide', type: 'button', style: { marginTop: '14px' }, onClick: () => actions.insertWp(i) }, h(Icon, { name: 'plus', size: 14 }), 'Insert waypoint'));
     }
@@ -676,17 +674,17 @@ import { UI } from "./ui";
       let targetSegment = 0;
       if (derived.wpFrac) for (let i = 0; i < derived.wpFrac.length - 1; i++) if (targetFraction >= derived.wpFrac[i] - 1e-6) targetSegment = i;
       const targetHeadingMode = isTank ? 'tangent' : (wps[targetSegment]?.segmentHeadingMode || headingMode);
-      icon = 'rotation'; title = 'Rotation Target'; tag = 'heading';
+      icon = 'rotation'; title = 'Rotation target';
       body = h(React.Fragment, null,
         targetHeadingMode !== 'targets' && h('div', { className: 'hint' }, h(Icon, { name: 'info', size: 14 }), 'Inactive on this segment \u2014 switch its heading mode to Targets.'),
         h(Num, { label: 'Target heading', value: t.deg, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setTarget(sel.idx, { deg: v }) }),
-        h('div', { className: 'fieldlabel' }, 'Position lock'),
-        h(Seg, { value: targetAnchor, ariaLabel: 'Position lock', options: [{ v: 'param', label: 'Path %' }, { v: 'dist', label: 'Distance' }], onChange: (v) => actions.setTarget(sel.idx, { anchor: v }) }),
+        h('div', { className: 'fieldlabel' }, 'Anchor position'),
+        h(Seg, { value: targetAnchor, ariaLabel: 'Anchor position', options: [{ v: 'param', label: 'Path %' }, { v: 'dist', label: 'Distance' }], onChange: (v) => actions.setTarget(sel.idx, { anchor: v }) }),
         targetAnchor === 'dist'
           ? h(Num, { label: 'Distance from start', value: targetDistance, unit: 'm', step: 0.1, precision: 2, min: 0, max: derived.sample.length || 0, onChange: (v) => actions.setTarget(sel.idx, { d: v }) })
           : h(Num, { label: 'Position along path', value: targetFraction * 100, unit: '%', step: 1, precision: 0, min: 0, max: 100, onChange: (v) => actions.setTarget(sel.idx, { f: v / 100 }) }),
-        h('div', { className: 'seg-hint' }, targetAnchor === 'dist' ? 'Distance fixed.' : 'Scales with path.'),
-        h('div', { className: 'seg-hint' }, 'Drag arrow · Shift snaps 15°.'),
+        h('div', { className: 'seg-hint' }, targetAnchor === 'dist' ? 'Keeps its distance from the start when the path changes.' : 'Moves proportionally when the path changes.'),
+        h('div', { className: 'seg-hint' }, 'Drag the arrow to adjust facing. Shift-click to delete.'),
         h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delTarget(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete target'));
     }
 
@@ -696,25 +694,26 @@ import { UI } from "./ui";
       const markerDistance = markerFraction * (derived.sample.length || 0);
       const markerAnchor = m.anchor === 'dist' ? 'dist' : 'param';
       const schedule = m.schedule || {};
-      const catalog = javaProject && javaProject.catalog;
-      const integration = javaProject && javaProject.integration;
+      const catalog = robotProject && robotProject.catalog;
+
+
       const commands = catalog ? catalog.commands || [] : [];
       const conditionOptions = AUTO.authoritativeConditions(catalog);
-      const recentProjects = javaProject && javaProject.recentProjects ? javaProject.recentProjects : [];
-      const currentProject = recentProjects.find((project) => project.id === (javaProject && javaProject.bookmarkId));
+      const recentProjects = robotProject && robotProject.recentProjects ? robotProject.recentProjects : [];
+      const currentProject = recentProjects.find((project) => project.id === (robotProject && robotProject.bookmarkId));
       const invocationId = m.invocation && m.invocation.commandId ? m.invocation.commandId : (m.cmd && m.cmd !== 'none' ? m.cmd : '');
       const selectedCommand = commands.find((command) => command.id === invocationId);
       const unresolved = invocationId && !selectedCommand;
       const pendingActionTag = m.actionIntent && m.actionIntent.semanticTag;
       const commandPickerItems = [{ value: '', label: 'No command' }]
-        .concat(unresolved ? [{ value: invocationId, label: simpleJavaName(invocationId), meta: 'Saved command is unavailable', badge: 'Missing' }] : [])
+        .concat(unresolved ? [{ value: invocationId, label: simpleRobotName(invocationId), meta: 'Saved command is unavailable', badge: 'Missing' }] : [])
         .concat(commands.map((command) => ({
           value: command.id,
           label: command.label,
-          meta: (command.kind === 'constructor' ? 'Command class' : 'Factory') + ' · ' + simpleJavaName(command.ownerType),
-          badge: pendingActionTag && (command.semanticTags || []).includes(pendingActionTag) ? 'Matches action' : command.runtimeReady === true ? '' : 'Not built',
+          meta: (command.parameters || []).filter((parameter) => parameter.role === 'argument').map((parameter) => parameter.label || parameter.name).join(', ') || command.member,
+          badge: pendingActionTag && (command.semanticTags || []).includes(pendingActionTag) ? 'Matches action' : '',
           searchText: [command.description, command.id, command.ownerType, command.member].concat(command.semanticTags || [])
-            .concat((command.parameters || []).map((parameter) => [parameter.name, parameter.label, parameter.description, parameter.unit, parameter.javaType].filter(Boolean).join(' ')))
+            .concat((command.parameters || []).map((parameter) => [parameter.name, parameter.label, parameter.description, parameter.unit, parameter.valueType].filter(Boolean).join(' ')))
             .filter(Boolean)
             .join(' '),
         })));
@@ -730,73 +729,24 @@ import { UI } from "./ui";
         Object.keys(invocationArguments).some((name) => !argumentNames.has(name))
         || argumentParameters.some((parameter) => parameterValueError(invocationArguments[parameter.name], parameter))
       );
-      const operation = javaProject && javaProject.operation;
+      const operation = robotProject && robotProject.operation;
       const catalogReady = !!(catalog && catalog.authoritative && catalog.catalogHash);
-      const supportInstalled = !!(integration && integration.installed);
-      const supportCompatible = !!(supportInstalled && (!catalogReady || integration.supportVersion === catalog.supportVersion));
-      const javaReady = catalogReady && supportCompatible;
-      const projectStateLabel = operation === 'scan' ? 'Checking project…'
-        : operation === 'install' ? 'Installing support…'
-          : operation === 'build' ? 'Building catalog…'
-            : javaReady ? 'Ready'
-              : supportInstalled && !supportCompatible ? 'Support update required'
-                : supportInstalled ? 'Catalog build required'
-                  : 'Support setup required';
-      icon = 'flag2'; title = 'Event Marker';
+      const projectStateLabel = operation === 'inspect' ? 'Inspecting commands…' : operation === 'scan' ? 'Checking project…' : robotProject?.status === 'stale' ? 'Refresh required' : catalogReady ? 'Catalog available' : 'Commands discovered';
+      icon = 'flag2'; title = m.name || 'Command marker';
       body = h(React.Fragment, null,
         h('label', { className: 'fieldlabel first', htmlFor: 'event-marker-name' }, 'Name'),
         h('input', { id: 'event-marker-name', className: 'textinput', value: m.name, autoComplete: 'off', spellCheck: false, 'data-lpignore': 'true', 'data-1p-ignore': true, onChange: (e) => actions.setMarker(sel.idx, { name: e.target.value }) }),
 
-        h('div', { className: 'cgroup-h' }, 'Java command'),
-        h('section', { className: 'cmd-project', 'aria-label': 'Linked Java project' },
-          h('div', { className: 'cmd-project-head' },
-            h('span', { className: 'cmd-project-icon' }, h(Icon, { name: 'folder', size: 15 })),
-            h('div', { className: 'cmd-project-copy' },
-              h('strong', { title: catalog ? catalog.projectName : 'No Java project linked' }, catalog ? catalog.projectName : 'No Java project linked'),
-              h('span', { title: currentProject && currentProject.folderName }, currentProject ? currentProject.folderName : catalog ? catalog.sourceFileCount + ' Java source files' : 'Choose the GradleRIO project folder'))),
-          catalog && h('div', { className: 'cmd-project-foot' },
-            h('div', { className: 'cmd-project-summary' },
-              h('span', {
-                className: 'cmd-project-state ' + (javaReady ? 'ready' : ''),
-                title: catalogReady && catalog.catalogHash ? catalog.catalogHash : undefined,
-                role: 'status',
-                'aria-live': 'polite',
-              }, h('i', null), projectStateLabel),
-              h('span', { className: 'cmd-project-count' }, commands.length + ' command' + (commands.length === 1 ? '' : 's'))),
-            h('div', { className: 'cmd-project-actions' },
-              h('button', { className: 'cmd-iconbtn', type: 'button', title: 'Refresh project', 'aria-label': operation === 'scan' ? 'Checking project' : 'Refresh Java project', disabled: !!operation, onClick: javaProject.refresh }, h(Icon, { name: 'refresh', size: 15 })),
-              catalogReady && supportCompatible && h('button', { className: 'cmd-iconbtn', type: 'button', title: 'Rebuild command catalog', 'aria-label': operation === 'build' ? 'Building command catalog' : 'Rebuild command catalog', disabled: !!operation || !integration || !integration.wrapperAvailable, onClick: javaProject.build }, h(Icon, { name: 'bolt', size: 15 })),
-              h('button', { className: 'cmd-iconbtn', type: 'button', title: 'Choose another project', 'aria-label': 'Choose Java project', disabled: !!operation, onClick: javaProject && javaProject.link }, h(Icon, { name: 'folder', size: 15 })))),
-          catalog && !supportCompatible && h('button', { className: 'cmd-primary-action', type: 'button', disabled: !!operation || !integration || !integration.wrapperAvailable, onClick: javaProject.install }, operation === 'install' ? 'Installing support…' : integration && integration.supportVersion ? 'Update support' : 'Install support'),
-          catalog && supportCompatible && !catalogReady && h('button', { className: 'cmd-primary-action', type: 'button', disabled: !!operation || !integration || !integration.wrapperAvailable, onClick: javaProject.build }, operation === 'build' ? 'Building catalog…' : 'Build command catalog'),
-          operation === 'build' && h('button', { className: 'cmd-cancel-action', type: 'button', onClick: javaProject.cancelBuild }, 'Cancel build'),
-          recentProjects.length > 1 && h('div', { className: 'cmd-project-switcher' },
-            h(Dropdown, {
-              id: 'event-marker-java-project',
-              label: 'Switch project',
-              value: javaProject.bookmarkId || '',
-              items: recentProjects.map((project) => ({ value: project.id, label: project.projectName, meta: project.folderName })),
-              placeholder: 'Choose a project',
-              icon: 'folder',
-              disabled: javaProject.status === 'loading',
-              onChange: (projectId) => { if (projectId) javaProject.openRecent(projectId); },
-            })),
-          !catalog && h('button', { className: 'cmd-primary-action', type: 'button', disabled: !!operation, onClick: javaProject && javaProject.link }, 'Choose Java project'),
-          integration && !integration.wrapperAvailable && h('div', { className: 'cmd-project-warning' }, 'Add a Gradle wrapper to install support or build commands.')),
-        javaProject && javaProject.error && h('div', { className: 'cmd-project-error', role: 'alert' }, javaProject.error),
-        javaProject && javaProject.notice && h('div', { className: 'cmd-project-notice', role: 'status' }, javaProject.notice),
-        m.actionIntent && h('div', { className: 'cmd-project-notice', role: 'status' }, 'Pending action: ' + m.actionIntent.description + ' (' + m.actionIntent.semanticTag + '). Choose a generated command marked “Matches action” before Java export.'),
-        catalog && catalog.warnings && catalog.warnings.length > 0 && h('div', { className: 'seg-hint' }, catalog.warnings.length + ' source discovery warning' + (catalog.warnings.length === 1 ? '' : 's') + '. Generated annotations remain authoritative.'),
         h('section', { className: 'cmd-command-editor', 'aria-label': 'Marker command' },
-          h(Dropdown, {
-            id: 'event-marker-command',
+          h(ChoiceBrowser, {
+            id: 'event-marker-command', resetKey: doc.id + ':' + sel.idx,
             label: 'Command',
             value: invocationId,
-            items: commandPickerItems,
-            placeholder: catalog ? 'Choose a command' : 'Choose a Java project',
+            items: catalog ? commandPickerItems : [],
+            placeholder: 'Search commands or parameters', emptyText: catalog ? 'No commands found. Check the linked project.' : 'Link a LabVIEW project to discover commands.',
             icon: 'bolt',
             searchThreshold: 6,
-            disabled: !catalog || javaProject.status === 'loading',
+            disabled: !catalog || robotProject.status === 'loading',
             onChange: (commandId) => {
               const command = commands.find((candidate) => candidate.id === commandId);
               const resolvesAction = command && pendingActionTag && (command.semanticTags || []).includes(pendingActionTag);
@@ -807,15 +757,16 @@ import { UI } from "./ui";
               });
             },
           }),
+          catalog && commands.length === 0 && h('div', { className: 'seg-hint', role: 'status' }, 'No command VIs found. Check the linked project below.'),
           unresolved && h('div', { className: 'cmd-project-error', role: 'status' }, 'This command is not in the linked project. Its saved ID and arguments are unchanged.'),
-          selectedCommand && selectedCommand.runtimeReady !== true && h('div', { className: 'cmd-project-error', role: 'status' }, 'Build the annotated catalog before exporting this source preview.'),
+          selectedCommand && !selectedCommand.labviewConnector && h('div', { className: 'cmd-project-error', role: 'status' }, 'Inspect this command’s types before exporting.'),
           selectedCommand && h('div', {
             className: 'cmd-command-summary',
             title: selectedCommand.source ? selectedCommand.source.file + ':' + selectedCommand.source.line : undefined,
           },
             selectedCommand.description && h('p', { className: 'cmd-command-description' }, selectedCommand.description),
-            h('span', { className: 'cmd-command-meta' }, (selectedCommand.kind === 'constructor' ? 'Command class' : 'Factory') + ' · ' + simpleJavaName(selectedCommand.ownerType) + (selectedCommand.confidence === 'inferred' ? ' · inferred' : ''))),
-          selectedCommand && dependencyParameters.length > 0 && h('div', { className: 'seg-hint' }, simpleJavaName(dependencyParameters[0].javaType) + (dependencyParameters.length > 1 ? ' and ' + (dependencyParameters.length - 1) + ' more dependencies are supplied by robot code.' : ' is supplied by robot code.')),
+            h('span', { className: 'cmd-command-meta' }, selectedCommand.member)),
+          selectedCommand && dependencyParameters.length > 0 && h('div', { className: 'seg-hint' }, simpleRobotName(dependencyParameters[0].valueType) + (dependencyParameters.length > 1 ? ' and ' + (dependencyParameters.length - 1) + ' more dependencies are supplied by robot code.' : ' is supplied by robot code.')),
           argumentSchemaMismatch && h('div', { className: 'cmd-schema-warning', role: 'status' },
             h('span', null, 'Saved arguments no longer match this command.'),
             h('button', { className: 'qbtn', type: 'button', onClick: () => actions.setMarker(sel.idx, { invocation: { ...m.invocation, commandId: selectedCommand.id, arguments: reconciledArguments } }) }, 'Use current defaults')),
@@ -844,8 +795,23 @@ import { UI } from "./ui";
                 onChange: (event) => actions.setMarker(sel.idx, { invocation: { ...m.invocation, commandId: selectedCommand.id, arguments: reconciledArguments, cancelOnPathEnd: event.target.checked } }),
               }),
               h('span', { className: 'cmd-toggle-track', 'aria-hidden': true }, h('span', null))))),
-        h('div', { className: 'fieldlabel' }, 'Group type'),
-        h(Seg, { value: m.group || 'sequential', ariaLabel: 'Group type', options: [{ v: 'sequential', label: 'Seq' }, { v: 'parallel', label: 'Parallel' }, { v: 'deadline', label: 'Deadline' }], onChange: (v) => actions.setMarker(sel.idx, { group: v }) }),
+        h('details', { className: 'inspector-details', open: !catalog }, h('summary', null, catalog ? 'LabVIEW project' : 'Link a LabVIEW project'),
+          catalog && h('div', { className: 'cmd-project-copy' },
+            h('strong', null, catalog.projectName),
+            h('span', null, catalog.labviewDiscovery?.projectFile || currentProject?.folderName || 'LabVIEW command catalog')),
+          catalog && h('div', { className: 'inrow' }, h('span', { className: 'seg-hint', role: 'status' }, projectStateLabel + ', ' + commands.length + ' commands'),
+            h('button', { type: 'button', className: 'cmd-iconbtn', 'aria-label': 'Refresh robot project', disabled: !!operation, onClick: robotProject.refresh }, h(Icon, { name: 'refresh', size: 15 }))),
+          h('button', { className: 'qbtn', type: 'button', disabled: !!operation, onClick: robotProject?.link }, catalog ? 'Change project' : 'Choose LabVIEW project'),
+          recentProjects.length > 1 && h(Dropdown, { id: 'event-marker-robot-project', label: 'Recent projects', value: robotProject.bookmarkId || '',
+            items: recentProjects.map((project) => ({ value: project.id, label: project.projectName, meta: project.folderName })),
+            onChange: (projectId) => robotProject.openRecent(projectId) }),
+          catalog && h(LabviewCommandInspection, { catalog, onInspect: robotProject.inspect, operation }),
+          catalog && h(LabviewProjectSources, { key: catalog.labviewDiscovery?.projectFile, catalog })),
+        robotProject?.error && h('div', { className: 'cmd-project-error', role: 'alert' }, robotProject.error),
+        robotProject?.notice && h('div', { className: 'cmd-project-notice', role: 'status' }, robotProject.notice),
+        m.actionIntent && h('div', { className: 'cmd-project-notice', role: 'status' }, 'Choose a command for ' + m.actionIntent.description + '.'),
+        h('div', { className: 'cgroup-h' }, 'Execution'),
+        m.group && m.group !== 'sequential' && h('div', { className: 'cmd-schema-warning', role: 'status' }, h('span', null, 'This saved group cannot be exported as BDX.'), h('button', { type: 'button', className: 'qbtn', onClick: () => actions.setMarker(sel.idx, { group: 'sequential' }) }, 'Use single command')),
         h('div', { className: 'fieldlabel' }, 'Trigger from'),
         h(Seg, { value: schedule.trigger || 'time', ariaLabel: 'Event trigger', options: [
           { v: 'time', label: 'Time', title: 'Fire when planned time reaches this marker' },
@@ -860,17 +826,17 @@ import { UI } from "./ui";
           h('span', { className: 'inrow-l' }, 'End time', h('small', null, 'expire or stop repeating')),
           h(Toggle, { on: schedule.endTimeS != null, ariaLabel: 'Limit event end time', onChange: (on) => actions.setMarker(sel.idx, { schedule: { ...schedule, endTimeS: on ? (derived.prof.totalTime || 0) : undefined } }) })),
         schedule.endTimeS != null && h(Num, { label: 'End path time', value: schedule.endTimeS, unit: 's', min: 0, max: derived.prof.totalTime || 0, step: 0.1, precision: 2, onChange: (v) => actions.setMarker(sel.idx, { schedule: { ...schedule, endTimeS: v } }) }),
-        h(Dropdown, { id: 'event-condition-id', label: 'Condition ID · optional', value: schedule.conditionId || '',
+        h(Dropdown, { id: 'event-condition-id', label: 'Condition (optional)', value: schedule.conditionId || '',
           items: AUTO.conditionPickerItems(conditionOptions, schedule.conditionId || '', 'No condition'),
           placeholder: 'Choose a generated condition', icon: 'branch',
           onChange: (value) => actions.setMarker(sel.idx, { schedule: { ...schedule, conditionId: value || undefined } }) }),
         h('div', { className: 'marker-position-group' },
-          h('div', { className: 'fieldlabel' }, 'Position lock'),
-          h(Seg, { value: markerAnchor, ariaLabel: 'Position lock', options: [{ v: 'param', label: 'Path %' }, { v: 'dist', label: 'Distance' }], onChange: (v) => actions.setMarker(sel.idx, { anchor: v }) }),
+          h('div', { className: 'fieldlabel' }, 'Anchor position'),
+          h(Seg, { value: markerAnchor, ariaLabel: 'Anchor position', options: [{ v: 'param', label: 'Path %' }, { v: 'dist', label: 'Distance' }], onChange: (v) => actions.setMarker(sel.idx, { anchor: v }) }),
           markerAnchor === 'dist'
             ? h(Num, { label: 'Distance from start', value: markerDistance, unit: 'm', step: 0.1, precision: 2, min: 0, max: derived.sample.length || 0, onChange: (v) => actions.setMarker(sel.idx, { d: v }) })
             : h(Num, { label: 'Position along path', value: markerFraction * 100, unit: '%', step: 1, precision: 0, min: 0, max: 100, onChange: (v) => actions.setMarker(sel.idx, { f: v / 100 }) }),
-          h('div', { className: 'seg-hint' }, markerAnchor === 'dist' ? 'Distance fixed.' : 'Scales with path.')),
+          h('div', { className: 'seg-hint' }, markerAnchor === 'dist' ? 'Keeps its distance from the start when the path changes.' : 'Moves proportionally when the path changes.')),
         h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delMarker(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete marker'));
     }
 
@@ -880,27 +846,23 @@ import { UI } from "./ui";
       const effR = (derived.effRanges && derived.effRanges[sel.idx]) || { f0: rg.f0 || 0, f1: rg.f1 || 0 };
       const loF = Math.min(effR.f0, effR.f1), hiF = Math.max(effR.f0, effR.f1);
       const clampFraction = (value) => Math.max(0, Math.min(1, value / 100));
-      const rangeAnchor = rg.anchor === 'dist' ? 'dist' : rg.anchor === 'wp' ? 'wp' : 'param';
-      const anchorOptions = [{ v: 'param', label: 'Proportional' }, { v: 'wp', label: 'Local' }].concat(rangeAnchor === 'dist' ? [{ v: 'dist', label: 'Fixed distance' }] : []);
-      icon = 'gauge'; title = 'Constraint Range';
+      const rangeAnchor = rg.anchor === 'dist' ? 'dist' : 'param';
+      const anchorOptions = [{ v: 'param', label: 'Proportional' }, { v: 'dist', label: 'Distance' }];
+      icon = 'gauge'; title = rg.name || 'Constraint range';
       tag = UnitPrefs.fromCanonical(loF * len, 'm').toFixed(1) + '\u2013' + UnitPrefs.format(hiF * len, 'm', 1);
       body = h(React.Fragment, null,
         h(Num, { label: 'Max velocity', value: rg.maxVel, unit: 'm/s', min: 0, max: pathLimits.maxVel, onChange: (v) => actions.setRange(sel.idx, { maxVel: v }) }),
         h('section', { className: 'range-anchor-editor', 'aria-label': 'Range position lock' },
-          h('div', { className: 'fieldlabel' }, 'Position lock'),
-          h(Seg, { value: rangeAnchor, ariaLabel: 'Position lock', options: anchorOptions, onChange: (v) => actions.setRangeAnchor(sel.idx, v) }),
+          h('div', { className: 'fieldlabel' }, 'Anchor position'),
+          h(Seg, { value: rangeAnchor, ariaLabel: 'Anchor position', options: anchorOptions, onChange: (v) => actions.setRangeAnchor(sel.idx, v) }),
           rangeAnchor === 'dist'
             ? h('div', { className: 'grid2' },
                 h(Num, { label: 'Start distance', value: loF * len, unit: 'm', min: 0, max: len, step: 0.1, precision: 2, onChange: (v) => actions.setRange(sel.idx, { d0: Math.min(v, hiF * len) }) }),
                 h(Num, { label: 'End distance', value: hiF * len, unit: 'm', min: 0, max: len, step: 0.1, precision: 2, onChange: (v) => actions.setRange(sel.idx, { d1: Math.max(v, loF * len) }) }))
-            : rangeAnchor === 'wp'
-              ? h('div', { className: 'range-local' },
-                  h('div', null, h('b', null, 'From'), h('span', null, wpName(Math.max(0, Math.min(n - 2, rg.w0 || 0)), n) + ' \u00b7 ' + Math.round((rg.t0 || 0) * 100) + '%')),
-                  h('div', null, h('b', null, 'To'), h('span', null, wpName(Math.max(0, Math.min(n - 2, rg.w1 || 0)), n) + ' \u00b7 ' + Math.round((rg.t1 || 0) * 100) + '%')))
-              : h('div', { className: 'grid2' },
-                  h(Num, { label: 'Start position', value: loF * 100, unit: '%', min: 0, max: 100, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { f0: Math.min(clampFraction(v), hiF), f1: hiF }) }),
-                  h(Num, { label: 'End position', value: hiF * 100, unit: '%', min: 0, max: 100, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { f0: loF, f1: Math.max(clampFraction(v), loF) }) })),
-          h('div', { className: 'seg-hint' }, rangeAnchor === 'dist' ? 'Legacy distance.' : rangeAnchor === 'wp' ? 'Stays on these segments.' : 'Scales with path.')),
+            : h('div', { className: 'grid2' },
+                  h(Num, { label: 'Start position', value: loF * 100, unit: '%', min: 0, max: 100, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { anchor: 'param', f0: Math.min(clampFraction(v), hiF), f1: hiF }) }),
+                  h(Num, { label: 'End position', value: hiF * 100, unit: '%', min: 0, max: 100, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { anchor: 'param', f0: loF, f1: Math.max(clampFraction(v), loF) }) })),
+          h('div', { className: 'seg-hint' }, rangeAnchor === 'dist' ? 'Keeps both distances from the start when the path changes.' : 'Moves proportionally when the path changes.')),
         h('button', { className: 'range-disclosure' + (moreRangeLimits ? ' on' : ''), type: 'button', 'aria-expanded': moreRangeLimits, onClick: () => setMoreRangeLimits(!moreRangeLimits) },
           h('span', { className: 'range-disclosure-copy' }, h('strong', null, 'Acceleration & rotation'), h('small', null, 'Optional local limits')),
           h(Icon, { name: 'chevron', size: 14 })),
@@ -915,13 +877,13 @@ import { UI } from "./ui";
             h(Num, { label: 'Max \u03b1', value: rg.maxAngAccel, unit: '\u00b0/s\u00b2', max: pathLimits.maxAngAccel, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { maxAngAccel: v }) }))),
         h('label', { className: 'fieldlabel', htmlFor: 'constraint-range-label' }, 'Label'),
         h('input', { id: 'constraint-range-label', className: 'textinput', value: rg.name || '', placeholder: 'e.g. Reef approach', autoComplete: 'off', spellCheck: false, 'data-lpignore': 'true', 'data-1p-ignore': true, onChange: (e) => actions.setRange(sel.idx, { name: e.target.value }) }),
-        h('div', { className: 'chint' }, 'Drag endpoints · tightest overlap wins.'),
+        h('div', { className: 'chint' }, 'Drag endpoints to resize. Overlaps use the lowest limit.'),
         h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delRange(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete range'));
     } else {
       return null;
     }
 
-    return h('div', { className: 'ctxinsp' },
+    return h('div', { className: 'ctxinsp inspector-refresh' },
       h('div', { className: 'ctxinsp-hd' },
         h('span', { className: 'ctxinsp-ic' }, h(Icon, { name: icon, size: 15 })),
         h('span', { className: 'ctxinsp-t', title }, title),
