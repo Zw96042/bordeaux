@@ -1,3 +1,4 @@
+import { TOOL_SHORTCUTS } from '../components/KeyboardHelp';
 import { createLibraryDurations } from "../lib/libraryDurations";
 import { FieldStatus } from "../components/FieldStatus";
 import * as React from "react";
@@ -49,6 +50,10 @@ import { createPlaybackStore } from "../lib/playbackStore";
   const h = React.createElement;
   const { FIELD_W, FIELD_H, IMG_W, IMG_H } = FIELD_DIMS;
   const PERSEG = 56;
+  function robotProjectError(error) {
+    const message = error && error.message ? error.message : String(error);
+    return message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '');
+  }
   function normalizeProject(raw) {
     return PathLinks.reconcile(normalizeProjectData(raw));
   }
@@ -387,11 +392,14 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const agentPublishedContext = useRef(null);
     const agentProposalRef = useRef(agentProposal); agentProposalRef.current = agentProposal;
     const agentProposalContext = useRef(null);
-    const [javaProjectState, setJavaProjectState] = useState({ status: 'unlinked', operation: null, catalog: null, integration: null, error: '', notice: '', bookmarkId: null, recentProjects: [] });
-    const javaCatalogFingerprint = useRef(null);
-    if (javaProjectState.catalog && javaProjectState.catalog.semanticFingerprint) javaCatalogFingerprint.current = javaProjectState.catalog.semanticFingerprint;
-    else if (!javaProjectState.operation) javaCatalogFingerprint.current = null;
+    const [robotProjectState, setRobotProjectState] = useState({ status: 'unlinked', operation: null, catalog: null, integration: null, error: '', notice: '', bookmarkId: null, recentProjects: [] });
+    const robotCatalogFingerprint = useRef(null);
+    if (robotProjectState.catalog && robotProjectState.catalog.semanticFingerprint) robotCatalogFingerprint.current = robotProjectState.catalog.semanticFingerprint;
+    else if (!robotProjectState.operation) robotCatalogFingerprint.current = null;
     const [exportError, setExportError] = useState('');
+    const [bdxNotice, setBdxNotice] = useState('');
+    const [projectLocation, setProjectLocation] = useState(null);
+    const [saveState, setSaveState] = useState({ status: 'idle', error: '' });
     const [planningInputRevision, setPlanningInputRevision] = useState(0);
     const [unitSystem, setUnitSystemState] = useState(() => UnitPrefs.current());
     const setUnitSystem = useCallback((next) => {
@@ -402,7 +410,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
     React.useLayoutEffect(() => {
       if (project.editor?.unitSystem) setUnitSystemState(UnitPrefs.set(project.editor.unitSystem));
     }, [project.editor?.unitSystem]);
-    const javaRestoreGeneration = useRef(0);
+    const robotRestoreGeneration = useRef(0);
     const skipDirty = useRef(true);
     const keyboardNavigation = useRef(false);
     const editStore = useMemo(() => PathEdit.create(), []);
@@ -419,12 +427,12 @@ import { createPlaybackStore } from "../lib/playbackStore";
     useEffect(() => agentPreviewer.subscribe(() => setAgentPreview(agentPreviewer.getSnapshot())), [agentPreviewer]);
 
     useEffect(() => {
-      if (!window.bordeauxAPI || typeof window.bordeauxAPI.listRecentJavaProjects !== 'function') return;
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.listRecentRobotProjects !== 'function') return;
       let active = true;
-      window.bordeauxAPI.listRecentJavaProjects().then((recentProjects) => {
-        if (active) setJavaProjectState((current) => ({ ...current, recentProjects: Array.isArray(recentProjects) ? recentProjects : [] }));
+      window.bordeauxAPI.listRecentRobotProjects().then((recentProjects) => {
+        if (active) setRobotProjectState((current) => ({ ...current, recentProjects: Array.isArray(recentProjects) ? recentProjects : [] }));
       }).catch((error) => {
-        if (active) setJavaProjectState((current) => ({ ...current, error: error && error.message ? error.message : String(error) }));
+        if (active) setRobotProjectState((current) => ({ ...current, error: error && error.message ? error.message : String(error) }));
       });
       return () => { active = false; };
     }, []);
@@ -439,9 +447,9 @@ import { createPlaybackStore } from "../lib/playbackStore";
       return () => { active = false; if (unsubscribe) unsubscribe(); };
     }, []);
 
-    const applyJavaProjectConnection = useCallback((result) => {
+    const applyRobotProjectConnection = useCallback((result) => {
       setExportError('');
-      setJavaProjectState({
+      setRobotProjectState({
         status: 'ready',
         operation: null,
         catalog: result.catalog,
@@ -452,102 +460,92 @@ import { createPlaybackStore } from "../lib/playbackStore";
         recentProjects: result.recentProjects || [],
       });
       if (result.bookmarkId) {
-        setProject((current) => current.editor && current.editor.javaProjectBookmarkId === result.bookmarkId
+        setProject((current) => current.editor && current.editor.robotProjectBookmarkId === result.bookmarkId
           ? current
-          : { ...current, editor: { ...(current.editor || {}), javaProjectBookmarkId: result.bookmarkId } });
+          : { ...current, editor: { ...(current.editor || {}), robotProjectBookmarkId: result.bookmarkId } });
       }
     }, []);
 
-    const linkJavaProject = useCallback(async () => {
-      if (!window.bordeauxAPI || typeof window.bordeauxAPI.linkJavaProject !== 'function') {
-        setJavaProjectState((current) => ({ ...current, status: 'error', error: 'Java project discovery is available in the Bordeaux desktop app.' }));
+    const linkRobotProject = useCallback(async () => {
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.linkRobotProject !== 'function') {
+        setRobotProjectState((current) => ({ ...current, status: 'error', error: 'Robot project linking is available in the Bordeaux desktop app.' }));
         return;
       }
-      const generation = ++javaRestoreGeneration.current;
-      setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', error: '', notice: '' }));
+      const generation = ++robotRestoreGeneration.current;
+      setRobotProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', error: '', notice: '' }));
       try {
-        const result = await window.bordeauxAPI.linkJavaProject();
-        if (javaRestoreGeneration.current !== generation) return;
+        const result = await window.bordeauxAPI.linkRobotProject();
+        if (robotRestoreGeneration.current !== generation) return;
         if (!result) {
-          setJavaProjectState((current) => ({ ...current, status: current.catalog ? 'ready' : 'unlinked', operation: null, error: '' }));
+          setRobotProjectState((current) => ({ ...current, status: current.catalog ? 'ready' : 'unlinked', operation: null, error: '' }));
           return;
         }
-        applyJavaProjectConnection(result);
+        applyRobotProjectConnection(result);
       } catch (error) {
-        if (javaRestoreGeneration.current !== generation) return;
-        setJavaProjectState((current) => ({ ...current, status: 'error', operation: null, catalog: null, integration: null, bookmarkId: null, error: error && error.message ? error.message : String(error) }));
+        if (robotRestoreGeneration.current !== generation) return;
+        setRobotProjectState((current) => ({ ...current, status: 'error', operation: null, catalog: null, integration: null, bookmarkId: null, error: robotProjectError(error) }));
       }
-    }, [applyJavaProjectConnection]);
+    }, [applyRobotProjectConnection]);
 
-    const openRecentJavaProject = useCallback(async (id, expectedGeneration) => {
-      if (!window.bordeauxAPI || typeof window.bordeauxAPI.openRecentJavaProject !== 'function') return;
-      const generation = expectedGeneration == null ? ++javaRestoreGeneration.current : expectedGeneration;
-      setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', error: '', notice: '' }));
+    const openRecentRobotProject = useCallback(async (id, expectedGeneration) => {
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.openRecentRobotProject !== 'function') return;
+      const generation = expectedGeneration == null ? ++robotRestoreGeneration.current : expectedGeneration;
+      setRobotProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', error: '', notice: '' }));
       try {
-        const result = await window.bordeauxAPI.openRecentJavaProject(id);
-        if (javaRestoreGeneration.current !== generation) return;
-        applyJavaProjectConnection(result);
+        const result = await window.bordeauxAPI.openRecentRobotProject(id);
+        if (robotRestoreGeneration.current !== generation) return;
+        applyRobotProjectConnection(result);
       } catch (error) {
-        if (javaRestoreGeneration.current !== generation) return;
-        setJavaProjectState((current) => ({ ...current, status: 'error', operation: null, catalog: null, integration: null, bookmarkId: null, error: error && error.message ? error.message : String(error) }));
+        if (robotRestoreGeneration.current !== generation) return;
+        setRobotProjectState((current) => ({ ...current, status: 'error', operation: null, catalog: null, integration: null, bookmarkId: null, error: robotProjectError(error) }));
       }
-    }, [applyJavaProjectConnection]);
+    }, [applyRobotProjectConnection]);
 
-    const refreshJavaProject = useCallback(async () => {
-      if (!window.bordeauxAPI || typeof window.bordeauxAPI.refreshJavaProject !== 'function') return;
-      const generation = javaRestoreGeneration.current;
-      setJavaProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', error: '', notice: '' }));
+    const refreshRobotProject = useCallback(async () => {
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.refreshRobotProject !== 'function') return;
+      const generation = robotRestoreGeneration.current;
+      setRobotProjectState((current) => ({ ...current, status: 'loading', operation: 'scan', error: '', notice: '' }));
       try {
-        const result = await window.bordeauxAPI.refreshJavaProject();
-        if (javaRestoreGeneration.current !== generation) return;
-        applyJavaProjectConnection(result);
+        const result = await window.bordeauxAPI.refreshRobotProject();
+        if (robotRestoreGeneration.current !== generation) return;
+        applyRobotProjectConnection(result);
       } catch (error) {
-        if (javaRestoreGeneration.current !== generation) return;
-        setJavaProjectState((current) => ({ ...current, status: current.catalog ? 'stale' : 'error', operation: null, error: error && error.message ? error.message : String(error) }));
+        if (robotRestoreGeneration.current !== generation) return;
+        setRobotProjectState((current) => ({ ...current, status: current.catalog ? 'stale' : 'error', operation: null, error: robotProjectError(error) }));
       }
-    }, [applyJavaProjectConnection]);
+    }, [applyRobotProjectConnection]);
 
-    const installJavaSupport = useCallback(async () => {
-      if (!window.bordeauxAPI || typeof window.bordeauxAPI.installJavaSupport !== 'function') return;
-      const generation = javaRestoreGeneration.current;
-      setJavaProjectState((current) => ({ ...current, operation: 'install', error: '', notice: '' }));
+    const inspectLabviewCommands = useCallback(async () => {
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.inspectLabviewCommands !== 'function') return;
+      const generation = robotRestoreGeneration.current;
+      setRobotProjectState((current) => ({ ...current, operation: 'inspect', error: '', notice: '' }));
       try {
-        const result = await window.bordeauxAPI.installJavaSupport();
-        if (javaRestoreGeneration.current !== generation) return;
+        const result = await window.bordeauxAPI.inspectLabviewCommands();
+        if (robotRestoreGeneration.current !== generation) return;
+        applyRobotProjectConnection(result);
+      } catch (error) {
+        if (robotRestoreGeneration.current !== generation) return;
+        setRobotProjectState((current) => ({ ...current, operation: null, error: robotProjectError(error) }));
+      }
+    }, [applyRobotProjectConnection]);
+
+    const buildRobotCatalog = useCallback(async () => {
+      if (!window.bordeauxAPI || typeof window.bordeauxAPI.buildRobotCatalog !== 'function') return;
+      const generation = robotRestoreGeneration.current;
+      setRobotProjectState((current) => ({ ...current, operation: 'build', error: '', notice: '' }));
+      try {
+        const result = await window.bordeauxAPI.buildRobotCatalog();
+        if (robotRestoreGeneration.current !== generation) return;
         if (result) {
-          applyJavaProjectConnection(result);
-          setJavaProjectState((current) => ({ ...current, notice: 'Support installed. Annotate command factories, follow .bordeaux/INTEGRATION.md for RobotContainer wiring, then build the catalog.' }));
+          applyRobotProjectConnection(result);
+          setRobotProjectState((current) => ({ ...current, notice: 'Generated command catalog built and loaded.' }));
         }
-        else setJavaProjectState((current) => ({ ...current, operation: null }));
+        else setRobotProjectState((current) => ({ ...current, operation: null }));
       } catch (error) {
-        if (javaRestoreGeneration.current !== generation) return;
-        setJavaProjectState((current) => ({ ...current, operation: null, error: error && error.message ? error.message : String(error) }));
+        if (robotRestoreGeneration.current !== generation) return;
+        setRobotProjectState((current) => ({ ...current, operation: null, status: current.catalog ? 'stale' : 'error', error: robotProjectError(error) }));
       }
-    }, [applyJavaProjectConnection]);
-
-    const buildJavaCatalog = useCallback(async () => {
-      if (!window.bordeauxAPI || typeof window.bordeauxAPI.buildJavaCatalog !== 'function') return;
-      const generation = javaRestoreGeneration.current;
-      setJavaProjectState((current) => ({ ...current, operation: 'build', error: '', notice: '' }));
-      try {
-        const result = await window.bordeauxAPI.buildJavaCatalog();
-        if (javaRestoreGeneration.current !== generation) return;
-        if (result) {
-          applyJavaProjectConnection(result);
-          setJavaProjectState((current) => ({ ...current, notice: 'Generated command catalog built and loaded.' }));
-        }
-        else setJavaProjectState((current) => ({ ...current, operation: null }));
-      } catch (error) {
-        if (javaRestoreGeneration.current !== generation) return;
-        setJavaProjectState((current) => ({ ...current, operation: null, status: current.catalog ? 'stale' : 'error', error: error && error.message ? error.message : String(error) }));
-      }
-    }, [applyJavaProjectConnection]);
-
-    const cancelJavaCatalogBuild = useCallback(async () => {
-      if (!window.bordeauxAPI || typeof window.bordeauxAPI.cancelJavaCatalogBuild !== 'function') return;
-      const result = await window.bordeauxAPI.cancelJavaCatalogBuild();
-      setJavaProjectState((current) => ({ ...current, notice: result && result.canceled ? 'Canceling the Java catalog build…' : 'No Java catalog build is running.' }));
-    }, []);
+    }, [applyRobotProjectConnection]);
 
     const routineLibrary = routineState(project);
     const routines = routineLibrary.routines;
@@ -613,7 +611,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
       const before = base.paths.find((path) => path.id === draft.id);
       return PathLinks.sync(materialized, draft.id, before);
     }, [editStore]);
-    const pushController = useRobotPushController({ getProject: materializeProject, projectKey, catalogKey: javaProjectState.catalog?.catalogHash, bookmarkKey: javaProjectState.bookmarkId });
+    const pushController = useRobotPushController({ getProject: materializeProject, projectKey, catalogKey: robotProjectState.catalog?.catalogHash, bookmarkKey: robotProjectState.bookmarkId });
     const enqueuePersistence = useCallback((operation) => {
       const pending = persistenceTail.current.catch(() => undefined).then(operation);
       persistenceTail.current = pending.then(() => undefined, () => undefined);
@@ -685,11 +683,11 @@ import { createPlaybackStore } from "../lib/playbackStore";
     }, []);
     useEffect(() => markAgentProposalStale(), [project, activeIdx, markAgentProposalStale]);
     useEffect(() => {
-      if (javaProjectState.operation) return;
+      if (robotProjectState.operation) return;
       const current = agentProposalRef.current;
-      if (current?.status === 'ready' && current.baseJavaCatalogFingerprint
-        && current.baseJavaCatalogFingerprint !== javaCatalogFingerprint.current) markAgentProposalStale();
-    }, [javaProjectState.operation, javaProjectState.catalog && javaProjectState.catalog.semanticFingerprint, markAgentProposalStale]);
+      if (current?.status === 'ready' && current.baseRobotCatalogFingerprint
+        && current.baseRobotCatalogFingerprint !== robotCatalogFingerprint.current) markAgentProposalStale();
+    }, [robotProjectState.operation, robotProjectState.catalog && robotProjectState.catalog.semanticFingerprint, markAgentProposalStale]);
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.publishAgentSession !== 'function') return;
       let published = false;
@@ -738,7 +736,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
           project: projectRef.current,
           activePathId: currentActivePathId,
           editRevision: editStore.getRevision(),
-          javaCatalogFingerprint: javaCatalogFingerprint.current,
+          robotCatalogFingerprint: robotCatalogFingerprint.current,
           hasDraft: Boolean(editStore.getSnapshot()),
         });
         const received = stale && proposal.status === 'ready' ? { ...proposal, status: 'stale' } : proposal;
@@ -1466,12 +1464,12 @@ import { createPlaybackStore } from "../lib/playbackStore";
         project: projectRef.current,
         activePathId: currentActivePathId,
         editRevision: editStore.getRevision(),
-        javaCatalogFingerprint: javaCatalogFingerprint.current,
+        robotCatalogFingerprint: robotCatalogFingerprint.current,
         hasDraft: Boolean(editStore.getSnapshot()),
       });
       if (!agentProposal || agentProposal.status !== 'ready' || !contextMatches
         || !proposalContext || proposalContext.published !== publishedContext || proposalContext.id !== agentProposal.id
-        || javaProjectState.operation || !agentProposalCanApplyCandidate
+        || robotProjectState.operation || !agentProposalCanApplyCandidate
         || (agentProposal.blockingIssues && agentProposal.blockingIssues.length)) return;
       const before = { project: clone(project), activeIdx };
       let nextIndex = activeIdx;
@@ -1496,7 +1494,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
       const applied = { ...agentProposal, status: 'applied', appliedRevision: agentRevision.current + 1 };
       agentProposalRef.current = applied;
       setAgentProposal(applied);
-    }, [agentProposal, agentCandidate, agentProposalCanApplyCandidate, project, activeIdx, agentSessionId, editStore, javaProjectState.operation, updateDirty]);
+    }, [agentProposal, agentCandidate, agentProposalCanApplyCandidate, project, activeIdx, agentSessionId, editStore, robotProjectState.operation, updateDirty]);
 
     const total = derived.prof.totalTime || 0;
     useEffect(() => playbackStore.setTotal(total), [playbackStore, total]);
@@ -1517,10 +1515,10 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const lastRun = useRef({ steps: [], total: 0 });
     const run = useMemo(() => {
       if (page !== 'auto') return lastRun.current;
-      const nextRun = AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId, javaProjectState.catalog, routinePlans);
+      const nextRun = AUTO.buildRun(routine, project.paths, robot, routineOutcomes, plannerId, robotProjectState.catalog, routinePlans);
       lastRun.current = nextRun;
       return nextRun;
-    }, [page, routine, project.paths, robot, routineOutcomes, plannerId, javaProjectState.catalog, routinePlans]);
+    }, [page, routine, project.paths, robot, routineOutcomes, plannerId, robotProjectState.catalog, routinePlans]);
     useEffect(() => routinePlaybackStore.setTotal(run.total), [routinePlaybackStore, run.total]);
     useEffect(() => { if (page !== 'plan') playbackStore.pause(); if (page !== 'auto') routinePlaybackStore.pause(); }, [page, playbackStore, routinePlaybackStore]);
 
@@ -1529,7 +1527,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
       set: (id, patch) => setRoutine((r) => AUTO.update(r, id, patch)),
       del: (id) => {
         const node = AUTO.findNode(routine, id);
-        const label = node ? AUTO.nodeTitle(node, project.paths, javaProjectState.catalog) : 'this routine step';
+        const label = node ? AUTO.nodeTitle(node, project.paths, robotProjectState.catalog) : 'this routine step';
         if (!confirm('Delete “' + label + '” from the routine? Decision branches beneath it will also be removed.')) return;
         setRoutine((r) => AUTO.remove(r, id)); setRoutineSel(null);
       },
@@ -1542,7 +1540,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
       prepend: (type, cat) => setRoutine((r) => { const nn = AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return AUTO.prepend(r, nn); }),
       setOutcome: (id, br) => setRoutineOutcomes((o) => ({ ...o, [id]: br })),
       openInEditor: (id) => { const idx = project.paths.findIndex((path) => path.id === id); if (idx >= 0) { setActive(idx); setPage('plan'); } },
-    }), [routineOutcomes, routine, project.paths, javaProjectState.catalog]);
+    }), [routineOutcomes, routine, project.paths, robotProjectState.catalog]);
     const autoFieldActions = useMemo(() => ({ selectNode: (id) => setRoutineSel((s) => s === id ? null : id), select: () => setRoutineSel(null) }), []);
 
     const onFit = useCallback(() => setView(FIT), []);
@@ -1614,7 +1612,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
       const next = normalizeProject(incoming);
       setProjectKey((key) => key + 1);
       setLibraryPreferenceKey(next.name + ':' + next.paths[0].id);
-      const javaGeneration = ++javaRestoreGeneration.current;
+      const robotGeneration = ++robotRestoreGeneration.current;
       const requestedPathId = next.editor && next.editor.activePathId;
       const requestedPathIndex = requestedPathId ? next.paths.findIndex((path) => path.id === requestedPathId) : -1;
       skipDirty.current = true;
@@ -1625,13 +1623,14 @@ import { createPlaybackStore } from "../lib/playbackStore";
       playbackStore.reset();
       routinePlaybackStore.reset();
       setExportError('');
+      setBdxNotice('');
       hist.current = { past: [], future: [] };
       routineHist.current = { past: [], future: [] };
       projectHist.current = { past: [], future: [] };
       updateDirty(false);
-      setJavaProjectState((current) => ({ ...current, status: 'unlinked', operation: null, catalog: null, integration: null, bookmarkId: null, error: '', notice: '' }));
-      if (next.editor && next.editor.javaProjectBookmarkId) void openRecentJavaProject(next.editor.javaProjectBookmarkId, javaGeneration);
-    }, [cancelEdit, invalidateScheduledAutosave, openRecentJavaProject, playbackStore, routinePlaybackStore, updateDirty]);
+      setRobotProjectState((current) => ({ ...current, status: 'unlinked', operation: null, catalog: null, integration: null, bookmarkId: null, error: '', notice: '' }));
+      if (next.editor && next.editor.robotProjectBookmarkId) void openRecentRobotProject(next.editor.robotProjectBookmarkId, robotGeneration);
+    }, [cancelEdit, invalidateScheduledAutosave, openRecentRobotProject, playbackStore, routinePlaybackStore, updateDirty]);
     useEffect(() => {
       let active = true;
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.restoreLastProject !== 'function') return undefined;
@@ -1743,7 +1742,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         if (e.target.closest && e.target.closest('.editor-library,.library-divider,[role="menu"]')) return;
         const matches = e.target.matches && e.target.matches.bind(e.target);
         if (e.key === 'Tab') { keyboardNavigation.current = true; return; }
-        const nativeKeyboardControl = keyboardNavigation.current && matches && matches('button,select,input[type="range"]');
+        const nativeKeyboardControl = keyboardNavigation.current && matches && matches('button,summary,select,input[type="range"]');
         const textEditing = nativeKeyboardControl || e.target.isContentEditable || (matches && matches('textarea,input:not([type="range"])'));
         const k = e.key.toLowerCase();
         if (page === 'plan' && e.key === ' ' && !textEditing) {
@@ -1848,9 +1847,9 @@ import { createPlaybackStore } from "../lib/playbackStore";
                   run.planningError && h('span', null, run.planningError))),
               transport: h(RoutineTransportPlayback, { store: routinePlaybackStore, run }) }),
             h('aside', { className: 'rail rail-r' + (selNode ? '' : ' collapsed'), 'aria-label': 'Routine step inspector' },
-              selNode && h(StepInspector, { node: selNode, paths: project.paths, acq, run, javaProject: { ...javaProjectState, link: linkJavaProject }, conditionOptions: AUTO.authoritativeConditions(javaProjectState.catalog) })))
+              selNode && h(StepInspector, { node: selNode, paths: project.paths, acq, run, robotProject: { ...robotProjectState, link: linkRobotProject, inspect: inspectLabviewCommands }, conditionOptions: AUTO.authoritativeConditions(robotProjectState.catalog) })))
         : h('main', { className: 'stage stage-plan' },
-            renderLibrary('paths', (secOpen, setSecOpen) => h('div', { style: { height: '100%' }, inert: derivationCurrent ? undefined : '' }, h(Panels.Outline, { open: true, setOpen: () => {}, doc: derivationDoc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot, ready: derivationCurrent }))),
+            renderLibrary('paths', (secOpen, setSecOpen) => h('div', { style: { height: '100%' }, inert: derivationCurrent ? undefined : '' }, h(Panels.Outline, { project, open: true, setOpen: () => {}, doc: derivationDoc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot, ready: derivationCurrent }))),
             h('div', { className: 'fieldcol', inert: derivationCurrent ? undefined : '', 'aria-disabled': derivationCurrent ? undefined : true },
               h(Panels.ToolRail, { tool, setTool }),
               h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, derivedPath: derivation.path, robot, plannerId, optimizationCorridor: optimizationOpen && normalReady ? { points: normal.value?.sample.pts, widthM: doc.optimization?.corridorM ?? 0.15 } : null, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreview.previews : [], sel, tool, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, showHandles: true }),
@@ -1869,8 +1868,8 @@ import { createPlaybackStore } from "../lib/playbackStore";
                   h('b', null, agentProposal.operation === 'replace' ? 'Agent repair proposal' : 'Agent path proposal'),
                   h('span', null, agentProposal.intent),
                   h('span', { className: 'agent-proposal-status' }, agentProposal.status === 'ready' ? 'Preview only — the project has not changed.' : agentProposal.status === 'stale' ? 'Stale — the project changed. Ask the agent to regenerate.' : agentProposal.status === 'applied' ? 'Applied as one undoable project change.' : 'Rejected.'),
-                  agentProposal.status === 'ready' && h('div', { className: 'agent-candidates', role: 'radiogroup', 'aria-label': 'Agent proposal candidates' }, agentCandidates.map((candidate) => h('button', { key: candidate.id, type: 'button', role: 'radio', 'aria-checked': agentCandidate && candidate.id === agentCandidate.id, className: agentCandidate && candidate.id === agentCandidate.id ? 'selected' : '', onClick: () => setAgentCandidateId(candidate.id) }, candidate.label + (candidate.valid === false ? ' · invalid' : candidate.metrics ? ' · ' + candidate.metrics.totalTimeS.toFixed(2) + ' s' : '')))),
-                  agentCandidate && agentCandidate.metrics && h('span', null, UnitPrefs.format(agentCandidate.metrics.totalDistanceM, 'm', 2) + ' · ' + UnitPrefs.format(agentCandidate.metrics.minimumClearanceM, 'm', 2) + ' modeled clearance'),
+                  agentProposal.status === 'ready' && h('div', { className: 'agent-candidates', role: 'radiogroup', 'aria-label': 'Agent proposal candidates' }, agentCandidates.map((candidate) => h('button', { key: candidate.id, type: 'button', role: 'radio', 'aria-checked': agentCandidate && candidate.id === agentCandidate.id, className: agentCandidate && candidate.id === agentCandidate.id ? 'selected' : '', onClick: () => setAgentCandidateId(candidate.id) }, candidate.label + (candidate.valid === false ? ', invalid' : candidate.metrics ? ', ' + candidate.metrics.totalTimeS.toFixed(2) + ' s' : '')))),
+                  agentCandidate && agentCandidate.metrics && h('span', null, UnitPrefs.format(agentCandidate.metrics.totalDistanceM, 'm', 2) + ', ' + UnitPrefs.format(agentCandidate.metrics.minimumClearanceM, 'm', 2) + ' modeled clearance'),
                   agentCandidate && agentCandidate.valid === false && agentCandidate.rejectionReason && h('span', { className: 'agent-proposal-status' }, 'Blocked: ' + agentCandidate.rejectionReason),
                   agentProposal.status === 'ready' && agentProposal.operation !== 'configureRobot' && agentProposalPreview.pending && h('span', { className: 'agent-proposal-status', role: 'status', 'aria-live': 'polite' }, 'Preparing the selected path preview…'),
                   agentProposal.status === 'ready' && agentProposal.operation !== 'configureRobot' && agentProposalPreview.error && h('span', { className: 'agent-proposal-status', role: 'alert' }, 'Selected path preview unavailable: ' + (agentProposalPreview.error.message || String(agentProposalPreview.error))),
@@ -1884,7 +1883,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
               h(Panels.ConstraintBar, { c: derivationDoc.constraints, robot, onOpen: () => { setOptimizationOpen(false); setComparison(null); select(null, -1); } }),
               h(PlaybackTransport, { store: playbackStore, derived, doc: derivationDoc, metric, setMetric, graphOpen, setGraphOpen }),
               h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen })),
-            h('aside', { inert: derivationCurrent || (optimizationOpen && normalError) ? undefined : '', className: 'rail rail-r' + (inspectorOpen || optimizationOpen ? '' : ' collapsed'), 'aria-label': optimizationOpen ? 'Path optimization' : 'Path inspector' },
+            h('aside', { className: 'rail rail-r' + (inspectorOpen || optimizationOpen ? '' : ' collapsed'), 'aria-label': optimizationOpen ? 'Path optimization' : 'Path inspector' },
               optimizationOpen ? h(OptimizationPanel, {
                 path: doc, paths: project.paths, state: optimizationState, candidate, accepted, stale: staleOptimization,
                 baselineTime, pending: !normalReady && !normalError, error: normalError, mode: comparisonMode, unitSystem,
@@ -1897,7 +1896,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
                 onSelectPath: (id) => { const index = project.paths.findIndex((path) => path.id === id); if (index >= 0) setActive(index); },
                 onClose: () => { compareTrajectory('selected'); setOptimizationOpen(false); setInspectorOpen(true); },
               }) : inspectorOpen
-                ? h(ContextInspector, { project, setWaypointPositionLink, doc: derivationDoc, sel, derived, actions: inspActions, drive: robot.drive, robot, javaProject: { ...javaProjectState, link: linkJavaProject, openRecent: openRecentJavaProject, refresh: refreshJavaProject, install: installJavaSupport, build: buildJavaCatalog, cancelBuild: cancelJavaCatalogBuild, export: () => onExportJava('linked') }, onClose: () => setInspectorOpen(false) })
+                ? h(ContextInspector, { project, setWaypointPositionLink, doc, sel, derived, actions: inspActions, drive: robot.drive, robot, robotProject: { ...robotProjectState, link: linkRobotProject, openRecent: openRecentRobotProject, refresh: refreshRobotProject, inspect: inspectLabviewCommands, build: buildRobotCatalog, export: onExportBdx }, onClose: () => setInspectorOpen(false) })
                 : h('button', { className: 'inspector-tab', type: 'button', title: 'Show inspector', onClick: () => setInspectorOpen(true) }, h(UI.Icon, { name: 'sliders', size: 16 }), h('span', null, 'Inspector'))),
             headMenu && h(UI.ContextMenu, { x: headMenu.x, y: headMenu.y, items: headMenu.items, returnFocus: headMenu.returnFocus, onClose: () => setHeadMenu(null) })));
   }
@@ -1906,7 +1905,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
     if (tool === 'waypoint') return 'Click the field to place the <b>next endpoint</b>';
     if (tool === 'rotation') return 'Click the path to set a <b>rotation target</b>';
     if (tool === 'marker') return 'Click the path to place an <b>event marker</b>';
-    if (tool === 'range') return 'Drag along the path to define a <b>constraint range</b> \u00b7 then edit its limits';
+    if (tool === 'range') return 'Drag along the path to define a <b>constraint range</b>, then edit its limits';
     return '';
   }
 
