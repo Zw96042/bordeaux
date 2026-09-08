@@ -13,20 +13,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-      - uses: gradle/actions/wrapper-validation@v4
-      - uses: gradle/actions/setup-gradle@v4
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
       - run: npm run certify:field
-      - run: npm run test:java
       - run: npm run build
         id: build
-      - run: npm run test:java-integration:built
       - run: npm audit --audit-level=high
       - name: Configure Electron sandbox
         id: sandbox

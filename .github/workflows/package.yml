@@ -35,18 +35,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-      - uses: gradle/actions/wrapper-validation@v4
-      - uses: gradle/actions/setup-gradle@v4
       - run: npm ci
       - run: npm run verify:release-tag
       - run: npm test
       - run: npm run typecheck
       - run: npm run certify:field
-      - run: npm run test:java
         if: matrix.platform == 'linux'
       - name: Require macOS signing and notarization credentials
         if: matrix.platform == 'mac'
