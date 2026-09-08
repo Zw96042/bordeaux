@@ -83,15 +83,15 @@ contextBridge.exposeInMainWorld("bordeauxAPI", {
     if (target) state.files[target] = saved;
     return { saved: Boolean(target) };
   }),
-  exportJava: async () => ({ exported: false }),
+  exportRobot: async () => ({ exported: false }),
   validateProject: async () => ({ ok: true, errors: [] }),
-  listRecentJavaProjects: async () => [],
-  linkJavaProject: async () => null,
-  openRecentJavaProject: async () => null,
-  refreshJavaProject: async () => null,
-  installJavaSupport: async () => null,
-  buildJavaCatalog: async () => null,
-  cancelJavaCatalogBuild: async () => null,
+  listRecentRobotProjects: async () => [],
+  linkRobotProject: async () => null,
+  openRecentRobotProject: async () => null,
+  refreshRobotProject: async () => null,
+  installRobotSupport: async () => null,
+  buildRobotCatalog: async () => null,
+  cancelRobotCatalogBuild: async () => null,
   setDirty: (dirty) => { state.mainDirty = Boolean(dirty); state.dirtyValues.push(state.mainDirty); },
   publishAgentSession: (snapshot) => {
     state.publishedProjects.push(clone(snapshot.project));

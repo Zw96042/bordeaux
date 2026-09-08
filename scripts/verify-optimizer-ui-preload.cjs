@@ -6,7 +6,7 @@ contextBridge.exposeInMainWorld('bordeauxAPI', {
   saveProject: (project) => ipcRenderer.invoke('optimizer-ui:save', project),
   autosaveProject: async () => ({ saved: false }),
   setDirty: () => undefined,
-  listRecentJavaProjects: async () => [],
+  listRecentRobotProjects: async () => [],
   getMcpStatus: async () => ({ enabled: true }),
   getActiveAgentProposal: async () => null,
   onMcpStatus: noop, onAgentProposal: noop, onMenuCommand: noop,

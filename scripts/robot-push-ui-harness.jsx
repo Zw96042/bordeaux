@@ -25,16 +25,17 @@ const preview = (operationId = 'push-1') => ({ operationId, revision, robot: 'Te
 
 function Harness() {
   controller = useRobotPushController(props);
-  return <RobotPushDialog controller={controller} />;
+  return <RobotPushDialog controller={controller} onExportBdx={(id) => mock.exports.push(id)} />;
 }
-async function mount() {
+async function mount(capabilities = { pathPush: true, routinePush: true }) {
   await act(async () => { root.render(null); });
   const source = project();
-  props = { getProject: () => source, projectKey: ++serial, catalogKey: 'catalog-1', bookmarkKey: 'java-1' };
-  mock = { probes: [], pairings: [], prepares: [], confirms: [], inspections: [], retentionPrepares: [], retentionConfirms: [], canceled: [], fallbackCalls: 0, pushListeners: new Set(), retentionListeners: new Set() };
+  props = { getProject: () => source, projectKey: ++serial, catalogKey: 'catalog-1', bookmarkKey: 'robot-1' };
+  mock = { exports: [], savedPairingReads: 0, probes: [], pairings: [], prepares: [], confirms: [], inspections: [], retentionPrepares: [], retentionConfirms: [], canceled: [], fallbackCalls: 0, pushListeners: new Set(), retentionListeners: new Set() };
   const enqueue = (name, args) => { const request = { args: structuredClone(args), ...deferred() }; mock[name].push(request); return request.promise; };
   window.bordeauxAPI = {
-    getRobotPairing: async () => pairing,
+    robotDeliveryCapabilities: capabilities,
+    getRobotPairing: async () => { mock.savedPairingReads = (mock.savedPairingReads || 0) + 1; return pairing; },
     probeRobot: (...args) => enqueue('probes', args),
     confirmRobotPairing: (...args) => enqueue('pairings', args),
     prepareRobotPush: (...args) => enqueue('prepares', args),
@@ -49,7 +50,7 @@ async function mount() {
     onRobotRetentionState: (callback) => { mock.retentionListeners.add(callback); return () => mock.retentionListeners.delete(callback); },
   };
   await act(async () => { root.render(<Harness />); });
-  assert(controller.pairing, 'Saved pairing should load');
+  if (capabilities.pathPush || capabilities.routinePush) assert(controller.pairing, 'Saved pairing should load');
   return source;
 }
 async function native(request) {
@@ -71,8 +72,8 @@ async function prepareRetention(actionName = 'rollback') {
   await action(() => controller.prepareRetention(actionName, { revisionId: revision, payloadSha256: revision }));
   await resolve(mock.retentionPrepares.at(-1), { operationId: 'retention-1', action: actionName, targetRevision: revision, payloadHash: revision, activeRevision: oldRevision, robot: 'Team 2468' });
 }
-async function test(name, run) {
-  try { const source = await mount(); await run(source); results.push({ name, ok: true }); }
+async function test(name, run, capabilities) {
+  try { const source = await mount(capabilities); await run(source); results.push({ name, ok: true }); }
   catch (error) { results.push({ name, ok: false, error: error.stack || String(error) }); }
 }
 
@@ -262,5 +263,23 @@ await test('Failed upload shows one error and stable recovery actions', async ()
   assert(!dialog.querySelector('.robot-push-endpoint'), 'Failed update must not show an unrelated connection form');
   await native({ capture: 'upload-failure' });
 });
+await test('Unavailable BDX delivery offers local export before any robot connection', async () => {
+  await action(() => controller.requestPush({ kind: 'paths', pathIds: ['A'] }));
+  equal(controller.phase, 'unavailable', 'Disabled capabilities must show the unavailable state');
+  equal(mock.savedPairingReads, 0, 'Unavailable delivery must not even request saved pairing');
+  const dialog = document.querySelector('dialog');
+  assert(dialog.open, 'Unavailable dialog should be visible');
+  assert(dialog.textContent.includes('compatible LabVIEW BDX receiver'), 'Explain the actual missing capability');
+  assert(!dialog.querySelector('.robot-push-endpoint'), 'Do not offer an unusable connection form');
+  assert(!/Revision history|Review current edits|Trust and pair/.test(dialog.textContent), 'Do not offer legacy recovery actions');
+  const exportButton = [...dialog.querySelectorAll('button')].find((button) => button.textContent === 'Export path as BDX');
+  assert(exportButton, 'Offer the local BDX path action');
+  await native({ capture: 'delivery-unavailable' });
+  exportButton.focus();
+  await act(async () => { await native({ key: 'Enter' }); });
+  equal(mock.exports, ['A'], 'Export only the explicitly selected path');
+  assert(!controller.open, 'Local export closes the delivery dialog');
+  for (const name of ['probes', 'pairings', 'prepares', 'confirms', 'inspections', 'retentionPrepares', 'retentionConfirms']) equal(mock[name].length, 0, name + ' must remain untouched');
+}, { pathPush: false, routinePush: false });
 await act(async () => { root.render(null); });
 const report = document.createElement('pre'); report.id = 'verification-report'; report.textContent = JSON.stringify(results, null, 2); document.body.append(report);
