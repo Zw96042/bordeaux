@@ -75,18 +75,6 @@
       "format": "PNG"
     },
     {
-      "file": "assets/social/og-1200x630.svg",
-      "width": 1200,
-      "height": 630,
-      "format": "SVG"
-    },
-    {
-      "file": "assets/social/og-1200x630.png",
-      "width": 1200,
-      "height": 630,
-      "format": "PNG"
-    },
-    {
       "file": "../marketing/assets/social/bordeaux-og.svg",
       "width": 1200,
       "height": 630,
@@ -108,18 +96,6 @@
       "file": "assets/social/square-1080x1080.png",
       "width": 1080,
       "height": 1080,
-      "format": "PNG"
-    },
-    {
-      "file": "assets/social/story-1080x1920.svg",
-      "width": 1080,
-      "height": 1920,
-      "format": "SVG"
-    },
-    {
-      "file": "assets/social/story-1080x1920.png",
-      "width": 1080,
-      "height": 1920,
       "format": "PNG"
     },
     {
@@ -159,30 +135,6 @@
       "format": "PNG"
     },
     {
-      "file": "assets/product/feature-java-1600x900.svg",
-      "width": 1600,
-      "height": 900,
-      "format": "SVG"
-    },
-    {
-      "file": "assets/product/feature-java-1600x900.png",
-      "width": 1600,
-      "height": 900,
-      "format": "PNG"
-    },
-    {
-      "file": "assets/video/title-card-1920x1080.svg",
-      "width": 1920,
-      "height": 1080,
-      "format": "SVG"
-    },
-    {
-      "file": "assets/video/title-card-1920x1080.png",
-      "width": 1920,
-      "height": 1080,
-      "format": "PNG"
-    },
-    {
       "file": "assets/video/chapter-plan-1920x1080.svg",
       "width": 1920,
       "height": 1080,
@@ -202,18 +154,6 @@
     },
     {
       "file": "assets/video/chapter-compose-1920x1080.png",
-      "width": 1920,
-      "height": 1080,
-      "format": "PNG"
-    },
-    {
-      "file": "assets/video/chapter-export-1920x1080.svg",
-      "width": 1920,
-      "height": 1080,
-      "format": "SVG"
-    },
-    {
-      "file": "assets/video/chapter-export-1920x1080.png",
       "width": 1920,
       "height": 1080,
       "format": "PNG"
