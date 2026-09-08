@@ -12,6 +12,7 @@ class FakeUpdater extends EventEmitter {
   checks = 0;
   checkResult: Promise<unknown> = Promise.resolve({});
   quitAndInstall = vi.fn();
+  downloadUpdate = vi.fn(async () => []);
 
   checkForUpdates(): Promise<unknown> {
     this.checks += 1;
@@ -23,6 +24,7 @@ function fixture(overrides: Partial<UpdateRuntime> = {}) {
   const updater = new FakeUpdater();
   const calls: string[] = [];
   const presenter: UpdatePresenter = {
+    available: (version, notes) => { calls.push(`available:${version}:${notes}`); return "later"; },
     unavailable: () => { calls.push("unavailable"); },
     downloading: (version) => { calls.push(`downloading:${version}`); },
     upToDate: (version) => { calls.push(`current:${version}`); },
@@ -69,7 +71,7 @@ describe("application updates", () => {
     const { controller, updater } = fixture();
     controller.start();
     expect(updater).toMatchObject({
-      autoDownload: true,
+      autoDownload: false,
       autoInstallOnAppQuit: false,
       autoRunAppAfterInstall: true,
       allowPrerelease: true,
@@ -118,7 +120,7 @@ describe("application updates", () => {
     const interactiveCheck = interactive.controller.check(true);
     interactive.updater.emit("update-available", { version: "0.2.0-beta.2" });
     await interactiveCheck;
-    expect(interactive.calls).toEqual(["downloading:0.2.0-beta.2"]);
+    expect(interactive.calls).toEqual(["available:0.2.0-beta.2:Release notes were not provided for this version."]);
   });
 
   it("contains update-check errors and reports them once", async () => {
@@ -128,13 +130,28 @@ describe("application updates", () => {
     expect(calls).toEqual(["failed:feed unavailable"]);
   });
 
-  it("reports a download failure after an interactive check found an update", async () => {
-    const { controller, updater, calls } = fixture();
-    const check = controller.check(true);
-    updater.emit("update-available", { version: "0.2.0-beta.2" });
-    await check;
-    updater.emit("error", new Error("download failed"));
-    expect(calls).toEqual(["downloading:0.2.0-beta.2", "failed:download failed"]);
+  it("offers background updates with release notes and downloads only after consent", async () => {
+    const { controller, updater, presenter, calls } = fixture();
+    controller.start();
+    updater.emit("update-available", { version: "0.3.0", releaseNotes: "<p>Improved path following</p>" });
+    await Promise.resolve();
+    expect(calls).toEqual(["available:0.3.0:Improved path following"]);
+    expect(updater.downloadUpdate).not.toHaveBeenCalled();
+    presenter.available = () => "download";
+    await controller.check(true);
+    updater.emit("update-available", { version: "0.3.0", releaseNotes: [] });
+    await Promise.resolve();
+    expect(updater.downloadUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("reports explicit download failure", async () => {
+    const { controller, updater, presenter, calls } = fixture();
+    presenter.available = () => "download";
+    updater.downloadUpdate.mockRejectedValueOnce(new Error("download failed"));
+    controller.start();
+    updater.emit("update-available", { version: "0.3.0" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls).toEqual(["failed:download failed"]);
   });
 
   it("installs only after an explicit clean-project restart", async () => {
@@ -187,6 +204,17 @@ describe("application updates", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     updater.emit("error", new Error("installer failed"));
     expect(calls).toEqual(["failed:installer failed"]);
+  });
+
+  it("offers the downloaded update from Check Updates without downloading it again", async () => {
+    const { controller, updater, presenter } = fixture();
+    const ready = vi.fn(async () => "later" as const); presenter.ready = ready;
+    controller.start(); updater.emit("update-downloaded", { version: "0.3.0" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await controller.check(true);
+    expect(ready).toHaveBeenCalledTimes(2);
+    expect(updater.checks).toBe(0);
+    expect(updater.downloadUpdate).not.toHaveBeenCalled();
   });
 
   it("can offer a downloaded update again after Later", async () => {

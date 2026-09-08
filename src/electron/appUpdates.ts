@@ -1,5 +1,6 @@
 export interface UpdateVersionInfo {
   version: string;
+  releaseNotes?: string | Array<{ version: string; note: string | null }>;
 }
 
 export type AppUpdateChannel = "beta" | "latest";
@@ -14,10 +15,12 @@ export interface AppUpdaterLike {
   on(event: "update-available" | "update-not-available" | "update-downloaded", listener: (info: UpdateVersionInfo) => void): unknown;
   on(event: "error", listener: (error: Error) => void): unknown;
   checkForUpdates(): Promise<unknown>;
+  downloadUpdate(): Promise<unknown>;
   quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void;
 }
 
 export interface UpdatePresenter {
+  available(version: string, releaseNotes: string): "later" | "download" | Promise<"later" | "download">;
   unavailable(currentVersion: string): void | Promise<void>;
   downloading(version: string): void | Promise<void>;
   upToDate(currentVersion: string): void | Promise<void>;
@@ -32,6 +35,11 @@ export interface UpdateRuntime {
   isProjectDirty(): boolean;
   prepareToInstall(): void | Promise<void>;
   warn(message: string, error?: unknown): void;
+}
+
+export function updateReleaseNotes(info: UpdateVersionInfo): string {
+  const notes = Array.isArray(info.releaseNotes) ? info.releaseNotes.map((entry) => entry.note || "").filter(Boolean).join("\n\n") : info.releaseNotes || "Release notes were not provided for this version.";
+  return notes.replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").slice(0, 16000);
 }
 
 function errorMessage(error: unknown): string {
@@ -62,6 +70,9 @@ export class AppUpdateController {
   private started = false;
   private interactiveCheck = false;
   private installing = false;
+  private downloading = false;
+  private downloadedVersion: string | null = null;
+  private readonly offeredVersions = new Set<string>();
   private checkPromise: Promise<void> | null = null;
   private readonly promptedVersions = new Set<string>();
 
@@ -84,7 +95,7 @@ export class AppUpdateController {
     const updater = this.updater;
     if (!updater) return;
     this.started = true;
-    updater.autoDownload = true;
+    updater.autoDownload = false;
     updater.autoInstallOnAppQuit = false;
     updater.autoRunAppAfterInstall = true;
     updater.allowPrerelease = this.channel === "beta";
@@ -92,8 +103,11 @@ export class AppUpdateController {
     updater.allowDowngrade = false;
 
     updater.on("update-available", (info) => {
-      if (!this.interactiveCheck) return;
-      void this.presenter.downloading(info.version);
+      const interactive = this.interactiveCheck;
+      this.interactiveCheck = false;
+      if (this.downloading || (!interactive && this.offeredVersions.has(info.version))) return;
+      this.offeredVersions.add(info.version);
+      void this.offerDownload(info);
     });
     updater.on("update-not-available", () => {
       if (!this.interactiveCheck) return;
@@ -105,12 +119,15 @@ export class AppUpdateController {
       if (this.interactiveCheck) {
         this.interactiveCheck = false;
         void this.presenter.failed(errorMessage(error));
-      } else if (this.installing) {
+      } else if (this.downloading || this.installing) {
+        this.downloading = false;
         this.installing = false;
         void this.presenter.failed(errorMessage(error));
       }
     });
     updater.on("update-downloaded", (info) => {
+      this.downloading = false;
+      this.downloadedVersion = info.version;
       if (this.promptedVersions.has(info.version)) return;
       this.promptedVersions.add(info.version);
       this.interactiveCheck = false;
@@ -124,6 +141,10 @@ export class AppUpdateController {
       return;
     }
     this.start();
+    if (interactive && this.downloadedVersion) {
+      await this.offerRestart(this.downloadedVersion);
+      return;
+    }
     const updater = this.updater;
     if (!updater) return;
     this.interactiveCheck ||= interactive;
@@ -146,6 +167,18 @@ export class AppUpdateController {
       }
     })();
     return this.checkPromise;
+  }
+
+  private async offerDownload(info: UpdateVersionInfo): Promise<void> {
+    try {
+      if (await this.presenter.available(info.version, updateReleaseNotes(info)) !== "download") return;
+      this.downloading = true;
+      await this.updater?.downloadUpdate();
+    } catch (error) {
+      this.downloading = false;
+      this.runtime.warn("Bordeaux download failed", error);
+      await this.presenter.failed(errorMessage(error));
+    }
   }
 
   private async offerRestart(version: string): Promise<void> {
