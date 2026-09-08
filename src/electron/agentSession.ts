@@ -21,10 +21,10 @@ import { REBUILT_2026_FIELD } from "../shared/field/rebuilt2026";
 import { resolveProjectFieldTerm, withAllianceView } from "../shared/field/vocabulary";
 import type { RobotRelativePose } from "../shared/field/types";
 import { clone } from "../shared/project/defaults";
-import type { JavaCommandCatalog, RobotPlanningProfile } from "../shared/types";
-import { defaultJavaCommandArguments, javaInvocationErrors } from "../shared/javaCommands";
+import type { RobotCommandCatalog, RobotPlanningProfile } from "../shared/types";
+import { defaultRobotCommandArguments, robotInvocationErrors } from "../shared/robotCommands";
 import { validateProject } from "../shared/validation";
-import { javaCatalogSemanticSignature } from "../shared/agent/catalogSignature";
+import { robotCatalogSemanticSignature } from "../shared/agent/catalogSignature";
 
 const MAX_PROPOSALS = 24;
 const MAX_CONCURRENT_ANALYSES = 2;
@@ -90,7 +90,7 @@ function requireSnapshot(snapshot: AgentSessionSnapshot | null): AgentSessionSna
   return snapshot;
 }
 
-function publicSession(snapshot: AgentSessionSnapshot, catalog: JavaCommandCatalog | null) {
+function publicSession(snapshot: AgentSessionSnapshot, catalog: RobotCommandCatalog | null) {
   return {
     context: snapshotContext(snapshot),
     sessionId: snapshot.sessionId,
@@ -114,7 +114,7 @@ function publicSession(snapshot: AgentSessionSnapshot, catalog: JavaCommandCatal
       ownershipRule: "An explicit red/blue term selects that physical field structure; allianceView never changes ownership.",
     },
     fieldPack: snapshot.fieldPack,
-    javaCatalog: catalog ? { catalogId: catalog.catalogId, catalogHash: catalog.catalogHash, commandCount: catalog.commands.length, authoritative: catalog.authoritative === true } : null,
+    robotCatalog: catalog ? { catalogId: catalog.catalogId, catalogHash: catalog.catalogHash, commandCount: catalog.commands.length, authoritative: catalog.authoritative === true } : null,
     strategy: snapshot.project.strategy ?? null,
   };
 }
@@ -130,18 +130,18 @@ function proposalMatchesSnapshot(proposal: AgentProposal, snapshot: AgentSession
     && proposal.baseActivePathId === snapshot.activePathId);
 }
 
-function javaCatalogFingerprint(catalog: JavaCommandCatalog | null): string | null {
+function robotCatalogFingerprint(catalog: RobotCommandCatalog | null): string | null {
   if (!catalog) return null;
-  return `sha256:${createHash("sha256").update(javaCatalogSemanticSignature(catalog), "utf8").digest("hex")}`;
+  return `sha256:${createHash("sha256").update(robotCatalogSemanticSignature(catalog), "utf8").digest("hex")}`;
 }
 
 function proposalMatchesCatalogFingerprint(proposal: AgentProposal, fingerprint: string | null): boolean {
-  if (!("baseJavaCatalogFingerprint" in proposal) || !proposal.baseJavaCatalogFingerprint) return true;
-  return proposal.baseJavaCatalogFingerprint === fingerprint;
+  if (!("baseRobotCatalogFingerprint" in proposal) || !proposal.baseRobotCatalogFingerprint) return true;
+  return proposal.baseRobotCatalogFingerprint === fingerprint;
 }
 
-function proposalMatchesCatalog(proposal: AgentProposal, catalog: JavaCommandCatalog | null): boolean {
-  return proposalMatchesCatalogFingerprint(proposal, javaCatalogFingerprint(catalog));
+function proposalMatchesCatalog(proposal: AgentProposal, catalog: RobotCommandCatalog | null): boolean {
+  return proposalMatchesCatalogFingerprint(proposal, robotCatalogFingerprint(catalog));
 }
 
 function findingCounts(analysis: PathAnalysis): CandidateSummary["findingCounts"] {
@@ -296,7 +296,7 @@ export class AgentSessionService {
 
   constructor(
     private readonly sendProposal: (proposal: AgentProposal, requireReceipt: boolean) => void | Promise<void>,
-    private readonly getJavaCatalog: () => JavaCommandCatalog | null,
+    private readonly getRobotCatalog: () => RobotCommandCatalog | null,
     private readonly runPlanning: AgentPlanningRunner = runAgentPlanningJobDirect,
   ) {}
 
@@ -332,9 +332,9 @@ export class AgentSessionService {
     this.expireProposals();
   }
 
-  refreshJavaCatalog(): void {
+  refreshRobotCatalog(): void {
     let displacedPendingPreview = false;
-    const fingerprint = javaCatalogFingerprint(this.getJavaCatalog());
+    const fingerprint = robotCatalogFingerprint(this.getRobotCatalog());
     for (const proposal of this.proposals.values()) {
       if (proposal.status !== "ready" || proposalMatchesCatalogFingerprint(proposal, fingerprint)) continue;
       proposal.status = "stale";
@@ -371,12 +371,12 @@ export class AgentSessionService {
   }
 
   getActiveProposal(): AgentProposal | null {
-    this.refreshJavaCatalog();
+    this.refreshRobotCatalog();
     this.expireProposals();
     const proposals = [...this.proposals.values()];
     for (let index = proposals.length - 1; index >= 0; index -= 1) {
       const proposal = proposals[index];
-      if (proposal.status === "ready" && proposalMatchesSnapshot(proposal, this.snapshot) && proposalMatchesCatalog(proposal, this.getJavaCatalog())) return proposal;
+      if (proposal.status === "ready" && proposalMatchesSnapshot(proposal, this.snapshot) && proposalMatchesCatalog(proposal, this.getRobotCatalog())) return proposal;
     }
     return null;
   }
@@ -419,7 +419,7 @@ export class AgentSessionService {
   private restoreCommittedPreview(): void {
     if (!this.committedPreviewId || !this.snapshot) return;
     const committed = this.proposals.get(this.committedPreviewId);
-    if (!committed || !proposalMatchesSnapshot(committed, this.snapshot) || !proposalMatchesCatalog(committed, this.getJavaCatalog())) {
+    if (!committed || !proposalMatchesSnapshot(committed, this.snapshot) || !proposalMatchesCatalog(committed, this.getRobotCatalog())) {
       this.committedPreviewId = null;
       return;
     }
@@ -432,7 +432,7 @@ export class AgentSessionService {
     if (previewGeneration !== this.previewGeneration) {
       throw new Error("Agent preview request was superseded by a newer request.");
     }
-    if (!proposalMatchesSnapshot(proposal, this.snapshot) || !proposalMatchesCatalog(proposal, this.getJavaCatalog())) {
+    if (!proposalMatchesSnapshot(proposal, this.snapshot) || !proposalMatchesCatalog(proposal, this.getRobotCatalog())) {
       throw new Error("The Bordeaux editor session changed while the proposal was being generated. Retry against the current session.");
     }
     let supersededProposalId: string | undefined;
@@ -450,7 +450,7 @@ export class AgentSessionService {
       if (previewGeneration !== this.previewGeneration) {
         throw new Error("Agent preview request was superseded by a newer request.");
       }
-      if (!proposalMatchesSnapshot(proposal, this.snapshot) || !proposalMatchesCatalog(proposal, this.getJavaCatalog()) || proposal.status !== "ready") {
+      if (!proposalMatchesSnapshot(proposal, this.snapshot) || !proposalMatchesCatalog(proposal, this.getRobotCatalog()) || proposal.status !== "ready") {
         throw new Error("The Bordeaux editor session changed before it acknowledged the proposal. Retry against the current session.");
       }
     } catch (error) {
@@ -502,7 +502,7 @@ export class AgentSessionService {
   }
 
   async request(request: AgentRequest, signal?: AbortSignal): Promise<unknown> {
-    this.refreshJavaCatalog();
+    this.refreshRobotCatalog();
     this.expireProposals();
     if (request.method === "field_pack") return REBUILT_2026_FIELD;
     if (request.method === "get_current_proposal") {
@@ -522,8 +522,8 @@ export class AgentSessionService {
       return candidate;
     }
     const snapshot = requireSnapshot(this.snapshot);
-    if (request.method === "inspect_session") return publicSession(snapshot, this.getJavaCatalog());
-    if (request.method === "commands") return this.getJavaCatalog() ?? { authoritative: false, commands: [], warnings: ["Link and build a generated Java command catalog to expose team actions."] };
+    if (request.method === "inspect_session") return publicSession(snapshot, this.getRobotCatalog());
+    if (request.method === "commands") return this.getRobotCatalog() ?? { authoritative: false, commands: [], warnings: ["Link and build a generated Robot command catalog to expose team actions."] };
     if (request.method === "inspect_robot_profile") {
       const planning = snapshot.project.robot.planning;
       const missing = [
@@ -671,11 +671,11 @@ export class AgentSessionService {
       };
       return outcome;
     }
-    let baseJavaCatalogFingerprint: string | undefined;
+    let baseRobotCatalogFingerprint: string | undefined;
     if (request.params.endAction) {
-      const catalog = this.getJavaCatalog();
-      if (!catalog?.authoritative) throw new Error("Link and build an authoritative Java command catalog before binding an end action.");
-      baseJavaCatalogFingerprint = javaCatalogFingerprint(catalog) ?? undefined;
+      const catalog = this.getRobotCatalog();
+      if (!catalog?.authoritative) throw new Error("Link and build an authoritative Robot command catalog before binding an end action.");
+      baseRobotCatalogFingerprint = robotCatalogFingerprint(catalog) ?? undefined;
       const endAction = request.params.endAction;
       const tagged = catalog.commands.filter((item) => item.runtimeReady === true && item.semanticTags?.includes(endAction.semanticTag));
       const binding = snapshot.project.strategy?.actionBindings?.find((item) => item.semanticTag === endAction.semanticTag);
@@ -687,10 +687,10 @@ export class AgentSessionService {
       if (!command.semanticTags?.includes(endAction.semanticTag)) throw new Error(`Command ${command.id} does not explicitly advertise ${endAction.semanticTag}.`);
       const invocation = {
         commandId: command.id,
-        arguments: endAction.arguments ?? defaultJavaCommandArguments(command),
+        arguments: endAction.arguments ?? defaultRobotCommandArguments(command),
         cancelOnPathEnd: endAction.cancelOnPathEnd,
       };
-      const invocationErrors = javaInvocationErrors(invocation, command);
+      const invocationErrors = robotInvocationErrors(invocation, command);
       if (invocationErrors.length) throw new Error(`End action is invalid: ${invocationErrors.join("; ")}`);
       candidates.forEach((candidate) => {
         candidate.path.markers.push({ id: `event_${randomUUID()}`, f: 1, name: command.label, invocation });
@@ -713,14 +713,14 @@ export class AgentSessionService {
     }
     const recommendedCandidateId = valid[0].id;
     const advisories = request.params.endActionIntent ? [
-      `Action pending: “${request.params.endActionIntent.description}” (${request.params.endActionIntent.semanticTag}) is preserved at the path endpoint but has no robot command yet. Link an authoritative Java command before export.`,
+      `Action pending: “${request.params.endActionIntent.description}” (${request.params.endActionIntent.semanticTag}) is preserved at the path endpoint but has no robot command yet. Link an authoritative Robot command before export.`,
     ] : [];
     const proposal: PathProposal = {
       id: `proposal_${randomUUID()}`,
       baseSessionId: snapshot.sessionId,
       baseRevision: snapshot.revision,
       baseActivePathId: snapshot.activePathId,
-      ...(baseJavaCatalogFingerprint ? { baseJavaCatalogFingerprint } : {}),
+      ...(baseRobotCatalogFingerprint ? { baseRobotCatalogFingerprint } : {}),
       intent: request.params.intent,
       operation: "add",
       candidates,

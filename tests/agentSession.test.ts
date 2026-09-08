@@ -7,7 +7,7 @@ import { AgentBridgeClient, AgentBridgeServer } from "../src/electron/agentBridg
 import { AgentSessionService, runAgentPlanningJobDirect } from "../src/electron/agentSession";
 import type { RepairCandidate } from "../src/shared/agent/types";
 import { createDemoProject } from "../src/shared/project/defaults";
-import type { JavaCommandCatalog, JavaCommandDescriptor } from "../src/shared/types";
+import type { RobotCommandCatalog, RobotCommandDescriptor } from "../src/shared/types";
 import { validateProject } from "../src/shared/validation";
 
 function snapshot(revision = 0) {
@@ -32,7 +32,7 @@ function deferred<T = void>() {
   return { promise, resolve, reject };
 }
 
-function shootCommand(overrides: Partial<JavaCommandDescriptor> = {}): JavaCommandDescriptor {
+function shootCommand(overrides: Partial<RobotCommandDescriptor> = {}): RobotCommandDescriptor {
   return {
     id: "robot.shoot",
     label: "Shoot",
@@ -44,12 +44,12 @@ function shootCommand(overrides: Partial<JavaCommandDescriptor> = {}): JavaComma
     kind: "factory",
     confidence: "confirmed",
     parameters: [],
-    source: { file: "robot/Actions.java", line: 1 },
+    source: { file: "robot/Actions.vi", line: 1 },
     ...overrides,
   };
 }
 
-function authoritativeCatalog(commands: JavaCommandDescriptor[] = [shootCommand()]): JavaCommandCatalog {
+function authoritativeCatalog(commands: RobotCommandDescriptor[] = [shootCommand()]): RobotCommandCatalog {
   return {
     projectName: "Robot",
     sourceFileCount: 1,
@@ -711,7 +711,7 @@ describe("agent session and private bridge", () => {
       authoritative: true,
       commands: [{
         id: "robot.shoot", label: "Shoot", aliases: ["shoot"], semanticTags: ["shoot-fuel"], runtimeReady: true,
-        ownerType: "robot.Actions", member: "shoot", kind: "factory", confidence: "confirmed", parameters: [], source: { file: "robot/Actions.java", line: 1 },
+        ownerType: "robot.Actions", member: "shoot", kind: "factory", confidence: "confirmed", parameters: [], source: { file: "robot/Actions.vi", line: 1 },
       }],
       warnings: [],
     };
@@ -756,7 +756,7 @@ describe("agent session and private bridge", () => {
     } });
 
     catalog = authoritativeCatalog([]);
-    service.refreshJavaCatalog();
+    service.refreshRobotCatalog();
 
     expect(service.getActiveProposal()).toBeNull();
     expect(await service.request({ method: "get_proposal", params: { proposalId: proposal.proposalId } })).toMatchObject({ status: "stale" });
@@ -781,8 +781,8 @@ describe("agent session and private bridge", () => {
 
   it("stales an end-action proposal when the bound command argument schema changes", async () => {
     const parameter = {
-      name: "speed", label: "Speed", javaType: "double", role: "argument" as const,
-      defaultValue: 1, min: 0, max: 10, schema: { kind: "number" as const, javaType: "double" },
+      name: "speed", label: "Speed", valueType: "DBL", role: "argument" as const,
+      defaultValue: 1, min: 0, max: 10, schema: { kind: "number" as const, valueType: "DBL" },
     };
     let catalog = authoritativeCatalog([shootCommand({ parameters: [parameter] })]);
     const service = new AgentSessionService(() => {}, () => catalog);
