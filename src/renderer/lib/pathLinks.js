@@ -153,4 +153,17 @@
     return { ...project, paths, pathLinks };
   }
 
-export const PathLinks = { copyPose, sync, reconcile, linkPosition, unlinkPosition, positionMembers };
+// Resolve names through a shared position without copying names into each member.
+function waypointName(project, path, index) {
+  const waypoint = path?.waypoints?.[index];
+  if (waypoint?.positionName) return waypoint.positionName;
+  if (project && waypoint?.positionLink) {
+    for (const candidate of project.paths || []) {
+      const named = candidate.waypoints.find((point) => point.positionLink === waypoint.positionLink && point.positionName);
+      if (named) return named.positionName;
+    }
+  }
+  return index === 0 ? 'Start' : index === (path?.waypoints?.length || 0) - 1 ? 'End' : 'Waypoint ' + index;
+}
+
+export const PathLinks = { copyPose, sync, reconcile, linkPosition, unlinkPosition, positionMembers, waypointName };

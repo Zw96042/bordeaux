@@ -22,6 +22,7 @@ describe('named linkable waypoint positions', () => {
     expect(restored.paths[0].waypoints[0]).toMatchObject({ positionName: 'Pickup station', positionLink: 'pickup' });
     expect(restored.paths[1].waypoints[0].positionName).toBeUndefined();
     expect(restored.paths[1].waypoints[0].positionLink).toBe('pickup');
+    expect(sharedPositionChoices(restored, 'a', 0).members[0]).toMatchObject({ label: 'Pickup station', meta: 'b / Start' });
     expect(validateProject(restored).issues.filter((issue) => issue.path.endsWith('.positionName'))).toEqual([]);
   });
 

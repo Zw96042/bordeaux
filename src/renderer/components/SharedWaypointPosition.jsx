@@ -8,7 +8,8 @@ const waypointName = (index, count) => index === 0 ? 'Start' : index === count -
 export function sharedPositionChoices(project, pathId, index) {
   const allWaypoints = project.paths.flatMap((path) => path.waypoints.flatMap((point, at) =>
     path.id === pathId && at === index ? [] : [{
-      value: JSON.stringify([path.id, at]), label: point.positionName || path.name + ' / ' + waypointName(at, path.waypoints.length),
+      value: JSON.stringify([path.id, at]), label: point.positionName || (point.positionLink
+        ? PathLinks.waypointName(project, path, at) : path.name + ' / ' + waypointName(at, path.waypoints.length)),
       meta: path.name + ' / ' + waypointName(at, path.waypoints.length), positionName: point.positionName,
       pathId: path.id, index: at, positionLink: point.positionLink,
     }]));
@@ -36,21 +37,20 @@ export function SharedWaypointPosition({ project, doc, index, onLink, onName }) 
   };
   return h('div', { className: 'shared-waypoint-position' },
     h('div', { className: 'inrow first' },
-      h('span', { className: 'inrow-l' }, 'Linkable', h('small', null, 'Make this point available to other paths')),
+      h('span', { className: 'inrow-l' }, 'Share position', h('small', null, 'Move linked points together')),
       h(UI.Toggle, { on: !!waypoint.positionName, ariaLabel: 'Linkable waypoint', onChange: (on) => onName(index, on ? waypointName(index, doc.waypoints.length) : undefined) })),
     waypoint.positionName && h('label', { className: 'linkable-name' }, 'Point name',
       h('input', { className: 'textinput', 'aria-label': 'Linkable point name', maxLength: 80, value: name,
         onChange: (event) => setName(event.target.value), onBlur: saveName,
         onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); } if (event.key === 'Escape') { event.stopPropagation(); setName(waypoint.positionName); } } })),
 
-    h(UI.Dropdown, { id: 'waypoint-position-link', label: 'Shared position', value: '',
-      placeholder: candidates.length ? 'Use named point…' : 'No linkable points yet',
-      items: candidates,
-      disabled: !candidates.length,
+    h(UI.ChoiceBrowser, { id: 'waypoint-position-link', label: 'Linked position', value: members[0]?.value || '', resetKey: doc.id + ':' + index,
+      placeholder: 'Search named points', emptyText: 'Name a shared point in another path to link it here.',
+      items: [...members.slice(0, 1), ...candidates],
       onChange: (value) => { const target = candidates.find((item) => item.value === value); if (target) onLink(index, target); } }),
     (waypoint.positionLink || members.length > 0) && h('div', { className: 'inrow' },
       h('span', { className: 'inrow-l', style: { minWidth: 0, overflowWrap: 'anywhere' }, title: members.map((item) => item.label).join('\n') },
-        members.length ? members[0].label + (members.length > 1 ? ' + ' + (members.length - 1) + ' more' : '') : 'No other linked waypoints'),
+        members.length ? 'Linked to ' + members.length + ' other ' + (members.length === 1 ? 'point' : 'points') : 'No other linked waypoints'),
       h('button', { type: 'button', className: 'btn', onClick: () => onLink(index, null) }, 'Unlink')),
-    h('div', { className: 'seg-hint' }, members.length ? 'Linked position only. Heading and tangent stay local.' : 'Only named, linkable points appear here.'));
+    h('div', { className: 'seg-hint' }, members.length ? 'Position is shared. Facing and tangents stay independent.' : ''));
 }
