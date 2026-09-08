@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { generatedCatalogHash, parseGeneratedJavaCatalog } from "../src/electron/javaGeneratedCatalog";
+import { generatedCatalogHash, parseGeneratedRobotCatalog } from "../src/electron/robotGeneratedCatalog";
 
 function catalog() {
   const value = {
@@ -21,34 +21,34 @@ function catalog() {
         name: "target",
         label: "Target",
         description: "Authored scoring target.",
-        javaType: "frc.robot.Target",
+        valueType: "frc.robot.Target",
         role: "argument",
         schema: {
           kind: "object",
-          javaType: "frc.robot.Target",
+          valueType: "frc.robot.Target",
           fields: [
-            { name: "level", schema: { kind: "enum", javaType: "frc.robot.Level", enumValues: ["L1", "L4"] } },
-            { name: "sequence", schema: { kind: "integerString", javaType: "long" } },
+            { name: "level", schema: { kind: "enum", valueType: "frc.robot.Level", enumValues: ["L1", "L4"] } },
+            { name: "sequence", schema: { kind: "integerString", valueType: "I64" } },
           ],
         },
         defaultValue: { level: "L4", sequence: "9007199254740993" },
       }, {
         name: "precise",
-        javaType: "java.math.BigDecimal",
+        valueType: "robot.math.BigDecimal",
         role: "argument",
-        schema: { kind: "decimalString", javaType: "java.math.BigDecimal" },
+        schema: { kind: "decimalString", valueType: "robot.math.BigDecimal" },
         defaultValue: "0.10000000000000000001",
         min: "0.10000000000000000000",
         max: "0.10000000000000000002",
       }],
-      source: { file: "src/main/java/frc/robot/AutoCommands.java", line: 17 },
+      source: { file: "Commands/AutoCommands.vi", line: 17 },
     }],
   };
   value.catalogHash = generatedCatalogHash(value.commands);
   return value;
 }
 
-describe("generated Java command catalogs", () => {
+describe("generated Robot command catalogs", () => {
   it("accepts a 1.1 catalog whose identity covers sorted condition capabilities", () => {
     const value = catalog() as any;
     value.schemaVersion = "1.1";
@@ -61,17 +61,17 @@ describe("generated Java command catalogs", () => {
       semanticTags: ["game-piece"],
       ownerType: "frc.robot.Conditions",
       member: "hasNote",
-      source: { file: "src/main/java/frc/robot/Conditions.java", line: 14 },
+      source: { file: "Commands/Conditions.vi", line: 14 },
     }, {
       id: "frc.robot.Conditions#ready",
       label: "Ready",
       ownerType: "frc.robot.Conditions",
       member: "ready",
-      source: { file: "src/main/java/frc/robot/Conditions.java", line: 9 },
+      source: { file: "Commands/Conditions.vi", line: 9 },
     }];
     value.catalogHash = generatedCatalogHash(value.commands, value.conditions);
 
-    const parsed = parseGeneratedJavaCatalog(value);
+    const parsed = parseGeneratedRobotCatalog(value);
 
     expect(parsed.schemaVersion).toBe("1.1");
     expect(parsed.conditions).toEqual(expect.arrayContaining([
@@ -89,14 +89,14 @@ describe("generated Java command catalogs", () => {
       label: "Ready",
       ownerType: "frc.robot.Conditions",
       member: "ready",
-      source: { file: "frc/robot/Conditions.java", line: 0 },
+      source: { file: "frc/robot/Conditions.vi", line: 0 },
     }];
     value.catalogHash = generatedCatalogHash(value.commands, value.conditions);
 
-    expect(parseGeneratedJavaCatalog(value).conditions[0].source.line).toBe(1);
+    expect(parseGeneratedRobotCatalog(value).conditions[0].source.line).toBe(1);
   });
 
-  it("accepts the annotation processor's locale-independent condition order", () => {
+  it("accepts locale-independent condition ordering", () => {
     const value = catalog() as any;
     value.schemaVersion = "1.1";
     value.supportVersion = "0.2.0";
@@ -105,11 +105,11 @@ describe("generated Java command catalogs", () => {
       label: id,
       ownerType: "frc.robot.Conditions",
       member: "ready",
-      source: { file: "frc/robot/Conditions.java", line: 0 },
+      source: { file: "frc/robot/Conditions.vi", line: 0 },
     }));
     value.catalogHash = generatedCatalogHash(value.commands, value.conditions);
 
-    expect(parseGeneratedJavaCatalog(value).conditions.map((condition) => condition.id)).toEqual(["a#B", "a.B"]);
+    expect(parseGeneratedRobotCatalog(value).conditions.map((condition) => condition.id)).toEqual(["a#B", "a.B"]);
   });
 
   it("rejects command and condition IDs that collide", () => {
@@ -121,11 +121,11 @@ describe("generated Java command catalogs", () => {
       label: "Collision",
       ownerType: "frc.robot.Conditions",
       member: "collision",
-      source: { file: "frc/robot/Conditions.java", line: 0 },
+      source: { file: "frc/robot/Conditions.vi", line: 0 },
     }];
     value.catalogHash = generatedCatalogHash(value.commands, value.conditions);
 
-    expect(() => parseGeneratedJavaCatalog(value)).toThrow(/capability ID.*collides/);
+    expect(() => parseGeneratedRobotCatalog(value)).toThrow(/capability ID.*collides/);
   });
 
   it("rejects 1.1 catalogs with duplicate, unsorted, or malformed conditions", () => {
@@ -137,25 +137,25 @@ describe("generated Java command catalogs", () => {
       label: "Ready",
       ownerType: "frc.robot.Conditions",
       member: "ready",
-      source: { file: "src/main/java/frc/robot/Conditions.java", line: 9 },
+      source: { file: "Commands/Conditions.vi", line: 9 },
     }, {
       id: "frc.robot.Conditions#hasNote",
       label: "Has note",
       ownerType: "frc.robot.Conditions",
       member: "hasNote",
-      source: { file: "src/main/java/frc/robot/Conditions.java", line: 14 },
+      source: { file: "Commands/Conditions.vi", line: 14 },
     }];
     value.catalogHash = generatedCatalogHash(value.commands, value.conditions);
-    expect(() => parseGeneratedJavaCatalog(value)).toThrow(/sorted/);
+    expect(() => parseGeneratedRobotCatalog(value)).toThrow(/sorted/);
 
     value.conditions.reverse();
     value.conditions.push({ ...value.conditions[0] });
     value.catalogHash = generatedCatalogHash(value.commands, value.conditions);
-    expect(() => parseGeneratedJavaCatalog(value)).toThrow(/duplicated/);
+    expect(() => parseGeneratedRobotCatalog(value)).toThrow(/duplicated/);
 
     value.conditions = [{ ...value.conditions[0], aliases: Array.from({ length: 17 }, (_, index) => `alias-${index}`) }];
     value.catalogHash = generatedCatalogHash(value.commands, value.conditions);
-    expect(() => parseGeneratedJavaCatalog(value)).toThrow(/aliases/);
+    expect(() => parseGeneratedRobotCatalog(value)).toThrow(/aliases/);
   });
 
   it("requires the 1.1 catalog and 0.2.0 runtime contract together", () => {
@@ -165,15 +165,15 @@ describe("generated Java command catalogs", () => {
     value.conditions = [];
     value.catalogHash = generatedCatalogHash(value.commands, value.conditions);
 
-    expect(() => parseGeneratedJavaCatalog(value)).toThrow(/schema 1\.1 requires its matching supported runtime version/);
+    expect(() => parseGeneratedRobotCatalog(value)).toThrow(/schema 1\.1 requires its matching supported runtime version/);
   });
 
   it("continues to parse a legacy 1.0 command-only catalog", () => {
-    expect(parseGeneratedJavaCatalog(catalog())).toMatchObject({ schemaVersion: "1.0", conditions: [] });
+    expect(parseGeneratedRobotCatalog(catalog())).toMatchObject({ schemaVersion: "1.0", conditions: [] });
   });
 
   it("accepts bounded metadata and exact custom defaults", () => {
-    const { commands: [command], catalogHash } = parseGeneratedJavaCatalog(catalog());
+    const { commands: [command], catalogHash } = parseGeneratedRobotCatalog(catalog());
 
     expect(command).toMatchObject({
       id: "frc.robot.AutoCommands#score",
@@ -198,12 +198,12 @@ describe("generated Java command catalogs", () => {
     const duplicate = catalog();
     duplicate.commands.push(structuredClone(duplicate.commands[0]));
     duplicate.catalogHash = generatedCatalogHash(duplicate.commands);
-    expect(() => parseGeneratedJavaCatalog(duplicate)).toThrow(/duplicated/);
+    expect(() => parseGeneratedRobotCatalog(duplicate)).toThrow(/duplicated/);
 
     const invalidDefault = catalog();
     invalidDefault.commands[0].parameters[0].defaultValue = { level: "L9", sequence: "1" };
     invalidDefault.catalogHash = generatedCatalogHash(invalidDefault.commands);
-    expect(() => parseGeneratedJavaCatalog(invalidDefault)).toThrow(/default.*enum values/);
+    expect(() => parseGeneratedRobotCatalog(invalidDefault)).toThrow(/default.*enum values/);
   });
 
   it("rejects malformed and excessively deep schemas", () => {
@@ -211,24 +211,24 @@ describe("generated Java command catalogs", () => {
     let schema = invalid.commands[0].parameters[0].schema;
     for (let depth = 0; depth < 26; depth += 1) {
       schema.kind = "optional";
-      schema.element = { kind: "optional", javaType: "java.util.Optional<java.lang.String>" };
+      schema.element = { kind: "optional", valueType: "Optional<String>" };
       schema = schema.element;
     }
     invalid.catalogHash = generatedCatalogHash(invalid.commands);
-    expect(() => parseGeneratedJavaCatalog(invalid)).toThrow(/exceeds 24 levels/);
+    expect(() => parseGeneratedRobotCatalog(invalid)).toThrow(/exceeds 24 levels/);
   });
 
   it("rejects inverted exact bounds without converting them to binary floats", () => {
     const invalid = catalog();
     invalid.commands[0].parameters[1].min = "0.10000000000000000003";
     invalid.catalogHash = generatedCatalogHash(invalid.commands);
-    expect(() => parseGeneratedJavaCatalog(invalid)).toThrow(/inverted range/);
+    expect(() => parseGeneratedRobotCatalog(invalid)).toThrow(/inverted range/);
   });
 
   it("rejects generated defaults outside their authored bounds", () => {
     const invalid = catalog();
     invalid.commands[0].parameters[1].defaultValue = "0.2";
     invalid.catalogHash = generatedCatalogHash(invalid.commands);
-    expect(() => parseGeneratedJavaCatalog(invalid)).toThrow(/default.*at most/);
+    expect(() => parseGeneratedRobotCatalog(invalid)).toThrow(/default.*at most/);
   });
 });
