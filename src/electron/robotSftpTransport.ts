@@ -1,9 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
-import { buildJavaRevision } from "../shared/export/javaRevision";
 
 export const ROBOT_PUSH_PROTOCOL_VERSION = "bordeaux-robot-push/1.0" as const;
 export const ROBOT_RETENTION_PROTOCOL_VERSION = "bordeaux-retention/1.0" as const;
-export const ROBOT_ACTIVE_REVISION_READ_VERSION = "bordeaux-active-revision/1.0" as const;
 export const ROBOT_DEPLOYMENT_NAMESPACE = "/home/lvuser/deploy/bordeaux/push-v1" as const;
 
 export interface RobotEndpoint {
@@ -140,7 +138,6 @@ export type RobotRetentionResult =
 
 export type RobotRemoteFile =
   | { kind: "status" }
-  | { kind: "activeTrajectory" }
   | { kind: "incomingTemporary"; nonce: string; token: string }
   | { kind: "incomingRevision"; nonce: string }
   | { kind: "incomingRetentionTemporary"; nonce: string; token: string }
@@ -499,64 +496,6 @@ export class BordeauxRobotTransport {
     });
     try {
       return await readPairedRobotStatus(session, pairing, signal);
-    } finally {
-      await session.close();
-    }
-  }
-
-  /** Reads the fixed mailbox export; private runtime storage paths never cross this boundary. */
-  async readActiveRevision(
-    pairing: RobotPairing,
-    credentials: RobotCredentials,
-    options: { signal?: AbortSignal; timeoutMs?: number } = {},
-  ): Promise<{ status: RobotRuntimeStatus; contents: string | null }> {
-    validateEndpoint(pairing.endpoint);
-    const signal = options.signal ?? new AbortController().signal;
-    const session = await this.connect({
-      endpoint: pairing.endpoint,
-      credentials,
-      expectedHostKeyFingerprint: pairing.hostKeyFingerprint,
-      signal,
-      timeoutMs: options.timeoutMs ?? 15_000,
-    });
-    try {
-      const before = await readPairedRobotStatus(session, pairing, signal);
-      if (before.activeRevisionRead !== ROBOT_ACTIVE_REVISION_READ_VERSION) {
-        throw new RobotTransportError("transfer_failed", "This robot runtime does not support verified active-revision reads; update its Bordeaux runtime before selective push");
-      }
-      let contents: string | null = null;
-      if (before.activeRevisionId !== null) {
-        const payload = await session.read({ kind: "activeTrajectory" }, 16 * 1024 * 1024, signal);
-        if (payload.length === 0 || payload.length > 16 * 1024 * 1024) {
-          throw new RobotTransportError("transfer_failed", "Robot active trajectory exceeds its bounded payload size");
-        }
-        const sha256 = createHash("sha256").update(payload).digest("hex");
-        if (`sha256:${sha256}` !== before.activePayloadSha256) {
-          throw new RobotTransportError("transfer_failed", "Robot active trajectory hash does not match the inspected revision; refresh before pushing");
-        }
-        contents = payload.toString("utf8");
-        // Reuse the export identity contract, including schema and catalog/field validation.
-        const revision = buildJavaRevision({ contents, sha256 }, {
-          nonce: "baseline-read", expectedActiveRevisionId: before.activeRevisionId,
-        });
-        const { catalog, field } = revision.document.revision;
-        if (revision.revisionId !== before.activeRevisionId
-          || catalog.catalogId !== before.catalogId || catalog.catalogHash !== before.catalogHash
-          || catalog.supportVersion !== before.supportVersion || field.id !== before.fieldId
-          || field.revision !== before.fieldRevision || field.coordinateSchemaId !== before.fieldCoordinateSchemaId) {
-          throw new RobotTransportError("transfer_failed", "Robot active trajectory identity or context does not match the inspected runtime");
-        }
-      }
-      const after = await readPairedRobotStatus(session, pairing, signal);
-      const context = (status: RobotRuntimeStatus) => JSON.stringify([
-        status.activeRevisionRead, status.activeRevisionId, status.activePayloadSha256,
-        status.catalogId, status.catalogHash, status.supportVersion,
-        status.fieldId, status.fieldRevision, status.fieldCoordinateSchemaId,
-      ]);
-      if (context(before) !== context(after)) {
-        throw new RobotTransportError("transfer_failed", "Robot active revision changed while reading; refresh before pushing");
-      }
-      return { status: after, contents };
     } finally {
       await session.close();
     }

@@ -23,8 +23,6 @@ function remotePath(file: RobotRemoteFile): string {
   switch (file.kind) {
     case "status":
       return path.posix.join(ROBOT_DEPLOYMENT_NAMESPACE, "status.json");
-    case "activeTrajectory":
-      return path.posix.join(ROBOT_DEPLOYMENT_NAMESPACE, "active-trajectory.json");
     case "incomingTemporary":
       if (!/^[a-f0-9]{8,64}$/.test(file.token)) throw new RobotTransportError("invalid_request", "Remote Bordeaux temporary token is invalid");
       return path.posix.join(ROBOT_DEPLOYMENT_NAMESPACE, "inbox", `.bordeaux-${file.nonce}-${file.token}.tmp`);

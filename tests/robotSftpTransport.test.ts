@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createServer } from "node:net";
-import { createHash } from "node:crypto";
 import {
   BordeauxRobotTransport,
   ROBOT_DEPLOYMENT_NAMESPACE,
   ROBOT_PUSH_PROTOCOL_VERSION,
-  ROBOT_ACTIVE_REVISION_READ_VERSION,
   confirmRobotPairing,
   type RobotRemoteFile,
   type RobotProbe,
@@ -35,53 +33,6 @@ const probe: RobotProbe = {
 };
 
 describe("constrained robot SFTP transport", () => {
-  it.each(["active", "empty", "unsupported", "unknown-version", "missing", "corrupt", "oversized", "identity", "schema", "race", "empty-race", "context-race"])("verifies the %s active baseline", async (scenario) => {
-    const catalog = { catalogId: probe.status.catalogId, catalogHash: probe.status.catalogHash, supportVersion: probe.status.supportVersion };
-    const field = { id: probe.status.fieldId, revision: probe.status.fieldRevision, coordinateSchemaId: probe.status.fieldCoordinateSchemaId };
-    const contents = JSON.stringify({ schemaVersion: scenario === "schema" ? "unknown" : "bordeaux-trajectory/1.0", catalog, field, paths: [], routine: null });
-    const payloadSha256 = `sha256:${createHash("sha256").update(contents).digest("hex")}`;
-    const revisionId = `sha256:${createHash("sha256").update(JSON.stringify({ protocolVersion: "bordeaux-revision/1.0", payloadSha256, catalog, field })).digest("hex")}`;
-    const empty = scenario === "empty" || scenario === "empty-race";
-    const status = { ...probe.status, activeRevisionRead: scenario === "unsupported" ? undefined : scenario === "unknown-version" ? "bordeaux-active-revision/9.0" : ROBOT_ACTIVE_REVISION_READ_VERSION,
-      activeRevisionId: empty ? null : scenario === "identity" ? `sha256:${"b".repeat(64)}` : revisionId, activePayloadSha256: empty ? null : payloadSha256 };
-    const pairing = confirmRobotPairing({ probe, acceptedHostKeyFingerprint: probe.hostKeyFingerprint, acceptedRuntimeId: probe.status.runtimeId });
-    const reads: RobotRemoteFile[] = [];
-    let closed = false;
-    let statusReads = 0;
-    const session: RobotSftpSession = {
-      hostKeyFingerprint: probe.hostKeyFingerprint,
-      read: async (file, maxBytes) => {
-        reads.push(file);
-        if (file.kind === "status") {
-          statusReads += 1;
-          const changed = statusReads === 2;
-          return Buffer.from(JSON.stringify({ ...status,
-            ...(changed && (scenario === "race" || scenario === "empty-race") ? { activeRevisionId: `sha256:${"c".repeat(64)}`, activePayloadSha256: payloadSha256 } : {}),
-            ...(changed && scenario === "context-race" ? { catalogHash: `sha256:${"d".repeat(64)}` } : {}),
-          }));
-        }
-        expect(file).toEqual({ kind: "activeTrajectory" });
-        expect(maxBytes).toBe(16 * 1024 * 1024);
-        if (scenario === "missing") throw new Error("missing retained baseline");
-        if (scenario === "oversized") return Buffer.alloc(maxBytes + 1);
-        return Buffer.from(scenario === "corrupt" ? "corrupt" : contents);
-      },
-      write: async () => { throw new Error("unexpected write"); },
-      exists: async () => { throw new Error("unexpected exists"); },
-      renameSameDirectory: async () => { throw new Error("unexpected rename"); },
-      remove: async () => { throw new Error("unexpected remove"); },
-      close: async () => { closed = true; },
-    };
-    const transport = new BordeauxRobotTransport(async () => session);
-    if (scenario === "active" || scenario === "empty") {
-      await expect(transport.readActiveRevision(pairing, {})).resolves.toEqual({ status, contents: empty ? null : contents });
-      expect(reads).toEqual(empty ? [{ kind: "status" }, { kind: "status" }] : [{ kind: "status" }, { kind: "activeTrajectory" }, { kind: "status" }]);
-    } else {
-      await expect(transport.readActiveRevision(pairing, {})).rejects.toThrow();
-    }
-    expect(closed).toBe(true);
-  });
-
   it("binds an explicitly accepted host key and runtime identity", () => {
     const pairing = confirmRobotPairing({
       probe,
@@ -180,7 +131,6 @@ describe("constrained robot SFTP transport", () => {
     };
     const operations = [
       () => transport.inspect(pairing, credentials),
-      () => transport.readActiveRevision(pairing, credentials),
       () => transport.stageRevision(pairing, credentials, envelope),
       () => transport.stageRetention(pairing, credentials, envelope),
       () => transport.waitForActivation(pairing, credentials, expected),
