@@ -20,7 +20,7 @@ Open `http://localhost:4175`.
 
 ## Included
 
-- Responsive landing page with workflow, Java, accountability, FAQ, and download sections
+- Responsive landing page with workflow, LabVIEW, accountability, FAQ, and download sections
 - An indefinitely looping Chap hero animation with pause and reduced-motion handling as the sole illustrative figure
 - Keyboard/touch navigation, reduced-motion handling, focus states, a skip link, and semantic structure
 - Canonical, Open Graph, Twitter, JSON-LD, robots, sitemap, manifest, favicon, Apple touch icon, privacy page, and 404 page

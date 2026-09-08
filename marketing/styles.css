@@ -365,7 +365,7 @@ code, pre { font-family: var(--mono); }
 
 .craft-grid,
 .workflow-grid,
-.java-grid,
+.labview-grid,
 .control-grid,
 .faq-grid {
   display: grid;
@@ -453,16 +453,16 @@ code, pre { font-family: var(--mono); }
   line-height: 1.4;
 }
 
-.java-section {
+.labview-section {
   padding-block: 154px;
   color: var(--paper-ink);
   background: var(--paper-soft);
 }
 
-.java-grid { align-items: center; }
+.labview-grid { align-items: center; }
 
-.java-section .section-heading > p { color: var(--paper-muted); }
-.java-section .section-heading code { color: var(--paper-ink); }
+.labview-section .section-heading > p { color: var(--paper-muted); }
+.labview-section .section-heading code { color: var(--paper-ink); }
 
 .code-sample {
   min-width: 0;
@@ -685,7 +685,7 @@ code, pre { font-family: var(--mono); }
   .chap-stage { width: min(780px, 100%); min-height: 340px; }
   .craft-grid,
   .workflow-grid,
-  .java-grid,
+  .labview-grid,
   .control-grid,
   .faq-grid { grid-template-columns: 1fr; }
   .section-heading { max-width: 740px; }
@@ -738,7 +738,7 @@ code, pre { font-family: var(--mono); }
   .craft { padding-block: 36px 104px; }
   .craft-grid,
   .workflow-grid,
-  .java-grid,
+  .labview-grid,
   .control-grid,
   .faq-grid { gap: 58px; }
   .section-heading h2,
@@ -749,7 +749,7 @@ code, pre { font-family: var(--mono); }
   .workflow { padding-block: 104px; }
   .workflow-list { margin-block-start: 0; }
   .workflow-list li { font-size: 18px; }
-  .java-section { padding-block: 104px; }
+  .labview-section { padding-block: 104px; }
   .code-sample { width: calc(100% + 32px); margin-inline-start: -16px; }
   .code-sample pre { padding: 12px 16px 28px; font-size: 10.5px; }
   .control { padding-block: 104px; }

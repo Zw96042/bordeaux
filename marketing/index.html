@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#0f0b0b">
   <meta name="color-scheme" content="dark">
   <title>Bordeaux — Cultivated engineering for FRC autonomous</title>
-  <meta name="description" content="Bordeaux is a focused desktop tool for authoring FRC robot paths, autonomous routines, physical constraints, and typed Java command events.">
+  <meta name="description" content="Bordeaux is a focused desktop tool for authoring FRC robot paths, autonomous routines, physical constraints, and typed LabVIEW command events.">
   <link rel="canonical" href="https://bordeaux.wilsonzach.com/">
 
   <meta property="og:type" content="website">
@@ -15,16 +15,10 @@
   <meta property="og:title" content="Bordeaux — Cultivated engineering">
   <meta property="og:description" content="Shape the path, compose the autonomous run, and carry an inspectable contract into robot code.">
   <meta property="og:url" content="https://bordeaux.wilsonzach.com/">
-  <meta property="og:image" content="https://bordeaux.wilsonzach.com/assets/social/bordeaux-og.png">
-  <meta property="og:image:width" content="1200">
-  <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Bordeaux, a focused FRC autonomous authoring tool">
 
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Bordeaux — Cultivated engineering">
-  <meta name="twitter:description" content="A focused desktop editor for FRC paths, routines, constraints, and typed Java command events.">
-  <meta name="twitter:image" content="https://bordeaux.wilsonzach.com/assets/social/bordeaux-og.png">
-  <meta name="twitter:image:alt" content="Bordeaux, a focused FRC autonomous authoring tool">
+  <meta name="twitter:description" content="A focused desktop editor for FRC paths, routines, constraints, and typed LabVIEW command events.">
 
   <link rel="icon" href="assets/brand/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="assets/brand/apple-touch-icon.png" sizes="180x180">
@@ -41,7 +35,7 @@
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "macOS, Windows, Linux",
     "softwareVersion": "0.2.0-beta.3",
-    "description": "A focused desktop editor for authoring FRC robot paths, autonomous routines, event markers, and typed Java command integration.",
+    "description": "A focused desktop editor for authoring FRC robot paths, autonomous routines, event markers, and typed LabVIEW command integration.",
     "url": "https://bordeaux.wilsonzach.com/",
     "downloadUrl": "https://github.com/Zw96042/bordeaux/releases",
     "codeRepository": "https://github.com/Zw96042/bordeaux",
@@ -65,7 +59,7 @@
     <nav class="site-nav" id="site-navigation" aria-label="Primary navigation" data-navigation>
       <a href="#craft">The craft</a>
       <a href="#workflow">Workflow</a>
-      <a href="#java">Java</a>
+      <a href="#labview">LabVIEW</a>
       <a href="#control">Control</a>
       <a class="nav-download" href="https://github.com/Zw96042/bordeaux/releases">Download beta</a>
     </nav>
@@ -76,7 +70,7 @@
       <div class="shell hero-grid">
         <div class="hero-copy">
           <h1 id="hero-title">Cultivated engineering.</h1>
-          <p>Precision for robot constraints. Enough humanity to stay memorable through build season. Bordeaux brings the field, the routine, and the Java boundary into one considered tool.</p>
+          <p>Precision for robot constraints. Enough humanity to stay memorable through build season. Bordeaux brings the field, the routine, and the LabVIEW boundary into one considered tool.</p>
           <div class="hero-actions">
             <a class="action action-primary" href="https://github.com/Zw96042/bordeaux/releases">Download Bordeaux</a>
             <a class="action action-secondary" href="#craft">Discover the craft</a>
@@ -138,31 +132,16 @@
       </div>
     </section>
 
-    <section class="java-section" id="java" aria-labelledby="java-title">
-      <div class="shell java-grid">
+    <section class="labview-section" id="labview" aria-labelledby="labview-title">
+      <div class="shell labview-grid">
         <div class="section-heading">
-          <h2 id="java-title">Typed Java.<br>Robot code<br>stays yours.</h2>
-          <p>Bordeaux installs managed support only after a preview, discovers team-owned annotated factories through a deterministic catalog, and validates arguments before export.</p>
-          <p>It never edits <code>RobotContainer</code> and never deploys robot code.</p>
+          <h2 id="labview-title">LabVIEW commands.<br>Robot code<br>stays yours.</h2>
+          <p>Link a LabVIEW project, inspect saved command parameters, and place typed commands on your paths.</p>
+          <p>Export a selected path as a compact BDX file. Your robot code supplies motor control and command execution.</p>
         </div>
         <div class="code-sample">
-          <div class="code-heading"><span>ExampleCommands.java</span><button type="button" data-copy-code aria-label="Copy Java example"><span>Copy</span></button></div>
-          <pre><code data-code>public final class ExampleCommands {
-  @BordeauxCommand(
-      id = "intake.hold",
-      label = "Hold intake")
-  public Command hold(
-      @BordeauxParam(
-          label = "Output",
-          min = "-1",
-          max = "1")
-      double output) {
-    return Commands.startEnd(
-        () -&gt; intake.set(output),
-        intake::stop,
-        intake);
-  }
-}</code></pre>
+          <div class="code-heading"><span>Hold Intake.vi</span></div>
+          <p>Command: Hold intake</p><p>Output: DBL</p><p>Trigger: time or path progress</p>
         </div>
       </div>
     </section>
@@ -188,7 +167,7 @@
         <div class="section-heading"><h2 id="faq-title">Questions, answered plainly.</h2></div>
         <div class="faq-list">
           <details><summary>Is Bordeaux ready for competition use?</summary><p>Bordeaux is beta software. Validate exported trajectories in simulation and on a safely controlled robot, and keep a known-good autonomous fallback.</p></details>
-          <details><summary>Which robots and languages does it support?</summary><p>The maintained application is focused on FRC and Java 17, with swerve and tank robot models.</p></details>
+          <details><summary>Which robots and languages does it support?</summary><p>The maintained application is focused on FRC and LabVIEW, with swerve and tank robot models.</p></details>
           <details><summary>Does Bordeaux change or deploy robot code?</summary><p>No. It previews managed support changes, does not edit <code>RobotContainer</code>, and never performs robot deployment.</p></details>
           <details><summary>Which platforms are packaged?</summary><p>The repository includes packaging targets for macOS, Windows, and Linux. Check each beta release for the exact available artifacts.</p></details>
           <details><summary>Is Bordeaux open source?</summary><p>Yes. The source, releases, issue tracker, and current license are available in the public GitHub repository.</p></details>
