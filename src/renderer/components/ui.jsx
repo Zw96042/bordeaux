@@ -1,4 +1,5 @@
 import * as React from "react";
+import "../styles/inspector-refresh.css";
 import { createPortal } from "react-dom";
 import { PointerDrag } from "../hooks/usePointerDrag";
 import { parseFiniteDraftNumber } from "../lib/numericDraft";
@@ -24,7 +25,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
     trash: 'M5 7h14 M9 7V4h6v3 M7 7l1 13h8l1-13',
     plus: 'M12 5v14M5 12h14',
     chevron: 'M8 10l4 4 4-4',
-    gear: 'M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2',
+    gear: 'M9.5 3h5l.6 2.3 1.8 1 2.3-.6 2.5 4.3-1.7 1.7v2.1l1.7 1.7-2.5 4.3-2.3-.6-1.8 1-.6 2.3h-5l-.6-2.3-1.8-1-2.3.6L1.8 15l1.7-1.7v-2.1L1.8 9.5l2.5-4.3 2.3.6 1.8-1L9.5 3z M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z',
     lock: 'M7 11V8a5 5 0 0 1 10 0v3 M5 11h14v9H5z',
     route: 'M6 19a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M18 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M9 16h6a3 3 0 0 0 3-3',
     flag2: 'M5 21V4 M5 4h13l-3 5 3 5H5',
@@ -134,10 +135,10 @@ import { UnitPrefs } from "../lib/unitPreferences";
       const selectedIndex = Math.max(0, visibleItems.findIndex((item) => item.value === value));
       setActiveIndex(selectedIndex);
       requestAnimationFrame(() => {
-        if (showSearch) searchRef.current && searchRef.current.focus();
-        else optionRefs.current[selectedIndex] && optionRefs.current[selectedIndex].focus();
+        if (showSearch) searchRef.current?.focus();
+        else optionRefs.current[selectedIndex]?.focus();
       });
-    }, [open]);
+    }, [open, panelStyle !== null]);
 
     useEffect(() => {
       if (open) setActiveIndex(0);
@@ -171,6 +172,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
         return;
       }
       if (event.key === 'Escape') {
+        event.stopPropagation();
         event.preventDefault();
         setOpen(false);
         triggerRef.current && triggerRef.current.focus();
@@ -189,7 +191,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
       }
     };
 
-    const panel = open && panelStyle && createPortal(h('div', { ref: panelRef, className: 'cmd-picker-panel dropdown-panel', style: panelStyle, onKeyDown: handleKeyDown },
+    const panel = open && panelStyle && createPortal(h('div', { ref: panelRef, className: 'cmd-picker-panel dropdown-panel', style: panelStyle, onKeyDown: (event) => { event.stopPropagation(); handleKeyDown(event); } },
       showSearch && h('div', { className: 'cmd-picker-search' }, h(Icon, { name: 'search', size: 14 }),
         h('label', { className: 'sr-only', htmlFor: id + '-search' }, 'Filter ' + pickerName.toLowerCase()),
         h('input', { id: id + '-search', ref: searchRef, type: 'search', value: query,
@@ -208,9 +210,9 @@ import { UnitPrefs } from "../lib/unitPreferences";
               onMouseEnter: () => setActiveIndex(index), onClick: () => choose(item.value) },
             h('span', { className: 'cmd-picker-check' }, item.value === value && h(Icon, { name: 'check', size: 13 })),
             h('span', { className: 'cmd-picker-option-copy' }, h('strong', { title: item.label }, item.label), item.meta && h('small', null, item.meta)),
-            item.badge && h('span', { className: 'cmd-picker-badge' }, item.badge))),
+            item.badge && h('span', { className: 'cmd-picker-badge', title: item.badge }, item.badge))),
         hiddenMatchCount > 0 && h('div', { className: 'cmd-picker-more', role: 'status' },
-          visibleItems.length + ' of ' + filteredItems.length + ' shown · Keep typing to narrow results')),
+          visibleItems.length + ' of ' + filteredItems.length + ' shown. Keep typing to narrow results')),
       allowCustom && h('form', { className: 'cmd-picker-custom', onSubmit: (event) => {
         event.preventDefault();
         const exactValue = customDraft.trim();
@@ -234,6 +236,65 @@ import { UnitPrefs } from "../lib/unitPreferences";
         selected && selected.badge && h('small', null, selected.badge),
         h(Icon, { name: 'chevron', size: 13 })),
       panel);
+  }
+
+  // Inline choice browser keeps discovery and parameters in one stable inspector.
+  function ChoiceBrowser({ id, label, value, items = [], onChange, disabled, placeholder = 'Search', emptyText = 'No choices available', actionLabel = 'Change', resetKey }) {
+    const [editing, setEditing] = useState(false);
+    const [query, setQuery] = useState('');
+    const [active, setActive] = useState(-1);
+    const searchRef = useRef(null);
+    const changeRef = useRef(null);
+    const optionRefs = useRef([]);
+    const selected = items.find((item) => item.value === value && value !== '');
+    const expanded = editing || !selected;
+    const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    const matches = items.filter((item) => terms.every((term) => [item.label, item.meta, item.searchText].join(' ').toLocaleLowerCase().includes(term)));
+    const visible = matches.slice(0, MAX_RENDERED_PICKER_ITEMS);
+    useEffect(() => { setEditing(false); setQuery(''); setActive(-1); }, [resetKey]);
+    useEffect(() => { if (editing) searchRef.current?.focus(); }, [editing]);
+    const choose = (item) => {
+      onChange(item.value); setEditing(false); setQuery(''); setActive(-1);
+      requestAnimationFrame(() => (item.value ? changeRef.current : searchRef.current)?.focus());
+    };
+    const move = (index) => {
+      if (!visible.length) return;
+      const next = (index + visible.length) % visible.length;
+      setActive(next); optionRefs.current[next]?.scrollIntoView({ block: 'nearest' });
+    };
+    return h('section', { className: 'choice-browser', 'aria-label': label, onKeyDown: (event) => {
+      if (event.key === 'Escape' && expanded) { event.preventDefault(); event.stopPropagation(); if (selected) { setEditing(false); requestAnimationFrame(() => changeRef.current?.focus()); } else { setQuery(''); setActive(-1); searchRef.current?.focus(); } }
+      if (event.target.getAttribute('role') === 'option' && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+        event.preventDefault(); event.stopPropagation(); const index = optionRefs.current.indexOf(event.target); const next = (index + (event.key === 'ArrowDown' ? 1 : -1) + visible.length) % visible.length; move(next); optionRefs.current[next]?.focus();
+      }
+    } },
+      h('div', { className: 'choice-browser-heading' }, h('span', { className: 'fieldlabel' }, label),
+        selected && h('button', { type: 'button', className: 'choice-change', ref: changeRef, disabled,
+          'aria-expanded': expanded, 'aria-controls': id + '-choices', onClick: () => setEditing(!editing) }, expanded ? 'Done' : actionLabel)),
+      selected && !expanded && h('div', { className: 'choice-current' },
+        h(Icon, { name: 'check', size: 15 }),
+        h('div', null, h('strong', null, selected.label), selected.meta && h('small', null, selected.meta))),
+      expanded && h('div', { id: id + '-choices', className: 'choice-browser-body' },
+        h('div', { className: 'choice-search' }, h(Icon, { name: 'search', size: 15 }),
+          h('input', { id, ref: searchRef, type: 'search', role: 'combobox', value: query, disabled,
+            placeholder, 'aria-label': 'Search ' + label.toLowerCase(), 'aria-expanded': true,
+            'aria-controls': id + '-results', 'aria-autocomplete': 'list',
+            'aria-activedescendant': active >= 0 && visible[active] ? id + '-result-' + active : undefined,
+            onChange: (event) => { setQuery(event.target.value); setActive(-1); },
+            onKeyDown: (event) => {
+              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); event.stopPropagation(); move(active < 0 ? (event.key === 'ArrowDown' ? 0 : visible.length - 1) : active + (event.key === 'ArrowDown' ? 1 : -1)); }
+              if (event.key === 'Enter' && active >= 0 && visible[active]) { event.preventDefault(); event.stopPropagation(); choose(visible[active]); }
+              if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (query) { setQuery(''); setActive(-1); } else if (selected) { setEditing(false); requestAnimationFrame(() => changeRef.current?.focus()); } }
+            } })),
+        h('div', { className: 'choice-results', id: id + '-results', role: 'listbox', 'aria-label': label },
+          visible.map((item, index) => h('button', { key: item.value, id: id + '-result-' + index,
+            ref: (node) => { optionRefs.current[index] = node; }, type: 'button', role: 'option', disabled, tabIndex: index === Math.max(0, active) ? 0 : -1,
+            'aria-selected': item.value === value, className: 'choice-result' + (active === index ? ' active' : ''),
+            onClick: () => choose(item) },
+            h('span', null, h('strong', null, item.label), item.meta && h('small', null, item.meta)),
+            item.value === value && h(Icon, { name: 'check', size: 14 }))),
+          visible.length === 0 && h('p', { className: 'choice-empty', role: 'status' }, query ? 'No matches. Try another name.' : emptyText)),
+        matches.length > visible.length && h('p', { className: 'choice-empty' }, 'Search to narrow ' + matches.length + ' results.')));
   }
 
   // numeric field with drag-to-scrub
@@ -388,4 +449,4 @@ import { UnitPrefs } from "../lib/unitPreferences";
             it.hint && h('span', { className: 'ctxmenu-k' }, it.hint))));
   }
 
-export const UI = { Icon, IconBtn, Dropdown, Num, Section, Toggle, Seg, ContextMenu, constraintRangeSummary };
+export const UI = { Icon, IconBtn, Dropdown, ChoiceBrowser, Num, Section, Toggle, Seg, ContextMenu, constraintRangeSummary };
