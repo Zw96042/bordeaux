@@ -3,23 +3,24 @@ import { AUTO } from "../lib/routineModel";
 import { UnitPrefs } from "../lib/unitPreferences";
 import { CommandParameterEditor, commandArguments, parameterValueError, safeControlId } from "./ContextInspector";
 import { UI } from "./ui";
+import { LabviewCommandInspection, LabviewProjectSources } from "./LabviewProjectSources";
 
 // Autonomous Routine — step inspector (RIGHT rail) + run transport (bottom).
 // One inspector system, shared with the Plan page (.ctxinsp shell + form primitives).
   const h = React.createElement;
-  const { Icon, Dropdown, Seg } = UI;
+  const { Icon, Dropdown, ChoiceBrowser, Seg } = UI;
   const A = AUTO;
   const fmt = (t) => (t || 0).toFixed(2) + 's';
 
   function FieldLabel(t, right) { return h('div', { className: 'fieldlabel' }, h('span', null, t), right || null); }
 
   function StepInspector(props) {
-    const { node, paths, acq, run, javaProject, conditionOptions = [] } = props;
+    const { node, paths, acq, run, robotProject, conditionOptions = [] } = props;
     if (!node) return null;
-    const deployment = A.nodeDeploymentState(node, javaProject && javaProject.catalog);
+    const deployment = A.nodeDeploymentState(node, robotProject && robotProject.catalog);
     if (!deployment.deployable) {
       const title = deployment.legacy ? (deployment.label || 'Legacy step') : 'Unsupported step';
-      return h('div', { className: 'ctxinsp' },
+      return h('div', { className: 'ctxinsp inspector-refresh' },
         h('div', { className: 'ctxinsp-hd' },
           h('span', { className: 'ctxinsp-ic', style: { background: 'color-mix(in srgb, #d2655f 16%, transparent)', color: '#d2655f' } }, h(Icon, { name: 'info', size: 15 })),
           h('span', { className: 'ctxinsp-t', title }, title),
@@ -36,7 +37,7 @@ import { UI } from "./ui";
     if (node.type === 'path') {
       icon = 'route'; title = 'Path'; tag = 'step';
       body = h(React.Fragment, null,
-        h(Dropdown, { id: 'routine-bound-path', label: 'Bound path', value: node.ref, icon: 'route',
+        h(Dropdown, { id: 'routine-bound-path', label: 'Path', value: node.ref, icon: 'route',
           items: paths.map((path) => ({ value: path.id, label: path.name })),
           onChange: (value) => set({ ref: value }) }),
         seg && h('div', { className: 'rt-stat' },
@@ -53,7 +54,7 @@ import { UI } from "./ui";
         FieldLabel('Duration', h('span', { className: 'rt-scaleval' }, 's')),
         h('input', { className: 'textinput', type: 'number', min: 0.02, max: 15, step: 0.01, 'aria-label': 'Wait duration in seconds', value: durationS,
           onChange: (event) => set({ arguments: { durationS: Number(event.target.value) } }) }),
-        h('div', { className: 'seg-hint' }, 'Pause the routine for 0.02 to 15 seconds before the next step.'),
+        h('div', { className: 'seg-hint' }, 'Continue to the next step after this delay.'),
         h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete wait'));
 
     } else if (node.type === 'generatedTrajectory') {
@@ -67,21 +68,21 @@ import { UI } from "./ui";
       icon = 'branch'; title = 'Decision'; tag = 'branch'; accent = '#9aa3b0';
       const out = acq.outcomes[node.id] || 'then';
       body = h(React.Fragment, null,
-        h(Dropdown, { id: 'routine-condition', label: 'Condition ID', value: node.cond,
+        h(Dropdown, { id: 'routine-condition', label: 'Condition', value: node.cond,
           items: A.conditionPickerItems(conditionOptions, node.cond), placeholder: 'Choose a registered condition', icon: 'branch',
           onChange: (value) => set({ cond: value }) }),
         h('div', { className: 'grid2', style: { marginTop: '10px' } },
           h('div', null, FieldLabel('If true'), h('input', { className: 'textinput', 'aria-label': 'True branch label', value: node.thenLabel, spellCheck: false, onChange: (e) => set({ thenLabel: e.target.value }) })),
           h('div', null, FieldLabel('If false'), h('input', { className: 'textinput', 'aria-label': 'False branch label', value: node.elseLabel, spellCheck: false, onChange: (e) => set({ elseLabel: e.target.value }) }))),
-        FieldLabel('Simulated outcome'),
+        FieldLabel('Preview branch'),
         h(Seg, { value: out, options: [{ v: 'then', label: node.thenLabel || 'true' }, { v: 'else', label: node.elseLabel || 'false' }], onChange: (v) => acq.setOutcome(node.id, v) }),
-        h('div', { className: 'seg-hint' }, 'Robot code registers this stable ID. The simulated outcome only controls the editor preview.'),
+        h('div', { className: 'seg-hint' }, 'Choose a branch to preview. The robot evaluates the condition when running.'),
         h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete decision'));
 
     } else {
       const C = A.CATS[node.cat]; icon = C.icon; accent = C.color; tag = C.label;
-      title = 'Function';
-      const commands = javaProject && javaProject.catalog ? javaProject.catalog.commands || [] : [];
+      title = 'Command';
+      const commands = robotProject && robotProject.catalog ? robotProject.catalog.commands || [] : [];
       const invocationId = node.invocation && node.invocation.commandId || '';
       const selected = commands.find((command) => command.id === invocationId);
       const parameters = selected ? (selected.parameters || []).filter((parameter) => parameter.role === 'argument') : [];
@@ -91,20 +92,20 @@ import { UI } from "./ui";
         return [parameter.name, parameterValueError(value, parameter) ? commandArguments(selected)[parameter.name] : value];
       })) : saved;
       body = h(React.Fragment, null,
-        h('div', { className: 'rt-callout' }, h(Icon, { name: 'info', size: 14 }), 'Runs after the previous path and before the next path is selected.'),
-        javaProject && javaProject.catalog
-          ? h(Dropdown, { id: 'routine-command', label: 'Java command', value: invocationId,
+        h('div', { className: 'seg-hint' }, 'Runs between the surrounding steps.'),
+        robotProject && robotProject.catalog
+          ? h(ChoiceBrowser, { id: 'routine-command', resetKey: node.id, label: 'Command', value: invocationId,
               items: [{ value: '', label: 'Choose a command', meta: 'No command selected' }, ...commands.map((command) => ({
-                value: command.id, label: command.label, meta: command.description || command.id,
-                badge: command.runtimeReady === true ? 'ready' : 'build',
-              }))], placeholder: 'Choose a command', icon: 'bolt', onChange: (value) => {
+                value: command.id, label: command.label, meta: (command.parameters || []).filter((parameter) => parameter.role === 'argument').map((parameter) => parameter.label || parameter.name).join(', ') || command.member,
+                searchText: command.id + ' ' + command.member,
+              }))], placeholder: 'Search commands', emptyText: 'No commands found in this project', icon: 'bolt', onChange: (value) => {
               const command = commands.find((candidate) => candidate.id === value);
               set({ title: command ? command.label : 'Robot command', invocation: command ? { commandId: command.id, arguments: commandArguments(command) } : null });
             } })
-          : h(React.Fragment, null, FieldLabel('Java command'),
-              h('button', { className: 'cmd-primary-action', type: 'button', onClick: javaProject && javaProject.link }, 'Choose Java project')),
+          : h(React.Fragment, null, FieldLabel('Robot command'),
+              h('button', { className: 'cmd-primary-action', type: 'button', onClick: robotProject && robotProject.link }, 'Choose robot project')),
         invocationId && !selected && h('div', { className: 'cmd-project-error', role: 'status' }, 'This saved command is missing from the linked catalog.'),
-        selected && selected.runtimeReady !== true && h('div', { className: 'cmd-project-error', role: 'status' }, 'Build the annotated command catalog before export.'),
+        selected && !selected.labviewConnector && h('div', { className: 'cmd-project-error', role: 'status' }, 'Inspect this command’s types before exporting.'),
         selected && h('form', { className: 'cmd-parameters', onSubmit: (event) => event.preventDefault() },
           parameters.length === 0 ? h('div', { className: 'cmd-empty-params' }, 'No parameters')
             : parameters.map((parameter) => h(CommandParameterEditor, {
@@ -116,15 +117,19 @@ import { UI } from "./ui";
                 value: argumentsValue[parameter.name],
                 onChange: (value) => set({ invocation: { commandId: selected.id, arguments: { ...argumentsValue, [parameter.name]: value } } }),
               }))),
+        h('details', { className: 'inspector-details' }, h('summary', null, 'LabVIEW project'),
+        robotProject && robotProject.catalog && robotProject.catalog.runtime === 'labview' && h(LabviewCommandInspection, { catalog: robotProject.catalog, onInspect: robotProject.inspect, operation: robotProject.operation }),
+        robotProject && robotProject.catalog && robotProject.catalog.runtime === 'labview' && robotProject.error && h('div', { className: 'cmd-project-error', role: 'alert' }, robotProject.error),
+        robotProject && robotProject.catalog && robotProject.catalog.runtime === 'labview' && h(LabviewProjectSources, { catalog: robotProject.catalog })),
         h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete command'));
 
     }
 
-    return h('div', { className: 'ctxinsp' },
+    return h('div', { className: 'ctxinsp inspector-refresh' },
       h('div', { className: 'ctxinsp-hd' },
         h('span', { className: 'ctxinsp-ic', style: { background: 'color-mix(in srgb,' + accent + ' 16%, transparent)', color: accent } }, h(Icon, { name: icon, size: 15 })),
         h('span', { className: 'ctxinsp-t', title }, title),
-        tag && h('span', { className: 'ctxinsp-tag' }, tag),
+        tag && null,
         h('button', { className: 'ctxinsp-x', type: 'button', title: 'Close', 'aria-label': 'Close step inspector', onClick: () => acq.select(null) }, h(Icon, { name: 'x', size: 14 }))),
       h('div', { className: 'ctxinsp-body' }, body));
   }
