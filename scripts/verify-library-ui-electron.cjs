@@ -568,8 +568,9 @@ app.whenReady().then(async () => {
     await click('.library-menu button', 'Move or link…');
     assert.equal(await evaluate(() => document.querySelector('.library-properties').open), true);
     assert.equal(await evaluate(() => document.querySelector('.library-properties select option[value=""]').textContent), 'No folder');
+    await wait(() => evaluate(() => document.querySelector('.library-properties')?.contains(document.activeElement)), 'path properties focus');
     await key('Escape');
-    assert.equal(await evaluate(() => document.querySelector('.library-properties')), null);
+    await wait(() => evaluate(() => !document.querySelector('.library-properties')), 'native path properties Escape close');
     assert.equal(await evaluate(() => document.activeElement.dataset.libraryItem), 'library-path-0');
     check('item popover supports keyboard, Escape focus restoration, outside dismissal, and separate native properties');
     for (const [width, height] of [[1440, 900], [1280, 800], [1100, 720]]) {
