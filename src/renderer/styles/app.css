@@ -1,5 +1,6 @@
 /* Bordeaux renderer styles. */
 :root {
+  scrollbar-color: #30343b transparent;
   --panel-border-strong: oklch(1 0 0 / 0.13);
   --panel-soft: oklch(1 0 0 / 0.045);
   --polish-control: oklch(0.205 0.009 260);
@@ -537,7 +538,8 @@ input,select{font-family:inherit}
 .vc-div{width:1px;height:16px;background:var(--line);margin:0 3px}
 
 /* ============ robot page ============ */
-.robotpage{flex:1;overflow-y:auto;background:var(--bg);display:flex;justify-content:center}
+.page-main{display:flex;flex:1;min-height:0;overflow:hidden}
+.robotpage{flex:1;min-width:0;min-height:0;overflow-y:auto;overscroll-behavior:contain;background:var(--bg);display:flex;justify-content:center}
 .rp-wrap{width:100%;max-width:1280px;padding:24px 28px 40px}
 .rp-title{font-size:23px;font-weight:600;letter-spacing:-.3px}
 .rp-sub{font-size:12.5px;color:var(--txt-3);margin-top:6px;line-height:1.5;max-width:560px}

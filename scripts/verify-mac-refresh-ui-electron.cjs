@@ -154,6 +154,54 @@ app.whenReady().then(async () => {
       }
     }
     check('graph open/close first changed and settled animation frames keep view controls above telemetry at 1440 and 1100');
+    for (const [width, height] of [[1440, 900], [1100, 720], [1100, 600]]) {
+      win.setContentSize(width, height); await delay(100);
+      await pointer('.pageswitch button', 'Settings');
+      const bounds = await evaluate(() => {
+        const page = document.querySelector('.robotpage');
+        const r = page.getBoundingClientRect();
+        return { bottom: r.bottom, viewport: innerHeight, height: page.clientHeight, content: page.scrollHeight };
+      });
+      assert.ok(bounds.bottom <= bounds.viewport + 1, JSON.stringify(bounds));
+      assert.ok(bounds.content > bounds.height, 'Settings fixture requires scrolling');
+      // Deliver wheel input within the page, without scrollIntoView hiding layout failures.
+      win.webContents.sendInputEvent({ type: 'mouseMove', x: 500, y: 400 });
+      win.webContents.sendInputEvent({ type: 'mouseWheel', x: 500, y: 400, deltaY: -5000, canScroll: true });
+      await wait(() => evaluate(() => {
+        const p = document.querySelector('.robotpage');
+        return p.scrollTop + p.clientHeight >= p.scrollHeight - 2;
+      }), 'wheel reaches Settings bottom');
+      await shot(`settings-bottom-${width}x${height}`);
+      // Tabbing through actual controls must reveal them inside the scroll viewport.
+      await pointer('[aria-label="Robot width"]');
+      const count = await evaluate(() => document.querySelectorAll('.robotpage input,.robotpage button').length);
+      let lowest = 0;
+      for (let i = 0; i < count; i++) {
+        await key('Tab');
+        const focus = await evaluate(() => {
+          const el = document.activeElement, page = document.querySelector('.robotpage');
+          if (!page.contains(el)) return null;
+          const r = el.getBoundingClientRect(), p = page.getBoundingClientRect();
+          return { top: r.top, bottom: r.bottom, pageTop: p.top, pageBottom: p.bottom, scroll: page.scrollTop };
+        });
+        if (!focus) break;
+        assert.ok(focus.top >= focus.pageTop - 1 && focus.bottom <= focus.pageBottom + 1, JSON.stringify(focus));
+        lowest = Math.max(lowest, focus.scroll);
+      }
+      assert.ok(lowest > 0, 'Keyboard focus scrolls to lower Settings controls');
+      await pointer('.pageswitch button', 'Editor');
+      const scrollbar = await evaluate(() => {
+        const outline = document.querySelector('.outline-scroll');
+        return { color: getComputedStyle(outline).scrollbarColor, width: getComputedStyle(outline).scrollbarWidth };
+      });
+      assert.equal(scrollbar.color, 'rgb(48, 52, 59) rgba(0, 0, 0, 0)');
+      assert.equal(scrollbar.width, 'thin');
+      win.webContents.sendInputEvent({ type: 'mouseMove', x: 245, y: height - 100 });
+      win.webContents.sendInputEvent({ type: 'mouseWheel', x: 245, y: height - 100, deltaY: -100, canScroll: true });
+      await delay(100);
+      await shot(`outline-scrollbar-${width}x${height}`);
+    }
+    check('Settings wheel and keyboard scrolling and dark outline scrollbar at supported sizes and 600px height');
     assert.deepEqual(errors, []);
     await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ checks, mockPersistence: true, autosaveCount: autosaves.length, saveCount: saves.length, projectPath: location.projectPath, rotation, frames, errors }, null, 2));
     app.exit(0);
