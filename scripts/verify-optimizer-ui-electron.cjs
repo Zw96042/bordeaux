@@ -201,7 +201,7 @@ app.whenReady().then(async () => {
     await stable(candidate, 250, 'Reopened candidate comparison');
     check('closing comparison restores selected timing and reopening keeps the result without rerunning');
     const expectedGain = Number(normal.time) - Number(candidate.time);
-    const expectedGainLabel = `${expectedGain.toFixed(2)} s faster · ${(expectedGain / Number(normal.time) * 100).toFixed(1)}%`;
+    const expectedGainLabel = `${expectedGain.toFixed(2)} s faster, ${(expectedGain / Number(normal.time) * 100).toFixed(1)}%`;
     await waitFor(async () => (await snapshot()).status === expectedGainLabel, 'gain and percentage against the actual normal trajectory');
     await evaluate(() => {
       const heading = document.querySelector('.optimizer-outcome[role="status"]');
