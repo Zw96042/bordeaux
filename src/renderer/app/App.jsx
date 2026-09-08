@@ -819,6 +819,13 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const derived = derivation.value || PENDING_PATH_PREVIEW;
     const derivationDoc = derivation.path || doc;
     const derivationCurrent = derivation.current;
+    const [showPlanningProgress, setShowPlanningProgress] = useState(false);
+    useEffect(() => {
+      setShowPlanningProgress(false);
+      if (derivationCurrent || derivation.error) return;
+      const timer = window.setTimeout(() => setShowPlanningProgress(true), 600);
+      return () => window.clearTimeout(timer);
+    }, [derivationCurrent, optimizationKey, derivation.error]);
     const reverseDistance = currentPathLength(derivation);
 
     const durationInputs = useMemo(() => project.paths.map((path) => ({
@@ -1151,7 +1158,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
       return d;
     }), [mutate, derived]);
     const moveMarkerTo = useCallback((i, p, visitFraction) => mutate((d) => { const m = d.markers[i]; if (!m) return d; const f = Number.isFinite(visitFraction) ? visitFraction : PM.nearestFraction(p.x, p.y, derived.sample.pts); m.f = f; if (m.anchor === 'dist') m.d = +(f * (derived.sample.length || 0)).toFixed(3); return d; }), [mutate, derived]);
-    const setFeature = (items, i, patch) => { const item = items[i]; if (!item) return; if (patch.anchor) { const f = PM.featureFraction(item, derived.sample); item.f = f; if (patch.anchor === 'dist') item.d = +(f * (derived.sample.length || 0)).toFixed(3); else delete item.d; } Object.assign(item, patch); };
+    const setFeature = (items, i, patch) => { const item = items[i]; if (!item) return; if (patch.anchor) { const f = PM.featureFraction(item, derived.sample); item.f = f; if (patch.anchor === 'dist') item.d = f * (derived.sample.length || 0); else delete item.d; } Object.assign(item, patch); };
     const setTarget = useCallback((i, patch) => commit((d) => { setFeature(d.targets, i, patch); return d; }), [commit, derived]);
     const delTarget = useCallback((i) => { commit((d) => { d.targets.splice(i, 1); return d; }); select(null, -1); }, [commit, select]);
     const setMarker = useCallback((i, patch) => commit((d) => { setFeature(d.markers, i, patch); return d; }), [commit, derived]);
@@ -1182,7 +1189,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
       range.f0 = f0; range.f1 = f1; range.anchor = anchor;
       if (anchor === 'dist') {
         const length = derived.sample.length || 0;
-        range.d0 = +(f0 * length).toFixed(3); range.d1 = +(f1 * length).toFixed(3);
+        range.d0 = f0 * length; range.d1 = f1 * length;
         delete range.w0; delete range.w1; delete range.t0; delete range.t1;
       } else if (anchor === 'wp') {
         const fractions = PM.waypointFracs(d, derived.sample);
