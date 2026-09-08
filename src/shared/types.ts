@@ -180,7 +180,7 @@ export interface CommandInvocation {
   cancelOnPathEnd?: boolean;
 }
 
-export type JavaValueSchemaKind =
+export type RobotValueSchemaKind =
   | "boolean"
   | "integer"
   | "integerString"
@@ -194,21 +194,21 @@ export type JavaValueSchemaKind =
   | "object"
   | "opaque";
 
-export interface JavaValueField {
+export interface RobotValueField {
   name: string;
-  schema: JavaValueSchema;
+  schema: RobotValueSchema;
 }
 
-export interface JavaValueSchema {
-  kind: JavaValueSchemaKind;
-  javaType: string;
+export interface RobotValueSchema {
+  kind: RobotValueSchemaKind;
+  valueType: string;
   enumValues?: string[];
-  element?: JavaValueSchema;
-  value?: JavaValueSchema;
-  fields?: JavaValueField[];
+  element?: RobotValueSchema;
+  value?: RobotValueSchema;
+  fields?: RobotValueField[];
 }
 
-export interface JavaCommandParameter {
+export interface RobotCommandParameter {
   name: string;
   label?: string;
   description?: string;
@@ -216,12 +216,12 @@ export interface JavaCommandParameter {
   defaultValue?: CommandArgumentValue;
   min?: number | string;
   max?: number | string;
-  javaType: string;
+  valueType: string;
   role: "argument" | "dependency";
-  schema: JavaValueSchema;
+  schema: RobotValueSchema;
 }
 
-export interface JavaCommandDescriptor {
+export interface RobotCommandDescriptor {
   id: string;
   label: string;
   description?: string;
@@ -234,7 +234,15 @@ export interface JavaCommandDescriptor {
   kind: "constructor" | "factory";
   confidence: "confirmed" | "inferred";
   runtimeReady?: boolean;
-  parameters: JavaCommandParameter[];
+  /** NI-inspected command lifecycle; caller-owned dispatch is required for execution. */
+  labviewLegacy?: true;
+  /** Saved NI connector evidence for file serialization; never execution authority. */
+  labviewConnector?: {
+    labviewVersion: string; applicationContext: "My Computer"; target: string; file: string;
+    terminalNumbers: number[]; directions: number[]; requirements: number[]; captions: string[];
+    typeXml: string[]; extendedInfo: unknown[]; defaults: Record<string, unknown>;
+  };
+  parameters: RobotCommandParameter[];
   source: {
     file: string;
     line: number;
@@ -242,7 +250,7 @@ export interface JavaCommandDescriptor {
 }
 
 /** A generated robot predicate that can be used by routine decisions and event schedules. */
-export interface JavaConditionDescriptor {
+export interface RobotConditionDescriptor {
   id: string;
   label: string;
   description?: string;
@@ -259,15 +267,15 @@ export interface JavaConditionDescriptor {
 }
 
 /** A Bordeaux-owned routine capability with a closed, versioned contract. */
-export interface JavaBuiltInDescriptor {
+export interface RobotBuiltInDescriptor {
   id: "bordeaux.wait";
   kind: "wait";
   label: "Wait";
   description: "Pause the routine before its next step.";
-  parameters: [JavaCommandParameter];
+  parameters: [RobotCommandParameter];
 }
 
-export interface JavaTrajectoryGeneratorLimits {
+export interface RobotTrajectoryGeneratorLimits {
   timeoutMs: number;
   maxSamples: number;
   maxDurationS: number;
@@ -281,7 +289,7 @@ export interface JavaTrajectoryGeneratorLimits {
 }
 
 /** A team-owned runtime trajectory generator with a fully bounded output contract. */
-export interface JavaTrajectoryGeneratorDescriptor {
+export interface RobotTrajectoryGeneratorDescriptor {
   id: string;
   label: string;
   description?: string;
@@ -289,14 +297,46 @@ export interface JavaTrajectoryGeneratorDescriptor {
   semanticTags?: string[];
   ownerType: string;
   member: string;
-  inputs: JavaCommandParameter[];
+  inputs: RobotCommandParameter[];
   preview: { kind: "runtimeDynamic" };
   fallbackPolicy: "safeStopOnly" | "validatedBranch";
-  limits: JavaTrajectoryGeneratorLimits;
+  limits: RobotTrajectoryGeneratorLimits;
   source: { file: string; line: number };
 }
 
-export interface JavaCommandCatalog {
+/** Disk source inventory only. A VI here is not a verified runtime handler. */
+export interface LabviewProjectDiscovery {
+  projectFile: string;
+  targets: Array<{ name: string; type: string }>;
+  items: Array<{
+    name: string;
+    type: string;
+    target: string;
+    projectPath: string;
+    /** Path relative to the selected project directory; explicit references can be outside it. */
+    file?: string;
+    status: "present" | "missing" | "unsupported";
+    reason?: string;
+    origin: "project" | "autoFolder" | "library";
+  }>;
+  viCount: number;
+  truncated: boolean;
+  /** Compatibility requirements, not evidence that a discovered VI implements them. */
+  commandContract: { kind: "legacy-status-pair"; status: "requires-declaration"; description: string };
+  inspection?: {
+    status: "available" | "cached" | "unavailable" | "stale";
+    /** Inspection instance only. Item target names describe project membership. */
+    applicationContext?: "My Computer";
+    inspectedAt?: string;
+    commandCount: number;
+    unsupported: Array<{ file: string; target: string; reason: string }>;
+    reason?: string;
+  };
+}
+
+export interface RobotCommandCatalog {
+  runtime?: "labview";
+  labviewDiscovery?: LabviewProjectDiscovery;
   projectName: string;
   sourceFileCount: number;
   scannedAt: string;
@@ -309,29 +349,30 @@ export interface JavaCommandCatalog {
   /** Canonical command-semantics fingerprint supplied by the desktop process. */
   semanticFingerprint?: string;
   authoritative?: boolean;
-  commands: JavaCommandDescriptor[];
+  commands: RobotCommandDescriptor[];
   /** Empty for a legacy generated 1.0 command-only catalog. */
-  conditions?: JavaConditionDescriptor[];
+  conditions?: RobotConditionDescriptor[];
   /** Bordeaux-owned built-ins from the generated catalog's semantic identity. */
-  builtIns?: JavaBuiltInDescriptor[];
+  builtIns?: RobotBuiltInDescriptor[];
   /** Team-owned runtime trajectory generators. Present only in generated schema 1.3. */
-  trajectoryGenerators?: JavaTrajectoryGeneratorDescriptor[];
+  trajectoryGenerators?: RobotTrajectoryGeneratorDescriptor[];
   warnings: string[];
 }
 
-export interface JavaProjectBookmarkSummary {
+export interface RobotProjectBookmarkSummary {
   id: string;
   projectName: string;
   folderName: string;
   lastLinkedAt: string;
 }
 
-export interface JavaIntegrationStatus {
+export interface RobotIntegrationStatus {
+  runtime?: "labview";
   installed: boolean;
   supportVersion?: string;
   generatedCatalog: boolean;
   catalogHash?: string;
-  buildFile: "build.gradle" | "build.gradle.kts";
+  buildFile: "bordeaux-catalog.json";
   wrapperAvailable: boolean;
 }
 
@@ -413,7 +454,7 @@ export interface RoutineFunctionNode {
   funcRef?: string;
   op?: string;
   target?: string;
-  /** Generated Java command invoked between path steps. */
+  /** Generated Robot command invoked between path steps. */
   invocation?: CommandInvocation;
 }
 
@@ -496,7 +537,7 @@ export interface PathEndpointLink {
 /** Durable editor context which is safe to ignore on another machine. */
 export interface ProjectEditorState {
   activePathId?: string;
-  javaProjectBookmarkId?: string;
+  robotProjectBookmarkId?: string;
   unitSystem?: "metric" | "imperial";
 }
 
@@ -663,4 +704,10 @@ export interface BdxExport {
   };
   paths: BdxPath[];
   routine: AutonomousRoutine | null;
+}
+
+/** Desktop delivery support; file export does not imply an installed robot receiver. */
+export interface RobotDeliveryCapabilities {
+  pathPush: boolean;
+  routinePush: boolean;
 }

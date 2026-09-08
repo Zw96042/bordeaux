@@ -567,8 +567,8 @@ function validateProjectInner(project: unknown): ValidationResult {
       if (project.editor.activePathId !== undefined && (typeof project.editor.activePathId !== "string" || !pathIds.has(project.editor.activePathId))) {
         issues.push(issue("$.editor.activePathId", "Active path must reference a project path"));
       }
-      if (project.editor.javaProjectBookmarkId !== undefined && (typeof project.editor.javaProjectBookmarkId !== "string" || !/^[a-f0-9]{20}$/.test(project.editor.javaProjectBookmarkId))) {
-        issues.push(issue("$.editor.javaProjectBookmarkId", "Java project bookmark is invalid"));
+      if (project.editor.robotProjectBookmarkId !== undefined && (typeof project.editor.robotProjectBookmarkId !== "string" || !/^[a-f0-9]{20}$/.test(project.editor.robotProjectBookmarkId))) {
+        issues.push(issue("$.editor.robotProjectBookmarkId", "Robot project bookmark is invalid"));
       }
       if (project.editor.unitSystem !== undefined && project.editor.unitSystem !== "metric" && project.editor.unitSystem !== "imperial") {
         issues.push(issue("$.editor.unitSystem", "Display units must be metric or imperial"));
