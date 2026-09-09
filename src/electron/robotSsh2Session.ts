@@ -15,12 +15,37 @@ function fingerprint(key: Buffer): string {
   return `SHA256:${createHash("sha256").update(key).digest("base64").replace(/=+$/, "")}`;
 }
 
+export function validateRobotFileDirectory(directory: unknown): string {
+  if (typeof directory === "string") directory = directory.replace(/\/+$/, "");
+  if (typeof directory !== "string" || directory.length > 512
+    || !/^\/(?:home\/lvuser|natinst\/bin\/Paths)(?:\/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$/.test(directory)
+    || directory.split("/").some((part) => part === "." || part === "..")) {
+    throw new RobotTransportError("invalid_request", "Robot directory must be inside /natinst/bin/Paths or /home/lvuser without traversal or symbolic links");
+  }
+  return directory;
+}
+
+export function validateRobotFileName(fileName: unknown): string {
+  if (typeof fileName !== "string" || !/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,119}\.bdx$/.test(fileName)) {
+    throw new RobotTransportError("invalid_request", "Robot path filename must be a safe .bdx basename");
+  }
+  return fileName;
+}
+
 function remotePath(file: RobotRemoteFile): string {
   const nonce = "nonce" in file ? file.nonce : undefined;
   if (nonce !== undefined && !/^[A-Za-z0-9._:-]{1,128}$/.test(nonce)) {
     throw new RobotTransportError("invalid_request", "Remote Bordeaux file token is invalid");
   }
   switch (file.kind) {
+    case "pathFile":
+    case "pathTemporary": {
+      const directory = validateRobotFileDirectory(file.directory);
+      const name = validateRobotFileName(file.fileName);
+      if (file.kind === "pathFile") return `${directory}/${name}`;
+      if (!/^[a-f0-9]{32}$/.test(file.token)) throw new RobotTransportError("invalid_request", "Remote path temporary token is invalid");
+      return `${directory}/.bordeaux-${name}-${file.token}.tmp`;
+    }
     case "status":
       return path.posix.join(ROBOT_DEPLOYMENT_NAMESPACE, "status.json");
     case "incomingTemporary":
@@ -39,6 +64,9 @@ function remotePath(file: RobotRemoteFile): string {
 }
 
 function operationError(signal: AbortSignal, timedOut: () => boolean, cause?: unknown): RobotTransportError {
+  if (cause && typeof cause === "object" && "code" in cause && (cause.code === 3 || cause.code === "EACCES")) {
+    return new RobotTransportError("transfer_failed", "SFTP permission denied. The robot's lvuser account needs access to the selected destination directory", { cause });
+  }
   if (timedOut()) return new RobotTransportError("timed_out", "SFTP to the robot timed out", { cause });
   if (signal.aborted) return new RobotTransportError("cancelled", "SFTP to the robot was cancelled", { cause });
   return new RobotTransportError("unavailable", UNAVAILABLE_MESSAGE, { cause });
@@ -94,18 +122,42 @@ class Ssh2RobotSession implements RobotSftpSession {
     private readonly cleanup: () => void,
   ) {}
 
+  async ensureDirectory(directory: string, create: boolean, signal: AbortSignal): Promise<void> {
+    validateRobotFileDirectory(directory);
+    const parts = directory.split("/").filter(Boolean);
+    for (let index = 1; index <= parts.length; index += 1) {
+      const target = `/${parts.slice(0, index).join("/")}`;
+      const combined = AbortSignal.any([signal, this.sessionSignal]);
+      const stat = await guarded<Stats | null>(combined, this.timedOut, (resolve, reject) => {
+        this.sftp.lstat(target, (error, value) => {
+          if (!error) resolve(value);
+          else if ((error as Error & { code?: number }).code === 2) resolve(null);
+          else reject(operationError(combined, this.timedOut, error));
+        });
+      });
+      if (!stat) {
+        // Probe tolerates an absent destination, but never creates anything.
+        if (!create) return;
+        if (index <= 2) throw new RobotTransportError("transfer_failed", "Robot destination parent directory is unavailable");
+        await callbackOperation(combined, this.timedOut, (callback) => this.sftp.mkdir(target, { mode: 0o755 }, callback));
+      } else if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        throw new RobotTransportError("transfer_failed", "Robot destination contains a non-directory or symbolic link");
+      }
+    }
+  }
+
   async read(file: RobotRemoteFile, maxBytes: number, signal: AbortSignal): Promise<Buffer> {
     if (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > 24 * 1024 * 1024) {
       throw new RobotTransportError("invalid_request", "Remote Bordeaux read limit is invalid");
     }
     const target = remotePath(file);
-    const stat = await guarded<Stats>(this.sessionSignal, this.timedOut, (resolve, reject) => {
+    const stat = await guarded<Stats>(AbortSignal.any([signal, this.sessionSignal]), this.timedOut, (resolve, reject) => {
       this.sftp.lstat(target, (error, value) => error ? reject(operationError(this.sessionSignal, this.timedOut, error)) : resolve(value));
     });
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 0 || stat.size > maxBytes) {
       throw new RobotTransportError("transfer_failed", "Remote Bordeaux file is not a bounded regular file");
     }
-    return guarded<Buffer>(this.sessionSignal, this.timedOut, (resolve, reject) => {
+    return guarded<Buffer>(AbortSignal.any([signal, this.sessionSignal]), this.timedOut, (resolve, reject) => {
       const chunks: Buffer[] = [];
       let total = 0;
       const stream = this.sftp.createReadStream(target);
@@ -129,11 +181,11 @@ class Ssh2RobotSession implements RobotSftpSession {
   }
 
   write(file: RobotRemoteFile, contents: Buffer, signal: AbortSignal): Promise<void> {
-    if (file.kind !== "incomingTemporary" && file.kind !== "incomingRetentionTemporary") {
+    if (file.kind !== "incomingTemporary" && file.kind !== "incomingRetentionTemporary" && file.kind !== "pathTemporary") {
       throw new RobotTransportError("invalid_request", "Bordeaux can write only a temporary inbox file");
     }
     if (signal.aborted && !this.sessionSignal.aborted) throw new RobotTransportError("cancelled", "SFTP to the robot was cancelled");
-    return callbackOperation(this.sessionSignal, this.timedOut, (callback) => {
+    return callbackOperation(AbortSignal.any([signal, this.sessionSignal]), this.timedOut, (callback) => {
       this.sftp.writeFile(remotePath(file), contents, { flag: "wx", mode: 0o600 }, callback);
     });
   }
@@ -141,7 +193,7 @@ class Ssh2RobotSession implements RobotSftpSession {
   async exists(file: RobotRemoteFile, signal: AbortSignal): Promise<boolean> {
     const target = remotePath(file);
     if (signal.aborted && !this.sessionSignal.aborted) throw new RobotTransportError("cancelled", "SFTP to the robot was cancelled");
-    return guarded<boolean>(this.sessionSignal, this.timedOut, (resolve, reject) => {
+    return guarded<boolean>(AbortSignal.any([signal, this.sessionSignal]), this.timedOut, (resolve, reject) => {
       this.sftp.lstat(target, (error, stat) => {
         if (!error) {
           if (stat.isSymbolicLink() || !stat.isFile()) reject(new RobotTransportError("transfer_failed", "Remote Bordeaux path is not a regular file"));
@@ -158,7 +210,10 @@ class Ssh2RobotSession implements RobotSftpSession {
   renameSameDirectory(from: RobotRemoteFile, to: RobotRemoteFile, signal: AbortSignal): Promise<void> {
     const validRevisionRename = from.kind === "incomingTemporary" && to.kind === "incomingRevision";
     const validRetentionRename = from.kind === "incomingRetentionTemporary" && to.kind === "incomingRetention";
-    if ((!validRevisionRename && !validRetentionRename) || from.nonce !== to.nonce) {
+    const validPathRename = from.kind === "pathTemporary" && to.kind === "pathFile"
+      && from.directory === to.directory && from.fileName === to.fileName;
+    if (!validPathRename && ((!validRevisionRename && !validRetentionRename)
+      || !("nonce" in from) || !("nonce" in to) || from.nonce !== to.nonce)) {
       throw new RobotTransportError("invalid_request", "Bordeaux atomic rename must keep one fixed control file inside its inbox directory");
     }
     const source = remotePath(from);
@@ -167,17 +222,17 @@ class Ssh2RobotSession implements RobotSftpSession {
       throw new RobotTransportError("invalid_request", "Bordeaux atomic rename must remain in one remote directory");
     }
     if (signal.aborted && !this.sessionSignal.aborted) throw new RobotTransportError("cancelled", "SFTP to the robot was cancelled");
-    return callbackOperation(this.sessionSignal, this.timedOut, (callback) => {
+    return callbackOperation(AbortSignal.any([signal, this.sessionSignal]), this.timedOut, (callback) => {
       this.sftp.ext_openssh_rename(source, destination, callback);
     });
   }
 
   remove(file: RobotRemoteFile, signal: AbortSignal): Promise<void> {
-    if (file.kind !== "incomingTemporary" && file.kind !== "incomingRetentionTemporary") {
+    if (file.kind !== "incomingTemporary" && file.kind !== "incomingRetentionTemporary" && file.kind !== "pathTemporary") {
       throw new RobotTransportError("invalid_request", "Bordeaux cleanup can remove only a temporary inbox file");
     }
     if (signal.aborted && !this.sessionSignal.aborted) throw new RobotTransportError("cancelled", "SFTP to the robot was cancelled");
-    return callbackOperation(this.sessionSignal, this.timedOut, (callback) => this.sftp.unlink(remotePath(file), callback));
+    return callbackOperation(AbortSignal.any([signal, this.sessionSignal]), this.timedOut, (callback) => this.sftp.unlink(remotePath(file), callback));
   }
 
   async close(): Promise<void> {

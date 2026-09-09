@@ -137,6 +137,8 @@ export type RobotRetentionResult =
   | { state: "staged"; boundary: "acknowledgement"; message: string };
 
 export type RobotRemoteFile =
+  | { kind: "pathFile"; directory: string; fileName: string }
+  | { kind: "pathTemporary"; directory: string; fileName: string; token: string }
   | { kind: "status" }
   | { kind: "incomingTemporary"; nonce: string; token: string }
   | { kind: "incomingRevision"; nonce: string }
@@ -146,6 +148,7 @@ export type RobotRemoteFile =
 
 export interface RobotSftpSession {
   readonly hostKeyFingerprint: string;
+  ensureDirectory?(directory: string, create: boolean, signal: AbortSignal): Promise<void>;
   read(file: RobotRemoteFile, maxBytes: number, signal: AbortSignal): Promise<Buffer>;
   write(file: RobotRemoteFile, contents: Buffer, signal: AbortSignal): Promise<void>;
   exists(file: RobotRemoteFile, signal: AbortSignal): Promise<boolean>;
