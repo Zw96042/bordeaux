@@ -9,7 +9,7 @@ export function KeyboardHelp() {
     ['Select / move', '1 or V'], ['Place waypoint', '2 or W'], ['Place rotation', '3 or R'], ['Place command', '4 or M'], ['Create constraint region', '5 or C'],
     ['Delete a field or outline feature', 'Shift-click'], ['Delete selection', 'Delete / Backspace'], ['Play / pause', 'Space'], ['Fit field', 'F'], ['Toggle grid', 'G'], ['Cancel / select tool', 'Esc'],
     ['Move selection', 'Arrow keys'], ['Larger move', 'Shift + arrows'], ['Fine waypoint move', 'Alt + arrows'], ['Undo', mod + 'Z'], ['Redo', mod + 'Shift+Z'],
-    ['Open project', mod + 'O'], ['Open folder', mod + 'Shift+O'], ['Save project', mod + 'S'], ['Save project as', mod + 'Shift+S'], ['Rename library item', 'F2'],
+    ['Open project folder', mod + 'O'], ['Choose project folder', mod + 'Shift+O'], ['Save project and BDX files', mod + 'S'], ['Save to another folder', mod + 'Shift+S'], ['Rename library item', 'F2'],
   ];
   return h(React.Fragment, null,
     h('button', { ref: trigger, type: 'button', className: 'qbtn keyboard-help-trigger', 'aria-label': 'Keyboard shortcuts', title: 'Keyboard shortcuts', onClick: () => dialog.current.showModal() }, '?'),

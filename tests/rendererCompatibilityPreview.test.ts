@@ -115,7 +115,8 @@ describe("renderer application", () => {
     expect(panels).not.toContain("function PlannerFamily");
     expect(app).toContain("exportBdx");
     expect(app).not.toContain("exportRobot");
-    expect(panels).not.toMatch(/LabVIEW|labview|\.bdx/);
+    expect(panels).not.toMatch(/LabVIEW|labview/);
+    expect(panels).toContain("Save project and generate Paths/*.bdx");
     expect(app).toContain("normalizeProjectData(raw)");
   });
 

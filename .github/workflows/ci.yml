@@ -27,6 +27,11 @@ jobs:
           sudo chown root:root node_modules/electron/dist/chrome-sandbox
           sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
       - run: xvfb-run -a npm run test:smoke:built
+      - name: Verify project folder UI
+        run: xvfb-run -a node scripts/verify-project-folder-ui.mjs
+        env:
+          BORDEAUX_PROJECT_UI_OUTPUT: .ui-artifacts/project
+          ELECTRON_DISABLE_SECURITY_WARNINGS: "true"
       - name: Verify library and routine UI
         run: xvfb-run -a node scripts/verify-library-ui.mjs
         env:

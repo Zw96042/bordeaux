@@ -19,6 +19,7 @@ const bordeauxAPI = {
   exportBdx: (project: BordeauxProject, pathId: string) => ipcRenderer.invoke("project:exportBdx", project, pathId),
   getProjectLocation: () => ipcRenderer.invoke("project:location"),
   openProjectFolder: () => ipcRenderer.invoke("project:openFolder"),
+  openProjectFile: () => ipcRenderer.invoke("project:openFile"),
   openProject: () => ipcRenderer.invoke("project:open"),
   openRecentProject: (index: number) => ipcRenderer.invoke("project:openRecent", index),
   restoreLastProject: () => ipcRenderer.invoke("project:restoreLast"),

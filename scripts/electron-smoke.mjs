@@ -91,7 +91,7 @@ try {
     "api", "root", "validation", "motorPreset", "eventMarkerAutosave", "multiRoutineUi", "robotPushUi",
     "robotDiscovery", "robotBuilt", "robotRecent", "missingTypeEvidenceRejected", "eventlessBdxExported",
     "restored", "roundTrip", "editorRestored", "nodeGlobalsBlocked", "popupBlocked", "inlineScriptBlocked",
-    "filesWritten", "closeGuard",
+    "filesWritten", "closeGuard", "folderBdxSaved", "sourceSavedOnBdxFailure",
   ]) assert.equal(result[check], true, check);
   for (const check of [
     "markerInspector", "linkAction", "commandEnabled", "commandSearch", "recentHiddenForSingleProject",
@@ -99,6 +99,8 @@ try {
     "largeEnumPicker", "accessible",
   ]) assert.equal(result.robotUi[check], true, `robotUi.${check}`);
   assert.equal(result.robotUi.commandOptions, declaration.commands.length + 1, "Declared LabVIEW commands plus No command option");
+  const generatedPaths = await fs.readdir(path.join(smokeDirectory, "Paths"));
+  assert.ok(generatedPaths.some(name => name.endsWith(".bdx")), "Save writes BDX into Paths");
   console.log("BORDEAUX_SMOKE_OK");
 } finally {
   try {

@@ -56,7 +56,7 @@ export async function writeBufferAtomically(filePath: string, value: Uint8Array)
 export const PROJECT_EXTENSION = ".bordeaux";
 const WORKSPACE_FILE = ".bordeaux-workspace.json";
 const folderQueues = new Map<string, Promise<unknown>>();
-interface FolderState { format: "bordeaux-folder/1"; projectPath: string | null; project: BordeauxProject; files: Record<string, string>; pendingFiles?: Record<string, string>; }
+interface FolderState { format: "bordeaux-folder/1"; projectPath: string | null; project: BordeauxProject; files: Record<string, string>; pendingFiles?: Record<string, string>; generatedFiles?: Record<string, string>; pendingGeneratedFiles?: Record<string, string>; }
 
 export function projectFileName(name: string): string {
   return `${name.replace(/\.bordeaux(?:\.json)?$/i, "").replace(/[<>:"/\\|?*\x00-\x1f]/g, "-").trim().slice(0, 120) || "Project"}${PROJECT_EXTENSION}`;
@@ -99,7 +99,61 @@ export async function openProjectFolder(folder: string): Promise<{ project: Bord
   return { project: decoded.project, projectPath: saveTargetForOpenedProject(target, decoded) };
 }
 
-function digest(contents: string): string { return createHash("sha256").update(contents).digest("hex"); }
+function digest(contents: string | Uint8Array): string { return createHash("sha256").update(contents).digest("hex"); }
+
+/** Save explicitly generated binaries without compiling trajectories during autosave. */
+export async function writeProjectFolderBdx(folder: string, files: readonly { fileName: string; bytes: Uint8Array }[]): Promise<void> {
+  const target = path.resolve(folder);
+  const names = new Set<string>();
+  const documents = files.map(({ fileName, bytes }) => {
+    if (!/^[^<>:"/\\|?*\x00-\x1f]+\.bdx$/i.test(fileName) || fileName.length > 240) throw new Error("BDX output must have a plain .bdx filename");
+    const key = fileName.toLowerCase();
+    if (names.has(key)) throw new Error(`Duplicate BDX output filename: ${fileName}`);
+    names.add(key);
+    return { file: `Paths/${fileName}`, bytes: Buffer.from(bytes) };
+  });
+  const previous = folderQueues.get(target) ?? Promise.resolve();
+  const pending = previous.catch(() => undefined).then(async () => {
+    const folderStat = await fs.lstat(target);
+    if (!folderStat.isDirectory() || folderStat.isSymbolicLink()) throw new Error("Project folder must be a regular directory");
+    const state = await readFolderState(target);
+    if (!state) throw new Error("Save the project source before generating BDX files");
+    const directory = path.join(target, "Paths");
+    await fs.mkdir(directory, { recursive: true });
+    const directoryStat = await fs.lstat(directory);
+    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) throw new Error("Paths must be a regular directory");
+    const observed: Record<string, string> = { ...state.generatedFiles };
+    const existing = new Map<string, string>();
+    for (const document of documents) {
+      try {
+        const destination = path.join(target, document.file);
+        const stat = await fs.lstat(destination);
+        if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Cannot replace ${document.file}: expected a regular file`);
+        const hash = digest(await fs.readFile(destination));
+        if (hash !== state.generatedFiles?.[document.file] && hash !== state.pendingGeneratedFiles?.[document.file]) throw new Error(`${document.file} is unrelated or changed outside Bordeaux. Preserve or rename it before saving again.`);
+        observed[document.file] = hash;
+        existing.set(document.file, hash);
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    }
+    const intendedFiles = Object.fromEntries(documents.map((document) => [document.file, digest(document.bytes)]));
+    const generatedFiles = { ...observed, ...intendedFiles };
+    // Journal intended hashes first so a failed multi-file save can be retried.
+    await writeJsonAtomically(path.join(target, WORKSPACE_FILE), { ...state, generatedFiles: observed, pendingGeneratedFiles: { ...state.pendingGeneratedFiles, ...intendedFiles } });
+    for (const document of documents) {
+      const destination = path.join(target, document.file);
+      if (existing.has(document.file)) {
+        const stat = await fs.lstat(destination);
+        if (!stat.isFile() || stat.isSymbolicLink() || digest(await fs.readFile(destination)) !== existing.get(document.file)) throw new Error(`${document.file} changed outside Bordeaux while saving.`);
+      }
+      await replaceFile(destination, document.bytes, !existing.has(document.file));
+    }
+    const pendingGeneratedFiles = { ...state.pendingGeneratedFiles };
+    for (const document of documents) delete pendingGeneratedFiles[document.file];
+    await writeJsonAtomically(path.join(target, WORKSPACE_FILE), { ...state, generatedFiles, pendingGeneratedFiles: Object.keys(pendingGeneratedFiles).length ? pendingGeneratedFiles : undefined });
+  });
+  folderQueues.set(target, pending);
+  try { await pending; } finally { if (folderQueues.get(target) === pending) folderQueues.delete(target); }
+}
 
 // The complete recovery snapshot is committed before the individual documents.
 // A failed mirror write therefore leaves the latest edit recoverable. Files not
@@ -142,7 +196,7 @@ export async function autosaveProjectFolder(folder: string, value: unknown, proj
     // Retain hashes of removed entries so undo may recover their file. No local
     // deletion propagates into the folder or onto a robot.
     const files = { ...old?.files, ...Object.fromEntries(documents.map((item) => [item.file, digest(item.contents)])) };
-    const state: FolderState = { format: "bordeaux-folder/1", projectPath, project, files };
+    const state: FolderState = { format: "bordeaux-folder/1", projectPath, project, files, generatedFiles: old?.generatedFiles, pendingGeneratedFiles: old?.pendingGeneratedFiles };
     // Keep both previous and intended hashes if a mirror fails mid-save: recovery
     // loading remains authoritative and a subsequent autosave can finish safely.
     if (projectPath && options.createProject) await writeProject(projectPath, project, true);

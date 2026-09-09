@@ -46,7 +46,9 @@ For swerve paths, drag the start heading arrow or edit **Initial robot facing** 
 
 Field feedback uses one compact status with an **Optimize** action when attention is needed; expanded **Details** holds diagnostics. Normal trajectory rebuilding remains automatic.
 
-Open a folder to work there. `.bordeaux` project files retain project settings and editor state, while paths and routines are saved in the opened workspace.
+Choose **New project** or **Open folder** and select any regular folder; no existing project file is required. Bordeaux automatically saves editable paths in `Paths/*.path` and autonomous routines in `Routines/*.routine`, with a recovery snapshot in the folder. **Save** also writes the `.bordeaux` project and generates `Paths/*.bdx` for paths with at least two waypoints. Unfinished paths remain editable; if BDX generation fails, the project stays saved and the error offers a retry. Saving is local and never connects to a robot.
+
+Use **Save to another folder…** to copy the project into another folder, or **Open project file…** to open an existing `.bordeaux` file. Bordeaux preserves unrelated files and reports conflicts with externally modified generated files.
 
 ## License and asset rights
 

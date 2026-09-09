@@ -222,9 +222,9 @@ function EditorLibrary({ mode, prefs, update, project, routines, activePathId, a
       h('button', { type: 'button', className: 'library-location-folder', onClick: onOpenFolder, title: projectLocation?.folderPath || 'Choose where paths and routines are saved', 'aria-label': projectLocation?.folderPath ? 'Open another project folder' : 'Open project folder' },
         h(Icon, { name: 'folder', size: 14 }), h('span', null, projectLocation?.folderPath?.split(/[\\/]/).filter(Boolean).pop() || 'Open folder')),
       h('div', { className: 'library-save-status', role: saveState?.status === 'error' ? 'alert' : 'status' },
-        saveState?.status === 'error' ? h(React.Fragment, null, h('span', { title: saveState.error }, saveState.error), h('button', { type: 'button', onClick: onRetrySave }, 'Retry save'))
+        saveState?.status === 'error' ? h(React.Fragment, null, h('span', { title: saveState.error }, saveState.error), h('button', { type: 'button', onClick: onRetrySave }, saveState.retryExport ? 'Retry BDX save' : 'Retry save'))
           : saveState?.status === 'saving' ? 'Saving…'
-          : projectLocation?.folderPath ? h(React.Fragment, null, h('span', null, 'Autosave on'), !projectLocation.projectPath && h('button', { type: 'button', onClick: onSaveProject }, 'Save project settings'))
+          : projectLocation?.folderPath ? h(React.Fragment, null, h('span', { title: 'Editable paths and routines autosave to Paths/*.path and Routines/*.routine. Save also generates Paths/*.bdx.' }, 'Paths and routines autosave'))
           : 'Choose a folder to autosave files')),
     h('div', { className: 'library-tools' },
       h('button', { type: 'button', onClick: () => create(pathsMode ? 'path' : 'routine', () => pathsMode ? actions.addPath(active?.folderId) : actions.addRoutine()) }, h(Icon, { name: 'plus', size: 13 }), pathsMode ? 'New path' : 'New routine'),

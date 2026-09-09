@@ -22,7 +22,7 @@ import {
   summarizeRobotProjectBookmarks,
   writeRobotProjectBookmarks,
 } from "./robotProjectBookmarks";
-import { readProject, saveTargetForOpenedProject, writeBufferAtomically, openProjectFolder, autosaveProjectFolder, projectFileName } from "./projectFiles";
+import { readProject, saveTargetForOpenedProject, writeBufferAtomically, openProjectFolder, autosaveProjectFolder, projectFileName, writeProjectFolderBdx } from "./projectFiles";
 import { readRecentProjectFiles, rememberRecentProject, writeRecentProjectFiles } from "./recentProjectFiles";
 import { AgentBridgeClient, AgentBridgeServer } from "./agentBridge";
 import { appUpdateChannel, AppUpdateController, usesGitHubAppUpdates } from "./appUpdates";
@@ -534,12 +534,12 @@ function buildMenu() {
       label: "File",
       submenu: [
         { label: "New Project", accelerator: "CmdOrCtrl+N", click: () => sendCommand("new-project") },
-        { label: "Open Project...", accelerator: "CmdOrCtrl+O", click: () => sendCommand("open-project") },
+        { label: "Open project folder…", accelerator: "CmdOrCtrl+O", click: () => sendCommand("open-project") },
         { label: "Open Recent", submenu: recentSubmenu },
         { type: "separator" },
         { label: "Save", accelerator: "CmdOrCtrl+S", click: () => sendCommand("save-project") },
-        { label: "Open Folder…", accelerator: "CmdOrCtrl+Shift+O", click: () => sendCommand("open-folder") },
-        { label: "Save As...", accelerator: "CmdOrCtrl+Shift+S", click: () => sendCommand("save-project-as") },
+        { label: "Open project file…", accelerator: "CmdOrCtrl+Shift+O", click: () => sendCommand("open-project-file") },
+        { label: "Save to another folder…", accelerator: "CmdOrCtrl+Shift+S", click: () => sendCommand("save-project-as") },
         { type: "separator" },
         { label: "Export selected path as BDX…", accelerator: "CmdOrCtrl+E", click: () => sendCommand("export-bdx") },
         { type: "separator" },
@@ -627,6 +627,10 @@ async function openProjectFile(filePath: string) {
 
 handle("project:open", async () => {
   if (smokeDirectory) return openProjectFile(path.join(smokeDirectory, "project.bordeaux"));
+  return chooseProjectFolder();
+});
+
+handle("project:openFile", async () => {
   const result = await dialog.showOpenDialog(mainWindow!, { title: "Open Bordeaux Project or Path", properties: ["openFile"], filters: [{ name: "Bordeaux Project", extensions: ["bordeaux", "path", "json"] }] });
   if (result.canceled || !result.filePaths[0]) return null;
   return openProjectFile(result.filePaths[0]);
@@ -654,11 +658,12 @@ handle("project:new", () => {
 });
 
 handle("project:location", () => projectLocation());
-handle("project:openFolder", async () => {
-  const result = await dialog.showOpenDialog(mainWindow!, { title: "Open Bordeaux Folder", properties: ["openDirectory", "createDirectory"] });
+handle("project:openFolder", () => chooseProjectFolder());
+async function chooseProjectFolder() {
+  const result = await dialog.showOpenDialog(mainWindow!, { title: "Choose project folder", properties: ["openDirectory", "createDirectory"] });
   if (result.canceled || !result.filePaths[0]) return null;
   return activateProjectFolder(result.filePaths[0]);
-});
+}
 
 async function activateProjectFolder(folder: string) {
   const opened = await openProjectFolder(folder);
@@ -678,25 +683,53 @@ handle("project:save", async (_event, project, rawSaveAs) => {
   let target = rawSaveAs === true ? null : currentProjectPath;
   let createProject = false;
   if (!target) {
-    const defaultName = projectFileName((project as BordeauxProject).name || "Project");
+    let folder = rawSaveAs === true ? null : currentProjectFolder;
     if (smokeDirectory) target = path.join(smokeDirectory, "project.bordeaux");
-    else if (currentProjectFolder && rawSaveAs !== true) {
-      target = path.join(currentProjectFolder, defaultName);
-      createProject = true;
-      // A blank-folder Save must not silently replace a file created elsewhere.
-      try { await fs.promises.lstat(target); throw new Error("A project with that name already exists. Use Save As to choose a different name."); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    } else {
-      const result = await dialog.showSaveDialog(mainWindow!, { title: "Save Bordeaux Project", defaultPath: currentProjectFolder ? path.join(currentProjectFolder, defaultName) : defaultName, filters: [{ name: "Bordeaux Project", extensions: ["bordeaux"] }] });
-      if (result.canceled || !result.filePath) return { canceled: true };
-      target = result.filePath;
-      if (!target.toLowerCase().endsWith(".bordeaux")) target += ".bordeaux";
+    else {
+      if (!folder) {
+        const result = await dialog.showOpenDialog(mainWindow!, {
+          title: "Choose project folder", properties: ["openDirectory", "createDirectory"],
+          ...(currentProjectFolder ? { defaultPath: currentProjectFolder } : {}),
+        });
+        if (result.canceled || !result.filePaths[0]) return { canceled: true };
+        folder = result.filePaths[0];
+        if (sourceGeneration !== projectTargetGeneration) throw new Error("The project changed while choosing a folder. Save again.");
+        const existing = await openProjectFolder(folder);
+        if (existing.project && path.resolve(folder) !== path.resolve(currentProjectFolder || ".")) {
+          throw new Error("That folder already contains a Bordeaux project. Open it or choose a different folder.");
+        }
+      }
+      target = folder === currentProjectFolder && currentProjectPath ? currentProjectPath : path.join(folder, projectFileName((project as BordeauxProject).name || "Project"));
+      createProject = target !== currentProjectPath;
     }
   }
-  await autosaveProjectFolder(path.dirname(target), project, target, { allowRetarget: rawSaveAs === true, createProject });
-  await rememberFile(target);
-  if (sourceGeneration === projectTargetGeneration && currentProjectPath !== target) activateProjectTarget(target);
-  return { saved: true, location: projectLocation() };
+  await autosaveProjectFolder(path.dirname(target), project, target, { createProject });
+  if (sourceGeneration !== projectTargetGeneration) throw new Error("The project changed during saving. Its files were saved; open that folder to continue.");
+  if (currentProjectPath !== target) activateProjectTarget(target);
+  await rememberFile(path.dirname(target));
+  const savedGeneration = projectTargetGeneration;
+  // Persist editable sources first, so a planner or command-binding failure can
+  // never prevent saving a work in progress.
+  try {
+    const source = project as BordeauxProject;
+    const selected = source.paths.filter(candidate => candidate.waypoints.length >= 2);
+    const projectFile = linkedLabviewProjectFile, bookmark = linkedRobotProjectBookmarkId;
+    const hasCommands = selected.some(candidate => candidate.markers.some(marker => marker.invocation));
+    if (hasCommands && projectFile && source.editor?.robotProjectBookmarkId !== bookmark) throw new Error("The linked LabVIEW project does not match this project");
+    const options = { projectFile: hasCommands ? projectFile : null, inspectionCacheDirectory: labviewDiscoveryCacheDirectory() };
+    const bindings = await prepareBdxBindings(options);
+    const files = [];
+    for (const candidate of selected) {
+      const built = await buildBdxOffThread({ project: source, selection: { kind: "path", id: candidate.id }, bindings });
+      files.push({ fileName: built.fileName, bytes: built.bytes });
+    }
+    const currentBindings = await prepareBdxBindings(options);
+    if (savedGeneration !== projectTargetGeneration || projectFile !== linkedLabviewProjectFile || bookmark !== linkedRobotProjectBookmarkId || currentBindings.definitionJson !== bindings.definitionJson) throw new Error("Project or command definitions changed; save again to generate BDX files");
+    await writeProjectFolderBdx(path.dirname(target), files);
+    return { saved: true, location: projectLocation(), bdxCount: files.length };
+  } catch (error) {
+    return { saved: true, location: projectLocation(), exportError: "Project saved; BDX saving did not complete. Some BDX files may have been updated. " + (error instanceof Error ? error.message : String(error)) };
+  }
 });
 
 handle("project:autosave", async (_event, project) => {

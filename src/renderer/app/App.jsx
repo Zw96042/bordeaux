@@ -583,6 +583,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const routineHist = useRef({ past: [], future: [] });
     const projectHist = useRef({ past: [], future: [] });
     const autosaveRevision = useRef(0);
+    const bdxSaveFailure = useRef('');
     const autosaveTimer = useRef(0);
     const draftInputGeneration = useRef(0);
     const persistenceTail = useRef(Promise.resolve());
@@ -636,7 +637,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         const result = await window.bordeauxAPI.autosaveProject(materializeProject());
         if (revision === autosaveRevision.current) {
           if (result?.location) setProjectLocation(result.location);
-          setSaveState(result?.error ? { status: 'error', error: result.error } : { status: result?.saved ? 'saved' : 'draft', error: '' });
+          setSaveState(result?.error ? { status: 'error', error: result.error } : bdxSaveFailure.current ? { status: 'error', error: bdxSaveFailure.current, retryExport: true } : { status: result?.saved ? 'saved' : 'draft', error: '' });
         }
         if (revision === autosaveRevision.current && sourceProject === projectRef.current
           && editRevision === editStore.getRevision() && !editStore.getSnapshot() && result && result.saved) updateDirty(false);
@@ -1617,6 +1618,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const canReplaceProject = useCallback(() => flushProjectDraft()
       && (!dirtyRef.current || confirm('Discard unsaved changes to this project?')), [flushProjectDraft]);
     const loadProject = useCallback((incoming) => {
+      bdxSaveFailure.current = '';
       invalidateScheduledAutosave();
       cancelEdit();
       optimizer.cancel();
@@ -1665,21 +1667,13 @@ import { createPlaybackStore } from "../lib/playbackStore";
       invalidateScheduledAutosave();
       cancelEdit();
     }, [cancelEdit, invalidateScheduledAutosave]);
-    const newProject = useCallback(() => {
-      return enqueuePersistenceAfterPreflight(enqueuePersistence, canReplaceProject, async () => {
-        prepareProjectReplacement();
-        if (window.bordeauxAPI) await window.bordeauxAPI.newProject();
-        setProjectLocation(null); setSaveState({ status: 'draft', error: '' });
-        loadProject(freshProject());
-      });
-    }, [canReplaceProject, enqueuePersistence, loadProject, prepareProjectReplacement]);
-    const openProject = useCallback((recentIndex) => {
+    const openProject = useCallback((recentIndex, legacyFile = false) => {
       if (!window.bordeauxAPI) return;
       return enqueuePersistenceAfterPreflight(enqueuePersistence, canReplaceProject, async () => {
         try {
           const result = typeof recentIndex === 'number'
             ? await window.bordeauxAPI.openRecentProject(recentIndex)
-            : await window.bordeauxAPI.openProject();
+            : legacyFile ? await window.bordeauxAPI.openProjectFile() : await window.bordeauxAPI.openProject();
           if (result) { prepareProjectReplacement(); setProjectLocation(result.location || null); setSaveState({ status: 'saved', error: '' }); loadProject(result.project); }
         } catch (error) {
           alert('Could not open project: ' + (error && error.message ? error.message : error));
@@ -1708,10 +1702,11 @@ import { createPlaybackStore } from "../lib/playbackStore";
           const source = { project: projectRef.current, editRevision: editStore.getRevision(), draftGeneration: requestedDraftGeneration };
           setSaveState({ status: 'saving', error: '' });
           const result = await window.bordeauxAPI.saveProject(materializeProject(), saveAs === true);
-          if (result && result.canceled) { setSaveState({ status: 'idle', error: '' }); return; }
+          if (result && result.canceled) { setSaveState(bdxSaveFailure.current ? { status: 'error', error: bdxSaveFailure.current, retryExport: true } : { status: 'idle', error: '' }); return; }
           if (result?.location) setProjectLocation(result.location);
-          setSaveState({ status: 'saved', error: '' });
-          if (projectPersistenceStayedCurrent(source, {
+          bdxSaveFailure.current = result?.exportError || '';
+          setSaveState(bdxSaveFailure.current ? { status: 'error', error: bdxSaveFailure.current, retryExport: true } : { status: 'saved', error: '' });
+          if (result?.saved && projectPersistenceStayedCurrent(source, {
             project: projectRef.current,
             editRevision: editStore.getRevision(),
             draftGeneration: draftInputGeneration.current,
@@ -1739,8 +1734,9 @@ import { createPlaybackStore } from "../lib/playbackStore";
     useEffect(() => {
       if (!window.bordeauxAPI) return undefined;
       return window.bordeauxAPI.onMenuCommand(({ command, payload }) => {
-        if (command === 'new-project') void newProject();
+        if (command === 'new-project') void openProjectFolder();
         else if (command === 'open-project') void openProject();
+        else if (command === 'open-project-file') void openProject(undefined, true);
         else if (command === 'open-folder') void openProjectFolder();
         else if (command === 'open-recent') void openProject(payload);
         else if (command === 'save-project') void saveProject(false);
@@ -1749,7 +1745,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         else if (command === 'robot-link') void linkRobotProject();
         else if (command === 'robot-build') void buildRobotCatalog();
       });
-    }, [newProject, openProject, openProjectFolder, saveProject, onExportBdx, linkRobotProject, buildRobotCatalog]);
+    }, [openProject, openProjectFolder, saveProject, onExportBdx, linkRobotProject, buildRobotCatalog]);
 
     useEffect(() => {
       const onKey = (e) => {
@@ -1805,7 +1801,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
     }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, derivationCurrent, nudgeWp, nudgeFrac, playbackStore]);
 
     const pathIndex = (id) => project.paths.findIndex((path) => path.id === id);
-    const renderLibrary = (mode, structure) => h(LibraryRail, { projectLocation, saveState, onOpenFolder: openProjectFolder, onSaveProject: () => saveProject(false), onRetrySave: () => scheduleAutosave(true),
+    const renderLibrary = (mode, structure) => h(LibraryRail, { projectLocation, saveState, onOpenFolder: openProjectFolder, onSaveProject: () => saveProject(false), onRetrySave: () => saveState.retryExport ? saveProject(false) : scheduleAutosave(true),
       key: projectKey + ':' + mode, preferenceKey: libraryPreferenceKey, mode, project, routines,
       activePathId: doc.id, activeRoutineId: routine.id, times,
       onMode: (next) => next === 'paths' ? setActive(activeIdx) : setActiveRoutine(routine.id),
@@ -1906,7 +1902,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
                 baselineTime, pending: !normalReady && !normalError, error: normalError, mode: comparisonMode, unitSystem,
                 recovery: !derivationCurrent ? (hist.current.past.length || routineHist.current.past.length || projectHist.current.past.length
                   ? { label: 'Undo last edit', onClick: undo }
-                  : { label: 'Open project', onClick: openProject }) : undefined,
+                  : { label: 'Open project folder', onClick: openProject }) : undefined,
                 onCorridor: setCorridor, onStart: startOptimization,
                 onStartAll: () => { setComparison(null); void optimizer.startAll(); }, onCancel: optimizer.cancel,
                 onCompare: compareTrajectory, onApply: applyOptimization, onNormal: useNormalTrajectory,
