@@ -24,6 +24,7 @@ For renderer changes, review the affected workflow in the built app before calli
 
 Existing local harnesses:
 
+- `node scripts/verify-labview-project-ui.mjs`: visible project selection and command sync, Windows/Mac status, recent project rows, searchable source evidence, and keyboard access with mocked project callbacks.
 - `node scripts/verify-project-folder-ui.mjs`: folder selection/cancel, New, Save and BDX failure/retry, autosave error retention, keyboard navigation, and explicit legacy file command using mocked filesystem dialogs.
 - `node scripts/verify-library-ui.mjs`: paths, routines, settings, and mocked push integration.
 - `node scripts/verify-robot-push-ui.mjs`: legacy mocked activation controller transitions.

@@ -1,6 +1,6 @@
 import { PathLinks } from "../lib/pathLinks";
 import { SharedWaypointPosition } from "./SharedWaypointPosition";
-import { LabviewCommandInspection, LabviewProjectSources } from "./LabviewProjectSources";
+import { LabviewProjectPanel } from "./LabviewProjectSources";
 import * as React from "react";
 import { AUTO } from "../lib/routineModel";
 import { PM } from "../lib/pathMath";
@@ -699,8 +699,6 @@ import { UI } from "./ui";
 
       const commands = catalog ? catalog.commands || [] : [];
       const conditionOptions = AUTO.authoritativeConditions(catalog);
-      const recentProjects = robotProject && robotProject.recentProjects ? robotProject.recentProjects : [];
-      const currentProject = recentProjects.find((project) => project.id === (robotProject && robotProject.bookmarkId));
       const invocationId = m.invocation && m.invocation.commandId ? m.invocation.commandId : (m.cmd && m.cmd !== 'none' ? m.cmd : '');
       const selectedCommand = commands.find((command) => command.id === invocationId);
       const unresolved = invocationId && !selectedCommand;
@@ -730,10 +728,9 @@ import { UI } from "./ui";
         || argumentParameters.some((parameter) => parameterValueError(invocationArguments[parameter.name], parameter))
       );
       const operation = robotProject && robotProject.operation;
-      const catalogReady = !!(catalog && catalog.authoritative && catalog.catalogHash);
-      const projectStateLabel = operation === 'inspect' ? 'Inspecting commands…' : operation === 'scan' ? 'Checking project…' : robotProject?.status === 'stale' ? 'Refresh required' : catalogReady ? 'Catalog available' : 'Commands discovered';
       icon = 'flag2'; title = m.name || 'Command marker';
       body = h(React.Fragment, null,
+        h(LabviewProjectPanel, { robotProject }),
         h('label', { className: 'fieldlabel first', htmlFor: 'event-marker-name' }, 'Name'),
         h('input', { id: 'event-marker-name', className: 'textinput', value: m.name, autoComplete: 'off', spellCheck: false, 'data-lpignore': 'true', 'data-1p-ignore': true, onChange: (e) => actions.setMarker(sel.idx, { name: e.target.value }) }),
 
@@ -757,9 +754,9 @@ import { UI } from "./ui";
               });
             },
           }),
-          catalog && commands.length === 0 && h('div', { className: 'seg-hint', role: 'status' }, 'No command VIs found. Check the linked project below.'),
+          catalog && commands.length === 0 && h('div', { className: 'seg-hint', role: 'status' }, 'No command VIs found. Check the linked project or sync commands.'),
           unresolved && h('div', { className: 'cmd-project-error', role: 'status' }, 'This command is not in the linked project. Its saved ID and arguments are unchanged.'),
-          selectedCommand && !selectedCommand.labviewConnector && h('div', { className: 'cmd-project-error', role: 'status' }, 'Inspect this command’s types before exporting.'),
+          selectedCommand && !selectedCommand.labviewConnector && h('div', { className: 'cmd-project-error', role: 'status' }, 'Sync commands to load this command’s inputs before exporting.'),
           selectedCommand && h('div', {
             className: 'cmd-command-summary',
             title: selectedCommand.source ? selectedCommand.source.file + ':' + selectedCommand.source.line : undefined,
@@ -795,20 +792,6 @@ import { UI } from "./ui";
                 onChange: (event) => actions.setMarker(sel.idx, { invocation: { ...m.invocation, commandId: selectedCommand.id, arguments: reconciledArguments, cancelOnPathEnd: event.target.checked } }),
               }),
               h('span', { className: 'cmd-toggle-track', 'aria-hidden': true }, h('span', null))))),
-        h('details', { className: 'inspector-details', open: !catalog }, h('summary', null, catalog ? 'LabVIEW project' : 'Link a LabVIEW project'),
-          catalog && h('div', { className: 'cmd-project-copy' },
-            h('strong', null, catalog.projectName),
-            h('span', null, catalog.labviewDiscovery?.projectFile || currentProject?.folderName || 'LabVIEW command catalog')),
-          catalog && h('div', { className: 'inrow' }, h('span', { className: 'seg-hint', role: 'status' }, projectStateLabel + ', ' + commands.length + ' commands'),
-            h('button', { type: 'button', className: 'cmd-iconbtn', 'aria-label': 'Refresh robot project', disabled: !!operation, onClick: robotProject.refresh }, h(Icon, { name: 'refresh', size: 15 }))),
-          h('button', { className: 'qbtn', type: 'button', disabled: !!operation, onClick: robotProject?.link }, catalog ? 'Change project' : 'Choose LabVIEW project'),
-          recentProjects.length > 1 && h(Dropdown, { id: 'event-marker-robot-project', label: 'Recent projects', value: robotProject.bookmarkId || '',
-            items: recentProjects.map((project) => ({ value: project.id, label: project.projectName, meta: project.folderName })),
-            onChange: (projectId) => robotProject.openRecent(projectId) }),
-          catalog && h(LabviewCommandInspection, { catalog, onInspect: robotProject.inspect, operation }),
-          catalog && h(LabviewProjectSources, { key: catalog.labviewDiscovery?.projectFile, catalog })),
-        robotProject?.error && h('div', { className: 'cmd-project-error', role: 'alert' }, robotProject.error),
-        robotProject?.notice && h('div', { className: 'cmd-project-notice', role: 'status' }, robotProject.notice),
         m.actionIntent && h('div', { className: 'cmd-project-notice', role: 'status' }, 'Choose a command for ' + m.actionIntent.description + '.'),
         h('div', { className: 'cgroup-h' }, 'Execution'),
         m.group && m.group !== 'sequential' && h('div', { className: 'cmd-schema-warning', role: 'status' }, h('span', null, 'This saved group cannot be exported as BDX.'), h('button', { type: 'button', className: 'qbtn', onClick: () => actions.setMarker(sel.idx, { group: 'sequential' }) }, 'Use single command')),

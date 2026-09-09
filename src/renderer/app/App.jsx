@@ -1860,7 +1860,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
                   run.planningError && h('span', null, run.planningError))),
               transport: h(RoutineTransportPlayback, { store: routinePlaybackStore, run }) }),
             h('aside', { className: 'rail rail-r' + (selNode ? '' : ' collapsed'), 'aria-label': 'Routine step inspector' },
-              selNode && h(StepInspector, { node: selNode, paths: project.paths, acq, run, robotProject: { ...robotProjectState, link: linkRobotProject, inspect: inspectLabviewCommands }, conditionOptions: AUTO.authoritativeConditions(robotProjectState.catalog) })))
+              selNode && h(StepInspector, { node: selNode, paths: project.paths, acq, run, robotProject: { ...robotProjectState, link: linkRobotProject, refresh: refreshRobotProject, openRecent: openRecentRobotProject, build: buildRobotCatalog, inspect: inspectLabviewCommands }, conditionOptions: AUTO.authoritativeConditions(robotProjectState.catalog) })))
         : h('main', { className: 'stage stage-plan' },
             renderLibrary('paths', (secOpen, setSecOpen) => h('div', { style: { height: '100%' }, inert: derivationCurrent ? undefined : '' }, h(Panels.Outline, { project, open: true, setOpen: () => {}, doc: derivationDoc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot, ready: derivationCurrent }))),
             h('div', { className: 'fieldcol', inert: derivationCurrent ? undefined : '', 'aria-disabled': derivationCurrent ? undefined : true },

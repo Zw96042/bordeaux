@@ -163,7 +163,7 @@ async function runAdapter(requestFile: string, responseFile: string): Promise<vo
   });
 }
 
-/** Explicit authoring operation: inspect an already-open project, cache in Bordeaux user data only. */
+/** Inspect the selected, already-open project; cache in Bordeaux user data only. */
 export async function inspectLabviewCommands(selection: string, cacheDirectory: string, adapter: (requestFile: string, responseFile: string) => Promise<void> = runAdapter): Promise<RobotCommandCatalog> {
   const catalog = await discoverLabviewProject(selection);
   let temporary: string | undefined;

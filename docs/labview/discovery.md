@@ -6,8 +6,11 @@ Project sources are discovered directly from NI project XML, auto-populating fol
 referenced `.lvlib`/`.lvclass` containers. A file's membership and target are source information;
 they do not establish that the VI is an executable command.
 
-On Windows, open that exact project in LabVIEW, then choose **Inspect commands in LabVIEW**
-in the marker or routine command inspector. Bordeaux's bundled inspection adapter reads
+On Windows, keep that exact project open in LabVIEW. Selecting, restoring, or refreshing
+the linked project automatically inspects commands. **Sync commands** repeats discovery and
+inspection after changes. If inspection is unavailable, Bordeaux retains valid cached or
+declared commands and shows the reason with a retry action. On macOS, sync reloads source
+and cached metadata; live NI inspection requires Windows. Bordeaux's bundled inspection adapter reads
 connector metadata and saved scalar defaults from the existing LabVIEW process. It requires
 the same Windows user/session and a single matching registered NI process. It does not open
 projects, run inspected VIs, change control values, save/close projects, or connect targets.
@@ -87,3 +90,31 @@ control indices. `Optimized Call Command.vi` writes named Variant arguments by t
 and invokes Run VI. Subsystem helpers use status/notifier and queue lifecycles. A later port
 must deliberately adapt these loader, timing, dispatch, completion, and cancellation paths
 to BDXLV1 files. Discovery does not change or execute any of that robot code.
+
+
+## Conditions
+
+NI connector inspection discovers commands, not conditions. Conditions currently come from
+an explicit `conditions` array in `bordeaux-catalog.json` beside the `.lvproj`, for example:
+
+```json
+{
+  "schemaVersion": "bordeaux-labview-catalog/1",
+  "catalogId": "team-autonomous",
+  "commands": [],
+  "conditions": [
+    { "id": "hasGamePiece", "label": "Has game piece", "vi": "Conditions/Has Game Piece.vi" }
+  ]
+}
+```
+
+Add the entry to the existing catalog rather than replacing its commands. Build the catalog
+to validate its declared VI files and expose the conditions in Bordeaux's condition picker.
+Inspection alone does not build declarations or add conditions automatically.
+
+A condition represents a true/false predicate evaluated by robot code, such as a game-piece
+sensor check. The declaration gives the editor its stable ID, label, and VI reference; it does
+not generate a VI, infer a Boolean connector contract, or wire the predicate into robot
+execution. The team's robot scheduler must map that ID to the implemented check and supply
+its result. Catalog building verifies the referenced file, not that runtime behavior. An
+ordinary VI with a Boolean output is therefore not automatically a supported condition.

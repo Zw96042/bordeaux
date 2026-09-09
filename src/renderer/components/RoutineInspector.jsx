@@ -3,7 +3,7 @@ import { AUTO } from "../lib/routineModel";
 import { UnitPrefs } from "../lib/unitPreferences";
 import { CommandParameterEditor, commandArguments, parameterValueError, safeControlId } from "./ContextInspector";
 import { UI } from "./ui";
-import { LabviewCommandInspection, LabviewProjectSources } from "./LabviewProjectSources";
+import { LabviewProjectPanel } from "./LabviewProjectSources";
 
 // Autonomous Routine — step inspector (RIGHT rail) + run transport (bottom).
 // One inspector system, shared with the Plan page (.ctxinsp shell + form primitives).
@@ -92,6 +92,7 @@ import { LabviewCommandInspection, LabviewProjectSources } from "./LabviewProjec
         return [parameter.name, parameterValueError(value, parameter) ? commandArguments(selected)[parameter.name] : value];
       })) : saved;
       body = h(React.Fragment, null,
+        h(LabviewProjectPanel, { robotProject }),
         h('div', { className: 'seg-hint' }, 'Runs between the surrounding steps.'),
         robotProject && robotProject.catalog
           ? h(ChoiceBrowser, { id: 'routine-command', resetKey: node.id, label: 'Command', value: invocationId,
@@ -102,10 +103,9 @@ import { LabviewCommandInspection, LabviewProjectSources } from "./LabviewProjec
               const command = commands.find((candidate) => candidate.id === value);
               set({ title: command ? command.label : 'Robot command', invocation: command ? { commandId: command.id, arguments: commandArguments(command) } : null });
             } })
-          : h(React.Fragment, null, FieldLabel('Robot command'),
-              h('button', { className: 'cmd-primary-action', type: 'button', onClick: robotProject && robotProject.link }, 'Choose robot project')),
+          : null,
         invocationId && !selected && h('div', { className: 'cmd-project-error', role: 'status' }, 'This saved command is missing from the linked catalog.'),
-        selected && !selected.labviewConnector && h('div', { className: 'cmd-project-error', role: 'status' }, 'Inspect this command’s types before exporting.'),
+        selected && !selected.labviewConnector && h('div', { className: 'cmd-project-error', role: 'status' }, 'Sync commands to load this command’s inputs before exporting.'),
         selected && h('form', { className: 'cmd-parameters', onSubmit: (event) => event.preventDefault() },
           parameters.length === 0 ? h('div', { className: 'cmd-empty-params' }, 'No parameters')
             : parameters.map((parameter) => h(CommandParameterEditor, {
@@ -117,10 +117,6 @@ import { LabviewCommandInspection, LabviewProjectSources } from "./LabviewProjec
                 value: argumentsValue[parameter.name],
                 onChange: (value) => set({ invocation: { commandId: selected.id, arguments: { ...argumentsValue, [parameter.name]: value } } }),
               }))),
-        h('details', { className: 'inspector-details' }, h('summary', null, 'LabVIEW project'),
-        robotProject && robotProject.catalog && robotProject.catalog.runtime === 'labview' && h(LabviewCommandInspection, { catalog: robotProject.catalog, onInspect: robotProject.inspect, operation: robotProject.operation }),
-        robotProject && robotProject.catalog && robotProject.catalog.runtime === 'labview' && robotProject.error && h('div', { className: 'cmd-project-error', role: 'alert' }, robotProject.error),
-        robotProject && robotProject.catalog && robotProject.catalog.runtime === 'labview' && h(LabviewProjectSources, { catalog: robotProject.catalog })),
         h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete command'));
 
     }

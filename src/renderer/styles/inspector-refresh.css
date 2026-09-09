@@ -92,3 +92,23 @@
 .inspector-refresh .source-warning-list { display: grid; gap: 8px; }
 .inspector-refresh .source-warning-list p { margin: 0; font-size: 11px; overflow-wrap: anywhere; }
 .inspector-refresh .dropdown.cmd-picker .cmd-picker-trigger > span { white-space: normal; overflow-wrap: anywhere; text-overflow: clip; }
+
+/* Project selection and command sync stay visible beside command editing. */
+.labview-project-panel{display:flex;flex-direction:column;gap:6px;margin:0 0 14px;padding:0 0 12px;border-bottom:1px solid var(--line);min-width:0}
+.labview-project-heading{font-size:11px;color:var(--txt-3);font-weight:550}
+.labview-project-name{font-size:13px;font-weight:600;line-height:1.35;overflow-wrap:anywhere}
+.labview-project-panel p{margin:0}
+.labview-project-status{font-size:11px;color:var(--txt-2);line-height:1.4}
+.labview-project-help{font-size:10.5px;line-height:1.4;color:var(--txt-3)}
+.labview-project-actions{display:flex;flex-wrap:wrap;gap:6px}
+.labview-project-actions .qbtn{min-height:32px;padding:5px 9px;font-size:11px}
+.labview-text-action{align-self:flex-start;text-align:left;color:var(--txt-2);font-size:11px;line-height:1.4;padding:5px 0;text-decoration:underline;text-underline-offset:3px}
+.labview-project-panel button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.labview-project-panel .labview-sources{margin:0}
+.labview-source-content{display:flex;flex-direction:column;gap:8px;padding-top:5px}
+.labview-project-panel .fieldlabel{margin:0;font-size:11px}
+.labview-recent-projects{display:flex;flex-direction:column;border-top:1px solid var(--line)}
+.labview-recent-projects button{display:flex;flex-direction:column;gap:3px;text-align:left;padding:8px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.labview-recent-projects strong{font-size:11px;font-weight:550}
+.labview-recent-projects span{font-size:10px;color:var(--txt-3)}
+.labview-source-warnings{overflow-wrap:anywhere}

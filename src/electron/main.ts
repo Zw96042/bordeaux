@@ -12,7 +12,7 @@ import { validateProject } from "../shared/validation";
 import { prepareBdxBindings } from "./bdxBindings";
 import { buildBdxOffThread } from "./bdxWorkerClient";
 import { buildLabviewCatalog, resolveLabviewProject } from "./labviewProject";
-import { inspectLabviewCommands, withCachedLabviewCommands } from "./labviewNiInspection";
+import { inspectLabviewCommandsQueued, syncLabviewCommands } from "./labviewProjectSync";
 function readableRobotProjectError(error: unknown, name = "LabVIEW project"): Error { return new Error(`${name}: ${error instanceof Error ? error.message : String(error)}`); }
 import { discoverRobotProject, type RobotProjectRuntime } from "./robotProjectRuntime";
 import {
@@ -291,7 +291,7 @@ async function connectRobotProject(projectPath: string, runtime: RobotProjectRun
   const exactSelection = labviewProject?.projectFile ?? selectedPath;
   const diskCatalog = await discoverRobotProject(exactSelection, runtime);
   const discoveredCatalog = inspectedCatalog ?? (runtime === "labview"
-    ? await withCachedLabviewCommands(exactSelection, diskCatalog, labviewDiscoveryCacheDirectory())
+    ? await syncLabviewCommands(exactSelection, labviewDiscoveryCacheDirectory(), diskCatalog)
     : diskCatalog);
   const catalog: RobotCommandCatalog = {
     ...discoveredCatalog,
@@ -912,7 +912,7 @@ handle("robotProject:inspectLabview", async () => {
   const generation = robotConnectionGeneration;
   labviewInspectionInProgress = true;
   try {
-    const inspected = await inspectLabviewCommands(selection, labviewDiscoveryCacheDirectory());
+    const inspected = await inspectLabviewCommandsQueued(selection, labviewDiscoveryCacheDirectory());
     if (generation !== robotConnectionGeneration || selection !== linkedLabviewProjectFile) throw new Error("The linked project changed during command inspection");
     return await connectRobotProject(selection, "labview", inspected);
   } finally {

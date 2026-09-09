@@ -157,12 +157,12 @@
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   const robotUi = {
-    markerInspector: Boolean(document.querySelector('section[aria-label="Marker command"]') && document.querySelector('.cmd-project-copy')?.textContent.includes('SmokeRobot')),
+    markerInspector: Boolean(document.querySelector('section[aria-label="Marker command"]') && document.querySelector('.labview-project-name')?.textContent.includes('SmokeRobot')),
     linkAction: Boolean(linkButton),
     commandEnabled: Boolean(commandPicker && !commandPicker.disabled),
     commandOptions: commandOptions.length,
     commandSearch: commandSearch?.getAttribute('role') === 'combobox',
-    recentHiddenForSingleProject: !document.getElementById('event-marker-robot-project'),
+    recentHiddenForSingleProject: !document.querySelector('.labview-recent-projects'),
     cancelSwitch: Boolean(document.getElementById('event-command-cancel') && document.querySelector('.cmd-toggle-track')),
     parameter: smokeParametersPresent,
     jsonShapeRejected,
