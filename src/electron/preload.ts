@@ -1,3 +1,4 @@
+import type { RobotFileEndpoint, RobotFileConnection, RobotFilePreview, RobotFileResult } from "../shared/robotFileDelivery";
 import type { RobotPushScope, RobotDeploymentComparison } from "../shared/export/robotDeployment";
 import { contextBridge, ipcRenderer } from "electron";
 import type { BordeauxProject, RobotDeliveryCapabilities } from "../shared/types";
@@ -8,7 +9,13 @@ import type { RobotRetentionOperationResult, RobotRetentionPreview, RobotRetenti
 
 const bordeauxAPI = {
   platform: process.platform,
-  robotDeliveryCapabilities: Object.freeze({ pathPush: false, routinePush: false } satisfies RobotDeliveryCapabilities),
+  robotDeliveryCapabilities: Object.freeze({ pathPush: true, routinePush: false, fileTransfer: true } satisfies RobotDeliveryCapabilities),
+  getRobotFileConnection: (): Promise<RobotFileConnection | null> => ipcRenderer.invoke("robotFiles:connection"),
+  probeRobotFiles: (endpoint: RobotFileEndpoint): Promise<RobotFileConnection> => ipcRenderer.invoke("robotFiles:probe", endpoint),
+  trustRobotFiles: (fingerprint: string): Promise<RobotFileConnection> => ipcRenderer.invoke("robotFiles:trust", fingerprint),
+  prepareRobotFiles: (project: BordeauxProject, pathIds: string[]): Promise<RobotFilePreview> => ipcRenderer.invoke("robotFiles:prepare", project, pathIds),
+  confirmRobotFiles: (operationId: string): Promise<RobotFileResult> => ipcRenderer.invoke("robotFiles:confirm", operationId),
+  cancelRobotFiles: (operationId: string): Promise<{ canceled: boolean }> => ipcRenderer.invoke("robotFiles:cancel", operationId),
   exportBdx: (project: BordeauxProject, pathId: string) => ipcRenderer.invoke("project:exportBdx", project, pathId),
   getProjectLocation: () => ipcRenderer.invoke("project:location"),
   openProjectFolder: () => ipcRenderer.invoke("project:openFolder"),

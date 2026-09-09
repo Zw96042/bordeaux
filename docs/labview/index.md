@@ -18,4 +18,8 @@ See [command discovery](discovery.md) for source inventory and saved NI metadata
 
 ## Robot delivery
 
-Direct BDX export is available locally. The former JSON trajectory deployment pipeline has been removed. The app cannot report a successful BDX push until a matching BDX receiver, immutable revision readback and disabled-runtime acknowledgment are integrated. Routine documents autosave locally; AQU robot execution remains deferred.
+Direct BDX export is available locally. **Push path** uploads the selected path files through SFTP as `lvuser`, using the robot's SSH service on port 22. The default destination is `/natinst/bin/Paths/`; the connection dialog shows an editable directory. Confirm the SSH host key before trusting a new robot. A changed host key requires reconnecting and trusting that robot again.
+
+Review lists the exact filenames and destination before sending. Each file is written to a temporary file, read back, then atomically renamed over its matching filename and read back again. Other files are preserved. Multi-path uploads commit each file separately; if a later transfer fails or is canceled, the error reports already verified files and any uncertain replacement. The account must have write access to the destination; Bordeaux does not change robot permissions.
+
+“Uploaded and verified” means the selected BDX bytes are stored on the robot. It does not require a Bordeaux receiver, acknowledge runtime compatibility, activate a routine, or start execution. LabVIEW code remains responsible for loading and validating the files. Routine delivery, full-project replacement, and runtime pin/rollback are not part of direct file upload. Routine documents autosave locally; AQU robot execution remains deferred.

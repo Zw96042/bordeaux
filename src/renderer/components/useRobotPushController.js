@@ -1,3 +1,4 @@
+import { useRobotFilePushController } from './useRobotFilePushController';
 import { useEffect, useRef, useState } from 'react';
 import { deploymentInputKey, deploymentInputKeys, deploymentItemStatus } from '../lib/deploymentStatus';
 
@@ -5,7 +6,7 @@ const errorMessage = (error) => error?.message || String(error || 'The robot ope
 const clone = (value) => structuredClone(value);
 const sending = (phase) => ['uploading', 'uploaded', 'staged'].includes(phase);
 
-export function useRobotPushController({ getProject, projectKey, catalogKey: suppliedCatalogKey, bookmarkKey }) {
+export function useLegacyRobotPushController({ getProject, projectKey, catalogKey: suppliedCatalogKey, bookmarkKey }) {
   const catalogKey = String(suppliedCatalogKey || '') + ':' + String(bookmarkKey || '');
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -254,4 +255,10 @@ export function useRobotPushController({ getProject, projectKey, catalogKey: sup
     refreshing, result, error, unavailable, deliveryAvailable, adoptBaseline, setAdoptBaseline, desktopAvailable, busy, connectionLabel, itemStatus,
     requestPush, openConnection, refreshStatus, probeRobot, confirmPairing, confirmPush, cancel, prepareRetention,
     confirmRetention, chooseAnotherRobot, connectionHome, retry: () => intent.current && requestPush(intent.current.scope) };
+}
+
+export function useRobotPushController(props) {
+  // Desktop capabilities are fixed for the lifetime of the renderer.
+  return typeof window !== 'undefined' && window.bordeauxAPI?.robotDeliveryCapabilities?.fileTransfer === true
+    ? useRobotFilePushController(props) : useLegacyRobotPushController(props);
 }

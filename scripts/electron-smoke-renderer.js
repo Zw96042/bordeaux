@@ -215,12 +215,17 @@
   const pushRoutineButton = [...document.querySelectorAll('.library-push button')].find((button) => button.textContent.trim() === 'Push routine');
   if (!pushRoutineButton) throw new Error('Routine push action was not available');
   pushRoutineButton.click();
-  await waitFor(() => document.querySelector('[aria-labelledby="robot-push-title"]')?.open, 'robot delivery dialog');
-  const robotPushDialog = document.querySelector('[aria-labelledby="robot-push-title"]');
-  const robotPushUi = Boolean(robotPushDialog
-    && robotPushDialog.textContent.includes('Robot delivery unavailable')
-    && !robotPushDialog.querySelector('input[placeholder="roborio-2468-frc.local"]')
-    && robotPushDialog.querySelector('button[aria-label="Close robot delivery"]'));
+  await waitFor(() => document.querySelector('[aria-labelledby="robot-file-title"]')?.open, 'robot file dialog');
+  const robotPushDialog = document.querySelector('[aria-labelledby="robot-file-title"]');
+  const routineDeliveryBlocked = robotPushDialog.textContent.includes('Routine delivery and full-project replacement are not supported');
+  robotPushDialog.querySelector('[aria-label="Close robot files"]').click();
+  [...document.querySelectorAll('.library-tabs button')].find(button => button.textContent.trim() === 'Paths').click();
+  await waitFor(() => [...document.querySelectorAll('.library-push button')].some(button => button.textContent.trim() === 'Push path'), 'path push action');
+  [...document.querySelectorAll('.library-push button')].find(button => button.textContent.trim() === 'Push path').click();
+  await waitFor(() => document.querySelector('[aria-labelledby="robot-file-title"] input[placeholder="roborio-2468-frc.local"]'), 'SFTP connection fields');
+  const robotPushUi = routineDeliveryBlocked && window.bordeauxAPI.robotDeliveryCapabilities.pathPush
+    && [...document.querySelectorAll('[aria-labelledby="robot-file-title"] input')].some(input => input.value === '/natinst/bin/Paths')
+    && !document.querySelector('[aria-labelledby="robot-file-title"]').textContent.includes('compatible LabVIEW BDX receiver');
   window.bordeauxAPI.setDirty(true);
   const probe = document.createElement('script'); probe.textContent = 'window.__bordeauxInlineScriptRan = true'; document.head.appendChild(probe);
   const editorRestored = opened.project.editor?.activePathId === secondPath.id && opened.project.editor?.robotProjectBookmarkId === recentRobotProjects[0].id;

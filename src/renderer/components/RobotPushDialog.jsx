@@ -1,3 +1,4 @@
+import { RobotFilePushDialog } from './RobotFilePushDialog';
 import * as React from 'react';
 import { useRobotPushController } from './useRobotPushController';
 export { useRobotPushController };
@@ -9,6 +10,7 @@ const action = (label, onClick, props = {}) => h('button', { type: 'button', onC
 const names = (items) => items?.length ? items.join(', ') : 'None';
 
 export function RobotPushDialog({ controller: c, onExportBdx }) {
+  if (c.fileTransfer) return h(RobotFilePushDialog, { controller: c });
   const dialog = React.useRef(null);
   React.useEffect(() => {
     const element = dialog.current;

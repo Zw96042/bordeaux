@@ -25,7 +25,8 @@ For renderer changes, review the affected workflow in the built app before calli
 Existing local harnesses:
 
 - `node scripts/verify-library-ui.mjs`: paths, routines, settings, and mocked push integration.
-- `node scripts/verify-robot-push-ui.mjs`: mocked push controller transitions.
+- `node scripts/verify-robot-push-ui.mjs`: legacy mocked activation controller transitions.
+- `node scripts/verify-robot-file-push-ui.mjs`: direct SFTP connection, SSH identity, immutable file review, upload/readback success and failure using mocked transport.
 - `node scripts/verify-optimizer-ui.mjs`: optimizer comparison, exact apply/save/reload timing, units, keyboard reorder, and current-normal routine fallback.
 
 Use isolated fixtures and mock robot transports for UI checks. Report a failing check as failing. Do not weaken assertions to get a green result; distinguish an obsolete expectation from a product regression using code and rendered behavior.
@@ -38,4 +39,4 @@ Record the commit plus any working-tree changes, sizes, screenshots inspected, c
 
 Do not sign off with unresolved unintended destructive gestures, incorrect displayed units, inaccessible primary actions, clipped essential content, or failure states presented as indefinite loading. Track lesser consistency issues explicitly.
 
-CI runs all three UI harnesses under Xvfb after the build and uploads screenshots and results as `ui-verification`, including artifacts from failed checks. Local runs use isolated temporary directories; set `BORDEAUX_LIBRARY_UI_OUTPUT`, `BORDEAUX_OPTIMIZER_UI_OUTPUT`, or `BORDEAUX_PUSH_UI_OUTPUT` to retain evidence at a chosen location. Use a fresh directory to avoid reusing test preferences. Screenshots still require human or agent visual inspection; passing automated checks alone is not a visual sign-off.
+CI runs these UI harnesses under Xvfb after the build and uploads screenshots and results as `ui-verification`, including artifacts from failed checks. Local runs use isolated temporary directories; set `BORDEAUX_LIBRARY_UI_OUTPUT`, `BORDEAUX_OPTIMIZER_UI_OUTPUT`, or `BORDEAUX_PUSH_UI_OUTPUT` to retain evidence at a chosen location. Use a fresh directory to avoid reusing test preferences. Screenshots still require human or agent visual inspection; passing automated checks alone is not a visual sign-off.

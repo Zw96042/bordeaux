@@ -41,6 +41,11 @@ jobs:
         run: xvfb-run -a node scripts/verify-robot-push-ui.mjs
         env:
           BORDEAUX_PUSH_UI_OUTPUT: .ui-artifacts/push
+      - name: Verify direct SFTP path upload UI
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.sandbox.outcome == 'success' }}
+        run: xvfb-run -a node scripts/verify-robot-file-push-ui.mjs
+        env:
+          BORDEAUX_FILE_PUSH_UI_OUTPUT: .ui-artifacts/file-push
       - name: Upload UI evidence
         if: always()
         uses: actions/upload-artifact@v4

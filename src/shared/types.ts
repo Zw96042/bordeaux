@@ -708,6 +708,7 @@ export interface BdxExport {
 
 /** Desktop delivery support; file export does not imply an installed robot receiver. */
 export interface RobotDeliveryCapabilities {
+  fileTransfer?: boolean;
   pathPush: boolean;
   routinePush: boolean;
 }

@@ -40,6 +40,8 @@ import { quitAfterMcpInputEnds } from "./mcpStdioLifecycle";
 import { serveBordeauxMcp } from "../mcp/server";
 import { RobotPairingController, readRobotPairing, writeRobotPairing } from "./robotPairings";
 import { connectRobotSftp } from "./robotSsh2Session";
+import { RobotFileDelivery, readRobotFileConnection, writeRobotFileConnection } from "./robotFileDelivery";
+import type { RobotFileEndpoint } from "../shared/robotFileDelivery";
 import {
   BordeauxRobotTransport,
   type RobotEndpoint,
@@ -77,6 +79,8 @@ let robotConnectionGeneration = 0;
 let robotProjectBookmarks: RobotProjectBookmark[] = [];
 let robotPairings = new RobotPairingController();
 const robotTransport = new BordeauxRobotTransport(connectRobotSftp);
+let robotFileDelivery = new RobotFileDelivery(null, value => writeRobotFileConnection(robotFileConnectionFile(), value));
+function robotFileConnectionFile() { return path.join(app.getPath("userData"), "robot-sftp-connection.json"); }
 const diagnosticBundleCapability = new DiagnosticBundleCapability();
 let lastDiagnosticRobotAcknowledgement: DiagnosticRobotAcknowledgement = { state: "not-observed" };
 const smokeDirectory = process.env.BORDEAUX_SMOKE_DIRECTORY;
@@ -141,8 +145,7 @@ function stopBackgroundServices(): Promise<void> {
   if (backgroundShutdownPromise) return backgroundShutdownPromise;
   const bridge = agentBridge;
   agentBridge = null;
-  if (!bridge) return Promise.resolve();
-  backgroundShutdownPromise = bridge.stop();
+  backgroundShutdownPromise = Promise.all([robotFileDelivery.stop(), bridge?.stop()]).then(() => undefined);
   return backgroundShutdownPromise;
 }
 
@@ -909,6 +912,53 @@ handle("robot:inspect", async () => {
   if (!robotPairing) throw new Error("Pair a robot before inspecting its Bordeaux runtime");
   return robotTransport.inspect(robotPairing, { password: "" });
 });
+handle("robotFiles:connection", () => robotFileDelivery.current());
+handle("robotFiles:probe", (_event, endpoint) => robotFileDelivery.probe(endpoint as RobotFileEndpoint));
+handle("robotFiles:trust", (_event, fingerprint) => {
+  if (typeof fingerprint !== "string") throw new Error("Review the robot SSH identity first");
+  return robotFileDelivery.trust(fingerprint);
+});
+handle("robotFiles:prepare", async (_event, rawProject, pathIds) => {
+  if (!Array.isArray(pathIds) || !pathIds.length || pathIds.length > 64 || pathIds.some(id => typeof id !== "string") || new Set(pathIds).size !== pathIds.length) throw new Error("Select distinct paths to push");
+  const project = rawProject as BordeauxProject;
+  if (!project || !Array.isArray(project.paths)) throw new Error("A valid Bordeaux project is required");
+  const pairing = robotFileDelivery.current();
+  if (!pairing) throw new Error("Connect a robot before preparing this transfer");
+  const generation = robotConnectionGeneration, projectGeneration = projectTargetGeneration;
+  const projectFile = linkedLabviewProjectFile, bookmark = linkedRobotProjectBookmarkId;
+  if (projectFile && project.editor?.robotProjectBookmarkId !== bookmark) throw new Error("The linked LabVIEW project does not match this Bordeaux project");
+  const assertCurrent = () => {
+    if (generation !== robotConnectionGeneration || projectGeneration !== projectTargetGeneration || projectFile !== linkedLabviewProjectFile || bookmark !== linkedRobotProjectBookmarkId || JSON.stringify(pairing) !== JSON.stringify(robotFileDelivery.current())) throw new Error("The project or robot connection changed; review this transfer again");
+  };
+  const selected = pathIds.map(id => {
+    const matches = project.paths.filter(candidate => candidate.id === id);
+    if (matches.length !== 1) throw new Error("A selected path is missing or ambiguous");
+    return matches[0];
+  });
+  const hasCommands = selected.some(candidate => candidate.markers.some(marker => marker.invocation));
+  const bindingOptions = { projectFile: hasCommands ? projectFile : null, inspectionCacheDirectory: labviewDiscoveryCacheDirectory() };
+  const bindings = await prepareBdxBindings(bindingOptions);
+  const files = [];
+  for (const candidate of selected) {
+    const built = await buildBdxOffThread({ project, selection: { kind: "path", id: candidate.id }, bindings });
+    assertCurrent();
+    files.push({ pathId: candidate.id, name: candidate.name, fileName: built.fileName, contents: Buffer.from(built.bytes) });
+  }
+  return robotFileDelivery.prepare(files, async () => {
+    assertCurrent();
+    const current = await prepareBdxBindings(bindingOptions);
+    assertCurrent();
+    if (current.definitionJson !== bindings.definitionJson) throw new Error("NI parameter evidence changed; review this transfer again");
+  });
+});
+handle("robotFiles:confirm", (_event, operationId) => {
+  if (typeof operationId !== "string") throw new Error("Review the files before pushing");
+  return robotFileDelivery.confirm(operationId);
+});
+handle("robotFiles:cancel", (_event, operationId) => {
+  if (typeof operationId !== "string") throw new Error("Transfer identifier is invalid");
+  return robotFileDelivery.cancel(operationId);
+});
 const BDX_RECEIVER_UNAVAILABLE = "Robot delivery needs a LabVIEW BDX receiver with verified transfer and activation support. Export a BDX file locally for now.";
 for (const channel of ["robot:inspectRetention", "robot:prepareRetention", "robot:inspectLibrary", "robot:preparePush", "robot:confirmPush", "robot:confirmRetention"]) {
   handle(channel, () => { throw new Error(BDX_RECEIVER_UNAVAILABLE); });
@@ -974,6 +1024,9 @@ if (ownsDesktopInstance) app.whenReady().then(async () => {
     robotPairings = new RobotPairingController();
     console.warn("Could not load the paired Bordeaux robot:", error);
   }
+  try {
+    robotFileDelivery = new RobotFileDelivery(await readRobotFileConnection(robotFileConnectionFile()), value => writeRobotFileConnection(robotFileConnectionFile(), value));
+  } catch (error) { console.warn("Could not load robot SFTP connection:", error); }
   agentBridge = new AgentBridgeServer(app.getPath("userData"), agentSessions);
   if (enableMcpAccessOnLaunch) await agentBridge.start();
   appUpdates = createAppUpdateController();
