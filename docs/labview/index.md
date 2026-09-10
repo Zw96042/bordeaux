@@ -6,6 +6,8 @@ Bordeaux authors paths and routines for LabVIEW robot code. Commands come from a
 
 Export a selected path as a `.bdx` binary. The [binary format](binary-format.md) fixes byte order, metadata, trajectory samples, follow sections, command arguments and event scheduling fields. The writer has independent byte-layout tests and synthetic golden fixtures. Eventless paths require no command catalog; commanded paths require saved NI parameter type evidence. Event records resolve GUI IDs through those descriptors to original command VI basenames for the existing dynamic wrapper dispatcher (`bordeaux-dynamic-wrappers/1`). Old files containing hashed command IDs must be re-exported. Only markers with command invocations produce events; an eventless path runs no event commands.
 
+BDX file names use only ASCII letters, digits, `.`, `_` and `-`, with at most 80 characters before `.bdx`. Windows device names get a leading `_` (`_CON.bdx`). If two exportable paths map to the same file name, the save fails instead of overwriting one with the other. An unrelated file that already has that name is preserved and reported.
+
 This export profile supports time markers, optional time repeats, scalar arguments and saved defaults. Conditional/position markers, position-follow sections, automatic path-end cancellation, arrays and clusters are rejected explicitly. Wrappers remain reentrant VIs included by static reference for deployment and resolved dynamically by robot code; Bordeaux requires no catalog VI or filename mapping.
 
 ## Robot code

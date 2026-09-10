@@ -4,6 +4,7 @@ import { buildRobotTrajectory, type RobotTrajectoryDocument } from "./robotTraje
 import { buildCanonicalPathState } from "../planners/pathState";
 import { BinaryWriter, encodeBinaryEnvelope, utf8, type BinaryKind } from "./binaryCodec";
 import { densifyRobotSamples } from "./robotSamples";
+import { portableFileStem } from "../portableFileName";
 
 export interface BinarySelection { kind: BinaryKind; id: string }
 export interface BdxParameterType { niType: string; choices?: string[] }
@@ -59,9 +60,10 @@ export function encodeBdxArgument(type: BdxParameterType, value: unknown): { tag
   } else throw new Error(`NI ${type.niType} arguments are not supported by BDX v1; a command-specific adapter is required`);
   return { tag, bytes: writer.finish() };
 }
+/** ASCII-only, as robot uploads require, and at most 80 characters before `.bdx`. */
 export function binaryFileName(name: string): string {
   const base = name.normalize("NFKD").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[._-]+|[._-]+$/g, "").slice(0, 80) || "Bordeaux";
-  return `${base}.bdx`;
+  return `${portableFileStem(base, 80)}.bdx`;
 }
 
 /** Compile exactly one path into the direct-VI BDX layout. Saving never connects to a robot. */
