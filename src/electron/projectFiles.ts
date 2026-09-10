@@ -4,15 +4,18 @@ import { createHash, randomUUID } from "node:crypto";
 import type { BordeauxProject } from "../shared/types";
 import { decodeProjectFile, encodeProjectFile, prepareProjectFile } from "../shared/project/fileFormat";
 import type { DecodedProjectFile } from "../shared/project/fileFormat";
+import { MAX_FILE_NAME_BYTES, portableFileStem, truncateUtf8 } from "../shared/portableFileName";
 
 const writeQueues = new Map<string, Promise<void>>();
 const openedProjectHashes = new Map<string, string>();
-const MAX_PROJECT_FILE_BYTES = 16 * 1024 * 1024;
+export const MAX_PROJECT_FILE_BYTES = 16 * 1024 * 1024;
+/** A workspace holds the whole project plus its file ownership records. */
+export const MAX_WORKSPACE_FILE_BYTES = MAX_PROJECT_FILE_BYTES * 2;
 
 export async function readProject(filePath: string): Promise<DecodedProjectFile> {
   const stat = await fs.lstat(filePath);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Bordeaux project must be a regular file");
-  const maxBytes = path.basename(filePath) === PROJECT_WORKSPACE_FILE ? MAX_PROJECT_FILE_BYTES * 2 : MAX_PROJECT_FILE_BYTES;
+  const maxBytes = path.basename(filePath) === PROJECT_WORKSPACE_FILE ? MAX_WORKSPACE_FILE_BYTES : MAX_PROJECT_FILE_BYTES;
   if (stat.size > maxBytes) throw new Error(`Bordeaux project exceeds the ${maxBytes / 1024 / 1024} MiB size limit`);
   if (path.basename(filePath) === PROJECT_WORKSPACE_FILE) {
     const state = await readFolderState(path.dirname(filePath));
@@ -31,7 +34,8 @@ export function saveTargetForOpenedProject(filePath: string, decoded: DecodedPro
 
 async function replaceFile(filePath: string, contents: string | Uint8Array, exclusive = false): Promise<void> {
   const target = path.resolve(filePath);
-  const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`);
+  // At most 100 + 42 bytes, so any target name that fits also has a temporary name that fits.
+  const temporary = path.join(path.dirname(target), `.${truncateUtf8(path.basename(target), 100)}.${randomUUID()}.tmp`);
   try {
     await fs.writeFile(temporary, contents, typeof contents === "string" ? { encoding: "utf8", flag: "wx" } : { flag: "wx" });
     if (exclusive) await fs.link(temporary, target);
@@ -41,8 +45,24 @@ async function replaceFile(filePath: string, contents: string | Uint8Array, excl
   }
 }
 
+function jsonContents(value: unknown): string { return `${JSON.stringify(value, null, 2)}\n`; }
+
+// Readers refuse larger files, so writing one would strand the project at its
+// next open or save. Checked against the exact UTF-8 bytes before any write.
+function withinReadLimit(contents: string, maxBytes: number, label: string): string {
+  const bytes = Buffer.byteLength(contents, "utf8");
+  if (bytes <= maxBytes) return contents;
+  const needed = Math.ceil(bytes / (1024 * 1024) * 10) / 10;
+  throw new Error(`${label} would be ${needed} MiB, over the ${maxBytes / 1024 / 1024} MiB limit Bordeaux can reopen, so nothing was saved. Split the project or remove unused paths and routines, then save again.`);
+}
+
+function workspaceContents(state: FolderState): string {
+  return withinReadLimit(jsonContents(state), MAX_WORKSPACE_FILE_BYTES, "The project workspace");
+}
+
 export async function writeProject(filePath: string, value: unknown, exclusive = false): Promise<BordeauxProject> {
   const { project, contents } = encodeProjectFile(value);
+  withinReadLimit(contents, MAX_PROJECT_FILE_BYTES, path.basename(filePath));
   const target = path.resolve(filePath);
   const previous = writeQueues.get(target) ?? Promise.resolve();
   const write = previous.catch(() => undefined).then(() => replaceFile(target, contents, exclusive));
@@ -56,7 +76,7 @@ export async function writeProject(filePath: string, value: unknown, exclusive =
 }
 
 export async function writeJsonAtomically(filePath: string, value: unknown): Promise<void> {
-  await replaceFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+  await replaceFile(filePath, jsonContents(value));
 }
 
 export async function writeBufferAtomically(filePath: string, value: Uint8Array): Promise<void> {
@@ -70,14 +90,15 @@ const folderQueues = new Map<string, Promise<unknown>>();
 interface FolderState { format: "bordeaux-folder/1"; projectPath: string | null; project: BordeauxProject; files: Record<string, string>; pendingFiles?: Record<string, string>; generatedFiles?: Record<string, string>; pendingGeneratedFiles?: Record<string, string>; documentFiles?: Record<string, string>; legacyProjectMirror?: { file: string; hash: string }; importedFrom?: { file: string; hash: string }; }
 
 export function projectFileName(name: string): string {
-  return `${name.replace(/\.bordeaux(?:\.json)?$/i, "").replace(/[<>:"/\\|?*\x00-\x1f]/g, "-").trim().slice(0, 120) || "Project"}${PROJECT_EXTENSION}`;
+  const stem = name.replace(/\.bordeaux(?:\.json)?$/i, "").replace(/[<>:"/\\|?*\x00-\x1f]/g, "-").trim().slice(0, 120) || "Project";
+  return `${portableFileStem(stem, MAX_FILE_NAME_BYTES - PROJECT_EXTENSION.length)}${PROJECT_EXTENSION}`;
 }
 
 async function readFolderState(folder: string): Promise<FolderState | null> {
   const target = path.join(folder, PROJECT_WORKSPACE_FILE);
   try {
     const stat = await fs.lstat(target);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_PROJECT_FILE_BYTES * 2) throw new Error("Folder recovery file is not a valid regular file");
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_WORKSPACE_FILE_BYTES) throw new Error("Folder recovery file is not a valid regular file");
     const state = JSON.parse(await fs.readFile(target, "utf8")) as FolderState;
     if (state.format !== "bordeaux-folder/1" || !state.files || typeof state.files !== "object") throw new Error("This folder already contains an unrelated recovery file");
     state.project = prepareProjectFile(state.project);
@@ -153,9 +174,13 @@ function workspaceRecordsOpenedFile(state: FolderState, file: string): boolean {
 
 function digest(contents: string | Uint8Array): string { return createHash("sha256").update(contents).digest("hex"); }
 
+// Room for the widest duplicate suffix (validation allows 1,024 documents of a
+// kind) and the longest extension, so every derived name fits in one component.
+const DOCUMENT_STEM_BYTES = MAX_FILE_NAME_BYTES - " (99999)".length - ".routine".length;
+
 function safeDocumentName(name: string): string {
   const clean = name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "-").trim().replace(/[. ]+$/, "").slice(0, 120) || "Untitled";
-  return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(clean) ? `_${clean}` : clean;
+  return portableFileStem(clean, DOCUMENT_STEM_BYTES);
 }
 
 async function fileOwnership(folder: string, file: string, stat: { dev: number | bigint; ino: number | bigint }, records: readonly (Record<string, string> | undefined)[]) {
@@ -176,6 +201,16 @@ async function fileOwnership(folder: string, file: string, stat: { dev: number |
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
   return { hashes, aliases };
+}
+
+// Rejects a symlinked or non-directory entry before ownership data is read.
+// Saves create it only after every size check, so a rejected save adds no folders.
+async function checkRegularDirectory(directory: string, label: string, create = false): Promise<void> {
+  if (create) await fs.mkdir(directory, { recursive: true });
+  try {
+    const stat = await fs.lstat(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`${label} must be a regular directory`);
+  } catch (error) { if (create || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
 }
 
 async function removeOwnedDocument(folder: string, file: string, hashes: readonly (string | undefined)[], binary = false): Promise<void> {
@@ -226,7 +261,8 @@ export async function writeProjectFolderBdx(folder: string, files: readonly { fi
   const target = path.resolve(folder);
   const names = new Set<string>();
   const documents = files.map(({ fileName, bytes }) => {
-    if (!/^[^<>:"/\\|?*\x00-\x1f]+\.bdx$/i.test(fileName) || fileName.length > 240) throw new Error("BDX output must have a plain .bdx filename");
+    const stem = fileName.slice(0, -".bdx".length);
+    if (!/^[^<>:"/\\|?*\x00-\x1f]+\.bdx$/i.test(fileName) || portableFileStem(stem, MAX_FILE_NAME_BYTES - ".bdx".length) !== stem) throw new Error("BDX output must have a plain .bdx filename");
     const key = fileName.toLowerCase();
     if (names.has(key)) throw new Error(`Duplicate BDX output filename: ${fileName}`);
     names.add(key);
@@ -239,9 +275,7 @@ export async function writeProjectFolderBdx(folder: string, files: readonly { fi
     const state = await readFolderState(target);
     if (!state) throw new Error("Save the project source before generating BDX files");
     const directory = path.join(target, "Paths");
-    await fs.mkdir(directory, { recursive: true });
-    const directoryStat = await fs.lstat(directory);
-    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) throw new Error("Paths must be a regular directory");
+    await checkRegularDirectory(directory, "Paths");
     const observed: Record<string, string> = { ...state.generatedFiles };
     const existing = new Map<string, string>();
     const replacedAliases = new Set<string>();
@@ -260,8 +294,12 @@ export async function writeProjectFolderBdx(folder: string, files: readonly { fi
     }
     const intendedFiles = Object.fromEntries(documents.map((document) => [document.file, digest(document.bytes)]));
     const generatedFiles = intendedFiles;
+    const workspace = path.join(target, PROJECT_WORKSPACE_FILE);
+    const journal = workspaceContents({ ...state, generatedFiles: observed, pendingGeneratedFiles: { ...state.pendingGeneratedFiles, ...intendedFiles } });
+    const committed = workspaceContents({ ...state, generatedFiles, pendingGeneratedFiles: undefined });
+    await checkRegularDirectory(directory, "Paths", true);
     // Journal intended hashes first so a failed multi-file save can be retried.
-    await writeJsonAtomically(path.join(target, PROJECT_WORKSPACE_FILE), { ...state, generatedFiles: observed, pendingGeneratedFiles: { ...state.pendingGeneratedFiles, ...intendedFiles } });
+    await replaceFile(workspace, journal);
     for (const document of documents) {
       const destination = path.join(target, document.file);
       if (existing.has(document.file)) {
@@ -275,7 +313,7 @@ export async function writeProjectFolderBdx(folder: string, files: readonly { fi
     for (const file of new Set([...Object.keys(state.generatedFiles ?? {}), ...Object.keys(state.pendingGeneratedFiles ?? {})])) {
       if (!(file in generatedFiles) && !replacedAliases.has(file)) await removeOwnedDocument(target, file, [state.generatedFiles?.[file], state.pendingGeneratedFiles?.[file]], true);
     }
-    await writeJsonAtomically(path.join(target, PROJECT_WORKSPACE_FILE), { ...state, generatedFiles, pendingGeneratedFiles: undefined });
+    await replaceFile(workspace, committed);
   });
   folderQueues.set(target, pending);
   try { await pending; } finally { if (folderQueues.get(target) === pending) folderQueues.delete(target); }
@@ -330,12 +368,8 @@ export async function autosaveProjectFolder(folder: string, value: unknown, proj
       while (used.has(file.toLowerCase())) file = `${document.stem} (${++number}).${document.extension}`;
       document.file = file; used.add(file.toLowerCase());
     }
-    for (const directory of ["Paths", "Routines"]) {
-      const destination = path.join(target, directory);
-      await fs.mkdir(destination, { recursive: true });
-      const stat = await fs.lstat(destination);
-      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`${directory} must be a regular directory`);
-    }
+    for (const document of documents) withinReadLimit(document.contents, MAX_PROJECT_FILE_BYTES, document.file);
+    for (const directory of ["Paths", "Routines"]) await checkRegularDirectory(path.join(target, directory), directory);
     const observedFiles = { ...old?.files };
     const existing = new Map<string, string>();
     const replacedAliases = new Set<string>();
@@ -357,9 +391,12 @@ export async function autosaveProjectFolder(folder: string, value: unknown, proj
       generatedFiles: old?.generatedFiles, pendingGeneratedFiles: old?.pendingGeneratedFiles,
       legacyProjectMirror: await legacyProjectMirror(target, old, projectPath, decoded),
       importedFrom: options.legacyFile ? (await importedLegacyFile(target, options.legacyFile)) ?? old?.importedFrom : old?.importedFrom };
+    const journal = workspaceContents({ ...state, files: observedFiles, pendingFiles: { ...old?.pendingFiles, ...files } });
+    const committed = workspaceContents({ ...state, legacyProjectMirror: undefined });
+    for (const directory of ["Paths", "Routines"]) await checkRegularDirectory(path.join(target, directory), directory, true);
     // Journal the complete source before mirrors; retries recognize both old and
     // partially written new content without deleting anything before replacement.
-    await writeJsonAtomically(workspace, { ...state, files: observedFiles, pendingFiles: { ...old?.pendingFiles, ...files } });
+    await replaceFile(workspace, journal);
     for (const document of documents) {
       const destination = path.join(target, document.file);
       const current = existing.get(document.file);
@@ -378,7 +415,7 @@ export async function autosaveProjectFolder(folder: string, value: unknown, proj
       if (!(file in files) && !replacedAliases.has(file)) await removeOwnedDocument(target, file, [old?.files[file], old?.pendingFiles?.[file]]);
     }
     await removeLegacyProjectMirror(target, state.legacyProjectMirror);
-    await writeJsonAtomically(workspace, { ...state, legacyProjectMirror: undefined });
+    await replaceFile(workspace, committed);
     return project;
   });
   folderQueues.set(target, pending);

@@ -2,11 +2,12 @@ import fs from "node:fs/promises";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { blankPath, createDemoProject } from "../src/shared/project/defaults";
-import { encodeProjectFile, prepareProjectFile } from "../src/shared/project/fileFormat";
-import type { BordeauxProject } from "../src/shared/types";
-import { autosaveProjectFolder, openProjectFolder, projectWorkspacePath } from "../src/electron/projectFiles";
+import { decodeProjectFile, encodeProjectFile, prepareProjectFile } from "../src/shared/project/fileFormat";
+import type { BordeauxProject, CommandArgumentValue } from "../src/shared/types";
+import { MAX_PROJECT_FILE_BYTES, MAX_WORKSPACE_FILE_BYTES, autosaveProjectFolder, openProjectFolder, projectFileName, projectWorkspacePath, readProject, writeBufferAtomically, writeProject } from "../src/electron/projectFiles";
 
 const directories: string[] = [];
 async function folder() { const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-files-")); directories.push(directory); return directory; }
@@ -23,6 +24,24 @@ function manyPaths(count: number): BordeauxProject {
   project.paths = Array.from({ length: count }, (_, index) => blankPath(`Path ${index + 1}`));
   project.editor = { ...project.editor, activePathId: project.paths[0].id };
   return project;
+}
+
+// One string argument per path makes saved files grow byte for byte with its length.
+function withPayload(project: BordeauxProject, blobs: readonly string[]): BordeauxProject {
+  const next = structuredClone(project);
+  blobs.forEach((blob, index) => { next.paths[index].markers = [{ id: `payload-${index}`, f: 0.5, name: "Payload", invocation: { commandId: "Payload", arguments: { blob } } }]; });
+  return next;
+}
+const payloadLengths = (project: BordeauxProject | null) => project?.paths.map((item) => String(item.markers[0]?.invocation?.arguments.blob ?? "").length);
+
+async function folderDigests(directory: string) {
+  const result: Record<string, string> = {};
+  for (const entry of await fs.readdir(directory, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const file = path.join(entry.parentPath, entry.name);
+    result[path.relative(directory, file)] = createHash("sha256").update(await fs.readFile(file)).digest("hex");
+  }
+  return result;
 }
 
 async function identities(directory: string) {
@@ -167,6 +186,34 @@ describe("project preparation without serialization", () => {
     expect(prepared.paths[0]).not.toHaveProperty("_selT");
     expect(() => prepareProjectFile({ ...project, schemaVersion: "9.0" })).toThrow("Unsupported Bordeaux project schema version");
     expect(() => prepareProjectFile({ ...project, field: { ...project.field, id: "other" } })).toThrow("field compatibility");
+  });
+
+  it("keeps command arguments named like editor state while omitting path selection state", async () => {
+    const args: Record<string, CommandArgumentValue> = {
+      _selT: 0.25, _selAfter: [{ _selM: "keep", _selR: null }, [{ _selT: { deep: true } }]],
+      nested: { _selR: { _selAfter: 3 }, list: [1, "two", { _selM: false }] },
+    };
+    const project = createDemoProject();
+    project.paths[0].markers.push({ id: "event-1", f: 0.5, name: "Shoot", invocation: { commandId: "Shooter.Fire", arguments: structuredClone(args) } });
+    project.routines[0].nodes.push({ id: "node-1", type: "function", cat: "command", invocation: { commandId: "Intake.Run", arguments: structuredClone(args) } });
+    const edited = { ...project, paths: project.paths.map((item) => ({ ...item, _selAfter: 1, _selT: 0, _selM: 0, _selR: 0 })) };
+    const expectSaved = (saved: BordeauxProject) => {
+      for (const key of ["_selAfter", "_selT", "_selM", "_selR"]) expect(saved.paths[0]).not.toHaveProperty(key);
+      expect(saved.paths[0].markers[0].invocation?.arguments).toEqual(args);
+      expect(saved.routines[0].nodes[0]).toMatchObject({ invocation: { arguments: args } });
+    };
+
+    expectSaved(prepareProjectFile(edited));
+    expectSaved(decodeProjectFile(encodeProjectFile(edited).contents).project);
+    const directory = await folder();
+    await writeProject(path.join(directory, "Standalone.bordeaux"), edited);
+    expectSaved((await readProject(path.join(directory, "Standalone.bordeaux"))).project);
+    await autosaveProjectFolder(directory, edited, null);
+    expectSaved((await openProjectFolder(directory)).project!);
+    // A browser path document is itself the path record.
+    const browserPath = decodeProjectFile(JSON.stringify({ version: "2.0", robot: project.robot, ...edited.paths[0] })).project.paths[0];
+    for (const key of ["_selAfter", "_selT", "_selM", "_selR"]) expect(browserPath).not.toHaveProperty(key);
+    expect(browserPath.markers[0].invocation?.arguments).toEqual(args);
   });
 
   it("still validates the recovery workspace project on open", async () => {
