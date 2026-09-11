@@ -224,3 +224,150 @@ describe("project preparation without serialization", () => {
     await expect(openProjectFolder(directory)).rejects.toThrow("Unsupported Bordeaux project schema version");
   });
 });
+
+describe("saved size stays within what Bordeaux can reopen", () => {
+  it("writes a standalone project up to the UTF-8 byte limit and preserves the file beyond it", async () => {
+    const directory = await folder(), file = path.join(directory, "Large.bordeaux"), project = createDemoProject();
+    const fill = "x".repeat(MAX_PROJECT_FILE_BYTES - Buffer.byteLength(encodeProjectFile(withPayload(project, [""])).contents));
+    await writeProject(file, withPayload(project, [fill]));
+    expect((await fs.stat(file)).size).toBe(MAX_PROJECT_FILE_BYTES);
+    const saved = await folderDigests(directory);
+    expect(payloadLengths((await readProject(file)).project)).toEqual([fill.length]);
+
+    // The same number of characters, but one more UTF-8 byte.
+    const over = withPayload(project, [`${fill.slice(1)}é`]);
+    expect(encodeProjectFile(over).contents.length).toBe(MAX_PROJECT_FILE_BYTES);
+    await expect(writeProject(file, over)).rejects.toThrow("Large.bordeaux would be 16.1 MiB, over the 16 MiB limit");
+    expect(await folderDigests(directory)).toEqual(saved);
+    expect(payloadLengths((await readProject(file)).project)).toEqual([fill.length]);
+  }, 60_000);
+
+  it("saves a path document at its byte limit and rejects a larger one before replacing anything", async () => {
+    const directory = await folder(), project = createDemoProject();
+    await autosaveProjectFolder(directory, withPayload(project, [""]), null);
+    const document = path.join(directory, "Paths/NewPath.path");
+    const fill = "x".repeat(MAX_PROJECT_FILE_BYTES - (await fs.stat(document)).size);
+    await autosaveProjectFolder(directory, withPayload(project, [fill]), null);
+    expect((await fs.stat(document)).size).toBe(MAX_PROJECT_FILE_BYTES);
+    const saved = await folderDigests(directory);
+
+    await expect(autosaveProjectFolder(directory, withPayload(project, [`${fill.slice(1)}é`]), null))
+      .rejects.toThrow("Paths/NewPath.path would be 16.1 MiB, over the 16 MiB limit");
+    expect(await folderDigests(directory)).toEqual(saved);
+    expect(payloadLengths((await openProjectFolder(directory)).project)).toEqual([fill.length]);
+    // The saved boundary document remains replaceable by later saves.
+    await autosaveProjectFolder(directory, withPayload(project, [""]), null);
+    expect((await fs.stat(document)).size).toBeLessThan(1024 * 1024);
+  }, 60_000);
+
+  it("accepts a workspace near its limit and keeps it and its mirrors when an edit would exceed it", async () => {
+    const directory = await folder(), project = manyPaths(3);
+    const share = Math.floor((MAX_WORKSPACE_FILE_BYTES - 512 * 1024) / 3);
+    await autosaveProjectFolder(directory, withPayload(project, [share, share, share].map((length) => "x".repeat(length))), null);
+    expect((await fs.stat(projectWorkspacePath(directory))).size).toBeGreaterThan(MAX_WORKSPACE_FILE_BYTES - 1024 * 1024);
+    const saved = await folderDigests(directory);
+
+    const larger = share + 256 * 1024;
+    await expect(autosaveProjectFolder(directory, withPayload(project, [larger, larger, larger].map((length) => "x".repeat(length))), null))
+      .rejects.toThrow(/^The project workspace would be 32\.\d MiB, over the 32 MiB limit/);
+    expect(await folderDigests(directory)).toEqual(saved);
+    expect(payloadLengths((await openProjectFolder(directory)).project)).toEqual([share, share, share]);
+  }, 60_000);
+
+  it("keeps an opened legacy project untouched when its first folder save would be too large", async () => {
+    const directory = await folder(), legacy = path.join(directory, "Imported.bordeaux");
+    await writeProject(legacy, createDemoProject());
+    const saved = await folderDigests(directory);
+    const opened = (await readProject(legacy)).project;
+    await expect(autosaveProjectFolder(directory, withPayload(opened, ["x".repeat(MAX_PROJECT_FILE_BYTES)]), legacy, { legacyFile: legacy }))
+      .rejects.toThrow("over the 16 MiB limit");
+    expect(await folderDigests(directory)).toEqual(saved);
+    expect(await fs.readdir(directory)).toEqual(["Imported.bordeaux"]);
+    expect((await openProjectFolder(directory)).legacyFile).toBe(legacy);
+  }, 60_000);
+});
+
+describe("derived file names fit one filesystem name component", () => {
+  const bytes = (text: string) => Buffer.byteLength(text, "utf8");
+  const longCjk = "路".repeat(120), longEmoji = "🚀".repeat(100);
+
+  it("saves long CJK and emoji path and routine names, reopens them, and resaves in place", async () => {
+    const directory = await folder(), project = createDemoProject();
+    project.paths[0].name = longCjk; project.routines[0].name = longEmoji;
+    await autosaveProjectFolder(directory, project, null);
+    const [pathFile] = await fs.readdir(path.join(directory, "Paths")), [routineFile] = await fs.readdir(path.join(directory, "Routines"));
+    expect(pathFile).toBe(`${"路".repeat(79)}.path`);
+    expect(routineFile).toBe(`${"🚀".repeat(59)}.routine`);
+    expect(bytes(pathFile)).toBeLessThanOrEqual(255); expect(bytes(routineFile)).toBeLessThanOrEqual(255);
+    expect(JSON.parse(await fs.readFile(path.join(directory, "Paths", pathFile), "utf8")).name).toBe(longCjk);
+
+    const before = await identities(directory);
+    const reopened = (await openProjectFolder(directory)).project!;
+    expect(reopened.paths[0].name).toBe(longCjk); expect(reopened.routines[0].name).toBe(longEmoji);
+    await autosaveProjectFolder(directory, reopened, null);
+    expect(await identities(directory)).toEqual(before);
+  });
+
+  it("fits numbered duplicates of byte-limit names and keeps each document's file across saves", async () => {
+    const directory = await folder(), project = manyPaths(3);
+    // 2 + 79 × 3 = 239 bytes is the widest stem; " (2).routine" brings the name to 251
+    // bytes. A temporary name embedding all of it would exceed 255 bytes.
+    const widest = `ab${"路".repeat(100)}`;
+    project.paths.forEach((item) => { item.name = longCjk; });
+    project.routines = ["first", "second"].map((id) => ({ ...project.routines[0], id, name: widest }));
+    project.activeRoutineId = "first";
+    await autosaveProjectFolder(directory, project, null);
+    const stem = "路".repeat(79), routineStem = `ab${"路".repeat(79)}`;
+    expect((await fs.readdir(path.join(directory, "Paths"))).sort()).toEqual([`${stem} (2).path`, `${stem} (3).path`, `${stem}.path`]);
+    expect((await fs.readdir(path.join(directory, "Routines"))).sort()).toEqual([`${routineStem} (2).routine`, `${routineStem}.routine`]);
+    expect(bytes(`${routineStem} (2).routine`)).toBe(251);
+
+    const before = await identities(directory);
+    const reopened = (await openProjectFolder(directory)).project!;
+    expect(reopened.paths.map((item) => item.name)).toEqual([longCjk, longCjk, longCjk]);
+    expect(reopened.routines.map((item) => item.name)).toEqual([widest, widest]);
+    await autosaveProjectFolder(directory, reopened, null);
+    expect(await identities(directory)).toEqual(before);
+    // A longer name with the same derived stem keeps its numbered file.
+    reopened.paths[1].constraints.maxVel = 0.5; reopened.routines[1].name = `${widest}!`;
+    await autosaveProjectFolder(directory, reopened, null);
+    const after = await identities(directory);
+    expect(JSON.parse(after[`Paths/${stem} (2).path`].bytes).constraints.maxVel).toBe(0.5);
+    expect(after[`Paths/${stem}.path`]).toEqual(before[`Paths/${stem}.path`]);
+    expect(JSON.parse(after[`Routines/${routineStem} (2).routine`].bytes).name).toBe(`${widest}!`);
+    expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());
+  });
+
+  it("writes, replaces, and reopens a standalone project whose name fills the component", async () => {
+    const directory = await folder(), name = projectFileName(longCjk), file = path.join(directory, name);
+    expect(bytes(name)).toBe(255);
+    const project = createDemoProject();
+    await writeProject(file, project, true);
+    project.paths[0].name = "Edited";
+    await writeProject(file, project);
+    expect((await readProject(file)).project.paths[0].name).toBe("Edited");
+    expect(await fs.readdir(directory)).toEqual([name]);
+    // User-chosen export names use the same atomic replacement. A temporary name
+    // embedding this whole 255-character name would be too long on every platform.
+    const bdx = path.join(directory, `${"b".repeat(251)}.bdx`);
+    await writeBufferAtomically(bdx, Buffer.from("first"));
+    await writeBufferAtomically(bdx, Buffer.from("second"));
+    expect(await fs.readFile(bdx, "utf8")).toBe("second");
+    expect((await fs.readdir(directory)).sort()).toEqual([name, path.basename(bdx)].sort());
+  });
+
+  it("creates no folders or files when only a first save's workspace would be too large", async () => {
+    const directory = await folder(), legacy = path.join(directory, "Imported.bordeaux");
+    await writeProject(legacy, manyPaths(3));
+    const saved = await folderDigests(directory);
+    const opened = (await readProject(legacy)).project;
+    // Each mirror stays below 16 MiB; together they overfill the 32 MiB workspace.
+    const share = Math.ceil(MAX_WORKSPACE_FILE_BYTES / 3);
+    expect(share).toBeLessThan(MAX_PROJECT_FILE_BYTES - 1024 * 1024);
+    await expect(autosaveProjectFolder(directory, withPayload(opened, [share, share, share].map((length) => "x".repeat(length))), legacy, { legacyFile: legacy }))
+      .rejects.toThrow(/^The project workspace would be 32\.\d MiB, over the 32 MiB limit/);
+    expect(await fs.readdir(directory)).toEqual(["Imported.bordeaux"]);
+    expect(await folderDigests(directory)).toEqual(saved);
+    expect((await openProjectFolder(directory)).legacyFile).toBe(legacy);
+  }, 60_000);
+});
