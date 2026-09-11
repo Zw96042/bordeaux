@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDemoProject } from "../src/shared/project/defaults";
-import { autosaveProjectFolder, openProjectFolder, writeProjectFolderBdx } from "../src/electron/projectFiles";
+import { blankPath, createDemoProject } from "../src/shared/project/defaults";
+import { MAX_WORKSPACE_FILE_BYTES, autosaveProjectFolder, openProjectFolder, writeProjectFolderBdx } from "../src/electron/projectFiles";
+import { binaryFileName } from "../src/shared/export/robotBinary";
 
 const directories: string[] = [];
 async function folder() {
@@ -117,5 +118,78 @@ describe("folder BDX generation", () => {
     expect((await openProjectFolder(directory)).project?.paths[0].name).toBe("Next edit");
     await writeProjectFolderBdx(directory, []);
     await expect(fs.stat(path.join(directory, "Paths/Test.bdx"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("generates nothing when its ownership records would overfill a near-limit workspace", async () => {
+    const directory = await folder(), workspace = path.join(directory, ".bordeaux-workspace.json");
+    const project = createDemoProject();
+    project.paths = [blankPath("One"), blankPath("Two"), blankPath("Three")];
+    project.editor = { ...project.editor, activePathId: project.paths[0].id };
+    const withPayload = (lengths: readonly number[]) => {
+      const next = structuredClone(project);
+      lengths.forEach((length, index) => { next.paths[index].markers = [{ id: `payload-${index}`, f: 0.5, name: "Payload", invocation: { commandId: "Payload", arguments: { blob: "x".repeat(length) } } }]; });
+      return next;
+    };
+    await autosaveProjectFolder(directory, withPayload([0, 0, 0]), null);
+    // Leave 8 KiB: enough for a few ownership records, not for hundreds.
+    const total = MAX_WORKSPACE_FILE_BYTES - 8 * 1024 - (await fs.stat(workspace)).size, share = Math.floor(total / 3);
+    await autosaveProjectFolder(directory, withPayload([total - 2 * share, share, share]), null);
+    expect((await fs.stat(workspace)).size).toBe(MAX_WORKSPACE_FILE_BYTES - 8 * 1024);
+    const saved = await fs.readFile(workspace);
+
+    const many = Array.from({ length: 200 }, (_, index) => output(`Output ${index}.bdx`));
+    await expect(writeProjectFolderBdx(directory, many)).rejects.toThrow(/^The project workspace would be 32\.\d MiB, over the 32 MiB limit/);
+    expect((await fs.readFile(workspace)).equals(saved)).toBe(true);
+    expect((await fs.readdir(path.join(directory, "Paths"))).filter((file) => file.endsWith(".bdx"))).toEqual([]);
+    // A missing Paths folder is created only after the workspace records fit.
+    await fs.rm(path.join(directory, "Paths"), { recursive: true });
+    await expect(writeProjectFolderBdx(directory, many)).rejects.toThrow(/^The project workspace would be 32\.\d MiB/);
+    await expect(fs.lstat(path.join(directory, "Paths"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await fs.readFile(workspace)).equals(saved)).toBe(true);
+
+    await writeProjectFolderBdx(directory, [output()]);
+    expect(await fs.readFile(path.join(directory, "Paths/Test.bdx"), "utf8")).toBe("first");
+    expect((await openProjectFolder(directory)).project?.paths.map((item) => item.name)).toEqual(["One", "Two", "Three"]);
+  }, 60_000);
+
+  it("saves device-named paths under portable names next to their source mirrors", async () => {
+    const directory = await folder(), project = createDemoProject();
+    project.paths = [blankPath("CON"), blankPath("nul.txt"), blankPath("Console")];
+    project.editor = { ...project.editor, activePathId: project.paths[0].id };
+    await autosaveProjectFolder(directory, project, null);
+    const names = project.paths.map((item) => binaryFileName(item.name));
+    expect(names).toEqual(["_CON.bdx", "_nul.txt.bdx", "Console.bdx"]);
+    await writeProjectFolderBdx(directory, names.map((name) => output(name, name)));
+    expect((await fs.readdir(path.join(directory, "Paths"))).sort())
+      .toEqual(["Console.bdx", "Console.path", "_CON.bdx", "_CON.path", "_nul.txt.bdx", "_nul.txt.path"]);
+    expect(await fs.readFile(path.join(directory, "Paths/_CON.bdx"), "utf8")).toBe("_CON.bdx");
+    expect((await openProjectFolder(directory)).project?.paths.map((item) => item.name)).toEqual(["CON", "nul.txt", "Console"]);
+
+    // Device names are refused even from a caller that bypasses binaryFileName.
+    for (const name of ["CON.bdx", "con.bdx", "COM1.bdx", "nul.txt.bdx", "LPT1 .bdx"]) {
+      await expect(writeProjectFolderBdx(directory, [output(name)])).rejects.toThrow("plain .bdx filename");
+    }
+    await expect(writeProjectFolderBdx(directory, [output(`${"b".repeat(252)}.bdx`)])).rejects.toThrow("plain .bdx filename");
+    expect((await fs.readdir(path.join(directory, "Paths"))).filter((file) => file.endsWith(".bdx")).sort()).toEqual(["Console.bdx", "_CON.bdx", "_nul.txt.bdx"]);
+  });
+
+  it("rejects device-name collisions and unrelated prefixed files instead of overwriting them", async () => {
+    const directory = await folder(), project = createDemoProject();
+    project.paths = [blankPath("CON"), blankPath("_CON"), blankPath("con")];
+    project.editor = { ...project.editor, activePathId: project.paths[0].id };
+    await autosaveProjectFolder(directory, project, null);
+    const sources = (await fs.readdir(path.join(directory, "Paths"))).sort();
+    expect(sources).toEqual(["_CON (2).path", "_CON.path", "_con (3).path"]);
+
+    const names = project.paths.map((item) => binaryFileName(item.name));
+    expect(names).toEqual(["_CON.bdx", "_CON.bdx", "_con.bdx"]);
+    await expect(writeProjectFolderBdx(directory, names.slice(0, 2).map((name) => output(name)))).rejects.toThrow("Duplicate BDX output filename: _CON.bdx");
+    await expect(writeProjectFolderBdx(directory, [output(names[0]), output(names[2])])).rejects.toThrow("Duplicate BDX output filename: _con.bdx");
+    expect((await fs.readdir(path.join(directory, "Paths"))).sort()).toEqual(sources);
+
+    const unrelated = path.join(directory, "Paths/_CON.bdx");
+    await fs.writeFile(unrelated, "made by hand");
+    await expect(writeProjectFolderBdx(directory, [output(names[0])])).rejects.toThrow("unrelated or changed outside");
+    expect(await fs.readFile(unrelated, "utf8")).toBe("made by hand");
   });
 });
