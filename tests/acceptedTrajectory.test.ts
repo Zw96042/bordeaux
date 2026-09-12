@@ -1,5 +1,9 @@
 import { readFileSync } from "node:fs";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, beforeAll } from "vitest";
+import { autosaveProjectFolder, openProjectFolder, readProject, writeProject } from "../src/electron/projectFiles";
 import { analyzePath } from "../src/shared/agent/pathAnalysis";
 import { buildBdxExport } from "../src/shared/export/bdx";
 import { buildRobotBinary } from "../src/shared/export/robotBinary";
@@ -9,7 +13,7 @@ import { isOptimizationOutdated } from "../src/shared/planners/acceptedTrajector
 import { getPlanner } from "../src/shared/planners";
 import { decodeProjectFile, encodeProjectFile } from "../src/shared/project/fileFormat";
 import { validateProject } from "../src/shared/validation";
-import type { BordeauxProject, PlannerResult, PathDoc } from "../src/shared/types";
+import type { BordeauxProject, CommandArgumentValue, PlannerResult, PathDoc } from "../src/shared/types";
 import { binaryWriterFixture } from "./fixtures/binaryWriterFixture";
 
 const project = decodeProjectFile(readFileSync("benchmarks/planner-corpus/v1/corpus.bordeaux.json", "utf8")).project;
@@ -139,6 +143,55 @@ describe("explicit accepted optimization", () => {
       expect(getAcceptedTrajectory(tampered, project.robot)).toBeNull();
     }
   });
+
+  it("saves an applied optimization of an edited path without selection keys, keeping same-named command arguments", async () => {
+    const keys = ["_selAfter", "_selT", "_selM", "_selR"];
+    const args: Record<string, CommandArgumentValue> = { _selT: 7, nested: { _selM: 8 }, _selAfter: [{ _selR: null }], _selR: "keep" };
+    // The editor leaves selection keys on the path record it hands to the optimizer.
+    const edited = {
+      ...structuredClone(path), _selAfter: 1, _selT: 42, _selM: 0, _selR: 2,
+      markers: [{ id: "accepted-event", name: "Event", f: 0.4, cmd: "collect", invocation: { commandId: "Intake.Collect", arguments: structuredClone(args) } }],
+    } as PathDoc;
+    const output = optimizeCorridorFinal({ path: edited, robot: project.robot });
+    const applied = { ...edited, optimization: { corridorM: 0.15, accepted: createAcceptedTrajectory(edited, project.robot, output) } };
+    for (const key of keys) expect(applied.optimization.accepted.result.optimizedPath).toHaveProperty(key);
+    const before = structuredClone(applied);
+    const expected = structuredClone(applied.optimization.accepted.result);
+    for (const key of keys) delete (expected.optimizedPath as unknown as Record<string, unknown>)[key];
+    const saving = { ...structuredClone(project), paths: project.paths.map((candidate) => candidate.id === edited.id ? applied : { ...candidate, exportable: false }) };
+
+    const directory = await mkdtemp(join(tmpdir(), "bordeaux-accepted-"));
+    try {
+      const file = join(directory, "Applied.bordeaux"), workspace = join(directory, "Workspace");
+      await writeProject(file, saving);
+      await mkdir(workspace);
+      await autosaveProjectFolder(workspace, saving, null);
+      const reopened = [
+        decodeProjectFile(encodeProjectFile(saving).contents).project,
+        (await readProject(file)).project,
+        (await openProjectFolder(workspace)).project!,
+        // A browser path document is itself the path record.
+        decodeProjectFile(JSON.stringify({ version: "2.0", robot: project.robot, ...applied })).project,
+      ];
+      for (const opened of reopened) {
+        const restored = opened.paths.find((candidate) => candidate.id === edited.id)!;
+        const accepted = restored.optimization!.accepted!;
+        for (const key of keys) {
+          expect(restored).not.toHaveProperty(key);
+          expect(accepted.result.optimizedPath).not.toHaveProperty(key);
+        }
+        expect(restored.markers[0].invocation?.arguments).toEqual(args);
+        expect(accepted.result.markers[0].invocation?.arguments).toEqual(args);
+        expect(accepted.result.optimizedPath!.markers[0].invocation?.arguments).toEqual(args);
+        expect(accepted.inputKey).toBe(applied.optimization.accepted.inputKey);
+        expect(accepted.result).toEqual(expected);
+        expect(getAcceptedTrajectory(restored, opened.robot)).toEqual(expected);
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+    expect(applied).toEqual(before);
+  }, 30_000);
 });
 
 describe("applied optimization across export targets and agent analysis", () => {

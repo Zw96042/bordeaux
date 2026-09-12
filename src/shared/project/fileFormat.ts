@@ -1,7 +1,7 @@
 import type { BordeauxProject } from "../types";
 import { ACTIVE_FIELD_REFERENCE } from "../field/rebuilt2026";
 import { validateProject } from "../validation";
-import { TRANSIENT_EDITOR_KEYS, normalizeProject } from "./normalize";
+import { normalizeProject } from "./normalize";
 
 const CURRENT_PROJECT_SCHEMA_VERSION = "1.0" as const;
 
@@ -136,19 +136,11 @@ export function decodeProjectFile(contents: string): DecodedProjectFile {
   return decodeProjectValue(value);
 }
 
-function stripEditorState(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stripEditorState);
-  if (!isRecord(value)) return value;
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([key]) => !TRANSIENT_EDITOR_KEYS.has(key))
-      .map(([key, item]) => [key, stripEditorState(item)]),
-  );
-}
-
 /** The normalized, validated project that `encodeProjectFile` would write. */
 export function prepareProjectFile(value: unknown): BordeauxProject {
-  const decoded = decodeProjectValue(stripEditorState(value));
+  // Normalization strips editor state; the copy keeps a queued save unaffected
+  // by later edits to the caller's objects.
+  const decoded = decodeProjectValue(structuredClone(value));
   return { ...decoded.project, schemaVersion: CURRENT_PROJECT_SCHEMA_VERSION };
 }
 

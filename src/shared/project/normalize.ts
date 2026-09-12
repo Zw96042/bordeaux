@@ -52,6 +52,24 @@ function normalizeNodes(nodes: unknown, paths: readonly unknown[], depth = 0): u
   });
 }
 
+/**
+ * An accepted optimized path is a copy of the edited path document, so it can
+ * carry the same selection keys. Strip them from that record alone, copying
+ * only the levels that change.
+ */
+function withoutAcceptedPathSelection(optimization: unknown): unknown {
+  if (!isRecord(optimization)) return optimization;
+  const accepted = optimization.accepted;
+  if (!isRecord(accepted)) return optimization;
+  const result = accepted.result;
+  if (!isRecord(result)) return optimization;
+  const optimizedPath = result.optimizedPath;
+  if (!isRecord(optimizedPath) || ![...TRANSIENT_EDITOR_KEYS].some((key) => Object.hasOwn(optimizedPath, key))) return optimization;
+  const path = { ...optimizedPath };
+  for (const key of TRANSIENT_EDITOR_KEYS) delete path[key];
+  return { ...optimization, accepted: { ...accepted, result: { ...result, optimizedPath: path } } };
+}
+
 export function normalizeProject(value: unknown): unknown {
   if (!isRecord(value)) return value;
   const source = value;
@@ -66,6 +84,10 @@ export function normalizeProject(value: unknown): unknown {
     used.add(id);
     path.id = id;
     delete path.labview;
+    // Only path documents carry editor selection; nested authored data such as
+    // command arguments may legitimately use the same key names.
+    for (const key of TRANSIENT_EDITOR_KEYS) delete path[key];
+    if (path.optimization !== undefined) path.optimization = withoutAcceptedPathSelection(path.optimization);
     if (isRecord(path.constraints) && path.constraints.maxAngDecel === 0) {
       path.constraints = { ...path.constraints, maxAngDecel: path.constraints.maxAngAccel };
     }
