@@ -352,9 +352,11 @@ function derivePath(doc: PathDoc, robot: RobotConfig | null, perSeg?: number, op
   (doc.targets || []).forEach((t) => targetEntries.push({ f: featureFraction(t, smp), rad: t.deg * D2R }));
   const manualAnchors = buildAnchors(manualEntries), targetAnchors = buildAnchors(targetEntries);
   const rawHead: number[] = [];
+  // pointIndex only grows, so every boundary passed by an earlier sample is
+  // also passed by this one; resuming the scan yields the same segment.
+  let segment = 0;
   pts.forEach((p, pointIndex) => {
     const f = total > 1e-6 ? p.s / total : 0;
-    let segment = 0;
     while (segment < nWp - 2 && pointIndex >= wpIdx[segment + 1]) segment++;
     const segmentMode = effectiveHeadingMode(segment);
     if (segmentMode === 'lookAt') {

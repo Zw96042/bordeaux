@@ -121,20 +121,85 @@ function derivative(
   });
 }
 
+// Waypoint lookup returns the earliest sample at or after the previous
+// waypoint's sample that is nearest by Math.hypot. A 1e-4 m lattice locates
+// that sample without rescanning the suffix: |ix(a) - ix(b)| <= 2 whenever
+// hypot(a - b) <= LATTICE_RADIUS_M, so a candidate within that radius proves
+// that every equally near or nearer suffix sample was among its 5x5 cells.
+// Beyond LATTICE_LIMIT_M, division error could exceed that cell margin.
+const LATTICE_STEP_M = 1e-4;
+const LATTICE_RADIUS_M = 1e-4;
+const LATTICE_LIMIT_M = 1e6;
+
+function latticeCell(value: number): number {
+  return Math.round(value / LATTICE_STEP_M);
+}
+
+function latticeKey(x: number, y: number): string {
+  return `${x},${y}`;
+}
+
+function suffixNearestIndex(
+  waypoint: { x: number; y: number },
+  samples: readonly TrajectorySample[],
+  cursor: number,
+): number {
+  let best = cursor;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let index = cursor; index < samples.length; index += 1) {
+    const distance = Math.hypot(samples[index].x - waypoint.x, samples[index].y - waypoint.y);
+    if (distance < bestDistance) {
+      best = index;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+function firstAtOrAfter(indices: readonly number[], cursor: number): number {
+  let low = 0;
+  let high = indices.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (indices[middle] < cursor) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
 function waypointSampleIndices(path: PathDoc, samples: readonly TrajectorySample[]): number[] {
+  const cells = new Map<string, number[]>();
+  for (let index = 0; index < samples.length; index += 1) {
+    const key = latticeKey(latticeCell(samples[index].x), latticeCell(samples[index].y));
+    const cell = cells.get(key);
+    if (cell) cell.push(index);
+    else cells.set(key, [index]);
+  }
   let cursor = 0;
   return path.waypoints.map((waypoint) => {
-    let best = cursor;
+    let best = -1;
     let bestDistance = Number.POSITIVE_INFINITY;
-    for (let index = cursor; index < samples.length; index += 1) {
-      const distance = Math.hypot(samples[index].x - waypoint.x, samples[index].y - waypoint.y);
-      if (distance < bestDistance) {
-        best = index;
-        bestDistance = distance;
+    if (Math.abs(waypoint.x) <= LATTICE_LIMIT_M && Math.abs(waypoint.y) <= LATTICE_LIMIT_M) {
+      const cellX = latticeCell(waypoint.x);
+      const cellY = latticeCell(waypoint.y);
+      for (let offsetX = -2; offsetX <= 2; offsetX += 1) {
+        for (let offsetY = -2; offsetY <= 2; offsetY += 1) {
+          const cell = cells.get(latticeKey(cellX + offsetX, cellY + offsetY));
+          if (!cell) continue;
+          for (let position = firstAtOrAfter(cell, cursor); position < cell.length; position += 1) {
+            const index = cell[position];
+            const distance = Math.hypot(samples[index].x - waypoint.x, samples[index].y - waypoint.y);
+            if (distance < bestDistance || (distance === bestDistance && index < best)) {
+              best = index;
+              bestDistance = distance;
+            }
+          }
+        }
       }
     }
-    cursor = best;
-    return best;
+    // Waypoints away from every remaining sample keep the exhaustive scan.
+    cursor = bestDistance <= LATTICE_RADIUS_M ? best : suffixNearestIndex(waypoint, samples, cursor);
+    return cursor;
   });
 }
 
