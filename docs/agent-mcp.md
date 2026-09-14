@@ -3,8 +3,8 @@
 Bordeaux can expose the open editor as a local MCP server so an agent can inspect, analyze, repair, and propose autonomous paths. Access is off by default.
 
 1. Open Bordeaux and a project.
-2. Choose **Agents → Enable MCP Access**.
-3. Choose **Agents → Copy MCP Configuration** and paste the JSON into the MCP client configuration.
+2. Choose **Agents → Enable MCP access**.
+3. Choose **Agents → Copy MCP configuration** and paste the JSON into the MCP client configuration.
 4. Keep Bordeaux open while the agent works. Proposed paths appear as dashed previews with candidate metrics and **Apply/Reject** controls.
 
 The MCP server cannot save, export, build, deploy, or apply a proposal. Applying a proposal is always an explicit, undoable editor action. Any intervening editor change, project reload, or closed window makes the proposal stale.

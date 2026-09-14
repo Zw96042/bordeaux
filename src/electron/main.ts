@@ -468,13 +468,13 @@ function reloadProjectWindow(ignoreCache: boolean): void {
 function updateMenuItem(): Electron.MenuItemConstructorOptions {
   return process.windowsStore
     ? { label: "Updates are managed by Microsoft Store", enabled: false }
-    : { label: "Check for Updates…", click: () => { void appUpdates?.check(true); } };
+    : { label: "Check for updates…", click: () => { void appUpdates?.check(true); } };
 }
 
 function buildMenu() {
   const recentSubmenu = recentFiles.length > 0
     ? recentFiles.map((filePath, index) => ({ label: path.basename(filePath), sublabel: filePath, click: () => sendCommand("open-recent", index) }))
-    : [{ label: "No Recent Projects", enabled: false }];
+    : [{ label: "No recent projects", enabled: false }];
 
   const template: Electron.MenuItemConstructorOptions[] = [
     ...(process.platform === "darwin" ? [{ label: app.name, submenu: [
@@ -486,9 +486,9 @@ function buildMenu() {
     {
       label: "File",
       submenu: [
-        { label: "New Project", accelerator: "CmdOrCtrl+N", click: () => sendCommand("new-project") },
+        { label: "New project…", accelerator: "CmdOrCtrl+N", click: () => sendCommand("new-project") },
         { label: "Open project folder…", accelerator: "CmdOrCtrl+O", click: () => sendCommand("open-project") },
-        { label: "Open Recent", submenu: recentSubmenu },
+        { label: "Open recent", submenu: recentSubmenu },
         { type: "separator" },
         { label: "Save", accelerator: "CmdOrCtrl+S", click: () => sendCommand("save-project") },
         { label: "Open project file…", accelerator: "CmdOrCtrl+Shift+O", click: () => sendCommand("open-project-file") },
@@ -502,8 +502,8 @@ function buildMenu() {
     {
       label: "Robot",
       submenu: [
-        { label: "Link Robot Project…", click: () => sendCommand("robot-link") },
-        { label: "Build Command Catalog…", click: () => sendCommand("robot-build") },
+        { label: "Link robot project…", click: () => sendCommand("robot-link") },
+        { label: "Build command catalog…", click: () => sendCommand("robot-build") },
         { type: "separator" },
       ],
     },
@@ -511,7 +511,7 @@ function buildMenu() {
       label: "Agents",
       submenu: [
         {
-          label: "Enable MCP Access",
+          label: "Enable MCP access",
           type: "checkbox",
           checked: agentBridge?.enabled === true,
           click: () => {
@@ -529,7 +529,7 @@ function buildMenu() {
         },
         { type: "separator" },
         {
-          label: "Copy MCP Configuration",
+          label: "Copy MCP configuration",
           click: () => {
             const electronArgs = app.isPackaged ? ["--mcp-stdio"] : [path.join(__dirname, "main.js"), "--mcp-stdio"];
             const launch = process.platform === "win32"
@@ -542,7 +542,7 @@ function buildMenu() {
     },
     { label: "View", submenu: [...(!app.isPackaged ? [
       { label: "Reload", accelerator: "CmdOrCtrl+R", click: () => reloadProjectWindow(false) },
-      { label: "Force Reload", accelerator: "CmdOrCtrl+Shift+R", click: () => reloadProjectWindow(true) },
+      { label: "Force reload", accelerator: "CmdOrCtrl+Shift+R", click: () => reloadProjectWindow(true) },
     ] : []), { role: "toggleDevTools" }, { type: "separator" }, { role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" }, { type: "separator" }, { role: "togglefullscreen" }] },
     ...(process.platform === "darwin" ? [] : [{ label: "Help", submenu: [
       updateMenuItem(),
