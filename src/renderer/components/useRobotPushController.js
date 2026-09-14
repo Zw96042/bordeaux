@@ -1,6 +1,7 @@
 import { useRobotFilePushController } from './useRobotFilePushController';
 import { useEffect, useRef, useState } from 'react';
 import { deploymentInputKey, deploymentInputKeys, deploymentItemStatus } from '../lib/deploymentStatus';
+import { focusIfAvailable } from '../lib/focusReturn';
 
 const errorMessage = (error) => error?.message || String(error || 'The robot operation failed');
 const clone = (value) => structuredClone(value);
@@ -84,9 +85,10 @@ export function useLegacyRobotPushController({ getProject, projectKey, catalogKe
   }), []);
 
   const show = () => { origin.current = document.activeElement; setOpen(true); };
+  const returnFocus = () => focusIfAvailable(origin.current);
   const close = () => {
     setOpen(false);
-    requestAnimationFrame(() => { if (origin.current?.isConnected) origin.current.focus(); });
+    requestAnimationFrame(returnFocus);
   };
   const reconcile = (observed) => {
     const current = state.current;
@@ -251,7 +253,7 @@ export function useLegacyRobotPushController({ getProject, projectKey, catalogKe
   };
   const connectionLabel = !deliveryAvailable ? 'Robot delivery unavailable' : busy ? (phase === 'staged' ? 'Awaiting robot' : 'Robot, Working')
     : !pairing ? 'Connect robot' : status ? 'Team ' + pairing.teamNumber : 'Team ' + pairing.teamNumber + ', Not checked';
-  return { open, close, pairing, probe, host, setHost, port, setPort, phase, preview, retentionPreview, status, inspection,
+  return { open, close, returnFocus, pairing, probe, host, setHost, port, setPort, phase, preview, retentionPreview, status, inspection,
     refreshing, result, error, unavailable, deliveryAvailable, adoptBaseline, setAdoptBaseline, desktopAvailable, busy, connectionLabel, itemStatus,
     requestPush, openConnection, refreshStatus, probeRobot, confirmPairing, confirmPush, cancel, prepareRetention,
     confirmRetention, chooseAnotherRobot, connectionHome, retry: () => intent.current && requestPush(intent.current.scope) };

@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { UI } from './ui';
+import { shortcutLabel } from '../lib/shortcuts';
 import '../styles/project-menu.css';
 
 const h = React.createElement;
@@ -24,7 +25,6 @@ export function ProjectMenu({ projectName, projectLocation, saveState, openError
   const action = (label, callback, shortcut) => h('button', {
     type: 'button', role: 'menuitem', tabIndex: -1, onClick: () => { close(true); callback(); },
   }, h('span', null, label), h('span', { className: 'project-menu-shortcut', 'aria-hidden': true }, shortcut));
-  const modifier = typeof window !== 'undefined' && window.bordeauxAPI?.platform === 'darwin' ? '⌘' : 'Ctrl+';
   return h('div', { ref: root, className: 'project-control', onBlur: (event) => {
     if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) setOpen(false);
   } },
@@ -33,7 +33,7 @@ export function ProjectMenu({ projectName, projectLocation, saveState, openError
       title: name, onClick: () => setOpen(!open), onKeyDown: (event) => {
         if ([' ', 'Enter', 'ArrowDown', 'ArrowUp'].includes(event.key)) event.stopPropagation();
         if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setOpen(true); }
-      } }, h(Icon, { name: 'folder', size: 15 }), h('span', { className: 'project-trigger-label' }, 'Project'),
+      } }, h(Icon, { name: 'folder', size: 15 }),
       h('span', { className: 'project-trigger-name' }, name),
       h('span', { className: 'project-saving-indicator', 'data-saving': saveState?.status === 'saving', 'aria-hidden': true }),
       (openError || saveState?.status === 'error') && h('span', { className: 'project-error-indicator', 'aria-label': openError ? 'Could not open project' : 'Save failed' }, '!'),
@@ -56,10 +56,11 @@ export function ProjectMenu({ projectName, projectLocation, saveState, openError
       openError && h('div', { className: 'project-menu-note project-menu-error', role: 'alert' }, 'Could not open project. ', openError.message),
       openError && h('button', { type: 'button', role: 'menuitem', tabIndex: -1, 'data-retry-open': true, onClick: () => { close(true); onRetryOpen(); } }, 'Retry opening'),
       openError && action('Dismiss opening error', onDismissOpenError, ''),
-      action('Open project…', onOpen, modifier + 'O'),
-      action('Save', () => onSave(false), modifier + 'S'),
-      action('Save as…', () => onSave(true), modifier + '⇧S'),
+      // Same names as the native File menu: a project is a folder.
+      action('Open project folder…', onOpen, shortcutLabel('O')),
+      action('Save', () => onSave(false), shortcutLabel('S')),
+      action('Save to another folder…', () => onSave(true), shortcutLabel('S', { shift: true })),
       h('div', { className: 'project-menu-note' + (saveState?.status === 'error' ? ' project-menu-error' : ''), role: saveState?.status === 'error' ? 'alert' : 'presentation' },
         saveState?.status === 'error' ? saveState.error : projectLocation?.folderPath
-          ? 'Paths and routines autosave. Save also updates BDX files.' : 'Save chooses a folder for this project.')));
+          ? 'Edits autosave. Save also writes BDX files.' : 'Save to choose a folder for this project.')));
 }

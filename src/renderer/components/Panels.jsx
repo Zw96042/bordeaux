@@ -6,6 +6,7 @@ import { PointerDrag } from "../hooks/usePointerDrag";
 import { PM } from "../lib/pathMath";
 import { AUTO } from "../lib/routineModel";
 import { UnitPrefs } from "../lib/unitPreferences";
+import { shortcutLabel } from "../lib/shortcuts";
 import { UI } from "./ui";
 
   const { useRef, useState, useEffect, useMemo } = React;

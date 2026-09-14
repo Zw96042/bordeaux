@@ -51,7 +51,7 @@ app.whenReady().then(async () => {
     await wait(() => evaluate(() => !!document.querySelector('.toolbar')), 'editor ready');
     await delay(250);
     await screenshot('choose-folder-1440');
-    await projectAction('Open project…');
+    await projectAction('Open project folder…');
     assert.equal(calls.at(-1), 'folder');
     assert.equal(await evaluate(() => document.querySelector('.library-current-name').textContent), 'Opening move');
     check('Open selects a folder and cancel preserves the project');
@@ -103,7 +103,7 @@ app.whenReady().then(async () => {
     assert.ok(await evaluate(() => document.querySelector('[aria-label="Project menu"]').textContent.includes('My saved project')));
     check('Retry saves the current project without quitting or discarding it and names it after the folder');
     nextOpen = { project: { ...project, name: 'Autonomous paths and competition routines with a long project name', editor: { ...project.editor, unitSystem: 'imperial' } }, location: { folderPath: '/fixture/Autonomous paths and competition routines', projectPath: '/fixture/Autonomous paths and competition routines/.bordeaux-workspace.json' } };
-    await projectAction('Open project…');
+    await projectAction('Open project folder…');
     await wait(async () => !(await status()), 'folder opened');
     await delay(1100);
     assert.equal(project.name, 'Autonomous paths and competition routines');
@@ -136,11 +136,11 @@ app.whenReady().then(async () => {
     await key('Escape');
     assert.equal(await evaluate(() => document.activeElement.getAttribute('aria-label')), 'Project menu');
     await key('Down'); await key('End');
-    assert.equal(await evaluate(() => document.activeElement.textContent.startsWith('Save as')), true);
+    assert.equal(await evaluate(() => document.activeElement.textContent.startsWith('Save to another folder')), true);
     await key('Home'); await key('Tab');
     assert.equal(await evaluate(() => !!document.querySelector('#project-menu')), false);
     check('Project menu supports pointer, arrows, Enter, Space, Escape and Tab with focus return');
-    saveMode = 'cancel'; await projectAction('Save as…');
+    saveMode = 'cancel'; await projectAction('Save to another folder…');
     assert.equal(calls.at(-1), 'save-as');
     win.webContents.send('fixture:menu', 'open-project-file'); await delay(120);
     assert.equal(calls.at(-1), 'file');
