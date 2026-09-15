@@ -323,11 +323,66 @@ describe("renderer numeric drafts", () => {
 
   it("commits a valid number only once when Enter triggers blur", () => {
     const harness = numericDraftHarness("Num");
-    const input = harness.render();
-    const blur = vi.fn(() => (input.props.onBlur as Function)({ target: { value: "2" } }));
+    let input = harness.render();
+    (input.props.onFocus as Function)({ target: { select: vi.fn() } });
+    input = harness.render();
+    (input.props.onChange as Function)({ target: { value: "2" } });
+    input = harness.render();
+    expect(input.props.value).toBe("2");
+    const typed = input;
+    const blur = vi.fn(() => (typed.props.onBlur as Function)({ target: { value: "2" } }));
     (input.props.onKeyDown as Function)({ key: "Enter", preventDefault() {}, target: { value: "2", blur } });
     expect(blur).toHaveBeenCalled();
     expect(harness.onChange).toHaveBeenCalledExactlyOnceWith(2);
+  });
+
+  it("keeps the exact canonical BigNum value when display units change while it is focused", () => {
+    const harness = numericDraftHarness("BigNum", { value: 0.12345 });
+    let input = harness.render();
+    (input.props.onFocus as Function)({ target: { select: vi.fn() } });
+    input = harness.render();
+    expect(input.props.value).toBe("0.12345");
+
+    // Enter on the rounded presentation left by the unit change.
+    harness.setUnitSystem("imperial");
+    input = harness.render();
+    expect(input.props.value).toBe("1.23");
+    const shown = input;
+    const blur = vi.fn(() => (shown.props.onBlur as Function)({ target: { value: "1.23" } }));
+    (input.props.onKeyDown as Function)({ key: "Enter", preventDefault() {}, currentTarget: { value: "1.23", blur } });
+    expect(blur).toHaveBeenCalledOnce();
+    expect(harness.onChange).not.toHaveBeenCalled();
+
+    // Blur on the rounded presentation left by another unit change.
+    input = harness.render();
+    (input.props.onFocus as Function)({ target: { select: vi.fn() } });
+    input = harness.render();
+    harness.setUnitSystem("metric");
+    input = harness.render();
+    expect(input.props.value).toBe("0.12");
+    (input.props.onBlur as Function)({ target: { value: "0.12" } });
+    input = harness.render();
+    expect(input.props["aria-invalid"]).toBe(false);
+    expect(harness.onChange).not.toHaveBeenCalled();
+  });
+
+  it("commits a BigNum value typed after display units change while it is focused", () => {
+    const harness = numericDraftHarness("BigNum", { value: 0.12345 });
+    let input = harness.render();
+    (input.props.onFocus as Function)({ target: { select: vi.fn() } });
+    input = harness.render();
+    harness.setUnitSystem("imperial");
+    input = harness.render();
+    expect(input.props.value).toBe("1.23");
+
+    (input.props.onChange as Function)({ target: { value: "4" } });
+    input = harness.render();
+    expect(input.props.value).toBe("4");
+    const typed = input;
+    const blur = vi.fn(() => (typed.props.onBlur as Function)({ target: { value: "4" } }));
+    (input.props.onKeyDown as Function)({ key: "Enter", preventDefault() {}, currentTarget: { value: "4", blur } });
+    expect(blur).toHaveBeenCalledOnce();
+    expect(harness.onChange).toHaveBeenCalledExactlyOnceWith(0.4);
   });
 
   it("commits the live command value when Save blurs before React rerenders", () => {

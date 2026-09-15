@@ -42,6 +42,16 @@ export function flushFocusedProjectDraft(
   return false;
 }
 
+/**
+ * Commits a focused draft to its current owner before selection changes. Field
+ * pointer gestures prevent the default focus change, so the draft would
+ * otherwise stay focused while its inspector shows another item.
+ */
+export function commitFocusedDraft(source: Pick<Document, "activeElement"> = document): void {
+  const active = source.activeElement as DraftElement | null;
+  if (active?.matches(PROJECT_DRAFT_SELECTOR) && typeof active.blur === "function") active.blur();
+}
+
 /** Background saves must leave live editor drafts and focus alone. */
 export function hasProjectInputDraft(source: Pick<Document, "activeElement" | "querySelector"> = document): boolean {
   return Boolean(source.activeElement?.matches(PROJECT_DRAFT_SELECTOR)

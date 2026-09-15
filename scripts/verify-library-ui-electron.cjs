@@ -258,7 +258,7 @@ app.whenReady().then(async () => {
     const enterVelocity = async (raw) => {
       await wait(() => evaluate(() => !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'editable numeric constraints');
       await evaluate(() => {
-        const input = [...document.querySelectorAll('.numrow')].find((row) => row.querySelector('label')?.textContent === 'Max vel').querySelector('input');
+        const input = [...document.querySelectorAll('.numrow')].find((row) => row.querySelector('label')?.textContent === 'Max velocity').querySelector('input');
         input.focus(); input.select();
       });
       await win.webContents.insertText(raw);

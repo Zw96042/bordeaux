@@ -327,8 +327,13 @@ import { UnitPrefs } from "../lib/unitPreferences";
   function Num({ label, value, onChange, unit, imperialUnit, step = 0.01, min, max, precision = 2, projectDraft = true }) {
     const id = useId();
     const [edit, setEdit] = useState(null);
+    const [scrub, setScrub] = useState(null);
     const [error, setError] = useState('');
     const cancelEdit = useRef(false);
+    const scrubbing = useRef(false);
+    const latest = useRef(value); latest.current = value;
+    // Without a draft the field shows rounded text; committing that text would change the stored value.
+    const draft = useRef(edit); draft.current = edit;
     const ref = useRef(null);
     const pointerDrag = PointerDrag.useController();
     const unitSystem = UnitPrefs.current();
@@ -336,24 +341,52 @@ import { UnitPrefs } from "../lib/unitPreferences";
       setEdit(null);
       setError('');
     }, [unitSystem]);
-    const commitEdit = (raw) => {
+    /** Commits a text draft; returns the stored value, or null when it is invalid. */
+    const resolveEdit = (raw) => {
       const next = committedDraftValue(raw, value, displayValue, (parsed) => UnitPrefs.toCanonical(parsed, unit, imperialUnit), { min, max });
-      if (next == null) { setError('Enter a finite number.'); return false; }
+      if (next == null) { setError('Enter a finite number.'); return null; }
       setError('');
       if (!Object.is(next, value)) onChange(next);
-      return true;
+      return next;
     };
+    const commitEdit = (raw) => resolveEdit(raw) != null;
+    // A scrub previews its value in the field and commits once on release, so
+    // one gesture is one edit. Escape, pointer cancellation, or window blur discards it.
+    // A focused text draft commits as its blur would before the scrub replaces it;
+    // afterward the field shows the stored value, so a later blur or save adds nothing.
     const start = () => (down) => {
-      if (down.button !== 0) return;
+      if (down.button !== 0 || ref.current?.matches(':disabled')) return;
       down.preventDefault();
-      let dragged = false;
-      const sx = down.clientX, v0 = (typeof value === 'number' ? value : 0);
-      const sens = step * 8;
-      const mv = (e) => { if (!dragged && Math.abs(e.clientX - sx) < 4) return; dragged = true; let nv = v0 + (e.clientX - sx) * sens; if (min != null) nv = Math.max(min, nv); if (max != null) nv = Math.min(max, nv); onChange(Math.round(nv / step) * step); };
-      pointerDrag.start(down, { move: mv, cursor: 'ew-resize', end: () => { if (!dragged) ref.current?.focus(); } });
+      let dragged = false, next = null, base = value;
+      const sx = down.clientX, sens = step * 8;
+      const focused = () => document.activeElement === ref.current;
+      const finish = () => {
+        scrubbing.current = false; window.removeEventListener('keydown', onKey, true); setScrub(null);
+        if (dragged) { cancelEdit.current = true; setEdit(null); }
+      };
+      const onKey = (event) => { if (event.key !== 'Escape') return; event.preventDefault(); event.stopPropagation(); pointerDrag.cancel({ flush: false }); };
+      const mv = (e) => {
+        if (!dragged) {
+          if (Math.abs(e.clientX - sx) < 4) return;
+          if (focused() && draft.current != null) { base = resolveEdit(ref.current.value); if (base == null) { pointerDrag.cancel({ flush: false }); return; } }
+          else base = latest.current; // Blur committed any earlier draft, or the field shows the stored value.
+          dragged = scrubbing.current = true;
+        }
+        let nv = (typeof base === 'number' ? base : 0) + (e.clientX - sx) * sens; if (min != null) nv = Math.max(min, nv); if (max != null) nv = Math.min(max, nv);
+        next = Math.round(nv / step) * step; setScrub(next);
+      };
+      window.addEventListener('keydown', onKey, true);
+      pointerDrag.start(down, { move: mv, cursor: 'ew-resize',
+        end: () => {
+          finish();
+          if (!dragged) ref.current?.focus();
+          else if (next != null && !Object.is(next, base)) onChange(next);
+        },
+        cancel: finish });
     };
     const displayValue = typeof value === 'number' ? UnitPrefs.fromCanonical(value, unit, imperialUnit) : value;
-    const disp = edit != null ? edit : (typeof displayValue === 'number' ? displayValue.toFixed(precision) : displayValue);
+    const disp = scrub != null ? UnitPrefs.fromCanonical(scrub, unit, imperialUnit).toFixed(precision)
+      : edit != null ? edit : (typeof displayValue === 'number' ? displayValue.toFixed(precision) : displayValue);
     return h('div', { className: 'numrow' },
       label != null && h('label', { className: 'numlbl', htmlFor: id, onPointerDown: start() }, label),
       h('div', { className: 'numbox' },
@@ -362,11 +395,13 @@ import { UnitPrefs } from "../lib/unitPreferences";
           'data-project-draft': projectDraft ? true : undefined, 'aria-invalid': !!error,
           onChange: (e) => { cancelEdit.current = false; setEdit(e.target.value); if (error) setError(''); },
           onFocus: (e) => { cancelEdit.current = false; if (edit == null) setEdit(typeof displayValue === 'number' ? String(displayValue) : displayValue); requestAnimationFrame(() => { if (document.activeElement === e.target) e.target.select(); }); },
-          onBlur: (e) => { const committed = cancelEdit.current || commitEdit(e.target.value); cancelEdit.current = false; if (committed) setEdit(null); },
+          // Tab during a scrub leaves the value to the scrub's release or cancellation.
+          onBlur: (e) => { if (scrubbing.current) return; const committed = cancelEdit.current || edit == null || commitEdit(e.target.value); cancelEdit.current = false; if (committed) setEdit(null); },
           onKeyDown: (e) => {
+            // Enter during a scrub, like Tab, leaves the value to its release or Escape.
             if (e.key === 'Enter') {
               e.preventDefault();
-              if (cancelEdit.current || commitEdit(e.target.value)) { cancelEdit.current = true; e.target.blur(); }
+              if (!scrubbing.current && (cancelEdit.current || edit == null || commitEdit(e.target.value))) { cancelEdit.current = true; e.target.blur(); }
             }
             if (e.key === 'Escape') {
               e.preventDefault(); e.stopPropagation(); cancelEdit.current = true; setError(''); setEdit(null);
@@ -377,6 +412,26 @@ import { UnitPrefs } from "../lib/unitPreferences";
         unit && h('span', { id: id + '-unit', className: 'numunit' }, UnitPrefs.label(unit, imperialUnit))),
       error && h('span', { id: id + '-error', className: 'cmd-param-error numerror', role: 'alert' }, error),
     );
+  }
+
+  /**
+   * Authored text uses the same draft rules as Num: typing stays local, blur or
+   * Enter commits one edit, and Escape restores the saved value. A draft
+   * belongs to `owner`; when the owner changes, an uncommitted draft is dropped.
+   */
+  function DraftText({ value, onCommit, owner, ...props }) {
+    const [draft, setDraft] = useState(null);
+    const cancel = useRef(false);
+    React.useLayoutEffect(() => { setDraft(null); }, [owner]);
+    const commit = (raw) => { if (raw !== (value || '')) onCommit(raw); setDraft(null); };
+    return h('input', { ...props, value: draft != null ? draft : (value || ''), 'data-project-draft': true,
+      onFocus: () => { cancel.current = false; },
+      onChange: (event) => { cancel.current = false; setDraft(event.target.value); },
+      onBlur: (event) => { if (!cancel.current && draft != null) commit(event.target.value); cancel.current = false; },
+      onKeyDown: (event) => {
+        if (event.key === 'Enter') { event.preventDefault(); if (draft != null) commit(event.currentTarget.value); }
+        else if (event.key === 'Escape' && draft != null) { event.preventDefault(); event.stopPropagation(); cancel.current = true; setDraft(null); }
+      } });
   }
 
   function Section({ icon, title, count, right, children, open, onToggle, sub }) {

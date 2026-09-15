@@ -51,6 +51,8 @@ import "../styles/settings.css";
     const [edit, setEdit] = useState(null);
     const [error, setError] = useState('');
     const unitSystem = UnitPrefs.current();
+    // A unit change can clear the draft while the field stays focused; its rounded
+    // text is then presentation, and committing it would change the stored value.
     useEffect(() => {
       setEdit(null);
       setError('');
@@ -72,9 +74,9 @@ import "../styles/settings.css";
         'data-project-draft': true, 'aria-invalid': !!error, 'aria-describedby': error ? errorId : undefined,
         onChange: (e) => { cancelEdit.current = false; setEdit(e.target.value); if (error) setError(''); },
         onFocus: (e) => { cancelEdit.current = false; if (edit == null) setEdit(typeof displayValue === 'number' ? String(displayValue) : ''); requestAnimationFrame(() => { if (document.activeElement === e.target) e.target.select(); }); },
-        onBlur: (e) => { const committed = cancelEdit.current || commitEdit(e.target.value); cancelEdit.current = false; if (committed) setEdit(null); },
+        onBlur: (e) => { const committed = cancelEdit.current || edit == null || commitEdit(e.target.value); cancelEdit.current = false; if (committed) setEdit(null); },
         onKeyDown: (e) => {
-          if (e.key === 'Enter') { e.preventDefault(); if (cancelEdit.current || commitEdit(e.currentTarget.value)) { cancelEdit.current = true; e.currentTarget.blur(); } }
+          if (e.key === 'Enter') { e.preventDefault(); if (cancelEdit.current || edit == null || commitEdit(e.currentTarget.value)) { cancelEdit.current = true; e.currentTarget.blur(); } }
           else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelEdit.current = true; setError(''); setEdit(null); requestAnimationFrame(() => { if (document.activeElement === e.target) e.target.select(); }); }
         },
       }),
