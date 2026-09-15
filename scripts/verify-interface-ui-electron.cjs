@@ -34,7 +34,10 @@ app.whenReady().then(async () => {
     win = new BrowserWindow({ show: true, width: 1440, height: 900, useContentSize: true, webPreferences: { sandbox: true, contextIsolation: true, backgroundThrottling: false } });
     win.webContents.on('console-message', (d) => { if (d.level === 'error' && !d.message.startsWith("Loading the font 'data:")) errors.push(d.message); });
     await win.loadFile(path.join(output, 'dist/index.html')); await delay(250);
+    if (process.platform === 'darwin') app.focus({ steal: true });
     win.focus(); win.webContents.focus();
+    // Losing native focus blurs the field and withholds focus events, which changes draft commits.
+    await evaluate(() => { window.trustedBlurs = 0; window.addEventListener('blur', (event) => { if (event.isTrusted) window.trustedBlurs++; }); });
     await openSearchChoice(); await win.webContents.insertText('Option 10'); await key('Down');
     assert.equal(await evaluate(() => document.activeElement.id), 'search-choice-search');
     assert.equal(await evaluate(() => document.querySelector('.cmd-picker-option.active').dataset.value), '100');
@@ -75,6 +78,194 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate(() => document.querySelector('#routine-command-param-amount').value), '2');
     assert.equal(await evaluate(() => document.querySelector('#routine-command-param-amount').getAttribute('aria-invalid')), 'false');
     check('Invalid command drafts do not leak to a different routine command');
+    const scrubLabel = await evaluate(() => {
+      const label = [...document.querySelectorAll('.numlbl')].find((item) => item.textContent === 'Scrub speed');
+      label.scrollIntoView({ block: 'center' });
+      const r = label.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2), input: '#' + CSS.escape(label.htmlFor) };
+    });
+    // Looked up by label each time: remounting the field assigns a new input id.
+    const scrubInput = () => evaluate(() => document.getElementById([...document.querySelectorAll('.numlbl')].find((item) => item.textContent === 'Scrub speed').htmlFor).value);
+    const scrubOutputs = () => evaluate(() => ({ value: document.querySelector('#scrub-speed').textContent, commits: document.querySelector('#scrub-commits').textContent }));
+    win.webContents.sendInputEvent({ type: 'mouseMove', x: scrubLabel.x, y: scrubLabel.y });
+    win.webContents.sendInputEvent({ type: 'mouseDown', x: scrubLabel.x, y: scrubLabel.y, button: 'left', clickCount: 1 });
+    for (const dx of [20, 40, 60, 80]) { win.webContents.sendInputEvent({ type: 'mouseMove', x: scrubLabel.x + dx, y: scrubLabel.y, button: 'left' }); await delay(30); }
+    const liveScrub = await scrubInput();
+    assert.notEqual(liveScrub, '1.00', 'The field previews the scrubbed value during the gesture');
+    assert.deepEqual(await scrubOutputs(), { value: '1', commits: '0' }, 'Scrubbing does not commit until release');
+    win.webContents.sendInputEvent({ type: 'mouseUp', x: scrubLabel.x + 80, y: scrubLabel.y, button: 'left', clickCount: 1 }); await delay();
+    const released = await scrubOutputs();
+    assert.equal(released.commits, '1', 'One scrub gesture is one change');
+    assert.equal(Number(released.value).toFixed(2), liveScrub);
+    win.webContents.sendInputEvent({ type: 'mouseDown', x: scrubLabel.x, y: scrubLabel.y, button: 'left', clickCount: 1 });
+    for (const dx of [20, 40, 60]) { win.webContents.sendInputEvent({ type: 'mouseMove', x: scrubLabel.x + dx, y: scrubLabel.y, button: 'left' }); await delay(30); }
+    await key('Escape');
+    win.webContents.sendInputEvent({ type: 'mouseUp', x: scrubLabel.x + 60, y: scrubLabel.y, button: 'left', clickCount: 1 }); await delay();
+    assert.deepEqual(await scrubOutputs(), released, 'Escape cancels a scrub without a change');
+    assert.equal(await scrubInput(), liveScrub, 'Cancelling restores the committed value');
+    check('A label scrub previews live, commits once on release, and Escape cancels it');
+    // The same gestures with the field already focused, so its text draft is live during the scrub.
+    await evaluate(() => { window.addEventListener('pointerdown', (event) => { window.lastPointerId = event.pointerId; }, true); });
+    const scrubFocused = () => evaluate(() => document.activeElement?.id === [...document.querySelectorAll('.numlbl')].find((item) => item.textContent === 'Scrub speed').htmlFor);
+    // Native focus is a precondition of every focused step: losing it blurs the field, committing its draft,
+    // and withholds focus events. Each step starts focused and counts window blurs from there.
+    const nativeFocus = async () => assert.deepEqual(await evaluate(() => ({ focused: document.hasFocus(), blurs: window.trustedBlurs })),
+      { focused: true, blurs: 0 }, 'The harness window kept native focus (another window took it; rerun in the foreground)');
+    const focusScrubInput = async () => {
+      if (!await evaluate(() => document.hasFocus())) {
+        if (process.platform === 'darwin') app.focus({ steal: true });
+        win.focus(); win.webContents.focus();
+        await wait(() => evaluate(() => document.hasFocus()), 'renderer native focus before a focused scrub');
+      }
+      await evaluate(() => { window.trustedBlurs = 0; });
+      await nativeFocus();
+      const selector = await evaluate(() => '#' + CSS.escape([...document.querySelectorAll('.numlbl')].find((item) => item.textContent === 'Scrub speed').htmlFor));
+      await click(selector);
+      assert.equal(await scrubFocused(), true, 'The scrub input has focus before the gesture');
+    };
+    const shownSpeed = async () => Number(await scrubInput()).toFixed(2);
+    const scrubGesture = async (offsets, during) => {
+      win.webContents.sendInputEvent({ type: 'mouseDown', x: scrubLabel.x, y: scrubLabel.y, button: 'left', clickCount: 1 });
+      for (const dx of offsets) { win.webContents.sendInputEvent({ type: 'mouseMove', x: scrubLabel.x + dx, y: scrubLabel.y, button: 'left' }); await delay(30); }
+      const live = await scrubInput();
+      if (during) await during();
+      win.webContents.sendInputEvent({ type: 'mouseUp', x: scrubLabel.x + offsets.at(-1), y: scrubLabel.y, button: 'left', clickCount: 1 }); await delay();
+      return live;
+    };
+    const commitsSince = async (before) => Number((await scrubOutputs()).commits) - Number(before.commits);
+
+    await focusScrubInput();
+    let before = await scrubOutputs();
+    const focusedLive = await scrubGesture([20, 40, 60]);
+    const afterFocused = await scrubOutputs();
+    assert.equal(await commitsSince(before), 1, 'A focused scrub is one change');
+    assert.equal(Number(afterFocused.value).toFixed(2), focusedLive, 'Release stores the previewed value');
+    assert.equal(await shownSpeed(), focusedLive, 'The focused field shows the committed scrub, not its earlier draft');
+    await key('Tab');
+    assert.deepEqual(await scrubOutputs(), afterFocused, 'Tab after the scrub does not commit the earlier draft');
+    assert.equal(await shownSpeed(), focusedLive);
+    check('Focused scrub then Tab: one change, and the field keeps the scrubbed value');
+
+    // A cancelled scrub leaves the focused field showing its rounded stored value without a draft.
+    // The next scrub must start from the exact stored value and add exactly one change.
+    await focusScrubInput(); await replace('2.345'); await key('Enter');
+    assert.equal((await scrubOutputs()).value, '2.345', 'Enter commits the exact typed value');
+    await focusScrubInput();
+    before = await scrubOutputs();
+    await scrubGesture([20, 40], () => key('Escape'));
+    assert.deepEqual(await scrubOutputs(), before, 'Escape cancels the scrub without a change');
+    assert.equal(await scrubFocused(), true, 'The field keeps focus after the cancelled scrub');
+    assert.equal(await shownSpeed(), Number(before.value).toFixed(2), 'The focused field shows the rounded stored value');
+    await scrubGesture([20, 40]);
+    assert.equal(await commitsSince(before), 1, 'The next focused scrub is one change; the rounded display is not committed');
+    const sensitivity = 0.01 * 8;
+    assert.equal(Number((await scrubOutputs()).value), Math.round((Number(before.value) + 40 * sensitivity) / 0.01) * 0.01, 'The scrub starts from the stored value, not its rounded display');
+    await click('#save-drafts');
+    assert.equal(await commitsSince(before), 1, 'Save after the scrub adds nothing');
+    check('A scrub after a cancelled focused scrub starts from the stored value: one change, and Save adds nothing');
+
+    await focusScrubInput();
+    before = await scrubOutputs();
+    const savedLive = await scrubGesture([-20, -40]);
+    const afterSaved = await scrubOutputs();
+    assert.equal(await commitsSince(before), 1);
+    assert.equal(Number(afterSaved.value).toFixed(2), savedLive);
+    await click('#save-drafts');
+    assert.equal(await scrubFocused(), false, 'Save flushes the focused draft');
+    assert.deepEqual(await scrubOutputs(), afterSaved, 'Save after the scrub does not commit the earlier draft');
+    assert.equal(await shownSpeed(), savedLive);
+    check('Focused scrub then Save: one change, and Save adds nothing');
+
+    await focusScrubInput(); await replace('2');
+    await nativeFocus();
+    before = await scrubOutputs();
+    await scrubGesture([20, 40]);
+    assert.equal(await commitsSince(before), 2, 'A typed draft commits before the scrub that replaces it');
+    assert.equal(Number((await scrubOutputs()).value).toFixed(2), '5.20', 'The scrub starts from the committed draft');
+    assert.equal(await shownSpeed(), '5.20');
+    await click('#save-drafts');
+    assert.equal(await commitsSince(before), 2);
+    check('A typed draft commits once, then the scrub continues from it');
+
+    await focusScrubInput();
+    before = await scrubOutputs();
+    const tabbedLive = await scrubGesture([20, 40], () => key('Tab'));
+    const afterTabbed = await scrubOutputs();
+    assert.equal(await commitsSince(before), 1, 'Tab during the scrub neither commits the preview nor adds a change');
+    assert.equal(Number(afterTabbed.value).toFixed(2), tabbedLive);
+    assert.equal(await shownSpeed(), tabbedLive);
+    await click('#save-drafts');
+    assert.deepEqual(await scrubOutputs(), afterTabbed);
+    check('Tab during a scrub leaves exactly the released change');
+
+    // Enter while the pointer is still captured must not commit the preview early.
+    const enterDuringScrub = (afterEnter) => async () => {
+      const pending = await scrubOutputs(), preview = await scrubInput();
+      await key('Enter');
+      assert.deepEqual(await scrubOutputs(), pending, 'Enter during a captured scrub commits nothing');
+      assert.equal(await scrubInput(), preview, 'Enter keeps the pending scrub preview');
+      assert.equal(await scrubFocused(), true, 'Enter during a scrub does not end the field edit');
+      if (afterEnter) await afterEnter();
+    };
+    await focusScrubInput();
+    before = await scrubOutputs();
+    const enteredLive = await scrubGesture([20, 40, 60], enterDuringScrub());
+    const afterEntered = await scrubOutputs();
+    assert.equal(await commitsSince(before), 1, 'Enter then release is exactly one change');
+    assert.equal(Number(afterEntered.value).toFixed(2), enteredLive, 'Release stores the previewed value');
+    assert.notEqual(afterEntered.value, before.value);
+    assert.equal(await shownSpeed(), enteredLive);
+    await key('Enter');
+    assert.deepEqual(await scrubOutputs(), afterEntered, 'Enter after release adds nothing');
+    await click('#save-drafts');
+    assert.deepEqual(await scrubOutputs(), afterEntered, 'Save after Enter and release adds nothing');
+    await focusScrubInput();
+    before = await scrubOutputs();
+    await scrubGesture([20, 40], enterDuringScrub(() => key('Escape')));
+    assert.deepEqual(await scrubOutputs(), before, 'Enter then Escape discards the scrub');
+    assert.equal(await shownSpeed(), Number(before.value).toFixed(2), 'Enter then Escape restores the stored value');
+    await click('#save-drafts');
+    assert.deepEqual(await scrubOutputs(), before, 'Save after Enter then Escape adds nothing');
+    check('Enter during a captured scrub defers to release (one change) or Escape (no change)');
+
+    const cancellations = [
+      ['Tab then Escape', async () => { await key('Tab'); await key('Escape'); }],
+      ['window blur', () => evaluate(() => { window.dispatchEvent(new Event('blur')); })],
+      ['pointer cancellation', () => evaluate(() => { window.dispatchEvent(new PointerEvent('pointercancel', { pointerId: window.lastPointerId })); })],
+      ['Escape', () => key('Escape')],
+    ];
+    for (const [name, cancel] of cancellations) {
+      await focusScrubInput();
+      before = await scrubOutputs();
+      await scrubGesture([20, 40], cancel);
+      assert.deepEqual(await scrubOutputs(), before, name + ' discards a focused scrub');
+      assert.equal(await shownSpeed(), Number(before.value).toFixed(2), name + ' restores the stored value');
+      await click('#save-drafts');
+      assert.deepEqual(await scrubOutputs(), before, 'Save after ' + name + ' adds nothing');
+    }
+    await focusScrubInput();
+    before = await scrubOutputs();
+    await scrubGesture([20, 40], () => evaluate(() => { document.querySelector('#toggle-scrub').click(); }));
+    assert.equal(await evaluate(() => [...document.querySelectorAll('.numlbl')].some((item) => item.textContent === 'Scrub speed')), false);
+    assert.deepEqual(await scrubOutputs(), before, 'Unmounting the field discards its scrub');
+    await click('#toggle-scrub');
+    assert.equal(await shownSpeed(), Number(before.value).toFixed(2));
+    check('Escape, Tab+Escape, window blur, pointer cancellation, and unmount discard a focused scrub');
+    const draftState = () => evaluate(() => ({ value: document.querySelector('#draft-name').value, names: JSON.parse(document.querySelector('#draft-names').textContent), commits: Number(document.querySelector('#name-commits').textContent), focused: document.activeElement.id === 'draft-name' }));
+    await click('#draft-name'); await replace('Intake roller');
+    assert.deepEqual(await draftState(), { value: 'Intake roller', names: { a: 'Intake', b: 'Shooter' }, commits: 0, focused: true }, 'Typing stays a local draft');
+    await key('Escape');
+    assert.deepEqual(await draftState(), { value: 'Intake', names: { a: 'Intake', b: 'Shooter' }, commits: 0, focused: true }, 'Escape restores the saved name and keeps focus');
+    await replace('Intake roller'); await key('Enter');
+    assert.deepEqual(await draftState(), { value: 'Intake roller', names: { a: 'Intake roller', b: 'Shooter' }, commits: 1, focused: true }, 'Enter commits one change');
+    await replace('Intake 2'); await click('#owner-b');
+    assert.deepEqual(await draftState(), { value: 'Shooter', names: { a: 'Intake 2', b: 'Shooter' }, commits: 2, focused: false }, 'Leaving the field commits the draft to its owner');
+    await click('#draft-name'); await replace('Shooter 2'); await click('#owner-a-field');
+    assert.deepEqual(await draftState(), { value: 'Intake 2', names: { a: 'Intake 2', b: 'Shooter 2' }, commits: 3, focused: false }, 'A focus-preserving selection commits before switching owners');
+    await click('#draft-name'); await replace('Leaked'); await click('#owner-b-raw');
+    assert.deepEqual((await draftState()).value, 'Shooter 2', 'An uncommitted draft never appears on another owner');
+    await click('#select-a');
+    assert.deepEqual(await draftState(), { value: 'Shooter 2', names: { a: 'Intake 2', b: 'Shooter 2' }, commits: 3, focused: false }, 'A dropped draft is not committed later');
+    check('Text drafts commit once on Enter or blur, Escape restores, and drafts never move between owners');
     await openSearchChoice(); await win.webContents.insertText('Option 10'); await key('Down');
     await snap('controls-1440'); win.setContentSize(1100, 720); await delay(); await snap('controls-1100');
     const bounds = await evaluate(() => { const r = document.querySelector('.dropdown-panel').getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: innerHeight }; });
@@ -89,6 +280,10 @@ app.whenReady().then(async () => {
     check('Dropdown stays within the smaller viewport; reduced motion keeps static status');
     assert.deepEqual(errors, []);
     await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ checks, errors }, null, 2));
-  } catch (e) { console.error(e, errors); if (win) await snap('failure'); process.exitCode = 1; }
+  } catch (e) {
+    console.error(e, errors);
+    if (win) { console.error('Native focus at failure:', await evaluate(() => ({ focused: document.hasFocus(), trustedBlurs: window.trustedBlurs, active: document.activeElement?.id || document.activeElement?.tagName })).catch(() => null)); await snap('failure'); }
+    process.exitCode = 1;
+  }
   finally { win?.destroy(); app.exit(process.exitCode || 0); }
 });

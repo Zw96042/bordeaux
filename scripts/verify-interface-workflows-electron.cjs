@@ -88,11 +88,14 @@ app.whenReady().then(async () => {
     await click('.rt-gap-btn'); await key('Escape');
     assert.equal(await evaluate(() => document.activeElement.classList.contains('rt-gap-btn')), true);
     // Confirm an explicit deletion; never exercise live robot transports.
-    await evaluate(() => { window.confirm = () => true; });
+    await evaluate(() => { window.__confirms = []; window.confirm = (message) => { window.__confirms.push(message); return true; }; });
     await click('[data-id="path-a"] button[aria-label="Delete step"]');
     assert.equal(await evaluate(() => document.activeElement.closest('.rt-step')?.dataset.id), 'path-b');
     await click('[data-id="path-b"] button[aria-label="Delete step"]');
     assert.equal(await evaluate(() => document.activeElement.classList.contains('rt-add')), true);
+    const stepConfirms = await evaluate(() => window.__confirms);
+    assert.equal(stepConfirms.length, 2);
+    assert.ok(stepConfirms.every((message) => message.endsWith('You can undo this.') && !/branch/i.test(message)), 'Plain steps own no branches: ' + JSON.stringify(stepConfirms));
     await key('Enter'); await click('.rt-ch-row', 'PathFollow a planned trajectory');
     console.log('PASS Routine close/delete and Escape on add-step choosers restore usable keyboard focus');
     await wait(() => evaluate(() => !!document.querySelector('button[aria-label="Play routine"]:not(:disabled)')), 'routine preview ready');

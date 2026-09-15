@@ -4,6 +4,8 @@ import { UI } from '../src/renderer/components/ui';
 import { CommandParameterEditor } from '../src/renderer/components/ContextInspector';
 import { StepInspector } from '../src/renderer/components/RoutineInspector';
 import { AUTO } from '../src/renderer/lib/routineModel';
+import { flushSync } from 'react-dom';
+import { commitFocusedDraft, flushFocusedProjectDraft } from '../src/renderer/lib/draftPersistence';
 import '../src/renderer/styles/app.css';
 import '../src/renderer/styles/robot-push.css';
 import '../src/renderer/styles/inspector-refresh.css';
@@ -16,6 +18,14 @@ function Harness() {
   const [parameter, setParameter] = React.useState(2);
   const [which, setWhich] = React.useState('a');
   const [disabled, setDisabled] = React.useState(false);
+  const [speed, setSpeed] = React.useState(1);
+  const [scrubCommits, setScrubCommits] = React.useState(0);
+  const [scrubMounted, setScrubMounted] = React.useState(true);
+  const [names, setNames] = React.useState({ a: 'Intake', b: 'Shooter' });
+  const [owner, setOwner] = React.useState('a');
+  const [nameCommits, setNameCommits] = React.useState(0);
+  // Field gestures prevent the default focus change, as FieldView does.
+  const keepFocus = (event) => event.preventDefault();
   const nodes = ['a', 'b'].map((id) => ({ id, type: 'function', cat: 'command', title: id, invocation: { commandId: 'test', arguments: { amount: 2 } } }));
   const command = { id: 'test', label: 'Shared command', member: 'Test.vi', parameters: [{ name: 'amount', label: 'Amount', role: 'argument', schema: { kind: 'number', valueType: 'DBL' } }], labviewConnector: {} };
   return h('main', { className: 'app', style: { padding: 30, display: 'grid', gridTemplateColumns: 'minmax(300px, 480px) minmax(300px, 480px)', gap: 24, height: '100vh', overflow: 'auto', alignContent: 'start' } },
@@ -28,6 +38,18 @@ function Harness() {
       h(UI.Dropdown, { id: 'unknown-choice', label: 'Saved unavailable choice', value: 'retired-value', onChange: () => {}, items: [{ value: 'new', label: 'New value' }] }),
       h(UI.Num, { label: 'Precise width', value: num, onChange: setNum, unit: 'm' }),
       h('output', { id: 'canonical-width' }, String(num)),
+      scrubMounted && h(UI.Num, { label: 'Scrub speed', value: speed, unit: 'm/s', onChange: (value) => { setSpeed(value); setScrubCommits((count) => count + 1); } }),
+      h('output', { id: 'scrub-speed' }, String(speed)), h('output', { id: 'scrub-commits' }, String(scrubCommits)),
+      // Save flushes drafts without moving focus first, as the keyboard shortcut does.
+      h('button', { id: 'save-drafts', onPointerDown: keepFocus, onMouseDown: keepFocus, onClick: () => flushFocusedProjectDraft(document, flushSync) }, 'Save'),
+      h('button', { id: 'toggle-scrub', onClick: () => setScrubMounted((mounted) => !mounted) }, 'Toggle scrub field'),
+      h('label', { className: 'fieldlabel', htmlFor: 'draft-name' }, 'Draft name'),
+      h(UI.DraftText, { id: 'draft-name', className: 'textinput', value: names[owner], owner,
+        onCommit: (name) => { setNames((current) => ({ ...current, [owner]: name })); setNameCommits((count) => count + 1); } }),
+      h('button', { id: 'owner-b', onClick: () => setOwner('b') }, 'Owner B'),
+      h('button', { id: 'owner-a-field', onPointerDown: keepFocus, onMouseDown: keepFocus, onClick: () => { commitFocusedDraft(); setOwner('a'); } }, 'Field select A'),
+      h('button', { id: 'owner-b-raw', onPointerDown: keepFocus, onMouseDown: keepFocus, onClick: () => setOwner('b') }, 'Raw select B'),
+      h('output', { id: 'draft-names' }, JSON.stringify(names)), h('output', { id: 'name-commits' }, String(nameCommits)),
       h(CommandParameterEditor, { id: 'parameter', label: 'Numeric argument', schema: { kind: 'number', valueType: 'DBL' }, value: parameter, onChange: setParameter }),
       h('output', { id: 'parameter-value' }, String(parameter)),
       h('div', { className: 'seg' }, h('span', { className: 'seg-indicator' }), h('button', { className: 'seg-i' }, 'First'), h('button', { className: 'seg-i' }, 'Second')),
