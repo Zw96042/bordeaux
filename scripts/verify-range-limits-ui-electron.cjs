@@ -186,6 +186,105 @@ app.whenReady().then(async () => {
     await save();
     assert.equal(saved.paths[0].ranges[0].maxVel, 0.5);
     await snapshot('low-velocity-zone-1100');
+
+    // Field Shift-delete keeps keyboard focus in the inspector, so a focused name draft must
+    // resolve before the deletion: neither may overwrite the other, for commands and zones.
+    const featured = structuredClone(corpus.paths.find((p) => p.id === 'corpus-neutral-stop'));
+    featured.name = 'Path 1';
+    // At 1100x720, f=0.6 lies under the stop waypoint's heading-arrow hit area, so the
+    // Shift-clicked command sits farther along the path, clear of waypoint and zone handles.
+    featured.markers = [{ id: 'marker-a', f: 0.4, name: 'intake', cmd: 'none', group: 'sequential' }, { id: 'marker-b', f: 0.7, name: 'shoot', cmd: 'none', group: 'sequential' }];
+    featured.ranges = [{ anchor: 'param', f0: 0.05, f1: 0.25, name: 'Zone A' }, { anchor: 'param', f0: 0.75, f1: 0.95, name: 'Zone B' }];
+    saved = { ...corpus, paths: [featured], pathLinks: [], routines: [], editor: { activePathId: featured.id, unitSystem: 'metric' } };
+    const loadFeatures = async () => {
+      await win.loadFile(path.resolve('dist-renderer/index.html'));
+      win.focus(); win.webContents.focus();
+      await wait(() => evaluate(() => !!document.querySelector('.sechead-toggle') && document.querySelector('.fieldcol')?.dataset.planningReady === 'true'), 'feature path');
+    };
+    const press = async (point, modifiers = [], clickCount = 1) => {
+      await focusWindow();
+      win.webContents.sendInputEvent({ type: 'mouseMove', ...point });
+      for (const type of ['mouseDown', 'mouseUp']) win.webContents.sendInputEvent({ type, button: 'left', clickCount, modifiers, ...point });
+      await delay(350);
+    };
+    const outlineRow = (section, name) => evaluate((section) => {
+      const toggle = [...document.querySelectorAll('.sechead-toggle')].find((item) => item.querySelector('.sectitle')?.textContent === section);
+      if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+    }, section).then(() => delay(100)).then(() => evaluate((name) => {
+      const row = [...document.querySelectorAll('.outline .featselect')].find((item) => item.querySelector('.featnm')?.textContent === name);
+      if (!row) throw Error('Missing outline row ' + name);
+      row.scrollIntoView({ block: 'nearest' });
+      const r = row.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+    }, name));
+    // FieldView's Shift-delete reads data-role/data-idx from the exact event target, so only an
+    // integer pointer position whose topmost element is this feature counts. Stroke-only hit paths
+    // are sampled along their length; filled shapes from their center outward.
+    const fieldPoint = (role, index) => evaluate((role, index) => {
+      const covering = new Set();
+      for (const el of document.querySelectorAll(`.fieldcol svg [data-role="${role}"][data-idx="${index}"]`)) {
+        let points;
+        if (el.tagName === 'path' && el.getAttribute('fill') === 'none') {
+          const matrix = el.getScreenCTM(), length = el.getTotalLength();
+          points = Array.from({ length: 21 }, (_, i) => el.getPointAtLength(length * (0.5 + (i % 2 ? 1 : -1) * Math.ceil(i / 2) / 22)).matrixTransform(matrix));
+        } else {
+          const r = el.getBoundingClientRect(), cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+          points = [];
+          for (let i = -3; i <= 3; i++) for (let j = -3; j <= 3; j++) points.push({ x: cx + r.width * i / 8, y: cy + r.height * j / 8 });
+          points.sort((a, b) => Math.hypot(a.x - cx, a.y - cy) - Math.hypot(b.x - cx, b.y - cy));
+        }
+        for (const point of points) {
+          const x = Math.round(point.x), y = Math.round(point.y), hit = document.elementFromPoint(x, y);
+          if (hit?.getAttribute('data-role') === role && hit.getAttribute('data-idx') === String(index)) return { x, y };
+          covering.add((hit?.getAttribute('data-role') || hit?.tagName) + ':' + hit?.getAttribute('data-idx'));
+        }
+      }
+      throw Error('No unobscured field target for ' + role + ' ' + index + ' (covered by ' + [...covering].join(', ') + ')');
+    }, role, index);
+    const typeName = async (selector, text) => {
+      await click(selector);
+      assert.equal(await evaluate((selector) => document.activeElement === document.querySelector(selector), selector), true, 'Pointer focuses the name field');
+      win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'a', modifiers: [process.platform === 'darwin' ? 'meta' : 'control'] });
+      win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'a', modifiers: [process.platform === 'darwin' ? 'meta' : 'control'] });
+      await delay(60);
+      await evaluate(() => document.activeElement.select());
+      await win.webContents.insertText(text); await delay(100);
+      assert.equal(await evaluate((selector) => document.querySelector(selector).value, selector), text, 'Typing stays in the focused draft');
+    };
+    const undoOnce = async () => {
+      await focusWindow();
+      win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'z', modifiers: ['control'] }); win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'z', modifiers: ['control'] });
+      await delay(350);
+    };
+    const savedNames = (kind) => saved.paths[0][kind].map((item) => item.name);
+    for (const { kind, section, role, field, names } of [
+      { kind: 'markers', section: 'Commands', role: 'em', field: '#event-marker-name', names: ['intake', 'shoot'] },
+      { kind: 'ranges', section: 'Zones', role: 'cr', field: '#constraint-range-label', names: ['Zone A', 'Zone B'] },
+    ]) {
+      await loadFeatures();
+      // A drafted neighbor is committed, and the Shift-clicked feature is deleted.
+      await press(await outlineRow(section, names[0]), [], 2);
+      await typeName(field, names[0] + ' renamed');
+      await press(await fieldPoint(role, 1), ['shift']);
+      await delay(400); await save();
+      assert.deepEqual(savedNames(kind), [names[0] + ' renamed'], kind + ': the neighbor draft commits and the deletion holds');
+      await undoOnce(); await save();
+      assert.deepEqual(savedNames(kind), [names[0] + ' renamed', names[1]], kind + ': one Undo restores only the deleted feature');
+      await loadFeatures();
+      assert.deepEqual(savedNames(kind), [names[0] + ' renamed', names[1]]);
+      // Deleting the feature whose own name is drafted keeps it deleted.
+      await press(await outlineRow(section, names[1]), [], 2);
+      await typeName(field, names[1] + ' renamed');
+      await press(await fieldPoint(role, 1), ['shift']);
+      await delay(400); await save();
+      assert.deepEqual(savedNames(kind), [names[0] + ' renamed'], kind + ': the drafted feature stays deleted');
+      assert.equal(await evaluate((names) => [...document.querySelectorAll('.outline .featnm')].some((item) => names.includes(item.textContent)), [names[1], names[1] + ' renamed']), false);
+      await undoOnce(); await save();
+      assert.deepEqual(savedNames(kind), [names[0] + ' renamed', names[1] + ' renamed'], kind + ': one Undo restores the feature with its committed name');
+      await loadFeatures();
+      assert.deepEqual(savedNames(kind), [names[0] + ' renamed', names[1] + ' renamed'], kind + ': save and reload agree');
+      assert.equal(await evaluate((name) => [...document.querySelectorAll('.outline .featnm')].some((item) => item.textContent === name), names[1] + ' renamed'), true);
+    }
+    console.log('PASS Field Shift-delete with a focused command or zone name draft: deletion holds, a drafted neighbor commits, one Undo restores, save/reload agree');
     assert.deepEqual(errors, []);
     console.log(process.env.BORDEAUX_RANGE_LIMITS_REMAINDER_ONLY ? 'PASS Native Tab/Space removal, cleared save/reload, all enabled layouts and native empty region creation' : 'PASS Independent acceleration add/remove, native pointer/arrow/Enter/Space/Tab, menu and numeric Escape, canonical values, save/reload, both units, open/closed inspector at 1440x900 and 1100x720');
   } catch (error) { console.error(error, errors); if (win) await snapshot('failure'); process.exitCode = 1; }

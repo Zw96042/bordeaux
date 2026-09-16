@@ -9,5 +9,6 @@ const env = { ...process.env, BORDEAUX_RANGE_LIMITS_UI_OUTPUT: output, ELECTRON_
 delete env.ELECTRON_RUN_AS_NODE;
 console.log(`Range limits artifacts: ${output}`);
 const child = spawn(electron, ['scripts/verify-range-limits-ui-electron.cjs'], { env, stdio: 'inherit' });
-const timer = setTimeout(() => child.kill('SIGKILL'), 120000);
+// Includes the command and zone Shift-delete reload cycles.
+const timer = setTimeout(() => child.kill('SIGKILL'), 180000);
 child.on('exit', (code) => { clearTimeout(timer); process.exitCode = code === 0 ? 0 : 1; });
