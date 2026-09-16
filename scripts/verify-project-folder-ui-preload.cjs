@@ -1,7 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 const noop = () => () => undefined;
 contextBridge.exposeInMainWorld('bordeauxAPI', {
-  platform: 'linux', robotDeliveryCapabilities: { pathPush: false, routinePush: false },
+  platform: process.platform, robotDeliveryCapabilities: { pathPush: false, routinePush: false },
   restoreLastProject: () => ipcRenderer.invoke('fixture:restore'),
   openProject: () => ipcRenderer.invoke('fixture:open', 'folder'),
   openProjectFolder: () => ipcRenderer.invoke('fixture:open', 'new-folder'),

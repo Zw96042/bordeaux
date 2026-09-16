@@ -377,6 +377,23 @@ import { createPlaybackStore } from "../lib/playbackStore";
     useEffect(() => () => libraryDurations.cancel(), [libraryDurations]);
     const [optimizationOpen, setOptimizationOpen] = useState(false);
     const [comparison, setComparison] = useState(null);
+    const inspectorTab = useRef(null);
+    const restoreInspectorFocus = useRef(false);
+    const openInspector = useCallback(() => {
+      setComparison(null);
+      setOptimizationOpen(false);
+      setInspectorOpen(true);
+    }, []);
+    const closeInspector = useCallback(() => {
+      restoreInspectorFocus.current = true;
+      setInspectorOpen(false);
+    }, []);
+    useEffect(() => {
+      if (!inspectorOpen && !optimizationOpen && restoreInspectorFocus.current) {
+        restoreInspectorFocus.current = false;
+        inspectorTab.current?.focus();
+      }
+    }, [inspectorOpen, optimizationOpen]);
     const appliedPreview = useRef(null);
     const [metric, setMetric] = useState('velocity');
     const [tool, setTool] = useState('select');
@@ -825,13 +842,6 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const derived = derivation.value || PENDING_PATH_PREVIEW;
     const derivationDoc = derivation.path || doc;
     const derivationCurrent = derivation.current;
-    const [showPlanningProgress, setShowPlanningProgress] = useState(false);
-    useEffect(() => {
-      setShowPlanningProgress(false);
-      if (derivationCurrent || derivation.error) return;
-      const timer = window.setTimeout(() => setShowPlanningProgress(true), 600);
-      return () => window.clearTimeout(timer);
-    }, [derivationCurrent, optimizationKey, derivation.error]);
     const reverseDistance = currentPathLength(derivation);
 
     const durationInputs = useMemo(() => project.paths.map((path) => ({
@@ -1323,10 +1333,10 @@ import { createPlaybackStore } from "../lib/playbackStore";
       addTargetMid, addMarkerMid, addRangeMid,
       setSegMeta, setSegmentHeadingMode, setSegmentLookAt, setJiggle, faceWaypoint, duplicateWp, reversePath, canReversePath: reverseDistance != null, reorderWp, insertWp,
       setStop, setWait, setTurnInPlace, setTurnInPlaceMeta, setHeadingMode, toggleDriveBackward,
-      openInspector: () => setInspectorOpen(true) };
+      openInspector };
     const fieldActions = { addWaypoint, appendWaypoint, moveWaypoint, moveHandle, addTargetAt, addMarkerAt, moveTargetTo, rotateTargetTo, moveMarkerTo, addRange, moveRangeHandle, beginEdit, finishEdit, cancelEdit,
       setWaypointHeading, moveSegmentLookAt, headingMenu, faceWaypoint, delWp, delTarget, delMarker, delRange,
-      openInspector: () => setInspectorOpen(true),
+      openInspector,
       select };
 
     const uniquePathName = (base) => uniqueItemName(project.paths, base);
@@ -1569,17 +1579,19 @@ import { createPlaybackStore } from "../lib/playbackStore";
       playbackStore.reset();
       setComparison({ id: doc.id, key: optimizationKey, mode });
     };
+    const closeOptimization = () => {
+      compareTrajectory('selected');
+      setOptimizationOpen(false);
+      setInspectorOpen(false);
+      document.querySelector('.optimizer-toggle')?.focus();
+    };
     const toggleOptimization = () => {
       if (optimizationOpen) {
-        compareTrajectory('selected');
-        setOptimizationOpen(false);
+        closeOptimization();
         return;
       }
+      setInspectorOpen(false);
       setOptimizationOpen(true);
-      if (normalReady && !accepted && !candidate && !optimizationState.running) {
-        setComparison(null);
-        void optimizer.start(doc.id, 'common');
-      }
     };
     const startOptimization = (deadline) => {
       setComparison(null);
@@ -1712,10 +1724,12 @@ import { createPlaybackStore } from "../lib/playbackStore";
             draftGeneration: draftInputGeneration.current,
           })) updateDirty(false);
         } catch (error) {
-          setSaveState({ status: 'error', error: error.message || String(error) });
+          // A queued autosave must not hide the explicit save failure or its retry action.
+          invalidateScheduledAutosave();
+          setSaveState({ status: 'error', error: error.message || String(error), retrySave: true, retrySaveAs: saveAs === true });
         }
       });
-    }, [editStore, enqueuePersistence, flushProjectDraft, materializeProject, updateDirty]);
+    }, [editStore, enqueuePersistence, flushProjectDraft, invalidateScheduledAutosave, materializeProject, updateDirty]);
 
     const onExportBdx = useCallback(async (pathId) => {
       if (!flushProjectDraft()) return;
@@ -1801,7 +1815,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
     }, [undo, redo, sel, delWp, delTarget, delMarker, delRange, select, page, derivationCurrent, nudgeWp, nudgeFrac, playbackStore]);
 
     const pathIndex = (id) => project.paths.findIndex((path) => path.id === id);
-    const renderLibrary = (mode, structure) => h(LibraryRail, { projectLocation, saveState, onOpenFolder: openProjectFolder, onSaveProject: () => saveProject(false), onRetrySave: () => saveState.retryExport ? saveProject(false) : scheduleAutosave(true),
+    const renderLibrary = (mode, structure) => h(LibraryRail, { projectLocation, saveState, onOpenFolder: openProjectFolder, onSaveProject: () => saveProject(false), onRetrySave: () => saveState.retryExport || saveState.retrySave ? saveProject(saveState.retrySaveAs === true) : scheduleAutosave(true),
       key: projectKey + ':' + mode, preferenceKey: libraryPreferenceKey, mode, project, routines,
       activePathId: doc.id, activeRoutineId: routine.id, times,
       onMode: (next) => next === 'paths' ? setActive(activeIdx) : setActiveRoutine(routine.id),
@@ -1822,7 +1836,6 @@ import { createPlaybackStore } from "../lib/playbackStore";
         label: planningNotice.kind === 'interactive' ? 'Trajectory unavailable' : 'Interactive preview',
         detail: planningNotice.message + (planningNotice.kind === 'interactive' ? ' Undo or adjust the geometry to try again.' : ''),
         action: !optimizationOpen ? { label: 'Optimize', onClick: () => setOptimizationOpen(true) } : undefined },
-      showPlanningProgress && !selectedPreview && !normalReady && !normal.error && { id: 'loading', label: 'Preparing trajectory…', detail: 'Preview timing is provisional until planning finishes.' },
       !optimizationOpen && currentOptimization && selectedReady && !accepted && { id: 'optimization', error: true, label: 'Optimization unavailable', detail: 'The saved optimization could not be validated. Review it before using this path.',
         action: { label: 'Optimize', onClick: () => setOptimizationOpen(true) } },
     ].filter(Boolean);
@@ -1830,14 +1843,15 @@ import { createPlaybackStore } from "../lib/playbackStore";
 
     if (!derivation.value) {
       if (derivation.error) throw derivation.error;
-      return h('main', { className: 'fatal-error', role: 'status', 'aria-live': 'polite' },
-        h('h1', null, 'Preparing path preview'),
-        h('p', null, 'Calculating this path off the UI thread…'));
+      return h('main', { className: 'editor-startup', 'aria-busy': true, 'aria-label': 'Preparing editor' },
+        h('div', { className: 'editor-startup-toolbar' }),
+        h('div', { className: 'editor-startup-body', 'aria-hidden': true },
+          h('div', { className: 'editor-startup-library' }), h('div', { className: 'editor-startup-field' }), h('div', { className: 'editor-startup-inspector' })));
     }
 
     return h('div', { className: 'app' },
       h(Panels.Toolbar, { page, setPage: (next) => { finishEdit(); playbackStore.reset(); routinePlaybackStore.reset(); setPage(next); }, editorPage,
-        alliance, setAlliance,
+        alliance, setAlliance, projectName: project.name, projectLocation, saveState,
         onOpen: openProject, onOpenFolder: openProjectFolder, onSave: saveProject, onUndo: undo, onRedo: redo,
         optimizationOpen, toggleOptimization, optimizationApplied: Boolean(accepted) }),
       h(RobotPushDialog, { controller: pushController, onExportBdx }),
@@ -1893,7 +1907,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
                   agentProposal.status === 'ready' && h('button', { type: 'button', onClick: rejectAgentProposal }, 'Reject'),
                   agentProposal.status === 'ready' && h('button', { className: 'primary', type: 'button', disabled: !agentProposalCanApplyCandidate || (agentProposal.blockingIssues && agentProposal.blockingIssues.length > 0), onClick: applyAgentProposal }, agentProposal.operation === 'replace' ? 'Apply repair' : 'Add path'))),
               ),
-              h(Panels.ConstraintBar, { c: derivationDoc.constraints, robot, onOpen: () => { setOptimizationOpen(false); setComparison(null); select(null, -1); } }),
+              h(Panels.ConstraintBar, { c: derivationDoc.constraints, robot, onOpen: () => { openInspector(); select(null, -1); } }),
               h(PlaybackTransport, { store: playbackStore, derived, doc: derivationDoc, metric, setMetric, graphOpen, setGraphOpen }),
               h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen })),
             h('aside', { className: 'rail rail-r' + (inspectorOpen || optimizationOpen ? '' : ' collapsed'), 'aria-label': optimizationOpen ? 'Path optimization' : 'Path inspector' },
@@ -1902,15 +1916,16 @@ import { createPlaybackStore } from "../lib/playbackStore";
                 baselineTime, pending: !normalReady && !normalError, error: normalError, mode: comparisonMode, unitSystem,
                 recovery: !derivationCurrent ? (hist.current.past.length || routineHist.current.past.length || projectHist.current.past.length
                   ? { label: 'Undo last edit', onClick: undo }
-                  : { label: 'Open project folder', onClick: openProject }) : undefined,
+                  : { label: 'Open project folder', onClick: openProject })
+                  : { label: 'Edit path', onClick: openInspector },
                 onCorridor: setCorridor, onStart: startOptimization,
                 onStartAll: () => { setComparison(null); void optimizer.startAll(); }, onCancel: optimizer.cancel,
                 onCompare: compareTrajectory, onApply: applyOptimization, onNormal: useNormalTrajectory,
                 onSelectPath: (id) => { const index = project.paths.findIndex((path) => path.id === id); if (index >= 0) setActive(index); },
-                onClose: () => { compareTrajectory('selected'); setOptimizationOpen(false); setInspectorOpen(true); },
+                onClose: closeOptimization,
               }) : inspectorOpen
-                ? h(ContextInspector, { project, setWaypointPositionLink, doc, sel, derived, actions: inspActions, drive: robot.drive, robot, robotProject: { ...robotProjectState, link: linkRobotProject, openRecent: openRecentRobotProject, refresh: refreshRobotProject, inspect: inspectLabviewCommands, build: buildRobotCatalog, export: onExportBdx }, onClose: () => setInspectorOpen(false) })
-                : h('button', { className: 'inspector-tab', type: 'button', title: 'Show inspector', onClick: () => setInspectorOpen(true) }, h(UI.Icon, { name: 'sliders', size: 16 }), h('span', null, 'Inspector'))),
+                ? h(ContextInspector, { project, setWaypointPositionLink, doc, sel, derived, actions: inspActions, drive: robot.drive, robot, robotProject: { ...robotProjectState, link: linkRobotProject, openRecent: openRecentRobotProject, refresh: refreshRobotProject, inspect: inspectLabviewCommands, build: buildRobotCatalog, export: onExportBdx }, onClose: closeInspector })
+                : h('button', { ref: inspectorTab, className: 'inspector-tab', type: 'button', title: 'Show inspector', onClick: openInspector }, h(UI.Icon, { name: 'sliders', size: 16 }), h('span', null, 'Inspector'))),
             headMenu && h(UI.ContextMenu, { x: headMenu.x, y: headMenu.y, items: headMenu.items, returnFocus: headMenu.returnFocus, onClose: () => setHeadMenu(null) })));
   }
 

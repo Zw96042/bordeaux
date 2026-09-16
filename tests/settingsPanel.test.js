@@ -9,7 +9,7 @@ describe('settings workspace', () => {
   it('keeps file and editing actions in the toolbar and exposes Settings', () => {
     const markup = renderToStaticMarkup(React.createElement(Panels.Toolbar, { page: 'plan', editorPage: 'plan' }));
     expect(markup).toContain('Settings');
-    expect(markup).toContain('Save project');
+    expect(markup).toContain('aria-label="Project menu"');
     expect(markup).toContain('Optimize');
     expect(markup).not.toMatch(/Connect robot|Display units|Export JSON/);
   });

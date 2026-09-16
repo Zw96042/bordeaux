@@ -105,7 +105,7 @@ function PathProperties({ item, project, actions, close }) {
     h('footer', null, h('button', { type: 'button', onClick: close }, 'Done')));
 }
 
-function EditorLibrary({ mode, prefs, update, project, routines, activePathId, activeRoutineId, onMode, onPath, onRoutine, actions, times, controller, projectLocation, saveState, onOpenFolder, onSaveProject, onRetrySave }) {
+function EditorLibrary({ mode, prefs, update, project, routines, activePathId, activeRoutineId, onMode, onPath, onRoutine, actions, times, controller, saveState, onRetrySave }) {
   const pathsMode = mode === 'paths';
   const items = pathsMode ? project.paths : routines;
   const activeId = pathsMode ? activePathId : activeRoutineId;
@@ -131,6 +131,7 @@ function EditorLibrary({ mode, prefs, update, project, routines, activePathId, a
   useEffect(() => { if (scroll.current) scroll.current.scrollTop = prefs.scroll; }, []);
   useEffect(() => { if (editing) { edit.current?.focus(); edit.current?.select(); } }, [editing]);
   useEffect(() => { if (checked.length !== prefs.checked.length) update({ checked, selectionActiveId: activeId }); }, [project.paths]);
+  useEffect(() => { if (blocked) root.current?.querySelector('.library-blocked button')?.focus(); }, [blocked]);
   const closeMenu = (restore) => { if (restore) menu?.trigger?.focus(); setMenu(null); };
   const openMenu = (event, kind, item) => {
     event.preventDefault(); event.stopPropagation();
@@ -164,7 +165,7 @@ function EditorLibrary({ mode, prefs, update, project, routines, activePathId, a
     setMenu(null);
     if (kind === 'path') {
       const refs = referencingRoutines(routines, item.id);
-      if (refs.length) { setBlocked({ name: item.name, routines: refs }); return; }
+      if (refs.length) { setBlocked({ id: item.id, name: item.name, routines: refs }); return; }
     }
     const removed = kind === 'path' ? actions.deletePath(item.id) : kind === 'routine' ? actions.deleteRoutine(item.id) : actions.deleteFolder(item.id);
     if (removed) focusRow(activeId === item.id ? '' : activeId);
@@ -214,18 +215,13 @@ function EditorLibrary({ mode, prefs, update, project, routines, activePathId, a
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a' && pathsMode && !event.target.matches('input')) { event.preventDefault(); update({ checked: displayed.map((item) => item.id), selectionActiveId: activeId }); }
     if (event.key !== 'Escape') return;
     event.preventDefault();
-    if (editing) finish(editing.id); else if (menu) closeMenu(true); else if (blocked) setBlocked(null); else if (selected.length > 1) update({ checked: [activeId], selectionActiveId: activeId }); else { update({ query: '' }); search.current?.focus(); }
+    if (editing) finish(editing.id); else if (menu) closeMenu(true); else if (blocked) { setBlocked(null); focusRow(blocked.id); } else if (selected.length > 1) update({ checked: [activeId], selectionActiveId: activeId }); else { update({ query: '' }); search.current?.focus(); }
   } },
     h('div', { className: 'library-tabs', role: 'tablist', 'aria-label': 'Library' }, ['paths', 'routines'].map((tab) => h('button', { key: tab, type: 'button', role: 'tab', 'aria-selected': tab === mode, tabIndex: tab === mode ? 0 : -1,
       onClick: () => { if (tab !== mode) onMode(tab); }, onKeyDown: (event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); onMode(pathsMode ? 'routines' : 'paths'); requestAnimationFrame(() => document.querySelector('.library-tabs [aria-selected="true"]')?.focus()); } } }, tab === 'paths' ? 'Paths' : 'Routines'))),
-    h('div', { className: 'library-location' },
-      h('button', { type: 'button', className: 'library-location-folder', onClick: onOpenFolder, title: projectLocation?.folderPath || 'Choose where paths and routines are saved', 'aria-label': projectLocation?.folderPath ? 'Open another project folder' : 'Open project folder' },
-        h(Icon, { name: 'folder', size: 14 }), h('span', null, projectLocation?.folderPath?.split(/[\\/]/).filter(Boolean).pop() || 'Open folder')),
-      h('div', { className: 'library-save-status', role: saveState?.status === 'error' ? 'alert' : 'status' },
-        saveState?.status === 'error' ? h(React.Fragment, null, h('span', { title: saveState.error }, saveState.error), h('button', { type: 'button', onClick: onRetrySave }, saveState.retryExport ? 'Retry BDX save' : 'Retry save'))
-          : saveState?.status === 'saving' ? 'Saving…'
-          : projectLocation?.folderPath ? h(React.Fragment, null, h('span', { title: 'Editable paths and routines autosave to Paths/*.path and Routines/*.routine. Save also generates Paths/*.bdx.' }, 'Paths and routines autosave'))
-          : 'Choose a folder to autosave files')),
+    saveState?.status === 'error' && h('div', { className: 'library-location' },
+      h('div', { className: 'library-save-status', role: 'alert' },
+        h(React.Fragment, null, h('span', { title: saveState.error }, saveState.error), h('button', { type: 'button', onClick: onRetrySave }, saveState.retryExport ? 'Retry BDX save' : 'Retry save')))),
     h('div', { className: 'library-tools' },
       h('button', { type: 'button', onClick: () => create(pathsMode ? 'path' : 'routine', () => pathsMode ? actions.addPath(active?.folderId) : actions.addRoutine()) }, h(Icon, { name: 'plus', size: 13 }), pathsMode ? 'New path' : 'New routine'),
       pathsMode && h('button', { type: 'button', title: 'New folder', 'aria-label': 'New folder', onClick: () => create('folder', actions.addFolder) }, h(Icon, { name: 'folder', size: 14 }))),

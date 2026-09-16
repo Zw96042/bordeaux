@@ -1,3 +1,4 @@
+import { ProjectMenu } from './ProjectMenu';
 import { KeyboardHelp } from './KeyboardHelp';
 import { PathLinks } from '../lib/pathLinks';
 import * as React from "react";
@@ -21,16 +22,14 @@ import { UI } from "./ui";
         h('div', { className: 'brand' }, h('span', { className: 'brand-name' }, 'Bordeaux')),
         h('nav', { className: 'pageswitch', 'aria-label': 'Workspace' },
           h('button', { className: page !== 'robot' ? 'on' : '', type: 'button', 'aria-current': page !== 'robot' ? 'page' : undefined, onClick: () => setPage(editorPage) }, h(Icon, { name: 'route', size: 15 }), 'Editor'),
-          h('button', { className: page === 'robot' ? 'on' : '', type: 'button', 'aria-current': page === 'robot' ? 'page' : undefined, onClick: () => setPage('robot') }, h(Icon, { name: 'gear', size: 15 }), 'Settings'))),
+          h('button', { className: page === 'robot' ? 'on' : '', type: 'button', 'aria-current': page === 'robot' ? 'page' : undefined, onClick: () => setPage('robot') }, h(Icon, { name: 'gear', size: 15 }), 'Settings')),
+        h(ProjectMenu, { projectName: props.projectName, projectLocation: props.projectLocation, saveState: props.saveState, onOpen: props.onOpen, onSave: props.onSave })),
 
       h('div', { className: 'tb-right' },
         h(KeyboardHelp),
         plan && h(React.Fragment, null,
           h('div', { className: 'tbdiv' }),
           h('button', { type: 'button', className: 'qbtn optimizer-toggle', 'aria-expanded': optimizationOpen, onClick: toggleOptimization }, optimizationApplied ? 'Optimized' : 'Optimize')),
-        h(React.Fragment, null,
-          h('button', { className: 'qbtn tb-file', type: 'button', title: 'Open or create a project folder (⌘O)', 'aria-label': 'Open project folder', onClick: props.onOpen }, 'Open'),
-          h('button', { className: 'qbtn tb-file', type: 'button', title: 'Save project and generate Paths/*.bdx (⌘S)', 'aria-label': 'Save project', onClick: () => props.onSave(false) }, 'Save')),
         (plan || page === 'auto') && h(React.Fragment, null,
           h(IconBtn, { icon: 'undo', onClick: onUndo, title: 'Undo  (\u2318Z)' }),
           h(IconBtn, { icon: 'redo', onClick: onRedo, title: 'Redo  (\u21e7\u2318Z)' })),

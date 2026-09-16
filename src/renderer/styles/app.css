@@ -83,7 +83,6 @@ html, body { font-synthesis: none; }
 .numinput, .numunit, .rt-stat-v {
   font-variant-numeric: tabular-nums;
 }
-.tb-file { flex: 0 0 auto !important; white-space: nowrap; }
 .pathsw { flex: 1 1 170px; max-width: 170px; }
 .pathsw-btn, .exportbtn, .alliance, .qbtn, .cbar-chip, .cbar-k, .cbar-v, .cbar-u,
 .timecode, .roi, .numlbl, .numunit, .ctxinsp-tag { white-space: nowrap; }
@@ -307,6 +306,11 @@ input,select{font-family:inherit}
 [data-platform="darwin"] .toolbar button,[data-platform="darwin"] .toolbar input,[data-platform="darwin"] .toolbar select,[data-platform="darwin"] .toolbar [role="dialog"]{-webkit-app-region:no-drag}
 .tb-left{display:flex;align-items:center;gap:12px;min-width:0;flex:1 1 0}
 .tb-right{display:flex;align-items:center;gap:6px;min-width:0;flex:0 0 auto;justify-content:flex-end}
+.toolbar .qbtn{flex:0 0 auto;min-width:54px;height:40px;padding:0 12px;white-space:nowrap}
+.toolbar .optimizer-toggle{min-width:84px}
+.toolbar .keyboard-help-trigger{width:40px;min-width:40px;padding:0}
+.toolbar .iconbtn{width:40px;height:40px;flex:0 0 auto}
+.toolbar .field-flip{height:40px;padding-inline:12px}
 .brand{display:flex;align-items:center;gap:9px}
 .brand-name{font-weight:600;font-size:14.5px;letter-spacing:.2px}
 
@@ -343,6 +347,15 @@ input,select{font-family:inherit}
 .fieldcol{position:relative;flex:1;min-width:0;min-height:0;overflow:hidden;background:#0a0b0d}
 .rail{position:relative;flex-shrink:0;display:flex;min-height:0;z-index:20}
 .rail.collapsed{width:0}
+.stage-plan{--inspector-width:320px}
+.stage-plan .rail-r:not(.collapsed){width:var(--inspector-width);flex:0 0 var(--inspector-width)}
+.stage-plan .rail-r > :is(.ctxinsp,.optimizer-panel){width:100%;min-width:0;flex:1 1 auto}
+.editor-startup{height:100%;display:flex;flex-direction:column;background:#0a0b0d}
+.editor-startup-toolbar{height:50px;flex:none;background:var(--bg-1);border-bottom:1px solid var(--line)}
+.editor-startup-body{display:flex;flex:1;min-height:0}
+.editor-startup-library{width:264px;background:var(--bg-1);border-right:1px solid var(--line)}
+.editor-startup-field{flex:1}
+.editor-startup-inspector{width:320px;background:var(--bg-1);border-left:1px solid var(--line)}
 .fieldsvg{width:100%;height:100%;display:block;touch-action:none}
 .stage-hint{position:absolute;left:50%;top:57px;transform:translateX(-50%);font-size:10.5px;color:var(--txt-2);background:transparent;padding:5px 10px;pointer-events:none;white-space:nowrap;z-index:22;text-shadow:0 1px 8px #000}
 .stage-hint b{color:var(--accent-2);font-weight:600}
@@ -992,7 +1005,6 @@ button.cbar:hover{background:var(--bg-2)!important}
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation:none!important;scroll-behavior:auto!important;transition:none!important}
 }
-.tb-file{width:auto;min-width:54px;padding:0 10px;margin:0}
 
 /* Deliberate search, a compact comparison, and one next action. */
 .optimizer-panel { flex: 0 0 300px; width: 300px; min-width: 0; height: 100%; overflow: auto; border-left: 1px solid var(--line); background: var(--bg-1); font-size: 12px; }
@@ -1001,6 +1013,8 @@ button.cbar:hover{background:var(--bg-2)!important}
 .optimizer-heading .iconbtn { width: 40px; height: 40px; }
 .optimizer-body { padding: 16px; }
 .optimizer-outcome { margin: 0 0 20px; min-height: 24px; font-size: 16px; line-height: 24px; font-weight: 500; letter-spacing: -.3px; font-variant-numeric: tabular-nums; }
+.optimizer-status{position:relative}
+.optimizer-progress{position:absolute;left:0;bottom:-10px;width:100%;height:2px;accent-color:var(--accent)}
 .optimizer-outcome.gain { color: var(--good); }
 .optimizer-label { margin-bottom: 7px; color: var(--txt-3); font-size: 10px; text-transform: uppercase; letter-spacing: .8px; }
 .optimizer-panel button:not(.iconbtn) { color: var(--txt); font: inherit; cursor: pointer; transition: background-color .14s, border-color .14s; }

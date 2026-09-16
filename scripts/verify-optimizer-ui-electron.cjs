@@ -31,16 +31,23 @@ async function waitFor(fn, description, timeoutMs = 20_000) {
   }
   throw new Error(`Timed out waiting for ${description}`);
 }
-async function click(selector, text) {
+async function click(selector, text, clickCount = 1) {
   await waitFor(() => evaluate((selector, text) => {
-    const button = [...document.querySelectorAll(selector)].find((item) => text == null || item.textContent.trim() === text);
+    const button = [...document.querySelectorAll(selector)].find((item) => text == null || (item.querySelector(':scope > span:first-child')?.textContent || item.textContent).trim() === text);
     return Boolean(button && !button.disabled && !button.closest('[inert]') && button.checkVisibility());
   }, selector, text), `an available ${text || selector} control`);
-  await evaluate((selector, text) => {
-    const button = [...document.querySelectorAll(selector)].find((item) => text == null || item.textContent.trim() === text);
-    if (!button || button.disabled || button.closest('[inert]') || !button.checkVisibility()) throw new Error(`Cannot activate ${selector}: ${text || ''}`);
-    button.click();
+  const point = await evaluate((selector, text) => {
+    const button = [...document.querySelectorAll(selector)].find((item) => text == null || (item.querySelector(':scope > span:first-child')?.textContent || item.textContent).trim() === text);
+    button.scrollIntoView({ block: 'nearest' });
+    const box = button.getBoundingClientRect();
+    const x = Math.round(box.x + box.width / 2), y = Math.round(box.y + box.height / 2);
+    if (!button.contains(document.elementFromPoint(x, y))) throw new Error(`Control is obscured: ${selector}`);
+    return { x, y };
   }, selector, text);
+  window.webContents.sendInputEvent({ type: 'mouseMove', ...point });
+  window.webContents.sendInputEvent({ type: 'mouseDown', button: 'left', clickCount, ...point });
+  window.webContents.sendInputEvent({ type: 'mouseUp', button: 'left', clickCount, ...point });
+  await delay(40);
 }
 async function snapshot() {
   return evaluate(() => ({
@@ -60,7 +67,8 @@ async function ready() {
 }
 async function save() {
   const before = saveCount;
-  await click('button[aria-label="Save project"]');
+  await click('button[aria-label="Project menu"]');
+  await click('[role="menuitem"]', 'Save');
   await waitFor(() => saveCount > before, 'the mocked save to complete');
   return structuredClone(saved);
 }
@@ -74,11 +82,7 @@ async function stable(expected, milliseconds, label) {
   }
 }
 async function switchPath(name) {
-  await evaluate((name) => {
-    const row = [...document.querySelectorAll('.library-pick')].find((item) => item.querySelector('.library-name')?.textContent === name);
-    if (!row) throw new Error(`Path missing: ${name}`);
-    row.click();
-  }, name);
+  await click('.library-name', name);
   await waitFor(async () => (await snapshot()).path === name, 'the selected path');
   await ready();
 }
@@ -118,13 +122,13 @@ async function assertCompactResult() {
   assert.ok(state.text.trim().split(/\s+/).length <= 45, `Result panel must stay concise: ${state.text}`);
   assert.ok(!state.text.includes('Limited by'), 'Detailed physics must be hidden by default');
   assert.deepEqual(state.rows, ['Preview normal trajectory', 'Preview optimized trajectory']);
-  assert.equal(state.width, 300, 'The result inspector must remain compact');
+  assert.equal(state.width, 320, 'The result inspector must match the fixed inspector width');
 }
 
 function check(name) { checks.push(name); console.log(`PASS ${name}`); }
 
 app.whenReady().then(async () => {
-  window = new BrowserWindow({ show: false, width: 1440, height: 1000, useContentSize: true,
+  window = new BrowserWindow({ show: false, width: 1440, height: 900, useContentSize: true,
     webPreferences: { contextIsolation: true, sandbox: false, backgroundThrottling: false,
       preload: path.join(__dirname, 'verify-optimizer-ui-preload.cjs') } });
   window.webContents.on('console-message', (details) => {
@@ -178,9 +182,64 @@ app.whenReady().then(async () => {
     await click('button', 'Editor');
     await ready();
     const normal = await snapshot();
+    for (const [width, height] of [[1440, 900], [1100, 720]]) {
+      window.setContentSize(width, height);
+      await delay(250);
+      await fs.writeFile(path.join(output, `inspector-${width}x${height}.png`), (await window.webContents.capturePage()).toPNG());
+      const inspectorLayout = await evaluate(() => {
+        const rail = document.querySelector('.stage-plan .rail-r').getBoundingClientRect();
+        const field = document.querySelector('.fieldsvg').getBoundingClientRect();
+        return { railWidth: rail.width, fieldX: field.x, fieldWidth: field.width };
+      });
+      await evaluate(() => {
+        const labels = [];
+        const observer = new MutationObserver(() => {
+          const panel = document.querySelector('.optimizer-panel');
+          if (panel) labels.push(panel.innerText);
+        });
+        observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+        window.__optimizerOpeningProbe = { labels, stop: () => observer.disconnect() };
+      });
+      await click('.optimizer-toggle');
+      await stable(normal, 350, 'Opening the optimizer');
+      const openingLabels = await evaluate(() => {
+        const probe = window.__optimizerOpeningProbe;
+        probe.stop();
+        delete window.__optimizerOpeningProbe;
+        return probe.labels;
+      });
+      assert.ok(openingLabels.length > 0, 'Opening text probe must observe the panel');
+      assert.ok(openingLabels.every((text) => !/Loading|Preparing|Searching|Optimizing/.test(text)), 'Opening must not flash loading text');
+      assert.equal(await evaluate(() => document.querySelector('.optimizer-panel [aria-busy="true"]') != null || [...document.querySelectorAll('.optimizer-panel button')].some((item) => item.textContent === 'Cancel')), false);
+      const optimizerLayout = await evaluate(() => {
+        const rail = document.querySelector('.stage-plan .rail-r').getBoundingClientRect();
+        const field = document.querySelector('.fieldsvg').getBoundingClientRect();
+        return { railWidth: rail.width, fieldX: field.x, fieldWidth: field.width };
+      });
+      assert.deepEqual(optimizerLayout, inspectorLayout, 'Changing sidebar content must not move or resize the field');
+      assert.ok(!await evaluate(() => /Loading|Preparing|Searching|Optimizing/.test(document.querySelector('.optimizer-panel').innerText)), 'Opening must not flash loading text');
+      await fs.writeFile(path.join(output, `optimizer-idle-${width}x${height}.png`), (await window.webContents.capturePage()).toPNG());
+      await click('button[title="Close optimization"]');
+      assert.ok(await evaluate(() => document.querySelector('.stage-plan .rail-r.collapsed') && !document.querySelector('.optimizer-panel') && document.querySelector('.inspector-tab')), 'Close must collapse the sidebar instead of returning to path details');
+      assert.ok(await evaluate(() => document.activeElement === document.querySelector('.optimizer-toggle')), 'Closing optimization returns focus to its toolbar control');
+      await click('.inspector-tab');
+      assert.ok(await evaluate(() => !document.querySelector('.stage-plan .rail-r.collapsed') && !document.querySelector('.optimizer-panel')), 'Inspector reopens explicitly');
+      check(`inspector and optimizer preserve field geometry at ${width}×${height}`);
+    }
+    window.setContentSize(1440, 900);
+    await delay(250);
     await click('.optimizer-toggle');
+    await click('.featnm', 'Start');
+    await click('.featnm', 'Start', 2);
+    await waitFor(() => evaluate(() => !document.querySelector('.optimizer-panel') && document.querySelector('.ctxinsp')), 'double-click Start to replace Optimize with the inspector');
+    assert.ok(await evaluate(() => document.querySelector('.ctxinsp').innerText.includes('Start')), 'Waypoint inspection opens the selected Start details');
+    await click('.ctxinsp-x');
+    assert.ok(await evaluate(() => document.activeElement === document.querySelector('.inspector-tab')), 'Closing the inspector restores focus to its reopen tab');
+    await click('.optimizer-toggle');
+    check('double-clicking a waypoint opens its inspector over Optimize and closing returns focus');
+    await click('.optimizer-main', 'Optimize');
     await finishSearch();
-    check('one toolbar click opens the optimizer and runs a quick search');
+    check('optimizer opens quietly at the inspector width, closes the whole sidebar, and searches only on explicit request');
     await assertCompactResult();
     check('result-first inspector keeps settings and solver details collapsed');
     await fs.writeFile(path.join(output, 'optimizer-result.png'), (await window.webContents.capturePage()).toPNG());
@@ -210,8 +269,18 @@ app.whenReady().then(async () => {
       observer.observe(heading, { childList: true, subtree: true, characterData: true });
       window.__optimizerGainProbe = { labels, stop: () => observer.disconnect() };
     });
+    const toolbarBeforeApply = await evaluate(() => [...document.querySelectorAll('.tb-right button')].map((button) => {
+      const box = button.getBoundingClientRect();
+      return { x: box.x, y: box.y, width: box.width, height: box.height };
+    }));
     await click('.optimizer-panel button', 'Apply optimized');
     await waitFor(() => evaluate(() => document.querySelector('.optimizer-toggle')?.textContent === 'Optimized'), 'the applied selection');
+    const toolbarAfterApply = await evaluate(() => [...document.querySelectorAll('.tb-right button')].map((button) => {
+      const box = button.getBoundingClientRect();
+      return { x: box.x, y: box.y, width: box.width, height: box.height };
+    }));
+    assert.deepEqual(toolbarAfterApply, toolbarBeforeApply, 'Applying optimization must not shift the help or toolbar buttons when its label changes');
+    check('Optimize to Optimized preserves toolbar geometry');
     const applied = await snapshot();
     assert.equal(applied.time, candidate.time);
     assert.equal(applied.geometry, candidate.geometry);

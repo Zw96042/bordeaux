@@ -13,15 +13,20 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const evaluate = (fn, ...args) => win.webContents.executeJavaScript(`(${fn.toString()})(...${JSON.stringify(args)})`, true);
 async function wait(fn, label) { for (let i = 0; i < 200; i++) { if (await fn()) return; await delay(50); } throw new Error('Timed out: ' + label); }
 async function click(selector, text) {
+  if (selector === '[aria-label="Save project"]') {
+    await click('[aria-label="Project menu"]');
+    await click('.project-menu [role="menuitem"]', 'Save');
+    return;
+  }
   if (selector === '.library-connection' && !(await evaluate(() => document.querySelector('.settings-general')))) {
     await click('.pageswitch button', 'Settings'); connectionFromSettings = true;
   }
   await wait(() => evaluate((selector, text) => {
-    const el = [...document.querySelectorAll(selector)].find((item) => text == null || item.textContent.trim() === text);
+    const el = [...document.querySelectorAll(selector)].find((item) => text == null || (item.firstElementChild?.textContent.trim() === text || item.textContent.trim() === text));
     return Boolean(el && !el.disabled && !el.closest('[inert]'));
   }, selector, text), 'ready control: ' + selector + ' ' + text);
   await evaluate((selector, text) => {
-    const el = [...document.querySelectorAll(selector)].find((item) => text == null || item.textContent.trim() === text);
+    const el = [...document.querySelectorAll(selector)].find((item) => text == null || (item.firstElementChild?.textContent.trim() === text || item.textContent.trim() === text));
     if (!el || el.disabled || el.closest('[inert]')) throw new Error('Unavailable: ' + selector + ' ' + text);
     el.click();
   }, selector, text); await delay(50);
@@ -449,7 +454,7 @@ app.whenReady().then(async () => {
       const geometry = await evaluate(() => {
 
         const rail = document.querySelector('.library-rail');
-        return { sharedPositions: ['.pageswitch', '[aria-label=\"Save project\"]'].map((selector) => document.querySelector(selector).getBoundingClientRect().x), overflow: document.documentElement.scrollWidth > innerWidth, fieldWidth: document.querySelector('.fieldcol').getBoundingClientRect().width, railWidth: rail.getBoundingClientRect().width, pushVisible: document.querySelector('.library-push > button').checkVisibility() };
+        return { sharedPositions: ['.pageswitch', '[aria-label=\"Project menu\"]'].map((selector) => document.querySelector(selector).getBoundingClientRect().x), overflow: document.documentElement.scrollWidth > innerWidth, fieldWidth: document.querySelector('.fieldcol').getBoundingClientRect().width, railWidth: rail.getBoundingClientRect().width, pushVisible: document.querySelector('.library-push > button').checkVisibility() };
       });
       assert.equal(geometry.overflow, false); assert.ok(geometry.fieldWidth >= 350); assert.equal(geometry.pushVisible, true);
       assert.equal(geometry.railWidth, 264, 'Library width remains fixed across supported sizes');
@@ -465,7 +470,7 @@ app.whenReady().then(async () => {
       await click('.library-tabs button', 'Routines'); await click('[data-library-item="routine-a"]');
       const flowGeometry = await evaluate(() => {
         const flow = document.querySelector('.routine-workspace-flow'), stage = document.querySelector('.stage-auto');
-        return { sharedPositions: ['.pageswitch', '[aria-label=\"Save project\"]'].map((selector) => document.querySelector(selector).getBoundingClientRect().x), width: flow.getBoundingClientRect().width, height: flow.getBoundingClientRect().height, stageHeight: stage.getBoundingClientRect().height, railWidth: document.querySelector('.library-rail').getBoundingClientRect().width, inRail: Boolean(flow.closest('.library-rail')), flowInRail: Boolean(document.querySelector('.library-rail .rt-panel')), overflow: document.documentElement.scrollWidth > innerWidth, contentOverflow: flow.querySelector('.rt-scroll').scrollWidth > flow.querySelector('.rt-scroll').clientWidth };
+        return { sharedPositions: ['.pageswitch', '[aria-label=\"Project menu\"]'].map((selector) => document.querySelector(selector).getBoundingClientRect().x), width: flow.getBoundingClientRect().width, height: flow.getBoundingClientRect().height, stageHeight: stage.getBoundingClientRect().height, railWidth: document.querySelector('.library-rail').getBoundingClientRect().width, inRail: Boolean(flow.closest('.library-rail')), flowInRail: Boolean(document.querySelector('.library-rail .rt-panel')), overflow: document.documentElement.scrollWidth > innerWidth, contentOverflow: flow.querySelector('.rt-scroll').scrollWidth > flow.querySelector('.rt-scroll').clientWidth };
       });
       assert.equal(flowGeometry.railWidth, geometry.railWidth);
       assert.deepEqual(flowGeometry.sharedPositions, geometry.sharedPositions, 'Shared toolbar actions stay anchored when switching to routines at ' + width);
@@ -478,6 +483,16 @@ app.whenReady().then(async () => {
       await click('.rt-step[data-id="step-then"] .rt-step-body');
       assert.equal(await evaluate(() => document.querySelector('[aria-label="Routine step inspector"]').checkVisibility()), true);
       assert.equal(await evaluate(() => { const el = document.querySelector('.rt-scroll'); return el.scrollWidth > el.clientWidth; }), false, 'Populated branch flow must not clip when the inspector opens');
+      const branches = await evaluate(() => [...document.querySelectorAll('.rt-brlbl')].map((header) => {
+        const key = header.querySelector('.rt-brkey').getBoundingClientRect();
+        const name = header.querySelector('.rt-brname').getBoundingClientRect();
+        const count = header.querySelector('.rt-brcount').getBoundingClientRect();
+        return { keyRight: key.right, nameLeft: name.left, nameRight: name.right, countLeft: count.left };
+      }));
+      assert.ok(branches.length > 0);
+      for (const branch of branches) {
+        assert.ok(branch.keyRight <= branch.nameLeft && branch.nameRight <= branch.countLeft, 'Branch labels and counts must not overlap: ' + JSON.stringify(branch));
+      }
       await fs.writeFile(path.join(output, `routine-inspector-${width}.png`), (await win.webContents.capturePage()).toPNG());
       await click('[aria-label="Routine view"] button', 'Field preview');
       assert.equal(await evaluate(() => document.querySelector('.routine-workspace-field').checkVisibility()), true);

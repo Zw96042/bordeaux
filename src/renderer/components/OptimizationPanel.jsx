@@ -6,14 +6,7 @@ const seconds = (value) => Number.isFinite(value) ? `${value.toFixed(2)} s` : '�
 
 export function OptimizationPanel({ path, paths, state, candidate, accepted, stale, baselineTime, pending, error, recovery, mode,
   unitSystem, onCorridor, onStart, onStartAll, onCancel, onCompare, onApply, onNormal, onSelectPath, onClose }) {
-  const [now, setNow] = React.useState(Date.now);
   const entry = state.paths[path.id];
-  const searching = entry?.status === 'searching' && state.running;
-  React.useEffect(() => {
-    if (!searching) return undefined;
-    const timer = setInterval(() => setNow(Date.now()), 250);
-    return () => clearInterval(timer);
-  }, [searching]);
   const result = candidate?.finalTrajectory;
   const details = result?.optimization;
   const baseTime = baselineTime ?? details?.baselineTimeS;
@@ -25,8 +18,7 @@ export function OptimizationPanel({ path, paths, state, candidate, accepted, sta
       === JSON.stringify([result.samples, result.optimizedPath, result.stationaryActions, result.markers])), [accepted, result]);
   const newCandidate = improved && !alreadyApplied;
   const distance = (value) => `${(value * (unitSystem === 'imperial' ? 3.280839895 : 1)).toFixed(2)} ${unitSystem === 'imperial' ? 'ft' : 'm'}`;
-  const outcome = searching ? `Optimizing… ${Math.max(0, (now - entry.startedAt) / 1000).toFixed(1)} s`
-    : state.running ? 'Optimizing another path…'
+  const outcome = state.running ? 'Find a faster path'
     : improved ? `${seconds(gain)} faster, ${(gain / baseTime * 100).toFixed(1)}%`
     : stale ? 'Needs update'
     : details?.termination === 'unsupported' ? 'Normal only'
@@ -34,7 +26,7 @@ export function OptimizationPanel({ path, paths, state, candidate, accepted, sta
     : entry?.status === 'failure' ? 'Couldn’t optimize'
     : entry?.status === 'timeout' ? 'Search timed out'
     : entry?.status === 'canceled' ? 'Search canceled'
-    : accepted ? 'Optimization applied' : pending ? 'Preparing path…' : 'Find a faster path';
+    : accepted ? 'Optimization applied' : 'Find a faster path';
   const row = (label, time, value, applied, disabled = false) => h('button', {
     key: value, type: 'button', className: 'optimizer-choice', disabled,
     'aria-label': `Preview ${label.toLowerCase()} trajectory`,
@@ -49,7 +41,9 @@ export function OptimizationPanel({ path, paths, state, candidate, accepted, sta
     h('div', { className: 'optimizer-body' }, error ? h(React.Fragment, null,
       h('p', { className: 'optimizer-failure', role: 'alert' }, 'Couldn’t plan this path. ', error.message || String(error)),
       h('button', { type: 'button', className: 'optimizer-main', onClick: recovery?.onClick || onClose }, recovery?.label || 'Edit path')) : h(React.Fragment, null,
-      h('p', { className: 'optimizer-outcome' + (improved && !state.running ? ' gain' : ''), role: 'status' }, outcome),
+      h('div', { className: 'optimizer-status', 'aria-busy': pending || state.running },
+        h('p', { className: 'optimizer-outcome' + (improved && !state.running ? ' gain' : ''), role: 'status' }, outcome),
+        (pending || state.running) && h('progress', { className: 'optimizer-progress', 'aria-label': state.running ? 'Optimizing path' : 'Preparing path' })),
       h('div', { className: 'optimizer-comparison', 'aria-label': 'Trajectory comparison' },
         h('div', { className: 'optimizer-label' }, 'Preview'),
         row('Normal', baseTime, 'normal', !accepted && !stale, pending),

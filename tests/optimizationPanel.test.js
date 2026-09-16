@@ -19,13 +19,22 @@ describe('optimizer planning failure', () => {
     expect(markup).not.toContain('Trajectory comparison');
   });
 
-  it('keeps ordinary loading distinct from failure and enables search after planning succeeds', () => {
+  it('keeps pending work quiet and enables search after planning succeeds', () => {
     const loading = render({ pending: true });
-    expect(loading).toContain('Preparing path');
+    expect(loading).toContain('<progress');
+    expect(loading).toContain('aria-busy="true"');
+    expect(loading).not.toContain('Preparing path…');
     expect(loading).toMatch(/class="optimizer-main primary" disabled=""/);
     expect(loading).not.toContain('role="alert"');
     const ready = render({ pending: false, baselineTime: 3 });
     expect(ready).toContain('3.00 s');
     expect(ready).toMatch(/class="optimizer-main primary">Optimize<\/button>/);
+  });
+
+  it('shows cancellable progress without a ticking status message during search', () => {
+    const markup = render({ state: { running: true, paths: { path: { status: 'searching', startedAt: 0 } } } });
+    expect(markup).toContain('aria-label="Optimizing path"');
+    expect(markup).toContain('>Cancel</button>');
+    expect(markup).not.toContain('Optimizing…');
   });
 });

@@ -55,8 +55,8 @@
 .routine-workspace .rt-tool:disabled{opacity:.3;cursor:default}
 .routine-workspace .rt-step .rt-step-tag{display:block;padding:0;margin-top:4px;white-space:normal}
 .routine-workspace .rt-step-live{display:inline-block;margin-top:4px;text-transform:none;letter-spacing:0}
-.routine-workspace .rt-brlbl{display:grid;grid-template-columns:7px auto minmax(0,1fr) auto;gap:8px;text-align:left}
-.routine-workspace .rt-brlive{grid-column:3;text-transform:none;letter-spacing:0;justify-self:start}
+.routine-workspace .rt-brlbl{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px;text-align:left}
+.routine-workspace .rt-brlive{grid-column:2;text-transform:none;letter-spacing:0;justify-self:start}
 .routine-workspace .rt-brkey,.rt-stat-k,.routine-workspace .rt-timeline-title{text-transform:none;letter-spacing:0;font-family:var(--ui);font-size:11px}
 .routine-workspace-head{padding-block:12px}
 @media(pointer:coarse){.routine-workspace .rt-step{grid-template-columns:44px 44px minmax(0,1fr)}.routine-workspace .rt-step-tools{grid-column:3;justify-self:end}}

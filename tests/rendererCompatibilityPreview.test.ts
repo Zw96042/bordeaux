@@ -116,7 +116,9 @@ describe("renderer application", () => {
     expect(app).toContain("exportBdx");
     expect(app).not.toContain("exportRobot");
     expect(panels).not.toMatch(/LabVIEW|labview/);
-    expect(panels).toContain("Save project and generate Paths/*.bdx");
+    expect(panels).toContain("h(ProjectMenu");
+    const projectMenu = fs.readFileSync(new URL("../src/renderer/components/ProjectMenu.jsx", import.meta.url), "utf8");
+    expect(projectMenu).toContain("Save also updates BDX files.");
     expect(app).toContain("normalizeProjectData(raw)");
   });
 

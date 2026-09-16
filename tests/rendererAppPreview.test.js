@@ -16,7 +16,9 @@ describe("renderer app path preview lifecycle", () => {
     try {
       const html = renderToString(React.createElement(App, { initialProject: project }));
 
-      expect(html).toContain("Preparing path preview");
+      expect(html).toContain('aria-label="Preparing editor"');
+      expect(html).toContain('aria-busy="true"');
+      expect(html).not.toContain("Preparing path preview");
       expect(derivePath).not.toHaveBeenCalled();
     } finally {
       derivePath.mockRestore();
@@ -78,7 +80,9 @@ describe("renderer app path preview lifecycle", () => {
     try {
       const html = renderToString(React.createElement(App, { initialProject: project }));
 
-      expect(html).toContain("Preparing path preview");
+      expect(html).toContain('aria-label="Preparing editor"');
+      expect(html).toContain('aria-busy="true"');
+      expect(html).not.toContain("Preparing path preview");
       expect(derivePath).not.toHaveBeenCalled();
     } finally {
       derivePath.mockRestore();
@@ -284,7 +288,9 @@ describe("renderer app path preview lifecycle", () => {
     try {
       const html = renderToString(React.createElement(App, { initialProject: project }));
 
-      expect(html).toContain("Preparing path preview");
+      expect(html).toContain('aria-label="Preparing editor"');
+      expect(html).toContain('aria-busy="true"');
+      expect(html).not.toContain("Preparing path preview");
       expect(derivePath).not.toHaveBeenCalled();
     } finally {
       derivePath.mockRestore();

@@ -61,14 +61,23 @@ import { UI } from "./ui";
 
   function AddStep({ onPick, variant, label, waitAvailable }) {
     const [open, setOpen] = useState(false);
-    const pick = (type, cat) => { onPick(type, cat); setOpen(false); };
+    const trigger = useRef(null);
+    const pick = (type, cat) => {
+      // The empty-state chooser unmounts after the first insert, so retain its panel.
+      const panel = trigger.current?.closest('.rt-panel');
+      onPick(type, cat); setOpen(false);
+      requestAnimationFrame(() => {
+        const target = panel?.isConnected && panel.querySelector('.rt-step.sel > .rt-step-body');
+        (target || trigger.current)?.focus();
+      });
+    };
     if (variant === 'gap') {
       return h('div', { className: 'rt-gap' + (open ? ' open' : '') },
-        h('button', { className: 'rt-gap-btn', type: 'button', title: 'Insert step here', 'aria-label': open ? 'Close step chooser' : 'Insert step here', 'aria-expanded': open, onClick: () => setOpen((o) => !o) }, h(Icon, { name: open ? 'x' : 'plus', size: 13 })),
+        h('button', { ref: trigger, className: 'rt-gap-btn', type: 'button', title: 'Insert step here', 'aria-label': open ? 'Close step chooser' : 'Insert step here', 'aria-expanded': open, onClick: () => setOpen((o) => !o) }, h(Icon, { name: open ? 'x' : 'plus', size: 13 })),
         open && h(Chooser, { onPick: pick, waitAvailable }));
     }
     return h('div', { className: 'rt-addwrap' },
-      h('button', { className: 'rt-add' + (open ? ' on' : ''), type: 'button', onClick: () => setOpen((o) => !o) },
+      h('button', { ref: trigger, className: 'rt-add' + (open ? ' on' : ''), type: 'button', onClick: () => setOpen((o) => !o) },
         h(Icon, { name: open ? 'x' : 'plus', size: 14 }), open ? 'Choose a step' : (label || 'Add step')),
       open && h(Chooser, { onPick: pick, waitAvailable }));
   }
