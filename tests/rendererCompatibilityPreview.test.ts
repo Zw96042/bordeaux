@@ -216,8 +216,9 @@ describe("renderer application", () => {
 
   it("contains planner failures", () => {
     const app = fs.readFileSync(new URL("../src/renderer/app/App.jsx", import.meta.url), "utf8");
-    expect(app).toContain("usePlanningNotice(derivation.error, derivation.errorKind, planningInputRevision, doc.id)");
-    expect(app).toContain("error: planningNotice.kind === 'interactive'");
+    // Every planning error blocks the editor, so every notice is an error alert.
+    expect(app).toContain("planningNotice(derivation.error, derivation.errorKind)");
+    expect(app).toContain("{ id: 'planning', error: true");
     const status = fs.readFileSync(new URL("../src/renderer/components/FieldStatus.jsx", import.meta.url), "utf8");
     expect(status).toContain("role: primary.error ? 'alert' : 'status'");
     expect(app).toContain("class AppErrorBoundary");

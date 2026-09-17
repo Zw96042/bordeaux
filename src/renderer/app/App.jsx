@@ -186,6 +186,7 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
     const [initial] = useState(() => ({ path: doc, value: null, error: null }));
     const lastValid = useRef(initial.value ? { path: initial.path, value: initial.value } : null);
     const requestedRevision = useRef(0);
+    const [attempt, setAttempt] = useState(0);
     const [interactive, setInteractive] = useState(() => previewer.getSnapshot());
     const [snapshot, setSnapshot] = useState(() => ({
       status: 'pending',
@@ -210,7 +211,7 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
       if (interactive.status === 'error' && interactive.errorPath === doc) {
         setSnapshot({
           status: 'error', key: doc.id, path: lastValid.current?.path || doc, value: lastValid.current?.value || null,
-          error: interactive.error, errorPath: doc, durationMs: 0,
+          error: interactive.error, errorKind: 'interactive', errorPath: doc, durationMs: 0,
         });
         return undefined;
       }
@@ -229,18 +230,21 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
           setSnapshot({ status: 'ready', key: doc.id, path: doc, value: result.value, error: null, errorPath: null, durationMs: result.durationMs || 0 });
           return;
         }
+        // The fallback stays only as the last displayed geometry; it is never current.
+        const failure = finalPlanningError(result);
         setSnapshot({
           status: result.status,
           key: doc.id,
           path: doc,
           value: result.fallback || interactiveResult,
-          error: new Error(result.fallbackReason),
+          error: failure.error,
+          errorKind: failure.kind,
           errorPath: doc,
           durationMs: 0,
         });
       });
       return () => { active = false; request.cancel(); };
-    }, [planner, doc, robot, field, plannerId, interactive, enabled]);
+    }, [planner, doc, robot, field, plannerId, interactive, enabled, attempt]);
 
     const current = snapshot.path === doc && snapshot.value
       ? { path: doc, value: snapshot.value }
@@ -253,53 +257,13 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
       current: Boolean(current) && snapshot.status === 'ready',
       error: snapshot.errorPath === doc ? snapshot.error : null,
       // This hook prepares the selected trajectory; failures are blocking even on initial load.
-      errorKind: snapshot.errorPath === doc && snapshot.error ? 'interactive' : null,
+      errorKind: snapshot.errorPath === doc && snapshot.error ? snapshot.errorKind : null,
       pending: interactive.status === 'pending' || snapshot.status === 'pending',
       durationMs: snapshot.durationMs || 0,
       optimization: snapshot.value?.finalOptimization || null,
+      // Requests final planning again for the same input, after a timeout.
+      retry: () => setAttempt((value) => value + 1),
     };
-  }
-
-  function usePlanningNotice(error, kind, planningInputRevision, pathId) {
-    const [notice, setNotice] = useState(null);
-    const lastFinalNoticeAt = useRef(new Map());
-
-    useEffect(() => {
-      let revealTimer = 0;
-      let dismissTimer = 0;
-      if (!shouldPresentPlanningError(error, kind, planningInputRevision)) {
-        setNotice(null);
-        return undefined;
-      }
-
-      const message = planningErrorMessage(error, kind);
-      const key = pathId + ':' + kind;
-      if (kind === 'interactive') {
-        setNotice({ key, kind, message });
-        return undefined;
-      }
-
-      const lastShown = lastFinalNoticeAt.current.get(key) || 0;
-      if (Date.now() - lastShown < FINAL_PLANNING_NOTICE_COOLDOWN_MS) {
-        setNotice(null);
-        return undefined;
-      }
-
-      revealTimer = window.setTimeout(() => {
-        lastFinalNoticeAt.current.set(key, Date.now());
-        setNotice({ key, kind, message });
-        dismissTimer = window.setTimeout(() => {
-          setNotice((current) => current?.key === key ? null : current);
-        }, FINAL_PLANNING_NOTICE_DURATION_MS);
-      }, FINAL_PLANNING_NOTICE_DELAY_MS);
-
-      return () => {
-        window.clearTimeout(revealTimer);
-        window.clearTimeout(dismissTimer);
-      };
-    }, [error, kind, planningInputRevision, pathId]);
-
-    return notice;
   }
 
   function App({ initialProject = null, initialAgentProposal = null } = {}) {
@@ -362,7 +326,6 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
     const [projectLocation, setProjectLocation] = useState(null);
     const [saveState, setSaveState] = useState({ status: 'idle', error: '' });
     const [projectOpenError, setProjectOpenError] = useState(null);
-    const [planningInputRevision, setPlanningInputRevision] = useState(0);
     const [unitSystem, setUnitSystemState] = useState(() => UnitPrefs.current());
     const setUnitSystem = useCallback((next) => {
       const units = UnitPrefs.set(next);
@@ -763,7 +726,7 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
     const derivation = selectedPreview
       ? { value: selectedPreview, path: doc, current: true, pending: false, error: null, errorKind: null }
       : { ...selectedPlanning, path: selectedPlanning.path === planningPath ? doc : selectedPlanning.path };
-    const planningNotice = usePlanningNotice(derivation.error, derivation.errorKind, planningInputRevision, doc.id);
+    const planningStatus = planningNotice(derivation.error, derivation.errorKind);
     const derived = derivation.value || PENDING_PATH_PREVIEW;
     const derivationDoc = derivation.path || doc;
     const derivationCurrent = derivation.current;
@@ -1165,7 +1128,6 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
     const setConstraint = useCallback((patch) => commit((d) => { Object.assign(d.constraints, patch); return d; }), [commit]);
     const setDoc = useCallback((patch) => commit((d) => Object.assign(d, patch)), [commit]);
     const setRobot = useCallback((patch) => {
-      setPlanningInputRevision((revision) => revision + 1);
       setProject((pr) => ({ ...pr, robot: { ...pr.robot, ...patch } }));
     }, []);
 
@@ -1775,11 +1737,9 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
       bdxNotice && { id: 'bdx-export', label: 'BDX exported', detail: bdxNotice, action: { label: 'Dismiss', onClick: () => setBdxNotice('') } },
       exportError && { id: 'export', error: true, label: 'Export failed', detail: exportError,
         action: { label: 'Dismiss', onClick: () => setExportError('') } },
-      planningNotice && !(optimizationOpen && normalError) && { id: 'planning', error: planningNotice.kind === 'interactive',
-        label: planningNotice.kind === 'interactive' ? 'Trajectory unavailable' : 'Interactive preview',
-        detail: planningNotice.message + (planningNotice.kind === 'interactive' ? ' Edit the limits or undo the last change to try again.' : ''),
-        action: planningNotice.kind === 'interactive' ? { label: 'Edit limits', onClick: () => { openInspector(); if (sel.kind !== 'cr') select(null, -1); } }
-          : !optimizationOpen ? { label: 'Optimize', onClick: () => setOptimizationOpen(true) } : undefined },
+      planningStatus && !(optimizationOpen && normalError) && { id: 'planning', error: true, label: planningStatus.label, detail: planningStatus.detail,
+        action: planningStatus.recovery === 'retry' ? { label: 'Try again', onClick: selectedPlanning.retry }
+          : { label: 'Edit limits', onClick: () => { openInspector(); if (sel.kind !== 'cr') select(null, -1); } } },
       !optimizationOpen && selectedOutcome.unvalidated && { id: 'optimization', error: true, label: 'Optimization unavailable', detail: 'The saved optimization could not be validated. Review it before using this path.',
         action: { label: 'Optimize', onClick: () => setOptimizationOpen(true) } },
     ].filter(Boolean);
