@@ -43,3 +43,31 @@ describe('LabVIEW inspector', () => {
     expect(html).toContain('Intake staging →'); expect(html).not.toContain('>Default<');
   });
 });
+
+describe('planning recovery inspector', () => {
+  it('makes stale anchor controls inert while leaving the inspector close button available', () => {
+    const project = createDemoProject(), doc = project.paths[0];
+    doc.targets = [{ f: .5, deg: 90 }];
+    const derived = PM.derivePath(doc, project.robot, project.perSegmentConstraints, project.plannerId);
+    const html = renderToStaticMarkup(h(ContextInspector, { project, doc, derived, pending: true,
+      sel: { kind: 'rt', idx: 0 }, actions: {}, robot: project.robot }));
+    expect(html).toContain('class="ctxinsp-body" inert=""');
+    expect(html).toContain('Anchor position');
+    const header = html.slice(0, html.indexOf('class="ctxinsp-body"'));
+    expect(header).toContain('aria-label="Hide inspector"');
+    expect(header).not.toContain('inert=');
+  });
+
+  it('offers authored range repair without reading failed trajectory geometry', () => {
+    const project = createDemoProject(), doc = project.paths[0];
+    doc.ranges = [{ f0: .2, f1: .6, maxVel: 0, anchor: 'param' }];
+    const derived = new Proxy({}, { get() { throw new Error('Failed geometry must not be used for repair'); } });
+    const html = renderToStaticMarkup(h(ContextInspector, { project, doc, derived, repairMode: true,
+      sel: { kind: 'cr', idx: 0 }, actions: {}, robot: project.robot }));
+    expect(html).toContain('Max velocity');
+    expect(html).toContain('Delete range');
+    expect(html).not.toContain('inert=');
+    expect(html).not.toContain('Anchor position');
+    expect(html).not.toContain('>Distance<');
+  });
+});

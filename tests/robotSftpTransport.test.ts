@@ -599,8 +599,8 @@ describe("constrained robot SFTP transport", () => {
       failure = error as Error & { code?: string };
     }
     expect(failure.code).toBe("unavailable");
-    expect(failure.message).toContain("SFTP to the robot is unavailable");
-    expect(failure.message).toContain("did not detect which network");
+    expect(failure.message).toContain("ECONNREFUSED");
+    expect(failure.message).not.toContain("FMS");
     expect(failure.message).not.toContain("team-secret");
   });
 });

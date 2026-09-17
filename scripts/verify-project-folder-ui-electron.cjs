@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const output = process.env.BORDEAUX_PROJECT_UI_OUTPUT;
 app.setPath('userData', path.join(output, 'user-data'));
-let win, project, location = null, nextOpen = null, saveMode = 'success', finishSave, dirty = false;
+let win, project, location = null, nextOpen = null, openFailure = false, saveMode = 'success', finishSave, dirty = false;
 const calls = [], checks = [], errors = [];
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const evaluate = (fn, ...args) => win.webContents.executeJavaScript(`(${fn.toString()})(...${JSON.stringify(args)})`, true);
@@ -26,7 +26,7 @@ async function projectAction(label) {
 const check = (name) => { checks.push(name); console.log('PASS ' + name); };
 async function screenshot(name) { await fs.writeFile(path.join(output, name + '.png'), (await win.webContents.capturePage()).toPNG()); }
 ipcMain.handle('fixture:restore', () => ({ project, location }));
-ipcMain.handle('fixture:open', (_e, kind) => { calls.push(kind); if (!nextOpen) return null; const result = nextOpen; nextOpen = null; project = result.project; location = result.location; return result; });
+ipcMain.handle('fixture:open', (_e, kind) => { calls.push(kind); if (openFailure) throw new Error('Cannot open the selected project folder.'); if (!nextOpen) return null; const result = nextOpen; nextOpen = null; project = result.project; location = result.location; return result; });
 ipcMain.handle('fixture:reset', () => { throw new Error('New must not reset before folder selection'); });
 ipcMain.handle('fixture:autosave', (_e, value) => { calls.push('autosave'); if (location) project = value; return { saved: !!location, location }; });
 ipcMain.handle('fixture:save', (_e, value, saveAs) => {
@@ -58,6 +58,25 @@ app.whenReady().then(async () => {
     assert.equal(calls.at(-1), 'new-folder');
     assert.equal(await evaluate(() => document.querySelector('.library-current-name').textContent), 'Opening move');
     check('New selects a folder without resetting on cancel');
+    openFailure = true;
+    win.webContents.send('fixture:menu', 'new-project');
+    await wait(() => evaluate(() => document.querySelector('[data-retry-open]') === document.activeElement), 'opening recovery focused');
+    assert.equal(await status(), '', 'Opening errors are not save errors');
+    await delay(1100);
+    assert.ok(await evaluate(() => document.querySelector('.project-menu [role="alert"]')?.textContent.includes('Cannot open')), 'Autosave must not clear opening errors');
+    for (const [width, height] of [[1440, 900], [1100, 720]]) {
+      win.setContentSize(width, height); await delay(100); await screenshot('open-failure-' + width);
+    }
+    win.setContentSize(1440, 900);
+    const beforeOpenRetry = calls.length;
+    openFailure = false;
+    await pointer('[data-retry-open]');
+    assert.ok(calls.slice(beforeOpenRetry).includes('new-folder'), 'Retry reopens the folder picker');
+    assert.ok(!calls.slice(beforeOpenRetry).includes('save'), 'Retry must not save the old project');
+    await pointer('[aria-label="Project menu"]');
+    assert.ok(await evaluate(() => document.querySelector('.project-menu [role="alert"]')), 'Cancel keeps the failure available');
+    await key('Escape'); await projectAction('Dismiss opening error');
+    check('folder-opening failure retains context and retries the actual picker without autosave clearing it');
     await pointer('.library-tools button'); await key('Escape');
     await wait(async () => dirty, 'unsaved authored path');
     await evaluate(() => { window.discardPrompts = 0; window.confirm = () => { window.discardPrompts++; return false; }; });

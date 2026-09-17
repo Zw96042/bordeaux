@@ -73,6 +73,7 @@ export async function uploadRobotFiles(
   let temporary: RobotRemoteFile | undefined;
   const published: string[] = [];
   let publishing: string | undefined;
+  let stage = "check the destination directory";
   try {
     operation.throwIfAborted();
     if (session.hostKeyFingerprint !== connection.hostKeyFingerprint) {
@@ -82,19 +83,25 @@ export async function uploadRobotFiles(
     await directory(endpoint.directory, true, operation);
     for (const file of files) {
       operation.throwIfAborted();
+      stage = "check the destination directory";
       await directory(endpoint.directory, false, operation);
       const destination: RobotRemoteFile = { kind: "pathFile", directory: endpoint.directory, fileName: file.fileName };
       // Reject non-regular destinations, including symbolic links, before any replacement.
+      stage = `check ${file.fileName}`;
       await session.exists(destination, operation);
       temporary = { kind: "pathTemporary", directory: endpoint.directory, fileName: file.fileName, token: randomBytes(16).toString("hex") };
+      stage = `upload ${file.fileName}`;
       await session.write(temporary, file.contents, operation);
+      stage = `read back the uploaded ${file.fileName}`;
       if (!(await session.read(temporary, MAX_BYTES, operation)).equals(file.contents)) {
         throw new RobotTransportError("transfer_failed", `SFTP read-back did not match ${file.fileName}; its destination was not replaced`);
       }
       operation.throwIfAborted();
       publishing = file.fileName;
+      stage = `publish ${file.fileName}`;
       await session.renameSameDirectory(temporary, destination, operation);
       temporary = undefined;
+      stage = `verify ${file.fileName} at its destination`;
       if (!(await session.read(destination, MAX_BYTES, operation)).equals(file.contents)) {
         throw new RobotTransportError("transfer_failed", `Published SFTP read-back did not match ${file.fileName}`);
       }
@@ -107,7 +114,7 @@ export async function uploadRobotFiles(
     const code = deadline.aborted ? "timed_out" : signal?.aborted ? "cancelled"
       : error instanceof RobotTransportError ? error.code : "transfer_failed";
     throw new RobotTransportError(code,
-      `${reason}. ${published.length} of ${files.length} files verified on the robot${published.length ? ` (${published.join(", ")})` : ""}.${publishing ? ` ${publishing} may have been replaced; its final bytes were not verified.` : ""}`,
+      `Could not ${stage}: ${reason}. ${published.length} of ${files.length} files verified on the robot${published.length ? ` (${published.join(", ")})` : ""}.${publishing ? ` ${publishing} may have been replaced; its final bytes were not verified.` : ""}`,
       { cause: error });
   } finally {
     if (temporary) {

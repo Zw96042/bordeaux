@@ -1,0 +1,34 @@
+import * as React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { describe, expect, it } from 'vitest';
+import { AppUpdateDialog, releaseNoteBlocks } from '../src/renderer/components/AppUpdateDialog';
+const render = (patch) => renderToStaticMarkup(React.createElement(AppUpdateDialog, { state: { phase: 'available', currentVersion: '0.2.0-beta.10', version: '0.2.0-beta.11', channel: 'beta', ...patch } }));
+describe('app update dialog', () => {
+  it('renders safe headings, lists and code without activating release links or HTML', () => {
+    const notes = '# Fixes\n- **Faster** playback\n[Download](https://bad.example)\n<script>alert(1)</script>\n```js\nconst value = 1;\n```';
+    expect(releaseNoteBlocks(notes).map(b => b.kind)).toEqual(['heading', 'item', 'paragraph', 'paragraph', 'code']);
+    const html = render({ releaseNotes: notes });
+    expect(html).toContain('&lt;script&gt;');
+    expect(html).not.toContain('<script>');
+    expect(html).not.toContain('href=');
+    expect(html).not.toContain('bad.example');
+  });
+  it('disables restart with explicit save guidance for unsaved work', () => {
+    const html = render({ phase: 'downloaded', projectDirty: true });
+    expect(html).toContain('Save your project before restarting');
+    expect(html).toMatch(/disabled="">Restart and install/);
+    expect(render({ phase: 'downloaded', projectDirty: false })).not.toContain('disabled');
+  });
+  it('shows determinate progress, transfer totals and explicit cancellation', () => {
+    const html = render({ phase: 'downloading', progress: { percent: 43, transferred: 45 * 1048576, total: 100 * 1048576, bytesPerSecond: 2 * 1048576 } });
+    expect(html).toContain('value="43"');
+    expect(html).toContain('45.0 MB of 100.0 MB');
+    expect(html).toContain('2.0 MB/s');
+    expect(html).toContain('Cancel download');
+  });
+  it('chooses retry for the failed operation rather than the presence of a version', () => {
+    expect(render({ phase: 'error', errorStage: 'check' })).toContain('Try again');
+    expect(render({ phase: 'error', errorStage: 'download' })).toContain('Retry download');
+    expect(render({ phase: 'error', errorStage: 'install' })).toContain('Retry install');
+  });
+});

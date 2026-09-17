@@ -1,231 +1,206 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { appUpdateChannel, AppUpdateController, supportsAppUpdates, usesGitHubAppUpdates, type UpdatePresenter, type UpdateRuntime } from "../src/electron/appUpdates";
+import type { CancellationToken } from "builder-util-runtime";
+import type { AppUpdateState } from "../src/shared/appUpdates";
+import { appUpdateChannel, AppUpdateController, supportsAppUpdates, usesGitHubAppUpdates, updateReleaseNotes, type UpdateRuntime } from "../src/electron/appUpdates";
 
+function deferred<T = unknown>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
 class FakeUpdater extends EventEmitter {
-  autoDownload = false;
+  autoDownload = true;
   autoInstallOnAppQuit = true;
   autoRunAppAfterInstall = false;
   allowPrerelease = false;
   allowDowngrade = true;
   channel: string | null = null;
-  checks = 0;
-  checkResult: Promise<unknown> = Promise.resolve({});
+  checkForUpdates = vi.fn(async (): Promise<unknown> => ({}));
+  downloadUpdate = vi.fn(async (_token?: CancellationToken): Promise<unknown> => []);
   quitAndInstall = vi.fn();
-  downloadUpdate = vi.fn(async () => []);
-
-  checkForUpdates(): Promise<unknown> {
-    this.checks += 1;
-    return this.checkResult;
-  }
 }
-
 function fixture(overrides: Partial<UpdateRuntime> = {}) {
   const updater = new FakeUpdater();
-  const calls: string[] = [];
-  const presenter: UpdatePresenter = {
-    available: (version, notes) => { calls.push(`available:${version}:${notes}`); return "later"; },
-    unavailable: () => { calls.push("unavailable"); },
-    downloading: (version) => { calls.push(`downloading:${version}`); },
-    upToDate: (version) => { calls.push(`current:${version}`); },
-    failed: (message) => { calls.push(`failed:${message}`); },
-    ready: async (version, dirty) => { calls.push(`ready:${version}:${dirty}`); return "later" as const; },
-  };
+  const states: AppUpdateState[] = [];
   let dirty = false;
   const runtime: UpdateRuntime = {
-    packaged: true,
-    supported: true,
-    currentVersion: "0.2.0-beta.1",
-    isProjectDirty: () => dirty,
-    prepareToInstall: () => undefined,
-    warn: () => undefined,
-    ...overrides,
+    packaged: true, supported: true, currentVersion: "0.2.0-beta.1",
+    isProjectDirty: () => dirty, prepareToInstall: vi.fn(), warn: vi.fn(),
+    describeError: () => "Try again or open Releases.", ...overrides,
   };
-  const controller = new AppUpdateController(updater, presenter, runtime);
-  return {
-    updater, presenter, runtime, controller, calls,
-    setDirty(value: boolean) { dirty = value; },
+  const controller = new AppUpdateController(updater, runtime, state => states.push(state));
+  controller.start();
+  const offer = () => updater.emit("update-available", { version: "0.3.0", releaseNotes: "<p>Better paths</p>" });
+  const ready = async () => {
+    offer();
+    updater.downloadUpdate.mockImplementationOnce(async () => { updater.emit("update-downloaded", { version: "0.3.0" }); return []; });
+    await controller.download();
   };
+  return { updater, runtime, controller, states, offer, ready, setDirty(value: boolean) { dirty = value; } };
 }
 
-describe("application updates", () => {
-  it("supports every Electron desktop platform", () => {
-    expect(["darwin", "win32", "linux"].every((platform) => supportsAppUpdates(platform as NodeJS.Platform))).toBe(true);
+describe("application update state", () => {
+  it("selects supported package formats and stable/beta feeds", () => {
+    expect(supportsAppUpdates("darwin")).toBe(true);
     expect(supportsAppUpdates("aix")).toBe(false);
-  });
-
-  it("leaves Store-installed Windows updates to Microsoft", () => {
     expect(usesGitHubAppUpdates("win32", true)).toBe(false);
-    expect(usesGitHubAppUpdates("win32", false)).toBe(true);
     expect(usesGitHubAppUpdates("win32", false, true)).toBe(false);
-    expect(usesGitHubAppUpdates("darwin", false)).toBe(true);
-    expect(usesGitHubAppUpdates("linux", false, false, true)).toBe(true);
+    expect(usesGitHubAppUpdates("win32", false)).toBe(true);
     expect(usesGitHubAppUpdates("linux", false, false, false)).toBe(false);
+    expect(usesGitHubAppUpdates("linux", false, false, true)).toBe(true);
+    expect(appUpdateChannel("1.0.0")).toBe("latest");
+    expect(appUpdateChannel("1.0.0-rc.1")).toBe("beta");
+    expect(fixture().updater).toMatchObject({ autoDownload: false, autoInstallOnAppQuit: false, autoRunAppAfterInstall: true, allowPrerelease: true, allowDowngrade: false, channel: "beta" });
+    expect(fixture({ currentVersion: "1.0.0" }).updater.channel).toBe("latest");
   });
-
-  it("keeps prereleases on beta and stable builds on production updates", () => {
-    expect(appUpdateChannel("0.2.0-beta.1")).toBe("beta");
-    expect(appUpdateChannel("0.2.0-rc.1")).toBe("beta");
-    expect(appUpdateChannel("0.2.0")).toBe("latest");
-
-    const { controller, updater } = fixture();
-    controller.start();
-    expect(updater).toMatchObject({
-      autoDownload: false,
-      autoInstallOnAppQuit: false,
-      autoRunAppAfterInstall: true,
-      allowPrerelease: true,
-      allowDowngrade: false,
-      channel: "beta",
-    });
-
-    const stable = fixture({ currentVersion: "0.2.0" });
-    stable.controller.start();
-    expect(stable.updater).toMatchObject({
-      allowPrerelease: false,
-      channel: "latest",
-    });
+  it("never checks unsupported or development installs", async () => {
+    const f = fixture({ packaged: false });
+    await f.controller.check(true);
+    expect(f.updater.checkForUpdates).not.toHaveBeenCalled();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "unsupported", visible: true });
+    const absent = new AppUpdateController(null, f.runtime);
+    await absent.check(true);
+    expect(absent.snapshot().phase).toBe("unsupported");
   });
-
-  it("never contacts the update feed from development builds", async () => {
-    const { controller, updater, calls } = fixture({ packaged: false });
-    await controller.check(false);
-    await controller.check(true);
-    expect(updater.checks).toBe(0);
-    expect(calls).toEqual(["unavailable"]);
-  });
-
-  it("does not require an update client in unavailable builds", async () => {
-    const { presenter, runtime, calls } = fixture({ packaged: false });
-    const controller = new AppUpdateController(null, presenter, runtime);
-    await controller.check(true);
-    expect(calls).toEqual(["unavailable"]);
-  });
-
-  it("reports an updater that cannot run in the current package format", async () => {
-    const { controller, updater, calls } = fixture();
-    updater.checkResult = Promise.resolve(null);
-    await controller.check(true);
-    expect(calls).toEqual(["unavailable"]);
-  });
-
-  it("reports interactive availability without making automatic checks noisy", async () => {
-    const automatic = fixture();
-    const automaticCheck = automatic.controller.check(false);
-    automatic.updater.emit("update-not-available", { version: "0.2.0-beta.1" });
-    await automaticCheck;
-    expect(automatic.calls).toEqual([]);
-
-    const interactive = fixture();
-    const interactiveCheck = interactive.controller.check(true);
-    interactive.updater.emit("update-available", { version: "0.2.0-beta.2" });
-    await interactiveCheck;
-    expect(interactive.calls).toEqual(["available:0.2.0-beta.2:Release notes were not provided for this version."]);
-  });
-
-  it("contains update-check errors and reports them once", async () => {
-    const { controller, updater, calls } = fixture();
-    updater.checkResult = Promise.reject(new Error("feed unavailable"));
-    await controller.check(true);
-    expect(calls).toEqual(["failed:feed unavailable"]);
-  });
-
-  it("offers background updates with release notes and downloads only after consent", async () => {
-    const { controller, updater, presenter, calls } = fixture();
-    controller.start();
-    updater.emit("update-available", { version: "0.3.0", releaseNotes: "<p>Improved path following</p>" });
+  it("coalesces checks and lets a manual check reveal an ongoing background check", async () => {
+    const f = fixture(); const pending = deferred();
+    f.updater.checkForUpdates.mockReturnValue(pending.promise);
+    const background = f.controller.check(); const manual = f.controller.check(true);
     await Promise.resolve();
-    expect(calls).toEqual(["available:0.3.0:Improved path following"]);
-    expect(updater.downloadUpdate).not.toHaveBeenCalled();
-    presenter.available = () => "download";
-    await controller.check(true);
-    updater.emit("update-available", { version: "0.3.0", releaseNotes: [] });
-    await Promise.resolve();
-    expect(updater.downloadUpdate).toHaveBeenCalledOnce();
+    expect(f.updater.checkForUpdates).toHaveBeenCalledOnce();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "checking", visible: true });
+    f.updater.emit("update-not-available", { version: "0.2.0-beta.1" });
+    pending.resolve({}); await Promise.all([background, manual]);
+    expect(f.controller.snapshot().phase).toBe("upToDate");
+  });
+  it("reports null check results as unsupported", async () => {
+    const f = fixture(); f.updater.checkForUpdates.mockResolvedValue(null);
+    await f.controller.check(true); expect(f.controller.snapshot().phase).toBe("unsupported");
+  });
+  it("shows release notes once per version and never auto downloads", () => {
+    const f = fixture(); f.offer();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "available", visible: true, releaseNotes: "Better paths" });
+    f.controller.setVisible(false); f.offer();
+    expect(f.controller.snapshot().visible).toBe(false);
+    expect(f.updater.downloadUpdate).not.toHaveBeenCalled();
+    expect(updateReleaseNotes({version:"1",releaseNotes:[{version:"1",note:"A &amp; B"}]})).toBe("A & B");
+  });
+  it("deduplicates emitted and rejected check errors and keeps background failures hidden", async () => {
+    const f = fixture(); const error = new Error("private diagnostic");
+    f.updater.checkForUpdates.mockImplementation(async () => { f.updater.emit("error", error); throw error; });
+    await f.controller.check();
+    expect(f.states.filter(s => s.phase === "error")).toHaveLength(1);
+    expect(f.controller.snapshot()).toMatchObject({ visible: false, error: "Try again or open Releases.", errorDetails: "private diagnostic", errorStage: "check" });
+  });
+  it("publishes bounded progress and closing leaves transfer running", async () => {
+    const f = fixture(); f.offer(); const pending = deferred();
+    f.updater.downloadUpdate.mockReturnValue(pending.promise);
+    const work = f.controller.download(); await Promise.resolve();
+    f.updater.emit("download-progress", { percent: 140, transferred: 500, total: 1000, bytesPerSecond: 30 });
+    f.controller.setVisible(false);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "downloading", visible: false, progress: { percent: 100, transferred: 500 } });
+    expect(f.updater.downloadUpdate.mock.calls[0][0]?.cancelled).toBe(false);
+    f.updater.emit("update-downloaded", { version: "0.3.0" }); pending.resolve([]); await work;
+    expect(f.controller.snapshot()).toMatchObject({ phase: "downloaded", visible: false });
+    expect(f.updater.quitAndInstall).not.toHaveBeenCalled();
+    await f.controller.check(true);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "downloaded", visible: true });
+    expect(f.updater.checkForUpdates).not.toHaveBeenCalled();
+  });
+  it("cancels without errors or late readiness and permits retry after settlement", async () => {
+    const f = fixture(); f.offer(); const pending = deferred();
+    f.updater.downloadUpdate.mockReturnValueOnce(pending.promise);
+    const download = f.controller.download(); await Promise.resolve();
+    const cancel = f.controller.cancelDownload();
+    expect(f.updater.downloadUpdate.mock.calls[0][0]?.cancelled).toBe(true);
+    f.updater.emit("update-downloaded", { version: "0.3.0" });
+    f.updater.emit("error", new Error("cancelled"));
+    const retry = f.controller.download();
+    expect(f.updater.downloadUpdate).toHaveBeenCalledOnce();
+    pending.reject(new Error("cancelled")); await Promise.all([download, cancel, retry]);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "available", error: null });
+    await f.ready(); expect(f.controller.snapshot().phase).toBe("downloaded");
+  });
+  it("deduplicates download errors, ignores spurious completion and retries", async () => {
+    const f = fixture(); f.offer();
+    f.updater.downloadUpdate.mockImplementationOnce(async () => { const e = new Error("signature rejected"); f.updater.emit("error", e); f.updater.emit("update-downloaded", {version:"0.3.0"}); throw e; });
+    await f.controller.download();
+    expect(f.states.filter(s => s.phase === "error")).toHaveLength(1);
+    expect(f.controller.snapshot().errorStage).toBe("download");
+    await f.ready(); expect(f.controller.snapshot().phase).toBe("downloaded");
+  });
+  it("keeps downloaded update when dirty, then installs after saving", async () => {
+    const f = fixture(); await f.ready(); f.setDirty(true);
+    await f.controller.install();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "downloaded", projectDirty: true });
+    expect(f.runtime.prepareToInstall).not.toHaveBeenCalled();
+    f.setDirty(false); f.controller.refreshDirty(); await f.controller.install();
+    expect(f.updater.quitAndInstall).toHaveBeenCalledWith(false, true);
+  });
+  it("checks dirty state again after shutdown and blocks duplicate install requests", async () => {
+    const f = fixture(); await f.ready(); const pending = deferred<void>();
+    f.runtime.prepareToInstall = vi.fn(() => pending.promise);
+    const install = f.controller.install(); await f.controller.install();
+    expect(f.runtime.prepareToInstall).toHaveBeenCalledOnce();
+    f.setDirty(true); pending.resolve(); await install;
+    expect(f.controller.snapshot().phase).toBe("downloaded");
+    expect(f.updater.quitAndInstall).not.toHaveBeenCalled();
+  });
+  it("retains downloaded update after shutdown failure for an install retry", async () => {
+    const f = fixture(); await f.ready();
+    f.runtime.prepareToInstall = vi.fn().mockRejectedValueOnce(new Error("backend busy")).mockResolvedValue(undefined);
+    await f.controller.install(); expect(f.controller.snapshot().errorStage).toBe("install");
+    expect(f.updater.quitAndInstall).not.toHaveBeenCalled();
+    await f.controller.install(); expect(f.updater.quitAndInstall).toHaveBeenCalledOnce();
+  });
+  it("reports asynchronous installer failure", async () => {
+    const f = fixture(); await f.ready(); await f.controller.install();
+    f.updater.emit("error", new Error("installer failed"));
+    expect(f.controller.snapshot()).toMatchObject({ phase: "error", errorStage: "install" });
+  });
+  it("does not start the installer after an updater error during shutdown", async () => {
+    const f = fixture(); await f.ready(); const pending = deferred<void>();
+    f.runtime.prepareToInstall = () => pending.promise;
+    const install = f.controller.install();
+    f.updater.emit("error", new Error("installation unavailable"));
+    pending.resolve(); await install;
+    expect(f.controller.snapshot().errorStage).toBe("install");
+    expect(f.updater.quitAndInstall).not.toHaveBeenCalled();
+  });
+  it("does not duplicate listeners and returns independent state snapshots", async () => {
+    const f = fixture(); f.controller.start();
+    expect(f.updater.listenerCount("update-available")).toBe(1);
+    f.offer(); const pending = deferred(); f.updater.downloadUpdate.mockReturnValue(pending.promise);
+    const download = f.controller.download(); await Promise.resolve();
+    const snapshot = f.controller.snapshot(); snapshot.progress!.percent = 75;
+    expect(f.controller.snapshot().progress!.percent).toBe(0);
+    pending.resolve([]); await download;
   });
 
-  it("reports explicit download failure", async () => {
-    const { controller, updater, presenter, calls } = fixture();
-    presenter.available = () => "download";
-    updater.downloadUpdate.mockRejectedValueOnce(new Error("download failed"));
-    controller.start();
-    updater.emit("update-available", { version: "0.3.0" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(calls).toEqual(["failed:download failed"]);
+  it("keeps the install guard visible until an installation error unlocks it", async () => {
+    const f = fixture(); await f.ready(); f.controller.setVisible(false); await f.controller.install();
+    f.controller.setVisible(false);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "installing", visible: true });
+    f.updater.emit("error", new Error("native verification failed"));
+    f.controller.setVisible(false);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "error", visible: false });
+  });
+  it("shows current release notes when already up to date without presenting older notes", async () => {
+    const f = fixture();
+    f.updater.checkForUpdates.mockImplementation(async () => {
+      f.updater.emit("update-not-available", { version: "0.2.0-beta.1", releaseNotes: "<p>Current improvements</p>" });
+      return {};
+    });
+    await f.controller.check(true);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "upToDate", releaseNotes: "Current improvements", version: null });
+    f.updater.checkForUpdates.mockImplementation(async () => {
+      f.updater.emit("update-not-available", { version: "0.1.0", releaseNotes: "Older notes" });
+      return {};
+    });
+    await f.controller.check(true);
+    expect(f.controller.snapshot().releaseNotes).toBe("");
   });
 
-  it("installs only after an explicit clean-project restart", async () => {
-    const clean = fixture();
-    const prepareToInstall = vi.fn();
-    clean.runtime.prepareToInstall = prepareToInstall;
-    clean.presenter.ready = async () => "restart" as const;
-    clean.controller.start();
-    clean.updater.emit("update-downloaded", { version: "0.2.0-beta.2" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(prepareToInstall).toHaveBeenCalledOnce();
-    expect(prepareToInstall.mock.invocationCallOrder[0]).toBeLessThan(clean.updater.quitAndInstall.mock.invocationCallOrder[0]);
-    expect(clean.updater.quitAndInstall).toHaveBeenCalledWith(false, true);
-
-    const dirty = fixture();
-    dirty.setDirty(true);
-    dirty.presenter.ready = async () => "restart" as const;
-    dirty.controller.start();
-    dirty.updater.emit("update-downloaded", { version: "0.2.0-beta.2" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(dirty.updater.quitAndInstall).not.toHaveBeenCalled();
-  });
-
-  it("does not install when backend shutdown fails", async () => {
-    const { controller, updater, presenter, runtime, calls } = fixture();
-    presenter.ready = async () => "restart" as const;
-    runtime.prepareToInstall = async () => { throw new Error("backend is still running"); };
-    controller.start();
-    updater.emit("update-downloaded", { version: "0.2.0-beta.2" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(updater.quitAndInstall).not.toHaveBeenCalled();
-    expect(calls).toEqual(["failed:backend is still running"]);
-  });
-
-  it("does not install if the project changes during backend shutdown", async () => {
-    const { controller, updater, presenter, runtime, setDirty } = fixture();
-    presenter.ready = async () => "restart" as const;
-    runtime.prepareToInstall = () => setDirty(true);
-    controller.start();
-    updater.emit("update-downloaded", { version: "0.2.0-beta.2" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(updater.quitAndInstall).not.toHaveBeenCalled();
-  });
-
-  it("reports an updater error after installation begins", async () => {
-    const { controller, updater, presenter, calls } = fixture();
-    presenter.ready = async () => "restart" as const;
-    controller.start();
-    updater.emit("update-downloaded", { version: "0.2.0-beta.2" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    updater.emit("error", new Error("installer failed"));
-    expect(calls).toEqual(["failed:installer failed"]);
-  });
-
-  it("offers the downloaded update from Check Updates without downloading it again", async () => {
-    const { controller, updater, presenter } = fixture();
-    const ready = vi.fn(async () => "later" as const); presenter.ready = ready;
-    controller.start(); updater.emit("update-downloaded", { version: "0.3.0" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await controller.check(true);
-    expect(ready).toHaveBeenCalledTimes(2);
-    expect(updater.checks).toBe(0);
-    expect(updater.downloadUpdate).not.toHaveBeenCalled();
-  });
-
-  it("can offer a downloaded update again after Later", async () => {
-    const { controller, updater, presenter } = fixture();
-    const ready = vi.fn(async () => "later" as const);
-    presenter.ready = ready;
-    controller.start();
-    updater.emit("update-downloaded", { version: "0.2.0-beta.2" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    updater.emit("update-downloaded", { version: "0.2.0-beta.2" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(ready).toHaveBeenCalledTimes(2);
-  });
 });

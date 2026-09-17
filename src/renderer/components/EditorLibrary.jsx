@@ -107,6 +107,9 @@ function PathProperties({ item, project, actions, close }) {
 
 function EditorLibrary({ mode, prefs, update, project, routines, activePathId, activeRoutineId, onMode, onPath, onRoutine, actions, times, controller, saveState, onRetrySave }) {
   const pathsMode = mode === 'paths';
+  const routinePushAvailable = !controller.fileTransfer && typeof window !== 'undefined' && window.bordeauxAPI?.robotDeliveryCapabilities?.routinePush === true;
+  const pushUnavailable = !pathsMode && !routinePushAvailable;
+  const routinePushExplanation = 'Routine upload is unavailable with this connection. Routines stay saved locally.';
   const items = pathsMode ? project.paths : routines;
   const activeId = pathsMode ? activePathId : activeRoutineId;
   const active = items.find((item) => item.id === activeId);
@@ -233,12 +236,13 @@ function EditorLibrary({ mode, prefs, update, project, routines, activePathId, a
       h('div', { className: 'library-selection', role: 'status' },
         h('span', { className: 'library-current-name', title: pushName }, pathsMode && selected.length > 1 ? selected.length + ' paths selected' + (selected.some((id) => !visible.some((item) => item.id === id)) ? ', includes hidden' : '') : pushName),
         pathsMode && selected.length > 1 && h('button', { type: 'button', onClick: () => update({ checked: [activeId], selectionActiveId: activeId }) }, 'Clear')),
-      h('button', { type: 'button', disabled: controller.busy || !active || controller.desktopAvailable === false, onClick: () => controller.requestPush(pathsMode ? { kind: 'paths', pathIds: selected } : { kind: 'routine', routineId: active.id }) }, h(Icon, { name: 'share', size: 13 }), pathsMode ? selected.length > 1 ? 'Push ' + selected.length + ' paths' : 'Push path' : 'Push routine'),
+      h('button', { type: 'button', disabled: controller.busy || !active || controller.desktopAvailable === false || pushUnavailable, title: pushUnavailable ? routinePushExplanation : undefined, onClick: () => controller.requestPush(pathsMode ? { kind: 'paths', pathIds: selected } : { kind: 'routine', routineId: active.id }) }, h(Icon, { name: 'share', size: 13 }), pathsMode ? selected.length > 1 ? 'Push ' + selected.length + ' paths' : 'Push path' : 'Push routine'),
+      pushUnavailable && h('span', { className: 'library-selection-hint' }, routinePushExplanation),
       pathsMode && h('span', { className: 'library-selection-hint' }, 'Shift: select range. ⌘ / Ctrl: select multiple.')),
     menu && menuItem && h(LibraryMenu, { key: menu.id, menu, close: closeMenu },
       menu.kind !== 'folder' && menuButton(pathsMode ? 'Push path…' : 'Push routine…', () => {
         setMenu(null); controller.requestPush(pathsMode ? { kind: 'paths', pathIds: [menuItem.id] } : { kind: 'routine', routineId: menuItem.id });
-      }, { disabled: controller.busy || controller.desktopAvailable === false }),
+      }, { disabled: controller.busy || controller.desktopAvailable === false || pushUnavailable, title: pushUnavailable ? routinePushExplanation : undefined }),
       menu.kind === 'path' && menuButton('Export BDX…', () => { const pathId = menuItem.id; setMenu(null); actions.exportPath(pathId); }, { disabled: controller.desktopAvailable === false }),
       menu.kind !== 'folder' && h('hr'),
       menuButton('Rename', () => rename(menu.kind, menuItem)),

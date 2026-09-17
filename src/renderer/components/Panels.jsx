@@ -23,7 +23,7 @@ import { UI } from "./ui";
         h('nav', { className: 'pageswitch', 'aria-label': 'Workspace' },
           h('button', { className: page !== 'robot' ? 'on' : '', type: 'button', 'aria-current': page !== 'robot' ? 'page' : undefined, onClick: () => setPage(editorPage) }, h(Icon, { name: 'route', size: 15 }), 'Editor'),
           h('button', { className: page === 'robot' ? 'on' : '', type: 'button', 'aria-current': page === 'robot' ? 'page' : undefined, onClick: () => setPage('robot') }, h(Icon, { name: 'gear', size: 15 }), 'Settings')),
-        h(ProjectMenu, { projectName: props.projectName, projectLocation: props.projectLocation, saveState: props.saveState, onOpen: props.onOpen, onSave: props.onSave })),
+        h(ProjectMenu, { projectName: props.projectName, projectLocation: props.projectLocation, saveState: props.saveState, openError: props.projectOpenError, onRetryOpen: props.onRetryOpen, onDismissOpenError: props.onDismissOpenError, onOpen: props.onOpen, onSave: props.onSave })),
 
       h('div', { className: 'tb-right' },
         h(KeyboardHelp),

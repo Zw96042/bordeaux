@@ -238,6 +238,37 @@ app.whenReady().then(async () => {
     await click('.optimizer-toggle');
     check('double-clicking a waypoint opens its inspector over Optimize and closing returns focus');
     await click('.optimizer-main', 'Optimize');
+    await waitFor(() => evaluate(() => document.querySelector('.optimizer-main')?.textContent === 'Cancel'), 'the current-path search');
+    await switchPath(fixture.paths[1].name);
+    await waitFor(() => evaluate(() => !!document.querySelector('.optimizer-background')), 'the named background search');
+    const backgroundJob = await evaluate(() => ({
+      owner: document.querySelector('.optimizer-background strong')?.textContent,
+      cancelLabel: document.querySelector('.optimizer-background button')?.getAttribute('aria-label'),
+      currentBusy: document.querySelector('.optimizer-status')?.getAttribute('aria-busy'),
+      startDisabled: document.querySelector('.optimizer-main')?.disabled,
+      label: document.querySelector('.optimizer-main')?.textContent,
+    }));
+    assert.equal(backgroundJob.owner, fixture.paths[0].name);
+    assert.equal(backgroundJob.cancelLabel, `Cancel optimization for ${fixture.paths[0].name}`);
+    assert.equal(backgroundJob.currentBusy, 'false');
+    assert.equal(backgroundJob.startDisabled, true);
+    assert.equal(backgroundJob.label, 'Optimize');
+    await fs.writeFile(path.join(output, 'optimizer-background.png'), (await window.webContents.capturePage()).toPNG());
+    window.setContentSize(1100, 720);
+    await delay(120);
+    await fs.writeFile(path.join(output, 'optimizer-background-1100x720.png'), (await window.webContents.capturePage()).toPNG());
+    window.setContentSize(1440, 900);
+    await click('.optimizer-background button');
+    await waitFor(() => evaluate(() => !document.querySelector('.optimizer-background') && !document.querySelector('.optimizer-main')?.disabled), 'background cancellation to release the search slot');
+    assert.equal(await evaluate(() => !!document.querySelector('button[aria-label="Preview optimized trajectory"]')), false, 'The background job must not create a candidate on the selected path');
+    await switchPath(fixture.paths[0].name);
+    await stable(normal, 200, 'Canceling the original search');
+    // Cancellation may retain an incumbent candidate; it must never apply it.
+    assert.notEqual(await evaluate(() => document.querySelector('.optimizer-main')?.textContent), 'Cancel');
+    await openSettings();
+    await click('.optimizer-search-actions button:first-child');
+    await click('.optimizer-settings summary');
+    check('background search names its owner, blocks concurrent search, and cancels the original path');
     await finishSearch();
     check('optimizer opens quietly at the inspector width, closes the whole sidebar, and searches only on explicit request');
     await assertCompactResult();

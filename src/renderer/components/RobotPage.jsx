@@ -89,7 +89,7 @@ import "../styles/settings.css";
       error && h('span', { className: 'cmd-param-error', role: 'alert' }, error));
   }
 
-  function RobotPage({ robot, setRobot, unitSystem, setUnitSystem, pushController, mcpEnabled, agentProposal, onApplyProposal, onRejectProposal }) {
+  function RobotPage({ robot, setRobot, unitSystem, setUnitSystem, pushController, mcpEnabled, updateState, onOpenUpdates, agentProposal, onApplyProposal, onRejectProposal }) {
     const isSwerve = robot.drive === 'swerve';
     const [customEditing, setCustomEditing] = useState(false);
     const [selectedVertex, setSelectedVertex] = useState(0);
@@ -277,7 +277,11 @@ import "../styles/settings.css";
               pushController.busy ? 'Push progress' : pushController.pairing ? 'Manage connection' : 'Connect robot')),
           h('div', { className: 'settings-row' },
             h('strong', null, 'Display units'),
-            h(UI.Seg, { ariaLabel: 'Display units', value: unitSystem, options: [{ v: 'metric', label: 'Metric' }, { v: 'imperial', label: 'Imperial' }], onChange: setUnitSystem }))),
+            h(UI.Seg, { ariaLabel: 'Display units', value: unitSystem, options: [{ v: 'metric', label: 'Metric' }, { v: 'imperial', label: 'Imperial' }], onChange: setUnitSystem })),
+          updateState && h('div', { className: 'settings-row' },
+            h('div', { className: 'settings-label' }, h('strong', null, 'Software updates'),
+              h('span', null, 'Bordeaux ' + updateState.currentVersion + (updateState.phase === 'downloaded' ? ' · Ready to install' : updateState.phase === 'downloading' ? ' · Downloading update' : updateState.phase === 'available' ? ' · Update available' : ''))),
+            h('button', { className: 'qbtn', type: 'button', onClick: onOpenUpdates }, ['available', 'downloading', 'downloaded', 'installing', 'error'].includes(updateState.phase) ? 'View update' : 'Check for updates'))),
         h('h2', { className: 'settings-robot-heading' }, 'Robot'),
         h('div', { className: 'rp-sub' }, 'Project-wide dimensions and drivetrain limits.'),
         h('div', { className: 'rp-grid' },

@@ -1,7 +1,12 @@
 import path from "node:path";
 import type { BuiltRobotBinary } from "../shared/export/robotBinary";
-import type { BdxJob } from "./bdxProtocol";
+import type { BdxBatchJob, BdxJob } from "./bdxProtocol";
 import { runWorkerTask } from "./workerTask";
 export function buildBdxOffThread(job: BdxJob): Promise<BuiltRobotBinary> {
   return runWorkerTask(path.join(__dirname, "bdxWorker.js"), job, "BDX export");
+}
+
+/** Clone the reviewed project once and build selected paths sequentially in one worker. */
+export function buildBdxBatchOffThread(job: BdxBatchJob): Promise<BuiltRobotBinary[]> {
+  return runWorkerTask(path.join(__dirname, "bdxWorker.js"), job, "BDX path preparation");
 }

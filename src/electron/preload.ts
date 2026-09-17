@@ -1,3 +1,4 @@
+import type { AppUpdateState } from "../shared/appUpdates";
 import type { RobotFileEndpoint, RobotFileConnection, RobotFilePreview, RobotFileResult } from "../shared/robotFileDelivery";
 import type { RobotPushScope, RobotDeploymentComparison } from "../shared/export/robotDeployment";
 import { contextBridge, ipcRenderer } from "electron";
@@ -9,6 +10,19 @@ import type { RobotRetentionOperationResult, RobotRetentionPreview, RobotRetenti
 
 const bordeauxAPI = {
   platform: process.platform,
+  getAppUpdateState: (): Promise<AppUpdateState> => ipcRenderer.invoke("appUpdates:state"),
+  checkAppUpdates: (): Promise<void> => ipcRenderer.invoke("appUpdates:check"),
+  downloadAppUpdate: (): Promise<void> => ipcRenderer.invoke("appUpdates:download"),
+  cancelAppUpdateDownload: (): Promise<void> => ipcRenderer.invoke("appUpdates:cancel"),
+  installAppUpdate: (): Promise<void> => ipcRenderer.invoke("appUpdates:install"),
+  setAppUpdatesVisible: (visible: boolean): Promise<void> => ipcRenderer.invoke("appUpdates:visible", visible),
+  openAppUpdateReleases: (): Promise<void> => ipcRenderer.invoke("appUpdates:releases"),
+  copyAppUpdateDetails: (): Promise<void> => ipcRenderer.invoke("appUpdates:copyDetails"),
+  onAppUpdateState: (handler: (state: AppUpdateState) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: AppUpdateState) => handler(state);
+    ipcRenderer.on("appUpdates:state", listener);
+    return () => ipcRenderer.removeListener("appUpdates:state", listener);
+  },
   robotDeliveryCapabilities: Object.freeze({ pathPush: true, routinePush: false, fileTransfer: true } satisfies RobotDeliveryCapabilities),
   getRobotFileConnection: (): Promise<RobotFileConnection | null> => ipcRenderer.invoke("robotFiles:connection"),
   probeRobotFiles: (endpoint: RobotFileEndpoint): Promise<RobotFileConnection> => ipcRenderer.invoke("robotFiles:probe", endpoint),

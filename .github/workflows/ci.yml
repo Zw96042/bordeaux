@@ -55,6 +55,11 @@ jobs:
         run: xvfb-run -a node scripts/verify-robot-file-push-ui.mjs
         env:
           BORDEAUX_FILE_PUSH_UI_OUTPUT: .ui-artifacts/file-push
+      - name: Verify update panel UI
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.sandbox.outcome == 'success' }}
+        run: xvfb-run -a node scripts/verify-app-updates-ui.mjs
+        env:
+          BORDEAUX_UPDATES_UI_OUTPUT: .ui-artifacts/updates
       - name: Upload UI evidence
         if: always()
         uses: actions/upload-artifact@v4

@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { referencingRoutines, selectedPathIds } from '../src/renderer/components/EditorLibrary';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { describe, expect, it, vi, afterEach } from 'vitest';
+import { LibraryRail, referencingRoutines, selectedPathIds } from '../src/renderer/components/EditorLibrary';
 
 describe('library path references', () => {
   it('blocks deletion for either decision route and generated fallback branches', () => {
@@ -19,5 +21,18 @@ describe('batch selection', () => {
     const paths = [{ id: 'B', name: 'Renamed B' }, { id: 'A', name: 'Hidden by search' }, { id: 'C', name: 'C' }];
     expect(selectedPathIds(paths, ['A', 'B', 'deleted', 'B'])).toEqual(['B', 'A']);
     expect(selectedPathIds(paths.filter((path) => path.id !== 'A'), ['A', 'B'])).toEqual(['B']);
+  });
+});
+
+afterEach(() => vi.unstubAllGlobals());
+describe('routine delivery capability', () => {
+  it.each([false, true])('exposes routine upload only when supported: %s', (routinePush) => {
+    vi.stubGlobal('window', { bordeauxAPI: { robotDeliveryCapabilities: { routinePush } } });
+    const html = renderToStaticMarkup(React.createElement(LibraryRail, {
+      preferenceKey: 'capability', mode: 'routines', project: { paths: [] }, routines: [{ id: 'r', name: 'Routine', nodes: [] }],
+      activeRoutineId: 'r', controller: { busy: false, itemStatus: () => ({}) }, actions: {}, times: {},
+    }));
+    expect(html.includes('Routine upload is unavailable with this connection')).toBe(!routinePush);
+    expect(html).toMatch(routinePush ? /<button type="button"><svg[^]*?Push routine<\/button>/ : /<button type="button" disabled="" title="Routine upload[^]*?Push routine<\/button>/);
   });
 });

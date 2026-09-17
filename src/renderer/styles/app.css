@@ -1111,3 +1111,9 @@ summary:hover::after { color: var(--accent-2); text-decoration: underline; text-
 .keyboard-help kbd{font:11px var(--mono);color:var(--txt-2)}
 .keyboard-help p{color:var(--txt-3);font-size:11px;line-height:1.5;margin:16px 0 0}
 @container (max-width:700px){.timeline-summary{display:none}}
+
+/* Identify the owner of a search when another path is selected. */
+.optimizer-background{display:flex;align-items:flex-start;gap:12px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--line);color:var(--txt-2);font-size:11px;line-height:1.5}
+.optimizer-background>span{flex:1;min-width:0}
+.optimizer-background strong{display:block;color:var(--txt);font-weight:500;overflow-wrap:anywhere}
+.optimizer-background button{flex:none;padding:5px 8px;border:1px solid var(--line-2);border-radius:6px;background:var(--bg-2)}

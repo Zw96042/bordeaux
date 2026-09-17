@@ -9,7 +9,7 @@ import {
   type RobotSftpSession,
 } from "./robotSftpTransport";
 
-const UNAVAILABLE_MESSAGE = "SFTP to the robot is unavailable. Port 22 is not available on the FMS field network; Bordeaux did not detect which network is connected.";
+const UNAVAILABLE_MESSAGE = "The robot SSH/SFTP connection is unavailable.";
 
 function fingerprint(key: Buffer): string {
   return `SHA256:${createHash("sha256").update(key).digest("base64").replace(/=+$/, "")}`;
@@ -20,7 +20,7 @@ export function validateRobotFileDirectory(directory: unknown): string {
   if (typeof directory !== "string" || directory.length > 512
     || !/^\/(?:home\/lvuser|natinst\/bin\/Paths)(?:\/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$/.test(directory)
     || directory.split("/").some((part) => part === "." || part === "..")) {
-    throw new RobotTransportError("invalid_request", "Robot directory must be inside /natinst/bin/Paths or /home/lvuser without traversal or symbolic links");
+    throw new RobotTransportError("invalid_request", "Robot directory must be inside /natinst/bin/Paths or /home/lvuser without traversal");
   }
   return directory;
 }
@@ -64,12 +64,21 @@ function remotePath(file: RobotRemoteFile): string {
 }
 
 function operationError(signal: AbortSignal, timedOut: () => boolean, cause?: unknown): RobotTransportError {
-  if (cause && typeof cause === "object" && "code" in cause && (cause.code === 3 || cause.code === "EACCES")) {
-    return new RobotTransportError("transfer_failed", "SFTP permission denied. The robot's lvuser account needs access to the selected destination directory", { cause });
-  }
   if (timedOut()) return new RobotTransportError("timed_out", "SFTP to the robot timed out", { cause });
   if (signal.aborted) return new RobotTransportError("cancelled", "SFTP to the robot was cancelled", { cause });
-  return new RobotTransportError("unavailable", UNAVAILABLE_MESSAGE, { cause });
+  const code = cause && typeof cause === "object" && "code" in cause ? cause.code : undefined;
+  const detail = cause instanceof Error ? cause.message : "";
+  const diagnostic = [detail, code !== undefined ? `code ${String(code)}` : ""].filter(Boolean).join("; ");
+  if (code === 3 || code === "EACCES") {
+    return new RobotTransportError("transfer_failed", "SFTP permission denied. The robot's lvuser account needs access to the selected destination directory" + (diagnostic ? ` (${diagnostic})` : ""), { cause });
+  }
+  return new RobotTransportError("unavailable", diagnostic ? `Robot SSH/SFTP failed: ${diagnostic}` : UNAVAILABLE_MESSAGE, { cause });
+}
+
+function unsupportedRename(error: unknown): boolean {
+  const cause = error instanceof RobotTransportError ? error.cause : error;
+  return Boolean(cause && typeof cause === "object" && "code" in cause && cause.code === 8)
+    || (cause instanceof Error && !("code" in cause) && cause.message === "Server does not support this extended request");
 }
 
 function guarded<T>(
@@ -128,20 +137,34 @@ class Ssh2RobotSession implements RobotSftpSession {
     for (let index = 1; index <= parts.length; index += 1) {
       const target = `/${parts.slice(0, index).join("/")}`;
       const combined = AbortSignal.any([signal, this.sessionSignal]);
-      const stat = await guarded<Stats | null>(combined, this.timedOut, (resolve, reject) => {
+      let stat = await guarded<Stats | null>(combined, this.timedOut, (resolve, reject) => {
         this.sftp.lstat(target, (error, value) => {
           if (!error) resolve(value);
           else if ((error as Error & { code?: number }).code === 2) resolve(null);
           else reject(operationError(combined, this.timedOut, error));
         });
       });
+      // LabVIEW's runtime directory may be linked into the lvuser home. Follow
+      // directories only; read/exists still reject links at selected file names.
+      if (stat?.isSymbolicLink()) {
+        stat = await guarded<Stats>(combined, this.timedOut, (resolve, reject) => {
+          this.sftp.stat(target, (error, value) => error ? reject(operationError(combined, this.timedOut, error)) : resolve(value));
+        });
+      }
       if (!stat) {
-        // Probe tolerates an absent destination, but never creates anything.
+        // Required system/account roots cannot be created by an upload. Detect
+        // them during the read-only probe too, before presenting a usable target.
+        if (index <= 2) {
+          const hint = parts[0] === "natinst"
+            ? " LabVIEW's runtime path directory is normally /home/lvuser/natinst/bin/Paths; check the selected destination."
+            : " Check the robot filesystem and selected destination.";
+          throw new RobotTransportError("transfer_failed", `Required robot directory ${target} is unavailable.${hint}`);
+        }
+        // Probe tolerates missing upload directories, but never creates anything.
         if (!create) return;
-        if (index <= 2) throw new RobotTransportError("transfer_failed", "Robot destination parent directory is unavailable");
         await callbackOperation(combined, this.timedOut, (callback) => this.sftp.mkdir(target, { mode: 0o755 }, callback));
       } else if (!stat.isDirectory() || stat.isSymbolicLink()) {
-        throw new RobotTransportError("transfer_failed", "Robot destination contains a non-directory or symbolic link");
+        throw new RobotTransportError("transfer_failed", "Robot destination contains a non-directory");
       }
     }
   }
@@ -222,8 +245,25 @@ class Ssh2RobotSession implements RobotSftpSession {
       throw new RobotTransportError("invalid_request", "Bordeaux atomic rename must remain in one remote directory");
     }
     if (signal.aborted && !this.sessionSignal.aborted) throw new RobotTransportError("cancelled", "SFTP to the robot was cancelled");
-    return callbackOperation(AbortSignal.any([signal, this.sessionSignal]), this.timedOut, (callback) => {
+    const combined = AbortSignal.any([signal, this.sessionSignal]);
+    return callbackOperation(combined, this.timedOut, (callback) => {
       this.sftp.ext_openssh_rename(source, destination, callback);
+    }).catch(async (error: unknown) => {
+      // Legacy inbox publishing remains atomic. Only reviewed direct path files
+      // support servers without OpenSSH's optional POSIX rename extension.
+      if (!validPathRename || combined.aborted || !unsupportedRename(error)) throw error;
+      if (!await this.exists(to, combined)) {
+        await callbackOperation(combined, this.timedOut, (callback) => this.sftp.rename(source, destination, callback));
+        return;
+      }
+      const contents = await this.read(from, 24 * 1024 * 1024, combined);
+      await this.exists(to, combined); // Recheck that the final filename is not a link.
+      await callbackOperation(combined, this.timedOut, (callback) => {
+        this.sftp.writeFile(destination, contents, { flag: "w", mode: 0o600 }, callback);
+      });
+      await this.remove(from, combined);
+      // uploadRobotFiles verifies the final bytes; a failed copy is reported as
+      // potentially replaced, never rolled back by deleting the user's file.
     });
   }
 

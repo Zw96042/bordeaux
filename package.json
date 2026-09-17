@@ -1,6 +1,6 @@
 {
   "name": "bordeaux",
-  "version": "0.2.0-beta.10",
+  "version": "0.2.0-beta.11",
   "private": true,
   "productName": "Bordeaux",
   "author": "FRC Team 2468",
@@ -40,6 +40,7 @@
     "@types/node": "^22.10.2",
     "@types/react": "18.3.31",
     "@types/react-dom": "18.3.7",
+    "@types/semver": "^7.8.0",
     "@types/ssh2": "1.15.5",
     "@vitejs/plugin-react": "6.0.5",
     "electron": "^43.3.0",
@@ -195,7 +196,9 @@
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",
+    "builder-util-runtime": "9.7.0",
     "electron-updater": "6.8.9",
+    "semver": "7.7.4",
     "ssh2": "1.17.0",
     "zod": "4.4.3"
   }

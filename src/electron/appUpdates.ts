@@ -1,10 +1,11 @@
+import { CancellationToken } from "builder-util-runtime";
+import type { AppUpdateChannel, AppUpdateProgress, AppUpdateState } from "../shared/appUpdates";
+export type { AppUpdateChannel } from "../shared/appUpdates";
+
 export interface UpdateVersionInfo {
   version: string;
   releaseNotes?: string | Array<{ version: string; note: string | null }>;
 }
-
-export type AppUpdateChannel = "beta" | "latest";
-
 export interface AppUpdaterLike {
   autoDownload: boolean;
   autoInstallOnAppQuit: boolean;
@@ -14,20 +15,11 @@ export interface AppUpdaterLike {
   channel: string | null;
   on(event: "update-available" | "update-not-available" | "update-downloaded", listener: (info: UpdateVersionInfo) => void): unknown;
   on(event: "error", listener: (error: Error) => void): unknown;
+  on(event: "download-progress", listener: (progress: AppUpdateProgress) => void): unknown;
   checkForUpdates(): Promise<unknown>;
-  downloadUpdate(): Promise<unknown>;
+  downloadUpdate(token?: CancellationToken): Promise<unknown>;
   quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void;
 }
-
-export interface UpdatePresenter {
-  available(version: string, releaseNotes: string): "later" | "download" | Promise<"later" | "download">;
-  unavailable(currentVersion: string): void | Promise<void>;
-  downloading(version: string): void | Promise<void>;
-  upToDate(currentVersion: string): void | Promise<void>;
-  failed(message: string): void | Promise<void>;
-  ready(version: string, projectDirty: boolean): "later" | "restart" | Promise<"later" | "restart">;
-}
-
 export interface UpdateRuntime {
   packaged: boolean;
   supported: boolean;
@@ -35,6 +27,7 @@ export interface UpdateRuntime {
   isProjectDirty(): boolean;
   prepareToInstall(): void | Promise<void>;
   warn(message: string, error?: unknown): void;
+  describeError?(error: unknown): string;
 }
 
 export function updateReleaseNotes(info: UpdateVersionInfo): string {
@@ -68,138 +61,154 @@ export function appUpdateChannel(version: string): AppUpdateChannel {
 
 export class AppUpdateController {
   private started = false;
-  private interactiveCheck = false;
-  private installing = false;
-  private downloading = false;
-  private downloadedVersion: string | null = null;
-  private readonly offeredVersions = new Set<string>();
   private checkPromise: Promise<void> | null = null;
-  private readonly promptedVersions = new Set<string>();
+  private downloadPromise: Promise<void> | null = null;
+  private downloadToken: CancellationToken | null = null;
+  private downloaded = false;
+  private installing = false;
+  private offeredVersions = new Set<string>();
+  private state: AppUpdateState;
 
   constructor(
     private readonly updater: AppUpdaterLike | null,
-    private readonly presenter: UpdatePresenter,
     private readonly runtime: UpdateRuntime,
-  ) {}
-
-  get available(): boolean {
-    return this.runtime.packaged && this.runtime.supported && this.updater !== null;
+    private readonly onState: (state: AppUpdateState) => void = () => undefined,
+  ) {
+    this.state = {
+      phase: this.available ? "idle" : "unsupported", currentVersion: runtime.currentVersion,
+      version: null, releaseNotes: "", progress: null, error: null, errorDetails: null,
+      errorStage: null, projectDirty: runtime.isProjectDirty(), channel: this.channel, visible: false,
+    };
   }
 
-  get channel(): AppUpdateChannel {
-    return appUpdateChannel(this.runtime.currentVersion);
+  get available(): boolean { return this.runtime.packaged && this.runtime.supported && this.updater !== null; }
+  get channel(): AppUpdateChannel { return appUpdateChannel(this.runtime.currentVersion); }
+  snapshot(): AppUpdateState {
+    return { ...this.state, projectDirty: this.runtime.isProjectDirty(), progress: this.state.progress ? { ...this.state.progress } : null };
+  }
+  private publish(patch: Partial<AppUpdateState> = {}): void {
+    this.state = { ...this.state, ...patch, projectDirty: this.runtime.isProjectDirty() };
+    this.onState(this.snapshot());
+  }
+  setVisible(visible: boolean): void {
+    if (!visible && this.installing) return;
+    this.publish({ visible });
+  }
+  refreshDirty(): void { this.publish(); }
+  refresh(): void { this.refreshDirty(); }
+  private clearError(): Pick<AppUpdateState, "error" | "errorDetails" | "errorStage"> {
+    return { error: null, errorDetails: null, errorStage: null };
+  }
+  private fail(error: unknown, stage: NonNullable<AppUpdateState["errorStage"]>): void {
+    // electron-updater emits an error and rejects the same operation's promise.
+    if (this.state.phase === "error" && this.state.errorStage === stage) return;
+    this.runtime.warn("Bordeaux update failed", error);
+    this.publish({ phase: "error", errorStage: stage,
+      error: this.runtime.describeError?.(error) || "The update could not be completed. Try again or download the installer from Releases.",
+      errorDetails: errorMessage(error), progress: null });
   }
 
   start(): void {
-    if (this.started || !this.available) return;
-    const updater = this.updater;
-    if (!updater) return;
+    if (this.started || !this.available || !this.updater) return;
     this.started = true;
+    const updater = this.updater;
     updater.autoDownload = false;
     updater.autoInstallOnAppQuit = false;
     updater.autoRunAppAfterInstall = true;
     updater.allowPrerelease = this.channel === "beta";
     updater.channel = this.channel;
     updater.allowDowngrade = false;
-
     updater.on("update-available", (info) => {
-      const interactive = this.interactiveCheck;
-      this.interactiveCheck = false;
-      if (this.downloading || (!interactive && this.offeredVersions.has(info.version))) return;
+      if (this.downloadPromise || this.downloaded || this.installing) return;
+      const firstOffer = !this.offeredVersions.has(info.version);
       this.offeredVersions.add(info.version);
-      void this.offerDownload(info);
+      this.publish({ ...this.clearError(), phase: "available", version: info.version,
+        releaseNotes: updateReleaseNotes(info), progress: null, visible: this.state.visible || firstOffer });
     });
-    updater.on("update-not-available", () => {
-      if (!this.interactiveCheck) return;
-      this.interactiveCheck = false;
-      void this.presenter.upToDate(this.runtime.currentVersion);
+    updater.on("update-not-available", (info) => {
+      if (this.state.phase === "checking") this.publish({
+        phase: "upToDate", ...this.clearError(), version: null,
+        releaseNotes: info.version === this.runtime.currentVersion ? updateReleaseNotes(info) : "",
+      });
     });
-    updater.on("error", (error) => {
-      this.runtime.warn("Bordeaux updater failed", error);
-      if (this.interactiveCheck) {
-        this.interactiveCheck = false;
-        void this.presenter.failed(errorMessage(error));
-      } else if (this.downloading || this.installing) {
-        this.downloading = false;
-        this.installing = false;
-        void this.presenter.failed(errorMessage(error));
-      }
+    updater.on("download-progress", (progress) => {
+      if (this.state.phase !== "downloading" || !this.downloadToken || this.downloadToken.cancelled) return;
+      const finite = (value: number) => Number.isFinite(value) ? Math.max(0, value) : 0;
+      this.publish({ progress: { percent: Math.min(100, finite(progress.percent)), transferred: finite(progress.transferred), total: finite(progress.total), bytesPerSecond: finite(progress.bytesPerSecond) } });
     });
     updater.on("update-downloaded", (info) => {
-      this.downloading = false;
-      this.downloadedVersion = info.version;
-      if (this.promptedVersions.has(info.version)) return;
-      this.promptedVersions.add(info.version);
-      this.interactiveCheck = false;
-      void this.offerRestart(info.version).finally(() => this.promptedVersions.delete(info.version));
+      if (!this.downloadToken || this.downloadToken.cancelled || this.state.phase !== "downloading" || info.version !== this.state.version) return;
+      this.downloaded = true;
+      this.publish({ phase: "downloaded", progress: null, ...this.clearError() });
+    });
+    updater.on("error", (error) => {
+      if (this.downloadToken?.cancelled) return;
+      if (this.installing) { this.installing = false; this.fail(error, "install"); }
+      else if (this.downloadToken) this.fail(error, "download");
+      else if (this.checkPromise || this.state.phase === "checking") this.fail(error, "check");
     });
   }
 
   async check(interactive = false): Promise<void> {
-    if (!this.available) {
-      if (interactive) await this.presenter.unavailable(this.runtime.currentVersion);
-      return;
-    }
+    if (interactive) this.setVisible(true);
+    if (!this.available) { this.publish({ phase: "unsupported" }); return; }
     this.start();
-    if (interactive && this.downloadedVersion) {
-      await this.offerRestart(this.downloadedVersion);
-      return;
-    }
-    const updater = this.updater;
-    if (!updater) return;
-    this.interactiveCheck ||= interactive;
+    if (this.downloadPromise || this.installing) return;
+    if (this.downloaded) { this.publish({ phase: "downloaded", ...this.clearError() }); return; }
     if (this.checkPromise) return this.checkPromise;
-    this.checkPromise = (async () => {
+    this.publish({ phase: "checking", version: null, releaseNotes: "", progress: null, ...this.clearError() });
+    // Defer invoking the updater until the ownership promise has been recorded.
+    this.checkPromise = Promise.resolve().then(async () => {
       try {
-        const result = await updater.checkForUpdates();
-        if (result === null && this.interactiveCheck) {
-          this.interactiveCheck = false;
-          await this.presenter.unavailable(this.runtime.currentVersion);
-        }
-      } catch (error) {
-        this.runtime.warn("Bordeaux update check failed", error);
-        if (this.interactiveCheck) {
-          this.interactiveCheck = false;
-          await this.presenter.failed(errorMessage(error));
-        }
-      } finally {
-        this.checkPromise = null;
-      }
-    })();
+        const result = await this.updater!.checkForUpdates();
+        if (result === null && this.state.phase === "checking") this.publish({ phase: "unsupported" });
+      } catch (error) { this.fail(error, "check"); }
+      finally { this.checkPromise = null; }
+    });
     return this.checkPromise;
   }
 
-  private async offerDownload(info: UpdateVersionInfo): Promise<void> {
-    try {
-      if (await this.presenter.available(info.version, updateReleaseNotes(info)) !== "download") return;
-      this.downloading = true;
-      await this.updater?.downloadUpdate();
-    } catch (error) {
-      this.downloading = false;
-      this.runtime.warn("Bordeaux download failed", error);
-      await this.presenter.failed(errorMessage(error));
-    }
+  async download(): Promise<void> {
+    if (!this.available || !this.state.version || this.downloaded || this.installing || this.checkPromise) return;
+    if (this.downloadPromise) return this.downloadPromise;
+    if (this.state.phase !== "available" && !(this.state.phase === "error" && this.state.errorStage === "download")) return;
+    const token = new CancellationToken();
+    this.downloadToken = token;
+    this.publish({ phase: "downloading", progress: { percent: 0, transferred: 0, total: 0, bytesPerSecond: 0 }, ...this.clearError() });
+    this.downloadPromise = Promise.resolve().then(async () => {
+      try { await this.updater!.downloadUpdate(token); }
+      catch (error) { if (!token.cancelled) this.fail(error, "download"); }
+      finally {
+        this.downloadPromise = null;
+        this.downloadToken = null;
+        if (token.cancelled) this.publish({ phase: "available", progress: null, ...this.clearError() });
+      }
+    });
+    return this.downloadPromise;
   }
 
-  private async offerRestart(version: string): Promise<void> {
-    const projectDirty = this.runtime.isProjectDirty();
-    const choice = await this.presenter.ready(version, projectDirty);
-    if (choice !== "restart" || this.runtime.isProjectDirty()) return;
+  async cancelDownload(): Promise<void> {
+    if (!this.downloadToken || this.downloaded) return;
+    this.downloadToken.cancel();
+    // Keep ownership until the canceled transfer settles: late events must not
+    // turn it into a ready update or attach themselves to a retry.
+    await this.downloadPromise;
+  }
+
+  async install(): Promise<void> {
+    if (!this.downloaded || this.installing || !this.updater) return;
+    if (this.runtime.isProjectDirty()) { this.publish({ phase: "downloaded", ...this.clearError(), visible: true }); return; }
+    this.installing = true;
+    this.publish({ phase: "installing", visible: true, ...this.clearError() });
     try {
       await this.runtime.prepareToInstall();
-    } catch (error) {
-      this.runtime.warn("Bordeaux could not prepare to install the update", error);
-      await this.presenter.failed(errorMessage(error));
-      return;
-    }
-    if (this.runtime.isProjectDirty()) return;
-    this.installing = true;
-    try {
-      this.updater?.quitAndInstall(false, true);
-    } catch (error) {
-      this.installing = false;
-      this.runtime.warn("Bordeaux could not start the update installer", error);
-      await this.presenter.failed(errorMessage(error));
-    }
+      if (!this.installing) return; // an updater error arrived during shutdown
+      if (this.runtime.isProjectDirty()) {
+        this.installing = false;
+        this.publish({ phase: "downloaded", visible: true });
+        return;
+      }
+      this.updater.quitAndInstall(false, true);
+    } catch (error) { this.installing = false; this.fail(error, "install"); }
   }
 }

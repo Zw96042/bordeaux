@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 
-// Includes the direct SFTP connection, identity review and file-transfer dialog.
-const APPLICATION_JAVASCRIPT_BUDGET_BYTES = 505 * 1024;
+// Includes the in-app update dialog, release notes, progress, and recovery controls.
+// This flow adds about 6 KiB; retain less than 1 KiB of application headroom.
+const APPLICATION_JAVASCRIPT_BUDGET_BYTES = 513 * 1024;
 // Accepted-artifact validation and resumable search stay in the worker, off the UI thread.
 const WORKER_JAVASCRIPT_BUDGET_BYTES = 176 * 1024;
 const CSS_BUDGET_BYTES = 140 * 1024;

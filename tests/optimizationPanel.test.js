@@ -38,3 +38,34 @@ describe('optimizer planning failure', () => {
     expect(markup).not.toContain('Optimizing…');
   });
 });
+
+
+describe('optimization job ownership', () => {
+  const background = {
+    paths: [{ id: 'other', name: 'Scoring approach' }],
+    state: { running: true, paths: { other: { status: 'searching' } } },
+    pending: false, baselineTime: 4,
+  };
+  it('names the other path without claiming its progress or result for the selected path', () => {
+    const markup = render(background);
+    expect(markup).toContain('Search in progress');
+    expect(markup).toContain('<strong>Scoring approach</strong>');
+    expect(markup).toContain('aria-label="Cancel optimization for Scoring approach"');
+    expect(markup).toContain('aria-busy="false"');
+    expect(markup).not.toContain('aria-label="Optimizing path"');
+    expect(markup).toMatch(/class="optimizer-main primary" disabled="">Optimize<\/button>/);
+    expect(markup).toContain('4.00 s');
+  });
+  it('preserves an explicit current-path Apply while another path is searching', () => {
+    const markup = render({ ...background, candidate: { finalTrajectory: { totalTimeS: 3 } } });
+    expect(markup).toContain('1.00 s faster, 25.0%');
+    expect(markup).toMatch(/class="optimizer-main primary">Apply optimized<\/button>/);
+    expect(markup).toContain('Cancel optimization for Scoring approach');
+  });
+  it('labels batch cancellation honestly and keeps it available if current-path planning fails', () => {
+    const markup = render({ ...background, state: { ...background.state, batch: { completed: 0, total: 2 } }, error: new Error('Invalid geometry') });
+    expect(markup).toContain('aria-label="Cancel all optimization searches"');
+    expect(markup).toContain('Cancel all');
+    expect(markup).toContain('Invalid geometry');
+  });
+});

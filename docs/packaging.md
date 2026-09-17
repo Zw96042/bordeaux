@@ -34,12 +34,12 @@ Do not advertise project file associations until main-process startup handles OS
 
 ## Automatic update channels
 
-Installed GitHub builds use the public `Zw96042/bordeaux` Releases feed. The installed version fixes the update channel so testing builds cannot leak into production:
+Installed GitHub builds use the official public GitHub Releases API for `Zw96042/bordeaux`, including asset downloads. The website Atom feed is not required. Release tags and manifest versions must agree, and only installer files listed with SHA-512 checksums in the matching platform manifest are downloaded. macOS uses ZIPs, Windows uses setup executables, and Linux uses AppImages. Full downloads are used because API asset URLs do not expose sibling differential blockmaps. The installed version fixes the update channel so testing builds cannot leak into production:
 
 - `1.2.3-beta.4` follows `beta` manifests and accepts prereleases.
 - `1.2.3` follows `latest` manifests, shown in the app as the production channel, and never accepts prereleases.
 
-Beta clients may graduate to a newer stable release. Downgrades are never automatic. Bordeaux checks quietly shortly after launch; **Check for Updates…** starts a visible check. After downloading and verifying an update, Bordeaux installs only when the user chooses **Restart and Update** with no unsaved project changes. It stops background services before the updater closes every window, replaces the installed app, and relaunches it.
+Beta clients may graduate to a newer stable release. Downgrades are never automatic. Bordeaux checks quietly shortly after launch. **Settings → Software updates** and **Check for Updates…** open the shared update panel with release notes, download progress, cancellation, and retry. Closing the panel during a download leaves it running; canceling stops the transfer before another download can begin. After downloading and verifying an update, Bordeaux installs only when the user chooses **Restart and install** with no unsaved project changes. The install panel remains open while the native updater verifies and starts installation. Failed installation restores error recovery without disabling the unsaved-project guard or shutting down background services. Services stop through the normal quit cleanup only after installation actually begins quitting the app.
 
 electron-builder writes a small platform manifest containing the version, installer URL, size, and SHA-512 digest. The release workflow recalculates that digest before publishing; electron-updater verifies it again while downloading and when reusing its cache. The update payload is the signed ZIP on macOS, the NSIS setup executable on Windows, and the matching-architecture AppImage on Linux.
 

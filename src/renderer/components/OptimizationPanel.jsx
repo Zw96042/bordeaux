@@ -7,6 +7,11 @@ const seconds = (value) => Number.isFinite(value) ? `${value.toFixed(2)} s` : 'â
 export function OptimizationPanel({ path, paths, state, candidate, accepted, stale, baselineTime, pending, error, recovery, mode,
   unitSystem, onCorridor, onStart, onStartAll, onCancel, onCompare, onApply, onNormal, onSelectPath, onClose }) {
   const entry = state.paths[path.id];
+  // The controller runs one job at a time; only its searching entry owns progress.
+  const activePathId = state.running ? Object.keys(state.paths).find((id) => state.paths[id].status === 'searching') : null;
+  const searchingCurrentPath = activePathId === path.id;
+  const backgroundPath = activePathId && !searchingCurrentPath
+    ? paths.find((item) => item.id === activePathId) : null;
   const result = candidate?.finalTrajectory;
   const details = result?.optimization;
   const baseTime = baselineTime ?? details?.baselineTimeS;
@@ -18,7 +23,7 @@ export function OptimizationPanel({ path, paths, state, candidate, accepted, sta
       === JSON.stringify([result.samples, result.optimizedPath, result.stationaryActions, result.markers])), [accepted, result]);
   const newCandidate = improved && !alreadyApplied;
   const distance = (value) => `${(value * (unitSystem === 'imperial' ? 3.280839895 : 1)).toFixed(2)} ${unitSystem === 'imperial' ? 'ft' : 'm'}`;
-  const outcome = state.running ? 'Find a faster path'
+  const outcome = searchingCurrentPath ? 'Find a faster path'
     : improved ? `${seconds(gain)} faster, ${(gain / baseTime * 100).toFixed(1)}%`
     : stale ? 'Needs update'
     : details?.termination === 'unsupported' ? 'Normal only'
@@ -38,21 +43,27 @@ export function OptimizationPanel({ path, paths, state, candidate, accepted, sta
   return h('section', { className: 'optimizer-panel', 'aria-label': 'Path optimization' },
     h('div', { className: 'optimizer-heading' }, h('strong', null, 'Optimize'),
       h(UI.IconBtn, { icon: 'x', title: 'Close optimization', onClick: onClose })),
-    h('div', { className: 'optimizer-body' }, error ? h(React.Fragment, null,
+    h('div', { className: 'optimizer-body' },
+      backgroundPath && h('div', { className: 'optimizer-background', role: 'status' },
+        h('span', null, 'Search in progress', h('strong', null, backgroundPath.name)),
+        h('button', { type: 'button', onClick: onCancel,
+          'aria-label': state.batch ? 'Cancel all optimization searches' : `Cancel optimization for ${backgroundPath.name}` },
+        state.batch ? 'Cancel all' : 'Cancel search')),
+      error ? h(React.Fragment, null,
       h('p', { className: 'optimizer-failure', role: 'alert' }, 'Couldnâ€™t plan this path. ', error.message || String(error)),
       h('button', { type: 'button', className: 'optimizer-main', onClick: recovery?.onClick || onClose }, recovery?.label || 'Edit path')) : h(React.Fragment, null,
-      h('div', { className: 'optimizer-status', 'aria-busy': pending || state.running },
-        h('p', { className: 'optimizer-outcome' + (improved && !state.running ? ' gain' : ''), role: 'status' }, outcome),
-        (pending || state.running) && h('progress', { className: 'optimizer-progress', 'aria-label': state.running ? 'Optimizing path' : 'Preparing path' })),
+      h('div', { className: 'optimizer-status', 'aria-busy': pending || searchingCurrentPath },
+        h('p', { className: 'optimizer-outcome' + (improved && !searchingCurrentPath ? ' gain' : ''), role: 'status' }, outcome),
+        (pending || searchingCurrentPath) && h('progress', { className: 'optimizer-progress', 'aria-label': searchingCurrentPath ? 'Optimizing path' : 'Preparing path' })),
       h('div', { className: 'optimizer-comparison', 'aria-label': 'Trajectory comparison' },
         h('div', { className: 'optimizer-label' }, 'Preview'),
         row('Normal', baseTime, 'normal', !accepted && !stale, pending),
         accepted && row(newCandidate ? 'Applied' : 'Optimized', accepted.totalTimeS, 'selected', true),
         newCandidate && row('Optimized', result.totalTimeS, 'candidate', false)),
-      state.running ? h('button', { type: 'button', className: 'optimizer-main', onClick: onCancel }, 'Cancel')
+      searchingCurrentPath ? h('button', { type: 'button', className: 'optimizer-main', onClick: onCancel }, 'Cancel')
         : newCandidate ? h('button', { type: 'button', className: 'optimizer-main primary', onClick: onApply }, 'Apply optimized')
         : accepted && !stale ? h('button', { type: 'button', className: 'optimizer-main', disabled: true }, 'Applied')
-        : h('button', { type: 'button', className: 'optimizer-main primary', disabled: pending, onClick: () => onStart('common') },
+        : h('button', { type: 'button', className: 'optimizer-main primary', disabled: pending || state.running, onClick: () => onStart('common') },
           stale ? 'Update optimization' : entry ? 'Try again' : 'Optimize'),
       (accepted || stale) && h('button', { type: 'button', className: 'optimizer-reset', onClick: onNormal }, 'Use normal'),
       h('details', { className: 'optimizer-settings', key: `settings-${path.id}` },

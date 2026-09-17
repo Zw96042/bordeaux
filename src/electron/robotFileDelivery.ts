@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { RobotFileConnection, RobotFileEndpoint, RobotFilePreview, RobotFileResult } from "../shared/robotFileDelivery";
+import { DEFAULT_ROBOT_PATH_DIRECTORY } from "../shared/robotFileDelivery";
 import { writeJsonAtomically } from "./projectFiles";
 import { probeRobotFiles, uploadRobotFiles, validateRobotFileEndpoint } from "./robotFileTransfer";
 
@@ -15,7 +16,11 @@ export async function readRobotFileConnection(file: string): Promise<RobotFileCo
   try {
     const stat = await fs.lstat(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) throw new Error("Saved robot SSH identity is invalid");
-    return connection(JSON.parse(await fs.readFile(file, "utf8")));
+    const saved = connection(JSON.parse(await fs.readFile(file, "utf8")));
+    // Correct the former default without discarding the remembered SSH identity.
+    // The new destination remains visible in every immutable upload review.
+    if (saved.endpoint.directory === "/natinst/bin/Paths") saved.endpoint.directory = DEFAULT_ROBOT_PATH_DIRECTORY;
+    return saved;
   } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
 }
 export async function writeRobotFileConnection(file: string, value: RobotFileConnection): Promise<void> {

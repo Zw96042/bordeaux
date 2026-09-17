@@ -836,6 +836,40 @@ app.whenReady().then(async () => {
     await click('.optimizer-toggle');
     check('interactive planning failure retains the preview, exposes the current error, and recovers through Undo');
 
+    const beforeRepair = structuredClone(saved);
+    const repairPath = { ...structuredClone(corpus.paths.find((item) => item.id === 'corpus-neutral-slalom')),
+      id: 'repair-path', name: 'Restored path with an invalid local limit', targets: [{ f: .5, deg: 135 }],
+      ranges: [{ f0: .3, f1: .65, anchor: 'param', maxVel: 1.5, maxAccel: 2, maxDecel: 2 }] };
+    saved = { ...corpus, paths: [repairPath], routines: [], pathLinks: [], editor: { activePathId: repairPath.id } };
+    await win.loadFile(path.resolve('dist-renderer/index.html'));
+    await wait(() => evaluate(() => document.querySelector('.library-current-name')?.textContent.includes('Restored path')), 'restored repair fixture');
+    await pointerClick('.optimizer-toggle');
+    await wait(() => evaluate(() => document.querySelector('.optimizer-failure')), 'real final-planning failure');
+    assert.equal(await evaluate(() => document.querySelector('.optimizer-main').textContent), 'Edit path');
+    await pointerClick('.optimizer-main');
+    if (await evaluate(() => [...document.querySelectorAll('.sechead-toggle')].some((el) => el.textContent.includes('Constraint regions') && el.getAttribute('aria-expanded') === 'false'))) { await evaluate(() => [...document.querySelectorAll('.sechead-toggle')].find((el) => el.textContent.includes('Constraint regions')).setAttribute('data-repair-section', '')); await pointerClick('[data-repair-section]'); }
+    await pointerClick('[aria-label^="Constraint range,"]');
+    assert.ok(await evaluate(() => document.querySelector('.ctxinsp-body')?.textContent.includes('Planning failed.')));
+    assert.equal(await evaluate(() => Boolean(document.querySelector('.fieldcol[inert]'))), true);
+    for (const [width, height] of [[1440, 900], [1100, 720]]) {
+      win.setContentSize(width, height); await delay(100);
+      await fs.writeFile(path.join(output, `planning-repair-${width}.png`), (await win.webContents.capturePage()).toPNG());
+    }
+    await evaluate(() => document.activeElement.blur());
+    await key('Space'); await delay(120);
+    assert.equal(await evaluate(() => document.querySelector('.timecode-now').textContent), '0.00', 'Space cannot play invalid timing');
+    await pointerClick('.ctxinsp .delbtn');
+    await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'deleting the invalid range restores planning');
+    await click('[aria-label="Save project"]');
+    assert.equal(saved.paths[0].ranges.length, 0);
+    assert.deepEqual(saved.paths[0].waypoints, repairPath.waypoints);
+    check('restored failed planning keeps authored repair accessible while blocking stale playback');
+    saved = beforeRepair;
+    win.setContentSize(1440, 900);
+    await win.loadFile(path.resolve('dist-renderer/index.html'));
+    await wait(() => evaluate(() => document.querySelector('.fieldcol') && !document.querySelector('.fieldcol[inert]')), 'normal fixture after repair');
+
+
     saved.paths[0] = { ...structuredClone(source), id: saved.paths[0].id, name: 'Collect the second game piece from the far loading station' };
     saved.paths[0].waypoints[1] = { ...saved.paths[0].waypoints[1], thetaOn: true, theta: -178, stop: true, wait: 12.5 };
     saved.routines = [{ id: 'long-flow', name: 'Long content check', nodes: [{ id: 'long-step', type: 'path', ref: saved.paths[0].id }] }];

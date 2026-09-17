@@ -36,6 +36,17 @@
     await new Promise((resolve) => setTimeout(resolve, 0));
     unnamed.push(...unnamedOnPage());
   }
+  await waitFor(() => [...document.querySelectorAll('.settings-row')].some(row => row.textContent.includes('Software updates')), 'software updates settings entry');
+  const updatesButton = [...document.querySelectorAll('.settings-row')].find(row => row.textContent.includes('Software updates')).querySelector('button');
+  updatesButton.focus();
+  updatesButton.click();
+  await waitFor(() => document.querySelector('.app-update-dialog')?.open, 'native updater state opens in-app dialog');
+  const updateState = await window.bordeauxAPI.getAppUpdateState();
+  const updaterStateVisible = updateState.visible && typeof updateState.currentVersion === 'string'
+    && Boolean(document.querySelector('.app-update-versions')?.textContent.includes(updateState.currentVersion));
+  document.querySelector('button[aria-label="Close updates"]').click();
+  await waitFor(async () => !document.querySelector('.app-update-dialog')?.open && !(await window.bordeauxAPI.getAppUpdateState()).visible, 'updater closes through native IPC');
+  const updaterIntegration = updaterStateVisible && document.activeElement === updatesButton;
   const project = { schemaVersion: '1.0', field: { id: '2026-rebuilt', revision: '2026-manual-tu19-welded-4', coordinateSchemaId: 'bordeaux-field/1.0' }, name: 'Smoke edited', robot: { drive: 'swerve', w: .8, l: .8, maxSpeed: 4 }, paths: [{ id: 'path_smoke', name: 'Smoke', waypoints: [{ x: 1, y: 1, theta: 0, thetaOn: true, linked: true, stop: false, prevC: { x: .8, y: 1 }, nextC: { x: 1.2, y: 1 } }, { x: 2, y: 1, theta: 0, thetaOn: true, linked: true, stop: false, prevC: { x: 1.8, y: 1 }, nextC: { x: 2.2, y: 1 } }], targets: [], markers: [{ id: 'event_smoke', f: .5, name: 'Smoke event', invocation: { commandId: 'frc.robot.SmokeCommand', arguments: { count: 2, sequence: '9007199254740993', tags: ['auto'] }, cancelOnPathEnd: true } }], ranges: [], constraints: { maxVel: 2, maxAccel: 2, maxDecel: 2, maxAngVel: 180, maxAngAccel: 360 }, startVel: 0, goalVel: 0 }], pathLinks: [], routines: [{ id: 'routine_smoke_active', name: 'Smoke routine', nodes: [{ id: 'routine_smoke', type: 'path', ref: 'path_smoke' }] }], activeRoutineId: 'routine_smoke_active', plannerId: 'profiledSpline' };
   await window.bordeauxAPI.saveProject(project, true);
   await waitFor(() => document.getElementById('robot-drive-motor'), 'robot settings');
@@ -216,19 +227,41 @@
   const pushRoutineButton = [...document.querySelectorAll('.library-push button')].find((button) => button.textContent.trim() === 'Push routine');
   if (!pushRoutineButton) throw new Error('Routine push action was not available');
   pushRoutineButton.click();
-  await waitFor(() => document.querySelector('[aria-labelledby="robot-file-title"]')?.open, 'robot file dialog');
-  const robotPushDialog = document.querySelector('[aria-labelledby="robot-file-title"]');
-  const routineDeliveryBlocked = robotPushDialog.textContent.includes('Routine delivery and full-project replacement are not supported');
-  robotPushDialog.querySelector('[aria-label="Close robot files"]').click();
+  const routineDeliveryBlocked = pushRoutineButton.disabled
+    && document.querySelector('.library-push').textContent.includes('Routine upload is unavailable with this connection')
+    && !document.querySelector('[aria-labelledby="robot-file-title"]')?.open;
   [...document.querySelectorAll('.library-tabs button')].find(button => button.textContent.trim() === 'Paths').click();
   await waitFor(() => [...document.querySelectorAll('.library-push button')].some(button => button.textContent.trim() === 'Push path'), 'path push action');
   [...document.querySelectorAll('.library-push button')].find(button => button.textContent.trim() === 'Push path').click();
-  await waitFor(() => document.querySelector('[aria-labelledby="robot-file-title"] input[placeholder="roborio-2468-frc.local"]'), 'SFTP connection fields');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await waitFor(() => document.querySelector('[aria-labelledby="robot-file-title"]')?.open
+    && document.querySelector('[aria-labelledby="robot-file-title"] input[placeholder="roborio-2468-frc.local"]'), 'SFTP connection fields');
   const robotPushUi = routineDeliveryBlocked && window.bordeauxAPI.robotDeliveryCapabilities.pathPush
-    && [...document.querySelectorAll('[aria-labelledby="robot-file-title"] input')].some(input => input.value === '/natinst/bin/Paths')
+    && [...document.querySelectorAll('[aria-labelledby="robot-file-title"] input')].some(input => input.value === '/home/lvuser/natinst/bin/Paths')
     && !document.querySelector('[aria-labelledby="robot-file-title"]').textContent.includes('compatible LabVIEW BDX receiver');
-  window.bordeauxAPI.setDirty(true);
+  // Exercise real unsaved renderer state. A raw setDirty(true) is overwritten
+  // legitimately when an earlier autosave finishes, making the close probe race.
+  document.querySelector('button[aria-label="Close robot files"]').click();
+  [...document.querySelectorAll('.pageswitch button')].find(button => button.textContent.trim() === 'Settings').click();
+  await waitFor(() => document.querySelector('input[aria-label="Motor free speed"]'), 'dirty close-guard draft input');
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  const unsavedInput = document.querySelector('input[aria-label="Motor free speed"]');
+  unsavedInput.focus();
+  setInputValue.call(unsavedInput, '-');
+  unsavedInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  unsavedInput.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+  await waitFor(() => unsavedInput.getAttribute('aria-invalid') === 'true', 'invalid draft remains unsaved');
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  const unsavedDraftRetained = (await window.bordeauxAPI.getAppUpdateState()).projectDirty === true;
+
   const probe = document.createElement('script'); probe.textContent = 'window.__bordeauxInlineScriptRan = true'; document.head.appendChild(probe);
   const editorRestored = opened.project.editor?.activePathId === secondPath.id && opened.project.editor?.robotProjectBookmarkId === recentRobotProjects[0].id;
-  return { title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), fatalError: document.querySelector('.fatal-error')?.textContent || '', unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, validation: validation.ok, motorPreset, eventMarkerAutosave, multiRoutineUi, robotPushUi, robotDiscovery: robotConnection.catalog.projectName === 'SmokeRobot' && robotConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), robotBuilt: builtRobotConnection.catalog.authoritative === true && builtRobotConnection.catalog.catalogHash === reopenedRobotConnection.catalog.catalogHash, robotRecent: recentRobotProjects.length === 1 && reopenedRobotConnection.catalog.projectName === 'SmokeRobot', robotUi, missingTypeEvidenceRejected, folderBdxSaved: generated.saved && generated.bdxCount === eventless.paths.length && !generated.exportError, sourceSavedOnBdxFailure: saved.saved && Boolean(saved.exportError), eventlessBdxExported: exportedBdx.exported && exportedBdx.eventCount === 0, restored: restored.project.name === persistedProject.name, roundTrip: saved.saved && opened.project.name === persistedProject.name && opened.project.routines.find((routine) => routine.id === opened.project.activeRoutineId)?.nodes[0]?.ref === 'path_smoke' && !('routine' in opened.project), editorRestored, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked: window.open('https://example.com') === null, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
+  const popupBlocked = window.open('https://example.com') === null;
+  await window.bordeauxAPI.setAppUpdatesVisible(true);
+  await waitFor(() => document.querySelector('.app-update-dialog')?.open, 'updater visible for final built-app capture');
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const updateDialog = document.querySelector('.app-update-dialog');
+  const updaterModalVisible = updateDialog.matches(':modal') && updateDialog.getBoundingClientRect().width > 0;
+  return { updaterIntegration, updaterModalVisible, unsavedDraftRetained, title: document.title, api: typeof window.bordeauxAPI?.saveProject === "function", root: Boolean(document.getElementById("root")?.children.length), fatalError: document.querySelector('.fatal-error')?.textContent || '', unnamed, main: document.querySelectorAll('main').length, nav: document.querySelectorAll('nav').length, validation: validation.ok, motorPreset, eventMarkerAutosave, multiRoutineUi, robotPushUi, robotDiscovery: robotConnection.catalog.projectName === 'SmokeRobot' && robotConnection.catalog.commands.some((command) => command.id === 'frc.robot.SmokeCommand'), robotBuilt: builtRobotConnection.catalog.authoritative === true && builtRobotConnection.catalog.catalogHash === reopenedRobotConnection.catalog.catalogHash, robotRecent: recentRobotProjects.length === 1 && reopenedRobotConnection.catalog.projectName === 'SmokeRobot', robotUi, missingTypeEvidenceRejected, folderBdxSaved: generated.saved && generated.bdxCount === eventless.paths.length && !generated.exportError, sourceSavedOnBdxFailure: saved.saved && Boolean(saved.exportError), eventlessBdxExported: exportedBdx.exported && exportedBdx.eventCount === 0, restored: restored.project.name === persistedProject.name, roundTrip: saved.saved && opened.project.name === persistedProject.name && opened.project.routines.find((routine) => routine.id === opened.project.activeRoutineId)?.nodes[0]?.ref === 'path_smoke' && !('routine' in opened.project), editorRestored, nodeGlobalsBlocked: typeof require === 'undefined', popupBlocked, inlineScriptBlocked: !window.__bordeauxInlineScriptRan };
 })();

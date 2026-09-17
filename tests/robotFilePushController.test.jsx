@@ -45,6 +45,38 @@ afterEach(() => { for (const cleanup of hooks.cleanups) cleanup(); vi.unstubAllG
 const ready = async () => { render(); await Promise.resolve(); return render(); };
 const prepare = async () => { const c = await ready(); await c.requestPush({ kind: 'paths', pathIds: ['A'] }); return render(); };
 describe('SFTP file push controller', () => {
+  it('reuses the saved robot for repeated pushes and failed-upload retries', async () => {
+    const c = await prepare();
+    await c.confirmPush();
+    await render().requestPush({ kind: 'paths', pathIds: ['A'] });
+    expect(render().phase).toBe('review');
+    bridge.confirmRobotFiles.mockRejectedValueOnce(new Error("Error invoking remote method 'robotFiles:confirm': RobotTransportError: Required robot directory /natinst is unavailable."));
+    await render().confirmPush();
+    expect(render().error).toBe('Required robot directory /natinst is unavailable.');
+    await render().retry();
+    expect(render().phase).toBe('review');
+    expect(bridge.probeRobotFiles).not.toHaveBeenCalled();
+    expect(bridge.trustRobotFiles).not.toHaveBeenCalled();
+  });
+  it('remembers the trusted SSH identity when editing the destination', async () => {
+    await prepare();
+    await render().chooseAnotherRobot();
+    render().setDirectory('/home/lvuser/practice');
+    const changed = { ...connection, endpoint: { ...connection.endpoint, directory: '/home/lvuser/practice' } };
+    bridge.probeRobotFiles.mockResolvedValueOnce(changed);
+    bridge.trustRobotFiles.mockResolvedValueOnce(changed);
+    await render().probeRobot();
+    expect(bridge.trustRobotFiles).toHaveBeenCalledExactlyOnceWith(connection.hostKeyFingerprint);
+    expect(render().connection).toEqual(changed);
+    expect(render().phase).toBe('review');
+  });
+  it('requires identity review if the saved robot presents a different SSH key', async () => {
+    await prepare(); await render().chooseAnotherRobot();
+    bridge.probeRobotFiles.mockResolvedValueOnce({ ...connection, hostKeyFingerprint: 'SHA256:different' });
+    await render().probeRobot();
+    expect(render().phase).toBe('identity');
+    expect(bridge.trustRobotFiles).not.toHaveBeenCalled();
+  });
   it('loads the saved endpoint without probing or transmitting', async () => {
     const c = await ready(); expect(c.connection).toEqual(connection); expect(c.directory).toBe(DEFAULT_ROBOT_PATH_DIRECTORY);
     expect(bridge.probeRobotFiles).not.toHaveBeenCalled(); expect(bridge.prepareRobotFiles).not.toHaveBeenCalled();

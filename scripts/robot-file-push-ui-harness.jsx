@@ -79,7 +79,27 @@ await test('Upload failure shows one error with a fresh review recovery', async 
   assert(controller.phase === 'failed', 'Failed verification cannot report success');
   assert(document.querySelectorAll('[role="alert"]').length === 1, 'One useful error');
   await native({ capture: 'failure' });
-  await pointer('Review current edits'); assert(mock.prepares.length === 2, 'Retry prepares again');
+  await pointer('Review and retry'); assert(mock.prepares.length === 2, 'Retry prepares again');
+});
+await test('Repeated pushes use the remembered robot without connection or identity screens', async () => {
+  await prepare(); await pointer('Upload 2 paths');
+  await resolve(mock.confirms[0], { state: 'transferred', files, directory: endpoint.directory });
+  await pointer('Done'); assert(!controller.open, 'Done returns to the library');
+  await prepare();
+  assert(!mock.probes.length && !mock.trusts.length, 'No repeated connection or trust step');
+  await native({ capture: 'repeat-review' });
+});
+await test('Editing the destination reuses the known robot identity and keeps the selected paths', async () => {
+  await prepare(); await pointer('Edit destination');
+  await action(() => controller.setDirectory('/home/lvuser/practice'));
+  const changed = { ...connection, endpoint: { ...endpoint, directory: '/home/lvuser/practice' } };
+  await pointer('Connect'); await resolve(mock.probes[0], changed);
+  assert(mock.trusts.length === 1 && controller.phase === 'trusting', 'Known identity needs no repeated confirmation');
+  await resolve(mock.trusts[0], changed);
+  await resolve(mock.prepares[1], { ...preview, connection: changed });
+  assert(controller.phase === 'review' && mock.prepares[1].args[1].join(',') === 'A,B', 'Selection retained');
+  assert(document.querySelector('dialog').textContent.includes('/home/lvuser/practice'), 'Changed directory is reviewed');
+  await native({ capture: 'changed-destination' });
 });
 for (const key of ['projectKey','catalogKey','bookmarkKey']) await test('Discard stale preparation after ' + key + ' change', async () => {
   await pointer('Push selection');

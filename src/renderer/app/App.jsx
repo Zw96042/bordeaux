@@ -13,6 +13,8 @@ import { authoredPath, optimizationInputKey, isOptimizationOutdated } from "../.
 import { ContextInspector } from "../components/ContextInspector";
 import { FIELD_DIMS, FieldView } from "../components/FieldView";
 import { Panels } from "../components/Panels";
+import { AppUpdateDialog } from "../components/AppUpdateDialog";
+import { useAppUpdates } from "../components/useAppUpdates";
 import { RobotPage } from "../components/RobotPage";
 import { DiagnosticBundleDialog } from "../components/DiagnosticBundleDialog";
 import { LibraryRail, referencingRoutines } from "../components/EditorLibrary";
@@ -50,7 +52,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
   const h = React.createElement;
   const { FIELD_W, FIELD_H, IMG_W, IMG_H } = FIELD_DIMS;
   const PERSEG = 56;
-  function robotProjectError(error) {
+  function operationErrorMessage(error) {
     const message = error && error.message ? error.message : String(error);
     return message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '');
   }
@@ -359,6 +361,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
 
   function App({ initialProject = null, initialAgentProposal = null } = {}) {
     const [project, setProject] = useState(() => initialProject || freshProject());
+    const appUpdates = useAppUpdates();
     const plannerId = 'profiledSpline';
     const [activeIdx, setActiveIdx] = useState(0);
     const [sel, setSel] = useState({ kind: null, idx: -1 });
@@ -417,6 +420,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const [bdxNotice, setBdxNotice] = useState('');
     const [projectLocation, setProjectLocation] = useState(null);
     const [saveState, setSaveState] = useState({ status: 'idle', error: '' });
+    const [projectOpenError, setProjectOpenError] = useState(null);
     const [planningInputRevision, setPlanningInputRevision] = useState(0);
     const [unitSystem, setUnitSystemState] = useState(() => UnitPrefs.current());
     const setUnitSystem = useCallback((next) => {
@@ -500,7 +504,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         applyRobotProjectConnection(result);
       } catch (error) {
         if (robotRestoreGeneration.current !== generation) return;
-        setRobotProjectState((current) => ({ ...current, status: 'error', operation: null, catalog: null, integration: null, bookmarkId: null, error: robotProjectError(error) }));
+        setRobotProjectState((current) => ({ ...current, status: 'error', operation: null, catalog: null, integration: null, bookmarkId: null, error: operationErrorMessage(error) }));
       }
     }, [applyRobotProjectConnection]);
 
@@ -514,7 +518,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         applyRobotProjectConnection(result);
       } catch (error) {
         if (robotRestoreGeneration.current !== generation) return;
-        setRobotProjectState((current) => ({ ...current, status: 'error', operation: null, catalog: null, integration: null, bookmarkId: null, error: robotProjectError(error) }));
+        setRobotProjectState((current) => ({ ...current, status: 'error', operation: null, catalog: null, integration: null, bookmarkId: null, error: operationErrorMessage(error) }));
       }
     }, [applyRobotProjectConnection]);
 
@@ -528,7 +532,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         applyRobotProjectConnection(result);
       } catch (error) {
         if (robotRestoreGeneration.current !== generation) return;
-        setRobotProjectState((current) => ({ ...current, status: current.catalog ? 'stale' : 'error', operation: null, error: robotProjectError(error) }));
+        setRobotProjectState((current) => ({ ...current, status: current.catalog ? 'stale' : 'error', operation: null, error: operationErrorMessage(error) }));
       }
     }, [applyRobotProjectConnection]);
 
@@ -542,7 +546,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         applyRobotProjectConnection(result);
       } catch (error) {
         if (robotRestoreGeneration.current !== generation) return;
-        setRobotProjectState((current) => ({ ...current, operation: null, error: robotProjectError(error) }));
+        setRobotProjectState((current) => ({ ...current, operation: null, error: operationErrorMessage(error) }));
       }
     }, [applyRobotProjectConnection]);
 
@@ -560,7 +564,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         else setRobotProjectState((current) => ({ ...current, operation: null }));
       } catch (error) {
         if (robotRestoreGeneration.current !== generation) return;
-        setRobotProjectState((current) => ({ ...current, operation: null, status: current.catalog ? 'stale' : 'error', error: robotProjectError(error) }));
+        setRobotProjectState((current) => ({ ...current, operation: null, status: current.catalog ? 'stale' : 'error', error: operationErrorMessage(error) }));
       }
     }, [applyRobotProjectConnection]);
 
@@ -842,7 +846,11 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const derived = derivation.value || PENDING_PATH_PREVIEW;
     const derivationDoc = derivation.path || doc;
     const derivationCurrent = derivation.current;
+    const repairMode = Boolean(derivation.error);
+    const outlineDoc = repairMode ? doc : derivationDoc;
+    const outlinePreview = repairMode && derivationDoc !== doc ? PENDING_PATH_PREVIEW : derived;
     const reverseDistance = currentPathLength(derivation);
+    useEffect(() => { if (!derivationCurrent) playbackStore.pause(); }, [derivationCurrent, playbackStore]);
 
     const durationInputs = useMemo(() => project.paths.map((path) => ({
       id: path.id, path, robot, plannerId,
@@ -1686,9 +1694,9 @@ import { createPlaybackStore } from "../lib/playbackStore";
           const result = typeof recentIndex === 'number'
             ? await window.bordeauxAPI.openRecentProject(recentIndex)
             : legacyFile ? await window.bordeauxAPI.openProjectFile() : await window.bordeauxAPI.openProject();
-          if (result) { prepareProjectReplacement(); setProjectLocation(result.location || null); setSaveState({ status: 'saved', error: '' }); loadProject(result.project); }
+          if (result) { setProjectOpenError(null); prepareProjectReplacement(); setProjectLocation(result.location || null); setSaveState({ status: 'saved', error: '' }); loadProject(result.project); }
         } catch (error) {
-          alert('Could not open project: ' + (error && error.message ? error.message : error));
+          setProjectOpenError({ message: operationErrorMessage(error), kind: 'open', recentIndex, legacyFile });
         }
       });
     }, [canReplaceProject, enqueuePersistence, loadProject, prepareProjectReplacement]);
@@ -1698,12 +1706,13 @@ import { createPlaybackStore } from "../lib/playbackStore";
         try {
           const result = await window.bordeauxAPI.openProjectFolder();
           if (result) {
+            setProjectOpenError(null);
             prepareProjectReplacement();
             setProjectLocation(result.location);
             setSaveState({ status: result.location?.projectPath ? 'saved' : 'draft', error: '' });
             loadProject(result.project);
           }
-        } catch (error) { setSaveState({ status: 'error', error: error.message || String(error) }); }
+        } catch (error) { setProjectOpenError({ message: operationErrorMessage(error), kind: 'folder' }); }
       });
     }, [canReplaceProject, enqueuePersistence, loadProject, prepareProjectReplacement]);
     const saveProject = useCallback((saveAs) => {
@@ -1741,7 +1750,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
       try {
         const result = await window.bordeauxAPI.exportBdx(materializeProject(), selected);
         if (result?.exported) setBdxNotice('Saved ' + result.relativePath + ', ' + result.sampleCount + ' samples, ' + result.eventCount + ' events. Local export complete; robot code checks compatibility before execution.');
-      } catch (error) { setExportError(robotProjectError(error)); }
+      } catch (error) { setExportError(operationErrorMessage(error)); }
       finally { setRobotProjectState((current) => ({ ...current, operation: null })); }
     }, [flushProjectDraft, materializeProject]);
 
@@ -1772,7 +1781,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         const k = e.key.toLowerCase();
         if (page === 'plan' && e.key === ' ' && !textEditing) {
           e.preventDefault();
-          if (e.repeat) return;
+          if (e.repeat || !derivationCurrent) return;
           if (typeof e.target.blur === 'function') e.target.blur();
           playbackStore.toggle();
           return;
@@ -1841,8 +1850,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
     ].filter(Boolean);
 
 
-    if (!derivation.value) {
-      if (derivation.error) throw derivation.error;
+    if (!derivation.value && !repairMode) {
       return h('main', { className: 'editor-startup', 'aria-busy': true, 'aria-label': 'Preparing editor' },
         h('div', { className: 'editor-startup-toolbar' }),
         h('div', { className: 'editor-startup-body', 'aria-hidden': true },
@@ -1850,14 +1858,19 @@ import { createPlaybackStore } from "../lib/playbackStore";
     }
 
     return h('div', { className: 'app' },
+      h(AppUpdateDialog, { state: appUpdates.state, ...appUpdates.actions }),
       h(Panels.Toolbar, { page, setPage: (next) => { finishEdit(); playbackStore.reset(); routinePlaybackStore.reset(); setPage(next); }, editorPage,
-        alliance, setAlliance, projectName: project.name, projectLocation, saveState,
+        alliance, setAlliance, projectName: project.name, projectLocation, saveState, projectOpenError,
+        onRetryOpen: () => projectOpenError?.kind === 'folder' ? openProjectFolder() : openProject(projectOpenError?.recentIndex, projectOpenError?.legacyFile),
+        onDismissOpenError: () => setProjectOpenError(null),
         onOpen: openProject, onOpenFolder: openProjectFolder, onSave: saveProject, onUndo: undo, onRedo: redo,
         optimizationOpen, toggleOptimization, optimizationApplied: Boolean(accepted) }),
       h(RobotPushDialog, { controller: pushController, onExportBdx }),
       h(DiagnosticBundleDialog, { getProject: materializeProject, targetSelector: '.robot-connection-diagnostics', onOpen: pushController.close, renderKey: pushController.open + ':' + pushController.phase }),
       page === 'robot'
-        ? h('main', { className: 'page-main' }, h(RobotPage, { robot, setRobot, unitSystem, setUnitSystem, pushController, mcpEnabled, agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
+        ? h('main', { className: 'page-main' }, h(RobotPage, { robot, setRobot, unitSystem, setUnitSystem, pushController, mcpEnabled, updateState: appUpdates.state,
+          onOpenUpdates: () => ['available', 'downloading', 'downloaded', 'installing', 'error'].includes(appUpdates.state?.phase)
+            ? window.bordeauxAPI.setAppUpdatesVisible(true) : appUpdates.actions.onCheck(), agentProposal: agentProposal && agentProposal.operation === 'configureRobot' ? agentProposal : null, onApplyProposal: applyAgentProposal, onRejectProposal: rejectAgentProposal }))
         : page === 'auto'
         ? h('main', { className: 'stage stage-auto' },
             renderLibrary('routines', null),
@@ -1876,7 +1889,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
             h('aside', { className: 'rail rail-r' + (selNode ? '' : ' collapsed'), 'aria-label': 'Routine step inspector' },
               selNode && h(StepInspector, { node: selNode, paths: project.paths, acq, run, robotProject: { ...robotProjectState, link: linkRobotProject, refresh: refreshRobotProject, openRecent: openRecentRobotProject, build: buildRobotCatalog, inspect: inspectLabviewCommands }, conditionOptions: AUTO.authoritativeConditions(robotProjectState.catalog) })))
         : h('main', { className: 'stage stage-plan' },
-            renderLibrary('paths', (secOpen, setSecOpen) => h('div', { style: { height: '100%' }, inert: derivationCurrent ? undefined : '' }, h(Panels.Outline, { project, open: true, setOpen: () => {}, doc: derivationDoc, derived, sel, actions: inspActions, secOpen, setSecOpen, robot, ready: derivationCurrent }))),
+            renderLibrary('paths', (secOpen, setSecOpen) => h('div', { style: { height: '100%' }, inert: derivationCurrent || repairMode ? undefined : '' }, h(Panels.Outline, { project, open: true, setOpen: () => {}, doc: outlineDoc, derived: outlinePreview, sel, actions: inspActions, secOpen, setSecOpen, robot, ready: derivationCurrent }))),
             h('div', { className: 'fieldcol', inert: derivationCurrent ? undefined : '', 'aria-disabled': derivationCurrent ? undefined : true },
               h(Panels.ToolRail, { tool, setTool }),
               h(EditablePlaybackField, { store: playbackStore, editStore, doc, derived, derivedPath: derivation.path, robot, plannerId, optimizationCorridor: optimizationOpen && normalReady ? { points: normal.value?.sample.pts, widthM: doc.optimization?.corridorM ?? 0.15 } : null, insertionPreview: waypointPreview, proposalPreviews: agentProposal && agentProposal.status === 'ready' ? agentProposalPreview.previews : [], sel, tool, view, setView, alliance, showGrid, drive: robot.drive, accent, metric, actions: fieldActions, showHandles: true }),
@@ -1914,17 +1927,15 @@ import { createPlaybackStore } from "../lib/playbackStore";
               optimizationOpen ? h(OptimizationPanel, {
                 path: doc, paths: project.paths, state: optimizationState, candidate, accepted, stale: staleOptimization,
                 baselineTime, pending: !normalReady && !normalError, error: normalError, mode: comparisonMode, unitSystem,
-                recovery: !derivationCurrent ? (hist.current.past.length || routineHist.current.past.length || projectHist.current.past.length
-                  ? { label: 'Undo last edit', onClick: undo }
-                  : { label: 'Open project folder', onClick: openProject })
-                  : { label: 'Edit path', onClick: openInspector },
+                recovery: repairMode && (hist.current.past.length || routineHist.current.past.length || projectHist.current.past.length)
+                  ? { label: 'Undo last edit', onClick: undo } : { label: 'Edit path', onClick: openInspector },
                 onCorridor: setCorridor, onStart: startOptimization,
                 onStartAll: () => { setComparison(null); void optimizer.startAll(); }, onCancel: optimizer.cancel,
                 onCompare: compareTrajectory, onApply: applyOptimization, onNormal: useNormalTrajectory,
                 onSelectPath: (id) => { const index = project.paths.findIndex((path) => path.id === id); if (index >= 0) setActive(index); },
                 onClose: closeOptimization,
               }) : inspectorOpen
-                ? h(ContextInspector, { project, setWaypointPositionLink, doc, sel, derived, actions: inspActions, drive: robot.drive, robot, robotProject: { ...robotProjectState, link: linkRobotProject, openRecent: openRecentRobotProject, refresh: refreshRobotProject, inspect: inspectLabviewCommands, build: buildRobotCatalog, export: onExportBdx }, onClose: closeInspector })
+                ? h(ContextInspector, { project, setWaypointPositionLink, doc, sel, derived, repairMode, pending: !derivationCurrent && !repairMode, actions: inspActions, drive: robot.drive, robot, robotProject: { ...robotProjectState, link: linkRobotProject, openRecent: openRecentRobotProject, refresh: refreshRobotProject, inspect: inspectLabviewCommands, build: buildRobotCatalog, export: onExportBdx }, onClose: closeInspector })
                 : h('button', { ref: inspectorTab, className: 'inspector-tab', type: 'button', title: 'Show inspector', onClick: openInspector }, h(UI.Icon, { name: 'sliders', size: 16 }), h('span', null, 'Inspector'))),
             headMenu && h(UI.ContextMenu, { x: headMenu.x, y: headMenu.y, items: headMenu.items, returnFocus: headMenu.returnFocus, onClose: () => setHeadMenu(null) })));
   }

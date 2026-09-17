@@ -488,7 +488,36 @@ import { UI } from "./ui";
 
     let icon = 'route', title = '', tag = null, body = null;
 
-    if (!sel.kind) {
+    if (props.repairMode) {
+      // These controls use authored values only. Failed or stale trajectories must
+      // not supply anchor conversions, timing, or playback-dependent edits.
+      const waypoint = sel.kind === 'wp' && wps[sel.idx];
+      const range = sel.kind === 'cr' && doc.ranges?.[sel.idx];
+      const target = sel.kind === 'rt' && doc.targets?.[sel.idx];
+      const marker = sel.kind === 'em' && doc.markers?.[sel.idx];
+      icon = range ? 'gauge' : waypoint ? 'waypoint' : target ? 'rotation' : marker ? 'flag2' : 'route';
+      title = range ? range.name || 'Constraint range' : waypoint ? waypointLabel(sel.idx)
+        : target ? 'Rotation target' : marker ? marker.name || 'Command' : doc.name || 'Path';
+      const remove = range ? () => actions.delRange(sel.idx) : target ? () => actions.delTarget(sel.idx)
+        : marker ? () => actions.delMarker(sel.idx) : waypoint && n > 2 ? () => actions.delWp(sel.idx) : null;
+      const removeLabel = range ? 'Delete range' : target ? 'Delete rotation target' : marker ? 'Delete marker' : 'Delete waypoint';
+      body = h(React.Fragment, null,
+        h('p', { className: 'seg-hint', role: 'status' }, 'Planning failed. Edit the saved values or remove a feature below to try again. Select other features in the path outline.'),
+        waypoint && h('div', { className: 'grid2' },
+          h(Num, { label: 'X', value: waypoint.x, unit: 'm', onChange: (x) => actions.setWp(sel.idx, { x }) }),
+          h(Num, { label: 'Y', value: waypoint.y, unit: 'm', onChange: (y) => actions.setWp(sel.idx, { y }) })),
+        target && h(Num, { label: 'Heading', value: target.deg, unit: '°', onChange: (deg) => actions.setTarget(sel.idx, { deg }) }),
+        range && h('div', { className: 'grid2' }, [
+          ['maxVel', 'Max velocity', 'm/s'], ['maxAccel', 'Max accel', 'm/s²'],
+          ['maxDecel', 'Max decel', 'm/s²'], ['maxAngVel', 'Max ω', '°/s'], ['maxAngAccel', 'Max α', '°/s²'],
+        ].map(([key, label, unit]) => h(Num, { key, label, unit, value: range[key] ?? pathLimits[key], min: 0, max: pathLimits[key],
+          onChange: (value) => actions.setRange(sel.idx, { [key]: value }) }))),
+        !waypoint && !range && !target && !marker && h(ConstraintsBody, {
+          c: pathLimits, robot, setC: actions.setConstraint, moreLimits, setMoreLimits,
+        }),
+        remove && h('button', { className: 'delbtn', type: 'button', onClick: remove }, h(Icon, { name: 'trash', size: 15 }), removeLabel));
+    }
+    else if (!sel.kind) {
       icon = 'route'; title = doc.name || 'Path';
       body = h(React.Fragment, null,
         h('div', { className: 'qrow' },
@@ -872,7 +901,7 @@ import { UI } from "./ui";
         h('span', { className: 'ctxinsp-t', title }, title),
         tag && h('span', { className: 'ctxinsp-tag' }, tag),
         h('button', { className: 'ctxinsp-x', type: 'button', title: 'Hide inspector', 'aria-label': 'Hide inspector', onClick: onClose }, h(Icon, { name: 'x', size: 14 }))),
-      h('div', { className: 'ctxinsp-body' }, body));
+      h('div', { className: 'ctxinsp-body', inert: props.pending ? '' : undefined }, body));
   }
 
 export { ContextInspector, CommandParameterEditor, commandArguments, parameterValueError, safeControlId };

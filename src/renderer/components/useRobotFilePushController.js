@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_ROBOT_PATH_DIRECTORY } from '../../shared/robotFileDelivery';
 
-const message = (error) => error?.message || String(error || 'File transfer failed');
+const message = (error) => (error?.message || String(error || 'File transfer failed'))
+  .replace(/^Error invoking remote method '[^']+':\s*/, '').replace(/^(?:RobotTransportError|Error):\s*/, '');
 const working = (phase) => ['loading', 'probing', 'trusting', 'preparing', 'uploading'].includes(phase);
 
 export function useRobotFilePushController({ getProject, projectKey, catalogKey, bookmarkKey }) {
@@ -14,6 +15,7 @@ export function useRobotFilePushController({ getProject, projectKey, catalogKey,
   const generation = useRef(0);
   const intent = useRef(null);
   const origin = useRef(null);
+  const trusted = useRef(null);
   const source = useRef(getProject); source.current = getProject;
   const context = useRef({ projectKey, catalogKey, bookmarkKey });
   const update = (patch) => { state.current = { ...state.current, ...patch }; setView(state.current); };
@@ -35,6 +37,7 @@ export function useRobotFilePushController({ getProject, projectKey, catalogKey,
     api.getRobotFileConnection().then((connection) => {
       if (!live || request !== generation.current) return;
       if (connection) { setHost(connection.endpoint.host); setPort(String(connection.endpoint.port)); setDirectory(connection.endpoint.directory); }
+      trusted.current = connection;
       update({ connection, phase: 'idle' });
       if (connection && intent.current) void prepare();
     }).catch((error) => { if (live && request === generation.current) update({ phase: 'idle', error: message(error) }); });
@@ -79,19 +82,26 @@ export function useRobotFilePushController({ getProject, projectKey, catalogKey,
     update({ phase: 'probing', probe: null, error: '' });
     try {
       const probe = await api.probeRobotFiles({ host: host.trim(), port: Number(port), directory: directory.trim() });
-      if (request === generation.current) update({ probe, phase: 'identity' });
+      if (request !== generation.current) return;
+      update({ probe, phase: 'identity' });
+      const saved = trusted.current;
+      if (saved?.endpoint.host === probe.endpoint.host && saved.endpoint.port === probe.endpoint.port
+        && saved.hostKeyFingerprint === probe.hostKeyFingerprint) await acceptPairing(probe, request);
     } catch (error) { if (request === generation.current) update({ phase: 'idle', error: message(error) }); }
   };
-  const confirmPairing = async () => {
-    if (working(state.current.phase) || !state.current.probe) return;
-    const request = ++generation.current;
+  const acceptPairing = async (probe, request) => {
     update({ phase: 'trusting', error: '' });
     try {
-      const connection = await api.trustRobotFiles(state.current.probe.hostKeyFingerprint);
+      const connection = await api.trustRobotFiles(probe.hostKeyFingerprint);
       if (request !== generation.current) return;
+      trusted.current = connection;
       update({ connection, probe: null, phase: 'idle' });
       if (intent.current) await prepare();
     } catch (error) { if (request === generation.current) update({ phase: 'identity', error: message(error) }); }
+  };
+  const confirmPairing = async () => {
+    if (working(state.current.phase) || !state.current.probe) return;
+    await acceptPairing(state.current.probe, ++generation.current);
   };
   const confirmPush = async () => {
     if (state.current.phase !== 'review' || !state.current.preview) return;

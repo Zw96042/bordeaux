@@ -5,7 +5,7 @@
 .settings-label{display:flex;flex-direction:column;gap:5px;min-width:0}
 .settings-label span{color:var(--txt-3);font-size:12px;overflow-wrap:anywhere}
 .settings-row>.seg{width:220px;flex-shrink:0}
-.settings-row>.qbtn{flex-shrink:0}
+.settings-row>.qbtn{flex:0 0 auto}
 .settings-robot-heading{font-size:16px;font-weight:600;margin:0}
 @media(max-width:500px){.settings-row{align-items:flex-start;flex-direction:column;gap:12px}.settings-row>.seg{width:100%}}
 

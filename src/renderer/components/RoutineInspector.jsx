@@ -51,9 +51,9 @@ import { LabviewProjectPanel } from "./LabviewProjectSources";
       icon = 'pause'; title = 'Wait'; tag = 'built-in'; accent = '#cf962f';
       const durationS = node.arguments && node.arguments.durationS;
       body = h(React.Fragment, null,
-        FieldLabel('Duration', h('span', { className: 'rt-scaleval' }, 's')),
-        h('input', { className: 'textinput', type: 'number', min: 0.02, max: 15, step: 0.01, 'aria-label': 'Wait duration in seconds', value: durationS,
-          onChange: (event) => set({ arguments: { durationS: Number(event.target.value) } }) }),
+        h(CommandParameterEditor, { key: node.id, id: 'routine-wait-' + safeControlId(node.id), label: 'Wait duration in seconds',
+          schema: { kind: 'number' }, parameter: { min: 0.02, max: 15, unit: 's' }, value: durationS,
+          onChange: (durationS) => set({ arguments: { durationS } }) }),
         h('div', { className: 'seg-hint' }, 'Continue to the next step after this delay.'),
         h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete wait'));
 

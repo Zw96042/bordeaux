@@ -109,7 +109,7 @@ function numInput(projectDraft?: boolean): ElementNode {
   return inputIn(tree)!;
 }
 
-function commandNumberInput(onChange: (value: number) => void): ElementNode {
+function commandNumberInput(onChange: (value: number) => void, overrides = {}): ElementNode {
   const element = (type: unknown, props: Record<string, unknown>, ...children: unknown[]): ElementNode => ({ type, props: props ?? {}, children });
   const React = {
     Fragment: Symbol("Fragment"),
@@ -136,6 +136,7 @@ function commandNumberInput(onChange: (value: number) => void): ElementNode {
     valueType: "I32",
     parameter: { min: 1, max: 9 },
     onChange,
+    ...overrides,
   }))!;
 }
 
@@ -178,5 +179,24 @@ describe("renderer numeric drafts", () => {
     (input.props.onBlur as (event: { currentTarget: { value: string } }) => void)({ currentTarget: { value: "7" } });
 
     expect(onChange).toHaveBeenLastCalledWith(7);
+  });
+});
+
+ describe("Wait numeric draft range", () => {
+  it.each(["", "-", "1e", "NaN", "Infinity", "-2", "0", "0.019", "100"])("preserves the committed duration for invalid %s", (raw) => {
+    const changed = vi.fn();
+    const control = commandNumberInput(changed, { integer: false, valueType: undefined, parameter: { min: .02, max: 15 } });
+    (control.props.onChange as Function)({ target: { value: raw } });
+    expect(changed).not.toHaveBeenCalled();
+    (control.props.onBlur as Function)({ currentTarget: { value: raw } });
+    expect(changed).not.toHaveBeenCalled();
+  });
+  it.each([.02, 1.25, 15])("commits valid duration %s on blur or Enter", (value) => {
+    const changed = vi.fn();
+    const control = commandNumberInput(changed, { integer: false, valueType: undefined, parameter: { min: .02, max: 15 } });
+    (control.props.onBlur as Function)({ currentTarget: { value: String(value) } });
+    expect(changed).toHaveBeenLastCalledWith(value);
+    (control.props.onKeyDown as Function)({ key: 'Enter', preventDefault() {}, currentTarget: { value: String(value), blur() {} } });
+    expect(changed).toHaveBeenLastCalledWith(value);
   });
 });

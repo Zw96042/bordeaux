@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { RobotFileDelivery, type PreparedRobotFile } from "../src/electron/robotFileDelivery";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { RobotFileDelivery, readRobotFileConnection, writeRobotFileConnection, type PreparedRobotFile } from "../src/electron/robotFileDelivery";
 import { DEFAULT_ROBOT_PATH_DIRECTORY, type RobotFileConnection } from "../src/shared/robotFileDelivery";
 const connection: RobotFileConnection = { endpoint: { host: "roborio-2468-frc.local", port: 22, directory: DEFAULT_ROBOT_PATH_DIRECTORY }, hostKeyFingerprint: "SHA256:abcdefghijklmnopqrstuvxyz123456789" };
 const file = (): PreparedRobotFile => ({ pathId: "path-1", name: "Opening", fileName: "Opening.bdx", contents: Buffer.from("BDX fixture") });
@@ -27,7 +30,7 @@ describe("reviewed robot file delivery", () => {
     const result = await delivery.confirm(preview.operationId);
     expect(transport.upload.mock.calls[0][0]).toEqual(connection);
     expect(transport.upload.mock.calls[0][1][0]).toMatchObject({ fileName: "Opening.bdx", contents: Buffer.from("BDX fixture") });
-    expect(result).toMatchObject({ state: "transferred", directory: "/natinst/bin/Paths" });
+    expect(result).toMatchObject({ state: "transferred", directory: DEFAULT_ROBOT_PATH_DIRECTORY });
     expect(validate).toHaveBeenCalledOnce();
     await expect(delivery.confirm(preview.operationId)).rejects.toThrow(/Review/);
   });
@@ -59,5 +62,19 @@ describe("reviewed robot file delivery", () => {
     const stopped = delivery.stop();
     expect(signal.aborted).toBe(true);
     finish(); await stopped; await failure;
+  });
+});
+
+describe("remembered robot destination", () => {
+  it.each([
+    ["/natinst/bin/Paths", "/home/lvuser/natinst/bin/Paths"],
+    ["/home/lvuser/practice", "/home/lvuser/practice"],
+  ])("restores %s without forgetting SSH identity", async (stored, expected) => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-file-connection-"));
+    try {
+      const file = path.join(directory, "connection.json");
+      await writeRobotFileConnection(file, { ...connection, endpoint: { ...connection.endpoint, directory: stored } });
+      expect(await readRobotFileConnection(file)).toEqual({ ...connection, endpoint: { ...connection.endpoint, directory: expected } });
+    } finally { await fs.rm(directory, { recursive: true, force: true }); }
   });
 });

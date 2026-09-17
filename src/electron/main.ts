@@ -1,16 +1,18 @@
-import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, clipboard, dialog, ipcMain, Menu } from "electron";
+import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from "electron";
 import { autoUpdater as updateClient } from "electron-updater";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+// Running the entry file directly makes Electron report its own version.
+const applicationVersion: string = app.isPackaged ? app.getVersion() : require("../../package.json").version;
 import { robotCatalogSemanticSignature } from "../shared/agent/catalogSignature";
 import type { BordeauxProject, RobotCommandCatalog, RobotIntegrationStatus } from "../shared/types";
 import type { AgentSessionSnapshot } from "../shared/agent/types";
-import { createDemoProject } from "../shared/project/defaults";
 import { validateProject } from "../shared/validation";
 import { prepareBdxBindings } from "./bdxBindings";
-import { buildBdxOffThread } from "./bdxWorkerClient";
+import { buildBdxBatchOffThread, buildBdxOffThread } from "./bdxWorkerClient";
 import { buildLabviewCatalog, resolveLabviewProject } from "./labviewProject";
 import { inspectLabviewCommandsQueued, syncLabviewCommands } from "./labviewProjectSync";
 function readableRobotProjectError(error: unknown, name = "LabVIEW project"): Error { return new Error(`${name}: ${error instanceof Error ? error.message : String(error)}`); }
@@ -22,7 +24,11 @@ import {
   summarizeRobotProjectBookmarks,
   writeRobotProjectBookmarks,
 } from "./robotProjectBookmarks";
-import { readProject, saveTargetForOpenedProject, writeBufferAtomically, openProjectFolder, autosaveProjectFolder, projectFileName, writeProjectFolderBdx } from "./projectFiles";
+import { writeBufferAtomically, openProjectFolder, autosaveProjectFolder, projectFileName, writeProjectFolderBdx } from "./projectFiles";
+import { loadProjectFolderSelection, loadProjectSelection, type ProjectSelection } from "./projectOpening";
+import { requestProjectReload } from "./projectReload";
+import { describeUpdateFailure, OFFICIAL_RELEASES_URL } from "./updateFailure";
+import { GitHubReleaseProvider } from "./githubReleaseProvider";
 import { readRecentProjectFiles, rememberRecentProject, writeRecentProjectFiles } from "./recentProjectFiles";
 import { AgentBridgeClient, AgentBridgeServer } from "./agentBridge";
 import { appUpdateChannel, AppUpdateController, usesGitHubAppUpdates } from "./appUpdates";
@@ -134,11 +140,6 @@ app.setAppUserModelId("org.frc2468.bordeaux");
 const ownsDesktopInstance = mcpStdioMode || app.requestSingleInstanceLock();
 if (!ownsDesktopInstance) app.quit();
 
-function showUpdateMessage(options: Electron.MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> {
-  const window = mainWindow;
-  return window && !window.isDestroyed() ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
-}
-
 function stopBackgroundServices(): Promise<void> {
   diagnosticBundleCapability.clear();
   rejectProposalReceipts("Bordeaux is shutting down.");
@@ -156,72 +157,28 @@ function createAppUpdateController(): AppUpdateController {
     process.env.PORTABLE_EXECUTABLE_FILE !== undefined,
     process.env.APPIMAGE !== undefined,
   );
-  if (supported) nativeAutoUpdater.on("before-quit-for-update", () => { allowClose = true; });
+  if (supported) nativeAutoUpdater.on("before-quit-for-update", () => { allowClose = !dirty; });
   const packaged = app.isPackaged;
+  if (packaged && supported) {
+    updateClient.setFeedURL({ provider: "custom", updateProvider: GitHubReleaseProvider });
+    // API asset URLs do not expose sibling blockmap paths. Full downloads retain
+    // the manifest checksum and native installer signature verification.
+    updateClient.disableDifferentialDownload = true;
+  }
   return new AppUpdateController(packaged && supported ? updateClient : null, {
-    available: async (version, releaseNotes) => {
-      const result = await showUpdateMessage({ type: "info", title: "Bordeaux update available", message: `Bordeaux ${version} is available`, detail: releaseNotes, buttons: ["Later", "Download Update"], defaultId: 0, cancelId: 0, noLink: true });
-      return result.response === 1 ? "download" : "later";
-    },
-    unavailable: (currentVersion) => showUpdateMessage({
-      type: "info",
-      title: "Bordeaux updates",
-      message: "Update checks are available in installed builds.",
-      detail: `Bordeaux ${currentVersion} can update automatically from a macOS install, Windows setup install, or Linux AppImage. Store and portable builds use their distribution channel.`,
-      buttons: ["OK"],
-    }).then(() => undefined),
-    downloading: (version) => showUpdateMessage({
-      type: "info",
-      title: "Bordeaux update found",
-      message: `Downloading Bordeaux ${version}…`,
-      detail: "Bordeaux will let you know when the update is ready to install.",
-      buttons: ["OK"],
-    }).then(() => undefined),
-    upToDate: (currentVersion) => showUpdateMessage({
-      type: "info",
-      title: "Bordeaux updates",
-      message: "Bordeaux is up to date.",
-      detail: `You are running Bordeaux ${currentVersion} on the ${appUpdateChannel(currentVersion) === "beta" ? "beta" : "production"} channel.`,
-      buttons: ["OK"],
-    }).then(() => undefined),
-    failed: (message) => showUpdateMessage({
-      type: "error",
-      title: "Bordeaux update failed",
-      message: "Bordeaux could not complete the update.",
-      detail: message,
-      buttons: ["OK"],
-    }).then(() => undefined),
-    ready: async (version, projectDirty) => {
-      const result = await showUpdateMessage(projectDirty ? {
-        type: "info",
-        title: "Bordeaux update ready",
-        message: `Bordeaux ${version} has been downloaded.`,
-        detail: "Save or discard the current project, then choose Check for Updates again to install it.",
-        buttons: ["Later"],
-      } : {
-        type: "info",
-        title: "Bordeaux update ready",
-        message: `Restart to install Bordeaux ${version}?`,
-        detail: "Bordeaux will close, install the downloaded update, and reopen.",
-        buttons: ["Later", "Restart and Update"],
-        defaultId: 0,
-        cancelId: 0,
-        noLink: true,
-      });
-      return !projectDirty && result.response === 1 ? "restart" : "later";
-    },
-  }, {
     packaged,
     supported,
-    currentVersion: app.getVersion(),
+    currentVersion: applicationVersion,
     isProjectDirty: () => dirty,
-    prepareToInstall: async () => {
-      await stopBackgroundServices();
-      if (dirty) throw new Error("The project changed while Bordeaux was preparing the update. Save or discard it, then try again.");
-      backgroundServicesReadyForExit = true;
-      allowClose = true;
+    prepareToInstall: () => {
+      if (dirty) throw new Error("The project changed while Bordeaux was preparing the update. Save it, then try again.");
+      // Native macOS verification may still fail. Keep close guards and services
+      // intact until the real quit reaches the existing will-quit cleanup.
     },
+    describeError: (error) => describeUpdateFailure(error instanceof Error ? error.message : String(error)),
     warn: (message, error) => console.warn(message, error),
+  }, (state) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("appUpdates:state", state);
   });
 }
 
@@ -418,6 +375,7 @@ function createWindow() {
   window.webContents.on("will-attach-webview", (event) => event.preventDefault());
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   window.on("close", (event) => {
+    if (!allowClose && appUpdates?.snapshot().phase === "installing") { event.preventDefault(); return; }
     if (allowClose || !dirty) return;
     event.preventDefault();
     if (smokeDirectory) {
@@ -505,11 +463,31 @@ function createWindow() {
 }
 
 function sendCommand(command: string, payload?: unknown) {
+  if (appUpdates?.snapshot().phase === "installing") return;
   mainWindow?.webContents.send("menu-command", { command, payload });
 }
 
 function sendMcpStatus(): void {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("agent:mcpStatus", { enabled: agentBridge?.enabled === true });
+}
+
+function reloadProjectWindow(ignoreCache: boolean): void {
+  if (appUpdates?.snapshot().phase === "installing") return;
+  const window = mainWindow;
+  if (!window || window.isDestroyed()) return;
+  void requestProjectReload({
+    isDirty: () => dirty,
+    ask: async () => {
+      const { response } = await dialog.showMessageBox(window, {
+        type: "warning", title: "Unsaved Bordeaux project", message: "Reload this project?",
+        detail: "Reloading discards unsaved edits. Choose Save project to return to the editor and save first, then choose Reload again.",
+        buttons: ["Cancel", "Save project", "Discard and reload"], defaultId: 0, cancelId: 0, noLink: true,
+      });
+      return response === 2 ? "discard" : response === 1 ? "save" : "cancel";
+    },
+    save: () => sendCommand("save-project"),
+    reload: () => { if (!window.isDestroyed()) { if (ignoreCache) window.webContents.reloadIgnoringCache(); else window.webContents.reload(); } },
+  }).catch((error) => console.warn("Could not reload Bordeaux:", error));
 }
 
 function updateMenuItem(): Electron.MenuItemConstructorOptions {
@@ -588,41 +566,30 @@ function buildMenu() {
         },
       ],
     },
-    { label: "View", submenu: [{ role: "reload" }, { role: "forceReload" }, { role: "toggleDevTools" }, { type: "separator" }, { role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" }, { type: "separator" }, { role: "togglefullscreen" }] },
+    { label: "View", submenu: [...(!app.isPackaged ? [
+      { label: "Reload", accelerator: "CmdOrCtrl+R", click: () => reloadProjectWindow(false) },
+      { label: "Force Reload", accelerator: "CmdOrCtrl+Shift+R", click: () => reloadProjectWindow(true) },
+    ] : []), { role: "toggleDevTools" }, { type: "separator" }, { role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" }, { type: "separator" }, { role: "togglefullscreen" }] },
     ...(process.platform === "darwin" ? [] : [{ label: "Help", submenu: [
       updateMenuItem(),
       { type: "separator" },
-      { label: `Bordeaux ${app.getVersion()}`, enabled: false },
+      { label: `Bordeaux ${applicationVersion}`, enabled: false },
     ] } as Electron.MenuItemConstructorOptions]),
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-async function openProjectFile(filePath: string) {
-  if ((await fs.promises.lstat(filePath)).isDirectory()) return activateProjectFolder(filePath);
-  if (/\.(path|routine)$/i.test(filePath) && ["Paths", "Routines"].includes(path.basename(path.dirname(filePath)))) {
-    const folder = path.dirname(path.dirname(filePath));
-    if (fs.existsSync(path.join(folder, ".bordeaux-workspace.json"))) {
-      const opened = await activateProjectFolder(folder);
-      const item = JSON.parse(await fs.promises.readFile(filePath, "utf8"));
-      if (opened.project.paths.some((entry) => entry.id === item.id)) opened.project.editor = { ...opened.project.editor, activePathId: item.id };
-      if (opened.project.routines.some((entry) => entry.id === item.id)) opened.project.activeRoutineId = item.id;
-      return opened;
-    }
-  }
-  const decoded = await readProject(filePath);
-  let { project } = decoded;
-  const folder = path.dirname(filePath);
-  if (fs.existsSync(path.join(folder, ".bordeaux-workspace.json"))) {
-    const recovered = await openProjectFolder(folder);
-    if (recovered.project && recovered.projectPath && path.resolve(recovered.projectPath) === path.resolve(filePath)) project = recovered.project;
-  }
+async function activateProjectSelection(selection: ProjectSelection) {
   clearLinkedRobotProject();
-  await rememberFile(filePath);
-  activateProjectTarget(saveTargetForOpenedProject(filePath, decoded));
+  activateProjectTarget(selection.projectPath);
+  currentProjectFolder = selection.folderPath;
   dirty = false;
-  currentProjectFolder = path.dirname(filePath);
-  return { project, location: projectLocation() };
+  await rememberFile(selection.recentPath).catch((error) => console.warn("Could not remember the opened project:", error));
+  return { project: selection.project, location: projectLocation() };
+}
+
+async function openProjectFile(filePath: string) {
+  return activateProjectSelection(await loadProjectSelection(filePath));
 }
 
 handle("project:open", async () => {
@@ -666,14 +633,7 @@ async function chooseProjectFolder() {
 }
 
 async function activateProjectFolder(folder: string) {
-  const opened = await openProjectFolder(folder);
-  const project = opened.project ?? { ...createDemoProject(), name: path.basename(folder) };
-  clearLinkedRobotProject();
-  activateProjectTarget(opened.projectPath);
-  currentProjectFolder = folder;
-  await rememberFile(folder);
-  dirty = false;
-  return { project, location: projectLocation() };
+  return activateProjectSelection(await loadProjectFolderSelection(folder));
 }
 
 handle("project:save", async (_event, project, rawSaveAs) => {
@@ -818,9 +778,9 @@ handle("diagnostics:preview", async (_event, rawProject) => {
   const contents = buildDiagnosticBundle({
     generatedAt: new Date().toISOString(),
     app: {
-      version: app.getVersion(),
+      version: applicationVersion,
       build: app.isPackaged ? "packaged" : "development",
-      channel: appUpdateChannel(app.getVersion()),
+      channel: appUpdateChannel(applicationVersion),
     },
     os: { platform: process.platform, release: os.release(), arch: process.arch },
     fieldPin,
@@ -971,12 +931,10 @@ handle("robotFiles:prepare", async (_event, rawProject, pathIds) => {
   const hasCommands = selected.some(candidate => candidate.markers.some(marker => marker.invocation));
   const bindingOptions = { projectFile: hasCommands ? projectFile : null, inspectionCacheDirectory: labviewDiscoveryCacheDirectory() };
   const bindings = await prepareBdxBindings(bindingOptions);
-  const files = [];
-  for (const candidate of selected) {
-    const built = await buildBdxOffThread({ project, selection: { kind: "path", id: candidate.id }, bindings });
-    assertCurrent();
-    files.push({ pathId: candidate.id, name: candidate.name, fileName: built.fileName, contents: Buffer.from(built.bytes) });
-  }
+  assertCurrent();
+  const built = await buildBdxBatchOffThread({ project, selections: selected.map(candidate => ({ kind: "path", id: candidate.id })), bindings });
+  assertCurrent();
+  const files = built.map((file, index) => ({ pathId: selected[index].id, name: selected[index].name, fileName: file.fileName, contents: Buffer.from(file.bytes) }));
   return robotFileDelivery.prepare(files, async () => {
     assertCurrent();
     const current = await prepareBdxBindings(bindingOptions);
@@ -998,9 +956,20 @@ for (const channel of ["robot:inspectRetention", "robot:prepareRetention", "robo
 }
 handle("robot:cancelPush", () => ({ canceled: false }));
 handle("robot:cancelRetention", () => ({ canceled: false }));
+handle("appUpdates:state", () => appUpdates?.snapshot());
+handle("appUpdates:check", () => appUpdates?.check(true));
+handle("appUpdates:download", () => appUpdates?.download());
+handle("appUpdates:cancel", () => appUpdates?.cancelDownload());
+handle("appUpdates:install", () => appUpdates?.install());
+handle("appUpdates:visible", (_event, visible) => {
+  if (typeof visible !== "boolean") throw new Error("Update visibility must be a boolean");
+  appUpdates?.setVisible(visible);
+});
+handle("appUpdates:releases", () => shell.openExternal(OFFICIAL_RELEASES_URL));
+handle("appUpdates:copyDetails", () => clipboard.writeText(appUpdates?.snapshot().errorDetails || ""));
 handle("agent:getActiveProposal", () => agentSessions.getActiveProposal());
 handle("agent:getMcpStatus", () => ({ enabled: agentBridge?.enabled === true }));
-ipcMain.on("project:setDirty", (event, value) => { assertTrustedSender(event); dirty = value === true; });
+ipcMain.on("project:setDirty", (event, value) => { assertTrustedSender(event); dirty = value === true; appUpdates?.refresh(); });
 ipcMain.on("agent:publishSession", (event, value) => {
   assertTrustedSender(event);
   if (!agentSessions.tryPublishSnapshot(value as AgentSessionSnapshot)) {

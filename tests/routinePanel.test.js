@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { StepInspector } from '../src/renderer/components/RoutineInspector';
 import { RoutinePanel } from '../src/renderer/components/RoutinePanel';
 import { AUTO } from '../src/renderer/lib/routineModel';
 import { createDemoProject } from '../src/shared/project/defaults';
@@ -52,5 +53,18 @@ describe('routine path preview status', () => {
     const metadata = renderMetadata(project, routine, { status: 'ready', values: {} });
     expect(metadata('drive')).toBe('No trajectory available');
     expect(metadata('missing')).toBe('Choose a path');
+  });
+});
+
+describe('Wait inspector', () => {
+  it('uses bounded project draft validation for the selected Wait step', () => {
+    const html = renderToStaticMarkup(React.createElement(StepInspector, {
+      node: { id: 'wait-a', type: 'builtin', builtinId: 'bordeaux.wait', arguments: { durationS: 1 } },
+      paths: [], acq: {}, run: { segs: [] },
+    }));
+    expect(html).toContain('Wait duration in seconds');
+    expect(html).toContain('min="0.02"');
+    expect(html).toContain('max="15"');
+    expect(html).toContain('data-project-draft="true"');
   });
 });
