@@ -28,15 +28,14 @@ import { UI } from "../components/ui";
 import { PM } from "../lib/pathMath";
 import { agentProposalMatchesPublishedContext } from "../lib/agentProposalContext";
 import { PathLinks } from "../lib/pathLinks";
+import { finalPlanningError, planningNotice } from "../lib/planningFeedback";
 import {
-  FINAL_PLANNING_NOTICE_COOLDOWN_MS,
-  FINAL_PLANNING_NOTICE_DELAY_MS,
-  FINAL_PLANNING_NOTICE_DURATION_MS,
-  planningErrorMessage,
-  shouldPresentPlanningError,
-} from "../lib/planningFeedback";
+  PROJECT_SCOPE, ROUTINE_SCOPE, applyProjectEntry, captureProjectChange, createUndoHistory, deleteFolder, linkedPathIds,
+  pathScope, undoScopes, withLibraryFields,
+} from "../lib/undoHistory";
 import { AUTO } from "../lib/routineModel";
-import { enqueuePersistenceAfterPreflight, flushFocusedProjectDraft, hasProjectInputDraft, noteProjectDraftInput, projectFolderName, projectPersistenceStayedCurrent } from "../lib/draftPersistence";
+import { focusIfAvailable } from "../lib/focusReturn";
+import { commitFocusedDraft, enqueuePersistenceAfterPreflight, flushFocusedProjectDraft, hasProjectInputDraft, noteProjectDraftInput, projectFolderName, projectPersistenceStayedCurrent } from "../lib/draftPersistence";
 import { UnitPrefs } from "../lib/unitPreferences";
 import {
   createMarkerId as markerId,
@@ -465,15 +464,13 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
     const routineLibrary = routineState(project);
     const routines = routineLibrary.routines;
     const routine = routines.find((candidate) => candidate.id === routineLibrary.activeRoutineId) || routines[0];
-    const commitRoutineState = useCallback((update) => setProject((current) => {
-      const currentState = routineState(current);
-      routineHist.current.past.push(clone(currentState));
-      if (routineHist.current.past.length > 80) routineHist.current.past.shift();
-      routineHist.current.future = [];
-      hist.current.past = []; hist.current.future = [];
-      projectHist.current.future = [];
-      return withRoutineState(current, update(clone(currentState)));
-    }), []);
+    // One chronological journal; each surface undoes only its own scope or project-wide changes.
+    const history = useMemo(() => createUndoHistory(), []);
+    const recordUndo = useCallback((entry) => { history.record(entry); force((x) => x + 1); }, [history]);
+    const commitRoutineState = useCallback((update) => {
+      recordUndo({ scope: ROUTINE_SCOPE, touches: [ROUTINE_SCOPE], kind: 'routines', state: clone(routineState(projectRef.current)) });
+      setProject((current) => withRoutineState(current, update(clone(routineState(current)))));
+    }, [recordUndo]);
     const setRoutine = useCallback((update) => commitRoutineState((state) => {
       const current = state.routines.find((candidate) => candidate.id === state.activeRoutineId) || state.routines[0];
       const value = typeof update === 'function' ? update(current) : update;
@@ -494,9 +491,6 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
     const docRef = useRef(doc); docRef.current = doc;
     const projectRef = useRef(project); projectRef.current = project;
     const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
-    const hist = useRef({ past: [], future: [] });
-    const routineHist = useRef({ past: [], future: [] });
-    const projectHist = useRef({ past: [], future: [] });
     const autosaveRevision = useRef(0);
     const bdxSaveFailure = useRef('');
     const autosaveTimer = useRef(0);
@@ -748,10 +742,13 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
     }, [libraryDurations, project.paths, robot, project.field, plannerId, doc, optimizationKey, selectedOutcome]);
 
     const writeDoc = useCallback((nd) => {
-      setPlanningInputRevision((revision) => revision + 1);
       setProject((pr) => replaceEditedPath(pr, nd));
     }, []);
-    const beginHistory = useCallback(() => { hist.current.past.push(editablePath(docRef.current)); if (hist.current.past.length > 80) hist.current.past.shift(); hist.current.future = []; projectHist.current.future = []; force((x) => x + 1); }, []);
+    // Writing a path re-syncs linked positions, so its entry also touches every linked path.
+    const beginHistory = useCallback(() => {
+      const path = docRef.current;
+      recordUndo({ scope: pathScope(path.id), touches: linkedPathIds(projectRef.current, path.id).map(pathScope), kind: 'path', path: editablePath(path) });
+    }, [recordUndo]);
     const beginEdit = useCallback(() => {
       if (editStore.getSnapshot()) return;
       editStore.begin(editablePath(docRef.current));
@@ -780,61 +777,55 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
       editStore.update(fn(editablePath(draft)));
     }, [editStore, writeDoc]);
 
-    const waypointSnapshot = (current) => ({
-      waypoints: Object.fromEntries(current.paths.map((path) => [path.id, clone(path.waypoints)])),
-      pathLinks: clone(current.pathLinks),
-    });
-    const restoreWaypointSnapshot = (current, snapshot) => ({ ...current,
-      paths: current.paths.map((path) => snapshot.waypoints[path.id] ? { ...path, waypoints: clone(snapshot.waypoints[path.id]) } : path),
-      pathLinks: clone(snapshot.pathLinks).filter((link) => current.paths.some((path) => path.id === link.fromPathId) && current.paths.some((path) => path.id === link.toPathId)),
-    });
-
-    const undo = useCallback(() => {
+    // After a project-wide undo or redo, keep the edited path visible when it still exists.
+    const showPathAfterProjectChange = (next, preferredId) => {
+      const currentId = docRef.current?.id;
+      const id = [preferredId, currentId].find((candidate) => candidate && next.paths.some((path) => path.id === candidate));
+      const index = id ? next.paths.findIndex((path) => path.id === id) : Math.max(0, Math.min(activeIdx, next.paths.length - 1));
+      setActiveIdx(index); setSel({ kind: null, idx: -1 });
+      if (next.paths[index].id !== currentId) playbackStore.reset();
+    };
+    /** Performs one journal entry and returns the entry that reverses it, or null to keep it. */
+    const applyUndoEntry = (entry) => {
+      const current = projectRef.current;
+      if (entry.kind === 'path') {
+        const path = current.paths.find((candidate) => candidate.id === entry.path.id);
+        if (!path) return null;
+        writeDoc(withLibraryFields(entry.path, path));
+        return { ...entry, path: editablePath(path) };
+      }
+      if (entry.kind === 'routines') {
+        const inverse = { ...entry, state: clone(routineState(current)) };
+        setProject((value) => withRoutineState(value, entry.state)); setRoutineSel(null);
+        return inverse;
+      }
+      const applied = applyProjectEntry(current, entry, docRef.current?.id ?? null);
+      if (!applied) return null;
+      const removed = current.paths.filter((path) => !applied.project.paths.some((candidate) => candidate.id === path.id));
+      const referenced = removed.find((path) => referencingRoutines(routineState(current).routines, path.id).length);
+      if (referenced) {
+        alert('“' + referenced.name + '” is used by ' + referencingRoutines(routineState(current).routines, referenced.id).map((item) => item.name).join(', ') + '. Remove those steps before deleting the path.');
+        return null;
+      }
+      setProject(applied.project);
+      // Shared-position and folder entries keep the current path; project entries show the path they changed.
+      if (entry.kind === 'project') showPathAfterProjectChange(applied.project, entry.change.activePathId);
+      return applied.inverse;
+    };
+    const applyUndoEntryRef = useRef(applyUndoEntry); applyUndoEntryRef.current = applyUndoEntry;
+    const scopes = undoScopes(page, doc.id);
+    const scopeKey = scopes.join('\n');
+    const stepHistory = (direction) => () => {
       if (cancelEdit()) return;
-      const H = hist.current;
-      if (H.past.length) {
-        const previous = H.past.pop();
-        if (previous.waypointSnapshot) {
-          H.future.push({ waypointSnapshot: waypointSnapshot(project) });
-          setProject((current) => restoreWaypointSnapshot(current, previous.waypointSnapshot)); setPlanningInputRevision((value) => value + 1);
-        } else { H.future.push(editablePath(docRef.current)); writeDoc(previous); }
-        force((x) => x + 1); return;
-      }
-      const R = routineHist.current;
-      if (R.past.length) {
-        R.future.push(clone(routineState(project)));
-        const previous = R.past.pop();
-        setProject((current) => withRoutineState(current, previous));
-        setRoutineSel(null); force((x) => x + 1); return;
-      }
-      const P = projectHist.current; if (!P.past.length) return;
-      P.future.push({ project: clone(project), activeIdx });
-      const previous = P.past.pop(); routineHist.current = { past: [], future: [] }; setProject(previous.project); setActiveIdx(previous.activeIdx); setSel({ kind: null, idx: -1 }); force((x) => x + 1);
-    }, [cancelEdit, writeDoc, project, activeIdx]);
-    const redo = useCallback(() => {
-      if (cancelEdit()) return;
-      const H = hist.current;
-      if (H.future.length) {
-        const next = H.future.pop();
-        if (next.waypointSnapshot) {
-          H.past.push({ waypointSnapshot: waypointSnapshot(project) });
-          setProject((current) => restoreWaypointSnapshot(current, next.waypointSnapshot)); setPlanningInputRevision((value) => value + 1);
-        } else { H.past.push(editablePath(docRef.current)); writeDoc(next); }
-        force((x) => x + 1); return;
-      }
-      const R = routineHist.current;
-      if (R.future.length) {
-        R.past.push(clone(routineState(project)));
-        const nextState = R.future.pop();
-        setProject((current) => withRoutineState(current, nextState));
-        setRoutineSel(null); force((x) => x + 1); return;
-      }
-      const P = projectHist.current; if (!P.future.length) return;
-      P.past.push({ project: clone(project), activeIdx });
-      const next = P.future.pop(); routineHist.current = { past: [], future: [] }; setProject(next.project); setActiveIdx(next.activeIdx); setSel({ kind: null, idx: -1 }); force((x) => x + 1);
-    }, [cancelEdit, writeDoc, project, activeIdx]);
+      if (history[direction](scopeKey.split('\n'), (entry) => applyUndoEntryRef.current(entry))) force((x) => x + 1);
+    };
+    const undo = useCallback(stepHistory('undo'), [cancelEdit, history, scopeKey]);
+    const redo = useCallback(stepHistory('redo'), [cancelEdit, history, scopeKey]);
 
-    const select = useCallback((kind, idx) => setSel(kind ? { kind, idx } : { kind: null, idx: -1 }), []);
+    const select = useCallback((kind, idx) => {
+      commitFocusedDraft();
+      setSel(kind ? { kind, idx } : { kind: null, idx: -1 });
+    }, []);
     const moveWaypoint = useCallback((i, point) => mutate((path) => moveWaypointTo(path, i, point)), [mutate]);
     const moveHandle = useCallback((i, which, p) => mutate((d) => {
       const w = d.waypoints[i]; const key = which ? 'nextC' : 'prevC'; const other = which ? 'prevC' : 'nextC';
@@ -1018,17 +1009,23 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
         : PathLinks.unlinkPosition(before, doc.id, index);
       commitWaypointProject(before, next);
     };
-    const commitWaypointProject = (before, next) => {
+    // Shared-position edits belong to the active path; deletions, library links, and applied
+    // proposals are project-wide. Both restore only what they changed.
+    const commitProjectChange = (before, next, scope = PROJECT_SCOPE) => {
       if (next === before) return;
-      hist.current.past.push({ waypointSnapshot: waypointSnapshot(before) });
-      if (hist.current.past.length > 80) hist.current.past.shift();
-      hist.current.future = []; projectHist.current.future = [];
-      setProject(next); setPlanningInputRevision((value) => value + 1);
-      force((value) => value + 1);
+      recordUndo({ scope, kind: scope === PROJECT_SCOPE ? 'project' : 'waypoints', ...captureProjectChange(before, next, docRef.current?.id ?? null) });
+      setProject(next);
     };
+    const commitWaypointProject = (before, next) => commitProjectChange(before, next, pathScope(docRef.current.id));
     const toggleTheta = useCallback((i, on) => commit((d) => { d.waypoints[i].thetaOn = on; return d; }), [commit]);
     const setHandleLen = useCallback((i, key, len) => commit((d) => { const w = d.waypoints[i]; const a = Math.atan2(w[key].y - w.y, w[key].x - w.x); w[key] = { x: w.x + Math.cos(a) * len, y: w.y + Math.sin(a) * len }; return d; }), [commit]);
-    const delWp = useCallback((i) => { commit((d) => removeWaypoint(d, i)); select(null, -1); }, [commit, select]);
+    // Field Shift-delete keeps focus in the inspector. Its draft commits and renders first, so the
+    // deletion reads the drafted path and the draft cannot write the deleted feature back.
+    const deleteFeature = useCallback((remove) => {
+      flushSync(() => commitFocusedDraft());
+      commit(remove); select(null, -1);
+    }, [commit, select]);
+    const delWp = useCallback((i) => deleteFeature((d) => removeWaypoint(d, i)), [deleteFeature]);
 
     const enableTargetsAtFraction = (d, f) => {
       const fractions = derived.wpFrac || PM.waypointFracs(d, derived.sample);
@@ -1065,9 +1062,9 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
     const moveMarkerTo = useCallback((i, p, visitFraction) => mutate((d) => { const m = d.markers[i]; if (!m) return d; const f = Number.isFinite(visitFraction) ? visitFraction : PM.nearestFraction(p.x, p.y, derived.sample.pts); m.f = f; if (m.anchor === 'dist') m.d = +(f * (derived.sample.length || 0)).toFixed(3); return d; }), [mutate, derived]);
     const setFeature = (items, i, patch) => { const item = items[i]; if (!item) return; if (patch.anchor) { const f = PM.featureFraction(item, derived.sample); item.f = f; if (patch.anchor === 'dist') item.d = f * (derived.sample.length || 0); else delete item.d; } Object.assign(item, patch); };
     const setTarget = useCallback((i, patch) => commit((d) => { setFeature(d.targets, i, patch); return d; }), [commit, derived]);
-    const delTarget = useCallback((i) => { commit((d) => { d.targets.splice(i, 1); return d; }); select(null, -1); }, [commit, select]);
+    const delTarget = useCallback((i) => deleteFeature((d) => { d.targets.splice(i, 1); return d; }), [deleteFeature]);
     const setMarker = useCallback((i, patch) => commit((d) => { setFeature(d.markers, i, patch); return d; }), [commit, derived]);
-    const delMarker = useCallback((i) => { commit((d) => { d.markers.splice(i, 1); return d; }); select(null, -1); }, [commit, select]);
+    const delMarker = useCallback((i) => deleteFeature((d) => { d.markers.splice(i, 1); return d; }), [deleteFeature]);
 
     const addRange = useCallback((f0, f1) => commit((d) => {
       if (!d.ranges) d.ranges = [];
@@ -1110,7 +1107,7 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
       }
       return d;
     }), [commit, derived]);
-    const delRange = useCallback((i) => { commit((d) => { d.ranges.splice(i, 1); return d; }); select(null, -1); }, [commit, select]);
+    const delRange = useCallback((i) => deleteFeature((d) => { d.ranges.splice(i, 1); return d; }), [deleteFeature]);
     const moveRangeHandle = useCallback((i, which, f) => mutate((d) => {
       const rg = d.ranges[i]; const key = which ? 'f1' : 'f0'; const cf = Math.max(0, Math.min(1, f));
       const len = derived.sample.length || 1;
@@ -1232,12 +1229,13 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
       select };
 
     const uniquePathName = (base) => uniqueItemName(project.paths, base);
+    // Path history stays with its path; switching only changes which scope Undo applies to.
     const resetForPath = (i) => {
+      commitFocusedDraft();
       finishEdit();
       routinePlaybackStore.reset();
-      if (i !== activeIdx) setPlanningInputRevision(0);
       setActiveIdx(i); setSel({ kind: null, idx: -1 }); playbackStore.reset();
-      hist.current = { past: [], future: [] }; setPage('plan');
+      setPage('plan');
     };
     const updatePathLibrary = (update) => {
       finishEdit();
@@ -1270,14 +1268,18 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
     const setPathLink = (fromPathId, toPathId) => {
       const pr = materializeProject(); finishEdit();
       let pathLinks = (pr.pathLinks || []).filter((link) => link.fromPathId !== fromPathId);
-      if (!toPathId || fromPathId === toPathId) { commitWaypointProject(pr, { ...pr, pathLinks }); return; }
+      // Library links can join paths other than the active one, so they are project-wide history.
+      if (!toPathId || fromPathId === toPathId) {
+        if (pathLinks.length !== (pr.pathLinks || []).length) commitProjectChange(pr, { ...pr, pathLinks });
+        return;
+      }
       pathLinks = pathLinks.filter((link) => link.toPathId !== toPathId);
       const paths = pr.paths.slice(), source = paths.find((path) => path.id === fromPathId), targetIndex = paths.findIndex((path) => path.id === toPathId);
       if (!source || targetIndex < 0) return;
       const target = editablePath(paths[targetIndex]), end = source.waypoints[source.waypoints.length - 1];
       target.waypoints[0] = PathLinks.copyPose(target.waypoints[0], end); paths[targetIndex] = target;
       const next = { ...pr, paths, pathLinks: [...pathLinks, { id: pathLinkId(), fromPathId, toPathId }] };
-      commitWaypointProject(pr, PathLinks.sync(next, target.id, pr.paths[targetIndex]));
+      commitProjectChange(pr, PathLinks.sync(next, target.id, pr.paths[targetIndex]));
     };
     const dupPath = (i) => {
       const source = materializeProject().paths[i]; if (!source) return null;
@@ -1288,14 +1290,17 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
       resetForPath(index); return { index, name, id: cp.id, folderId: cp.folderId };
     };
     const delPath = (i) => {
-      if (project.paths.length <= 1) return false;
-      const target = project.paths[i]; if (!target) return false;
-      const references = referencingRoutines(routines, target.id);
+      const before = materializeProject();
+      if (before.paths.length <= 1) return false;
+      const target = before.paths[i]; if (!target) return false;
+      const references = referencingRoutines(routineState(before).routines, target.id);
       if (references.length) { alert('“' + target.name + '” is used by ' + references.map((candidate) => candidate.name).join(', ') + '. Remove those steps before deleting the path.'); return false; }
-      if (!confirm('Delete path “' + target.name + '”? This cannot be undone.')) return false;
-      updatePathLibrary((pr) => { const paths = pr.paths.filter((_, k) => k !== i); return { ...pr, paths, pathLinks: (pr.pathLinks || []).filter((link) => link.fromPathId !== target.id && link.toPathId !== target.id) }; });
-      setActiveIdx((a) => Math.max(0, a > i ? a - 1 : a === i ? Math.min(a, project.paths.length - 2) : a));
-      setSel({ kind: null, idx: -1 }); playbackStore.reset(); hist.current = { past: [], future: [] };
+      if (!confirm('Delete path “' + target.name + '”? You can undo this.')) return false;
+      finishEdit();
+      const pathLinks = (before.pathLinks || []).filter((link) => link.fromPathId !== target.id && link.toPathId !== target.id);
+      commitProjectChange(before, { ...before, paths: before.paths.filter((_, k) => k !== i), pathLinks: pathLinks.length === (before.pathLinks || []).length ? before.pathLinks : pathLinks });
+      setActiveIdx((a) => Math.max(0, a > i ? a - 1 : a === i ? Math.min(a, before.paths.length - 2) : a));
+      setSel({ kind: null, idx: -1 }); playbackStore.reset();
       return true;
     };
     const renamePath = (i, name) => { const clean = (name || '').trim(); if (!clean) return false; updatePathLibrary((pr) => { const paths = pr.paths.slice(); paths[i] = { ...paths[i], name: clean }; return { ...pr, paths }; }); return true; };
@@ -1312,8 +1317,12 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
     const deletePathFolder = (id) => {
       const folder = (project.pathFolders || []).find((candidate) => candidate.id === id); if (!folder) return false;
       const count = project.paths.filter((path) => path.folderId === id).length;
-      if (!confirm('Delete folder “' + folder.name + '”?' + (count ? ' Its ' + count + ' path' + (count === 1 ? '' : 's') + ' will move to Unfiled.' : ''))) return false;
-      updatePathLibrary((pr) => ({ ...pr, pathFolders: (pr.pathFolders || []).filter((candidate) => candidate.id !== id), paths: pr.paths.map((path) => path.folderId === id ? (() => { const next = { ...path }; delete next.folderId; return next; })() : path) }));
+      if (!confirm('Delete folder “' + folder.name + '”?' + (count ? ' Its ' + count + ' path' + (count === 1 ? '' : 's') + ' will stay in the library without a folder.' : '') + ' You can undo this.')) return false;
+      const deleted = deleteFolder(materializeProject(), id);
+      finishEdit();
+      // Restores only this folder and its unmoved members, never later library work.
+      recordUndo({ scope: PROJECT_SCOPE, touches: [], kind: 'folder', restore: deleted.change });
+      setProject(deleted.project);
       return true;
     };
     const movePathToFolder = (i, folderId) => updatePathLibrary((pr) => ({ ...pr, paths: pr.paths.map((path, index) => {
@@ -1326,10 +1335,10 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
     const uniqueRoutineName = (base) => uniqueItemName(routines, base);
     const setActiveRoutine = (id) => {
       if (id === routine.id && page === 'auto') return;
-      finishEdit(); playbackStore.reset();
+      commitFocusedDraft(); finishEdit(); playbackStore.reset();
       if (!routines.some((candidate) => candidate.id === id)) return;
       setProject((current) => withRoutineState(current, { ...routineState(current), activeRoutineId: id }));
-      routineHist.current = { past: [], future: [] }; resetForRoutine(); setPage('auto');
+      resetForRoutine(); setPage('auto');
     };
     const addRoutine = () => {
       finishEdit(); playbackStore.reset();
@@ -1346,7 +1355,7 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
     const deleteRoutine = (id) => {
       if (routines.length <= 1) return false;
       const target = routines.find((candidate) => candidate.id === id); if (!target) return false;
-      if (!confirm('Delete routine “' + target.name + '”? This cannot be undone.')) return false;
+      if (!confirm('Delete routine “' + target.name + '”? You can undo this.')) return false;
       commitRoutineState((state) => { const index = state.routines.findIndex((candidate) => candidate.id === id); const next = state.routines.filter((candidate) => candidate.id !== id); const activeRoutineId = state.activeRoutineId === id ? next[Math.min(index, next.length - 1)].id : state.activeRoutineId; return { routines: next, activeRoutineId }; });
       resetForRoutine(); return true;
     };
@@ -1386,7 +1395,6 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
         || !proposalContext || proposalContext.published !== publishedContext || proposalContext.id !== agentProposal.id
         || robotProjectState.operation || !agentProposalCanApplyCandidate
         || (agentProposal.blockingIssues && agentProposal.blockingIssues.length)) return;
-      const before = { project: clone(project), activeIdx };
       let nextIndex = activeIdx;
       let nextProject;
       if (agentProposal.operation === 'configureRobot') {
@@ -1403,8 +1411,9 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
         nextIndex = project.paths.length;
         nextProject = { ...project, paths: [...project.paths, clone(agentCandidate.path)] };
       }
-      projectHist.current.past.push(before); if (projectHist.current.past.length > 80) projectHist.current.past.shift(); projectHist.current.future = [];
-      setProject(nextProject); if (agentProposal.operation !== 'configureRobot') resetForPath(nextIndex); updateDirty(true);
+      commitProjectChange(project, nextProject);
+      if (agentProposal.operation !== 'configureRobot') resetForPath(nextIndex);
+      updateDirty(true);
       const appliedRevision = agentSync.revision() + 1;
       if (window.bordeauxAPI && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(agentProposal.id, 'applied', appliedRevision);
       const applied = { ...agentProposal, status: 'applied', appliedRevision };
@@ -1432,7 +1441,13 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
       del: (id) => {
         const node = AUTO.findNode(routine, id);
         const label = node ? AUTO.nodeTitle(node, project.paths, robotProjectState.catalog) : 'this routine step';
-        if (!confirm('Delete “' + label + '” from the routine? Branches beneath it will also be removed.')) return;
+        // Only steps that own branches remove anything beyond themselves.
+        const routes = node ? AUTO.branches(node) : [];
+        const nested = routes.reduce((count, route) => count + AUTO.branchCount(route.nodes), 0);
+        const consequence = !routes.length ? '' : nested
+          ? ' Its branches and the ' + nested + (nested === 1 ? ' step' : ' steps') + ' in them will also be removed.'
+          : ' Its empty branches will also be removed.';
+        if (!confirm('Delete “' + label + '” from the routine?' + consequence + ' You can undo this.')) return;
         const siblings = AUTO.siblingNodes(routine, id) || [];
         const at = siblings.findIndex((candidate) => candidate.id === id);
         const next = siblings[at + 1] || siblings[at - 1];
@@ -1446,7 +1461,7 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
       reorder: (id, targetId, before) => setRoutine((r) => AUTO.reorderRelative(r, id, targetId, before)),
       select: (id) => {
         const selectedStep = document.querySelector('.rt-step.sel .rt-step-body');
-        setRoutineSel(id);
+        commitFocusedDraft(); setRoutineSel(id);
         if (id == null) requestAnimationFrame(() => { if (selectedStep?.isConnected) selectedStep.focus(); });
       },
       addAfter: (id, type, cat) => setRoutine((r) => { const nn = AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return AUTO.insertAfter(r, id, nn); }),
@@ -1456,7 +1471,8 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
       setOutcome: (id, br) => setRoutineOutcomes((o) => ({ ...o, [id]: br })),
       openInEditor: (id) => { const idx = project.paths.findIndex((path) => path.id === id); if (idx >= 0) { setActive(idx); setPage('plan'); } },
     }), [routineOutcomes, routine, project.paths, robotProjectState.catalog]);
-    const autoFieldActions = useMemo(() => ({ selectNode: (id) => setRoutineSel((s) => s === id ? null : id), select: () => setRoutineSel(null) }), []);
+    const selectRoutineStep = useCallback((id) => { commitFocusedDraft(); setRoutineSel(id); }, []);
+    const autoFieldActions = useMemo(() => ({ selectNode: (id) => { commitFocusedDraft(); setRoutineSel((s) => s === id ? null : id); }, select: () => selectRoutineStep(null) }), [selectRoutineStep]);
 
     const onFit = useCallback(() => setView(FIT), []);
     const zoomBy = useCallback((factor) => setView((v) => {
@@ -1536,20 +1552,17 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
       const requestedPathIndex = requestedPathId ? next.paths.findIndex((path) => path.id === requestedPathId) : -1;
       skipDirty.current = true;
       projectRef.current = next;
-      setPlanningInputRevision(0);
       setProject(next);
       setActiveIdx(requestedPathIndex >= 0 ? requestedPathIndex : 0); setSel({ kind: null, idx: -1 }); setRoutineSel(null);
       playbackStore.reset();
       routinePlaybackStore.reset();
       setExportError('');
       setBdxNotice('');
-      hist.current = { past: [], future: [] };
-      routineHist.current = { past: [], future: [] };
-      projectHist.current = { past: [], future: [] };
+      history.clear();
       updateDirty(false);
       setRobotProjectState((current) => ({ ...current, status: 'unlinked', operation: null, catalog: null, integration: null, bookmarkId: null, error: '', notice: '' }));
       if (next.editor && next.editor.robotProjectBookmarkId) void openRecentRobotProject(next.editor.robotProjectBookmarkId, robotGeneration);
-    }, [cancelEdit, invalidateScheduledAutosave, openRecentRobotProject, playbackStore, routinePlaybackStore, updateDirty]);
+    }, [cancelEdit, history, invalidateScheduledAutosave, openRecentRobotProject, playbackStore, routinePlaybackStore, updateDirty]);
     useEffect(() => {
       let active = true;
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.restoreLastProject !== 'function') return undefined;
@@ -1824,8 +1837,10 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
               optimizationOpen ? h(OptimizationPanel, {
                 path: doc, paths: project.paths, state: optimizationState, candidate, accepted, stale: staleOptimization,
                 baselineTime, pending: !normalReady && !normalError, error: normalError, mode: comparisonMode, unitSystem,
-                recovery: repairMode && (hist.current.past.length || routineHist.current.past.length || projectHist.current.past.length)
-                  ? { label: 'Undo last edit', onClick: undo } : { label: 'Edit path', onClick: openInspector },
+                // Undo is offered only when the edit it would reverse belongs to this path.
+                recovery: normal.errorKind === 'timeout' ? { label: 'Try again', onClick: normal.retry }
+                  : repairMode && history.peekUndo(scopes)?.touches.includes(pathScope(doc.id))
+                    ? { label: 'Undo last edit', onClick: undo } : { label: 'Edit path', onClick: openInspector },
                 onCorridor: setCorridor, onStart: startOptimization,
                 onStartAll: () => { setComparison(null); void optimizer.startAll(); }, onCancel: optimizer.cancel,
                 onCompare: compareTrajectory, onApply: applyOptimization, onNormal: useNormalTrajectory,
