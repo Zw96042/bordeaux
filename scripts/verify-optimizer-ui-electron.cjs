@@ -25,6 +25,7 @@ async function evaluate(fn, ...args) {
 async function waitFor(fn, description, timeoutMs = 20_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (errors.length) throw new Error(`Renderer error while waiting for ${description}: ${errors.join('; ')}`);
     const value = await fn();
     if (value) return value;
     await delay(100);
@@ -128,7 +129,7 @@ async function assertCompactResult() {
 function check(name) { checks.push(name); console.log(`PASS ${name}`); }
 
 app.whenReady().then(async () => {
-  window = new BrowserWindow({ show: false, width: 1440, height: 900, useContentSize: true,
+  window = new BrowserWindow({ show: true, width: 1440, height: 900, useContentSize: true,
     webPreferences: { contextIsolation: true, sandbox: false, backgroundThrottling: false,
       preload: path.join(__dirname, 'verify-optimizer-ui-preload.cjs') } });
   window.webContents.on('console-message', (details) => {
@@ -139,6 +140,7 @@ app.whenReady().then(async () => {
   window.webContents.on('render-process-gone', (_event, details) => errors.push(`Renderer process gone: ${details.reason}`));
   try {
     await window.loadFile(html);
+    window.focus(); window.webContents.focus();
     await ready();
     assert.equal((await snapshot()).path, fixture.paths[0].name);
     check('normal trajectory is ready');
@@ -435,18 +437,18 @@ app.whenReady().then(async () => {
     await click('.library-tabs button', 'Paths');
     await switchPath(fixture.paths[1].name);
     await click('button', 'Settings');
+    await click('input[aria-label="Motor free speed"]');
     await evaluate(() => {
       const input = document.querySelector('input[aria-label="Motor free speed"]');
       if (!input) throw new Error('Motor free-speed input missing');
-      input.focus();
       input.select();
     });
     await window.webContents.insertText('1000');
-    await evaluate(() => {
-      const input = document.querySelector('input[aria-label="Motor free speed"]');
-      input.blur();
-      input.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-    });
+    // Exercise one native blur, rather than fabricating a second focusout after
+    // blur has already committed the robot configuration.
+    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Tab' });
+    window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Tab' });
+    await waitFor(() => evaluate(() => document.activeElement !== document.querySelector('input[aria-label="Motor free speed"]')), 'motor edit to commit and move focus');
     await click('button', 'Editor');
     await waitFor(async () => /Needs update/.test((await snapshot()).status || ''), 'physical robot edits to invalidate the applied trajectory');
     const currentNormalLabel = await evaluate(() => document.querySelector('button[aria-label="Preview normal trajectory"] b')?.textContent);

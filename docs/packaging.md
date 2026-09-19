@@ -56,7 +56,7 @@ git push origin main
 gh workflow run prerelease.yml -f version=0.2.0-beta.2 -f notes="Beta notes"
 ```
 
-The workflow runs only from `main`, tests all supported platforms, produces their packages, validates the public beta manifests, atomically creates the matching tag at the dispatched commit, and creates a non-draft GitHub prerelease only after every build succeeds. Each version can be published once; increment the beta number for every attempt that creates its Git tag.
+The workflow runs only from `main`, tests all supported platforms, produces their packages, validates the public beta manifests, and atomically creates the matching tag at the dispatched commit. Publication starts with a private draft and uploads assets one at a time. Every remote asset must match the local size and SHA-256 digest, including after an ambiguous upload failure; retries never overwrite an asset. The draft becomes a public prerelease only after the complete asset set passes verification. A failed publication leaves its draft available for diagnosis. Each version can be published once; increment the beta number for every attempt that creates its Git tag.
 
 ## Production releases
 

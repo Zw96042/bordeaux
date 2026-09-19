@@ -40,6 +40,21 @@ jobs:
         run: xvfb-run -a node scripts/verify-library-ui.mjs
         env:
           BORDEAUX_LIBRARY_UI_OUTPUT: .ui-artifacts/library
+      - name: Verify shared interface controls
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.sandbox.outcome == 'success' }}
+        run: xvfb-run -a node scripts/verify-interface-ui.mjs
+        env:
+          BORDEAUX_INTERFACE_UI_OUTPUT: .ui-artifacts/interface
+      - name: Verify interface workflows
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.sandbox.outcome == 'success' }}
+        run: xvfb-run -a node scripts/verify-interface-workflows.mjs
+        env:
+          BORDEAUX_INTERFACE_WORKFLOWS_OUTPUT: .ui-artifacts/interface-workflows
+      - name: Verify command output branches
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.sandbox.outcome == 'success' }}
+        run: xvfb-run -a node scripts/verify-command-branches-ui.mjs
+        env:
+          BORDEAUX_BRANCH_UI_OUTPUT: .ui-artifacts/command-branches
       - name: Verify optimizer UI
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.sandbox.outcome == 'success' }}
         run: xvfb-run -a node scripts/verify-optimizer-ui.mjs

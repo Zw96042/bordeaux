@@ -10,8 +10,8 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const evaluate = (fn, ...args) => win.webContents.executeJavaScript(`(${fn.toString()})(...${JSON.stringify(args)})`, true);
 async function wait(fn, label) { for (let i = 0; i < 200; i++) { if (await fn()) return; await delay(40); } throw new Error('Timed out: ' + label); }
 async function pointer(selector) {
-  await wait(() => evaluate((s) => { const el = document.querySelector(s); return el && !el.disabled && !el.closest('[inert]'); }, selector), selector);
-  const point = await evaluate((s) => { const el = document.querySelector(s); el.scrollIntoView({ block: 'nearest' }); const r = el.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; }, selector);
+  await wait(() => evaluate((s) => { const el = document.querySelector(s); return el && !el.disabled && !el.closest('[inert]') && el.checkVisibility(); }, selector), selector);
+  const point = await evaluate((s) => { const el = document.querySelector(s); el.scrollIntoView({ block: 'nearest' }); const r = el.getBoundingClientRect(); const x = Math.round(r.x + r.width / 2), y = Math.round(r.y + r.height / 2); if (!el.contains(document.elementFromPoint(x, y))) throw new Error('Obscured control: ' + s); return { x, y }; }, selector);
   for (const type of ['mouseDown', 'mouseUp']) win.webContents.sendInputEvent({ type, ...point, button: 'left', clickCount: 1 });
   await delay(80);
 }
@@ -43,9 +43,10 @@ app.whenReady().then(async () => {
     const corpus = JSON.parse(await fs.readFile(path.resolve('benchmarks/planner-corpus/v1/corpus.bordeaux.json'), 'utf8'));
     const source = corpus.paths.find((item) => item.id === 'corpus-neutral-stop');
     project = { ...corpus, name: 'Project folder workflow', paths: [{ ...source, id: 'opening', name: 'Opening move' }], routines: [], pathLinks: [], editor: { activePathId: 'opening' } };
-    win = new BrowserWindow({ show: false, width: 1440, height: 900, useContentSize: true, webPreferences: { contextIsolation: true, sandbox: false, backgroundThrottling: false, preload: path.join(__dirname, 'verify-project-folder-ui-preload.cjs') } });
+    win = new BrowserWindow({ show: true, width: 1440, height: 900, useContentSize: true, webPreferences: { contextIsolation: true, sandbox: false, backgroundThrottling: false, preload: path.join(__dirname, 'verify-project-folder-ui-preload.cjs') } });
     win.webContents.on('console-message', (details) => { if (details.level === 'error' && !details.message.startsWith("Loading the font 'data:font/woff2")) errors.push(details.message); });
     await win.loadFile(path.resolve('dist-renderer/index.html'));
+    win.focus(); win.webContents.focus();
     await wait(() => evaluate(() => document.querySelector('.library-current-name')?.textContent === 'Opening move'), 'restore');
     await wait(() => evaluate(() => !!document.querySelector('.toolbar')), 'editor ready');
     await delay(250);
@@ -185,16 +186,21 @@ app.whenReady().then(async () => {
     }
     check('Toolbar spacing, keyboard focus and inspector layouts remain usable at supported sizes');
     await pointer('.library-tabs button:nth-child(2)');
-    await pointer('.library-tools button'); await key('Escape');
+    await pointer('.library-tools button');
+    await wait(() => evaluate(() => document.activeElement.matches('.library-rename input')), 'new routine name focus');
+    await key('Escape');
+    await wait(() => evaluate(() => !document.querySelector('.library-rename') && document.activeElement.matches('.library-pick')), 'new routine name dismissed');
     for (const [selector, count] of [
       ['.routine-workspace-flow .rt-add', 1],
       ['.routine-workspace-flow .rt-list > .rt-gap .rt-gap-btn', 2],
       ['.routine-workspace-flow .rt-list > .rt-addwrap .rt-add', 3],
     ]) {
-      await pointer(selector); await key('Tab');
+      await pointer(selector);
+      await wait(() => evaluate((s) => document.querySelector(s)?.getAttribute('aria-expanded') === 'true', selector), 'step chooser opened');
+      await key('Tab');
       assert.equal(await evaluate(() => document.activeElement.matches('.rt-ch-row')), true);
       await key('Enter');
-      assert.equal(await evaluate(() => document.activeElement.matches('.rt-step.sel > .rt-step-body')), true);
+      await wait(() => evaluate(() => document.activeElement.matches('.rt-step.sel > .rt-step-body')), 'inserted step receives focus');
       assert.equal(await evaluate(() => document.querySelectorAll('.routine-workspace-flow .rt-step').length), count);
     }
     check('First, gap and end routine insertion focus the inserted step');
