@@ -744,8 +744,9 @@ app.whenReady().then(async () => {
     await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'target point ready');
     await evaluate(() => document.querySelector('.outline .featselect').click());
     await click('[aria-label="Linkable waypoint"]');
-    await wait(() => evaluate(() => document.querySelector('[aria-label="Linkable point name"]') && !document.querySelector('.rail-r[inert]')), 'named point editable');
-    await evaluate(() => { const input = document.querySelector('[aria-label="Linkable point name"]'); input.focus(); input.select(); });
+    await wait(() => evaluate(() => { const input = document.querySelector('[aria-label="Linkable point name"]'); return input && !input.disabled && !input.closest('[inert]'); }), 'named point editable');
+    await pointerClick('[aria-label="Linkable point name"]');
+    await evaluate(() => document.querySelector('[aria-label="Linkable point name"]').select());
     assert.equal(await evaluate(() => document.activeElement.getAttribute('aria-label')), 'Linkable point name');
     await win.webContents.insertText('Scoring position'); await delay(80);
     await evaluate(() => { const input = document.querySelector('[aria-label="Linkable point name"]'); input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); input.blur(); });

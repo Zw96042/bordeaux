@@ -8,6 +8,7 @@ let win;
 const errors = [], checks = [];
 const delay = (ms = 80) => new Promise((r) => setTimeout(r, ms));
 const evaluate = (fn, ...args) => win.webContents.executeJavaScript(`(${fn.toString()})(...${JSON.stringify(args)})`, true);
+async function wait(fn, label) { for (let i = 0; i < 100; i++) { if (await fn()) return; await delay(50); } throw Error('Timed out: ' + label); }
 async function click(selector, text) {
   const p = await evaluate((selector, text) => {
     const el = [...document.querySelectorAll(selector)].find((el) => !text || el.textContent.trim() === text);
@@ -24,24 +25,29 @@ async function key(keyCode, modifiers = []) { win.webContents.sendInputEvent({ t
 async function replace(text) { await key('Home'); await key('End', ['shift']); await win.webContents.insertText(text); await delay(); }
 async function snap(name) { await fs.writeFile(path.join(output, name + '.png'), (await win.webContents.capturePage()).toPNG()); }
 const check = (name) => { checks.push(name); console.log('PASS ' + name); };
+async function openSearchChoice() {
+  await click('#search-choice');
+  await wait(() => evaluate(() => document.activeElement.id === 'search-choice-search'), 'search choice autofocus');
+}
 app.whenReady().then(async () => {
   try {
-    win = new BrowserWindow({ show: false, width: 1440, height: 900, useContentSize: true, webPreferences: { sandbox: true, contextIsolation: true } });
+    win = new BrowserWindow({ show: true, width: 1440, height: 900, useContentSize: true, webPreferences: { sandbox: true, contextIsolation: true, backgroundThrottling: false } });
     win.webContents.on('console-message', (d) => { if (d.level === 'error' && !d.message.startsWith("Loading the font 'data:")) errors.push(d.message); });
     await win.loadFile(path.join(output, 'dist/index.html')); await delay(250);
-    await click('#search-choice'); await win.webContents.insertText('Option 10'); await key('Down');
+    win.focus(); win.webContents.focus();
+    await openSearchChoice(); await win.webContents.insertText('Option 10'); await key('Down');
     assert.equal(await evaluate(() => document.activeElement.id), 'search-choice-search');
     assert.equal(await evaluate(() => document.querySelector('.cmd-picker-option.active').dataset.value), '100');
     await win.webContents.insertText('1'); await key('Down'); await key('Enter');
     assert.equal(await evaluate(() => document.querySelector('#search-choice-value').textContent), 'Option 101');
     assert.equal(await evaluate(() => document.activeElement.id), 'search-choice');
     check('Search retains caret across arrow navigation and accepts the filtered result');
-    await click('#search-choice'); await key('Tab');
+    await openSearchChoice(); await key('Tab');
     assert.equal(await evaluate(() => document.activeElement.id), 'search-choice-custom');
     await win.webContents.insertText('custom-result'); await key('Tab');
     assert.equal(await evaluate(() => document.activeElement.textContent), 'Use');
     await key('Enter'); assert.equal(await evaluate(() => document.querySelector('#search-choice-value').textContent), 'custom-result');
-    await click('#search-choice'); await key('Tab', ['shift']);
+    await openSearchChoice(); await key('Tab', ['shift']);
     assert.equal(await evaluate(() => Boolean(document.querySelector('.dropdown-panel'))), false);
     check('Custom values and picker exit work with Tab and Shift+Tab');
     await click('#short-choice'); await key('End'); await key('Space');
@@ -69,7 +75,7 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate(() => document.querySelector('#routine-command-param-amount').value), '2');
     assert.equal(await evaluate(() => document.querySelector('#routine-command-param-amount').getAttribute('aria-invalid')), 'false');
     check('Invalid command drafts do not leak to a different routine command');
-    await click('#search-choice'); await win.webContents.insertText('Option 10'); await key('Down');
+    await openSearchChoice(); await win.webContents.insertText('Option 10'); await key('Down');
     await snap('controls-1440'); win.setContentSize(1100, 720); await delay(); await snap('controls-1100');
     const bounds = await evaluate(() => { const r = document.querySelector('.dropdown-panel').getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: innerHeight }; });
     assert.ok(bounds.top >= 0 && bounds.bottom <= bounds.height);
