@@ -364,7 +364,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
           id, ref, className: 'numinput', value: disp, inputMode: 'decimal', 'aria-describedby': [unit && id + '-unit', error && id + '-error'].filter(Boolean).join(' ') || undefined,
           'data-project-draft': projectDraft ? true : undefined, 'aria-invalid': !!error,
           onChange: (e) => { cancelEdit.current = false; setEdit(e.target.value); if (error) setError(''); },
-          onFocus: (e) => { cancelEdit.current = false; if (edit == null) setEdit(typeof displayValue === 'number' ? String(displayValue) : displayValue); requestAnimationFrame(() => e.target.select()); },
+          onFocus: (e) => { cancelEdit.current = false; if (edit == null) setEdit(typeof displayValue === 'number' ? String(displayValue) : displayValue); requestAnimationFrame(() => { if (document.activeElement === e.target) e.target.select(); }); },
           onBlur: (e) => { const committed = cancelEdit.current || commitEdit(e.target.value); cancelEdit.current = false; if (committed) setEdit(null); },
           onKeyDown: (e) => {
             if (e.key === 'Enter') {
@@ -373,7 +373,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
             }
             if (e.key === 'Escape') {
               e.preventDefault(); e.stopPropagation(); cancelEdit.current = true; setError(''); setEdit(null);
-              requestAnimationFrame(() => ref.current?.select());
+              requestAnimationFrame(() => { if (document.activeElement === e.target) e.target.select(); });
             }
           },
         }),

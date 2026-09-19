@@ -400,21 +400,19 @@ app.whenReady().then(async () => {
     await stable(applied, 250, 'Selected comparison restored on path switch');
     check('Normal comparison stays on the current path when switching between applied paths');
     await openSettings();
+    await click('.optimizer-corridor input');
     await evaluate(() => {
       const input = document.querySelector('.optimizer-corridor input');
       if (!input) throw new Error('Corridor input missing');
-      input.focus();
       input.select();
     });
     await window.webContents.insertText('0.30');
-    await evaluate(() => {
-      const input = document.querySelector('.optimizer-corridor input');
-      input.blur();
-      input.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-    });
+    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Tab' });
+    window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Tab' });
+    await waitFor(() => evaluate(() => document.activeElement !== document.querySelector('.optimizer-corridor input')), 'corridor edit to commit and move focus');
+    await waitFor(async () => /Needs update/.test((await snapshot()).status || ''), 'explicit stale optimization status');
     project = await save();
     assert.equal(project.paths[0].optimization.corridorM, 0.30, 'The corridor input must commit its edited value');
-    await waitFor(async () => /Needs update/.test((await snapshot()).status || ''), 'explicit stale optimization status');
     project = await save();
     assert.ok(project.paths[0].optimization.accepted, 'Stale artifacts remain available for an explicit choice');
     check('changing the corridor invalidates the selection with an explicit stale state');

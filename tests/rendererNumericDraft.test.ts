@@ -20,6 +20,8 @@ function numericDraftHarness(kind: "Num" | "BigNum") {
   let effectIndex = 0;
   let pendingEffects: Array<() => void> = [];
   let unitSystem = "metric";
+  const document = { activeElement: null as unknown };
+  const frames: Array<() => void> = [];
   const React = {
     createElement: element,
     useEffect: (effect: () => void, dependencies: unknown[]) => {
@@ -53,7 +55,8 @@ function numericDraftHarness(kind: "Num" | "BigNum") {
     PointerDrag: { useController: () => ({ start: () => undefined }) },
     UnitPrefs,
     UI: {},
-    requestAnimationFrame: (callback: () => void) => callback(),
+    document,
+    requestAnimationFrame: (callback: () => void) => frames.push(callback),
   };
   const component = kind === "Num"
     ? loadRendererExport<{ Num: (props: Record<string, unknown>) => ElementNode }>(
@@ -82,7 +85,7 @@ function numericDraftHarness(kind: "Num" | "BigNum") {
     }
     return inputIn(tree!)!;
   };
-  return { render, onChange, setUnitSystem: (next: string) => { unitSystem = next; } };
+  return { render, onChange, document, flushFrames: () => frames.splice(0).forEach(callback => callback()), setUnitSystem: (next: string) => { unitSystem = next; } };
 }
 
 function numInput(projectDraft?: boolean): ElementNode {
@@ -203,6 +206,27 @@ describe("renderer numeric drafts", () => {
     input = harness.render();
     (input.props.onBlur as Function)({ target: { value: "3" } });
     expect(harness.onChange).toHaveBeenCalledWith(3);
+  });
+
+  it.each(["Num", "BigNum"] as const)("does not let deferred %s selection steal focus from a menu", (kind) => {
+    const harness = numericDraftHarness(kind);
+    const input = harness.render();
+    const target = { value: "1", select: vi.fn() };
+    const menu = {};
+    harness.document.activeElement = target;
+    (input.props.onFocus as Function)({ target });
+    harness.document.activeElement = menu;
+    harness.flushFrames();
+    expect(target.select).not.toHaveBeenCalled();
+    harness.document.activeElement = target;
+    (input.props.onFocus as Function)({ target });
+    harness.flushFrames();
+    expect(target.select).toHaveBeenCalledOnce();
+    target.select.mockClear();
+    (input.props.onKeyDown as Function)({ key: "Escape", target, preventDefault() {}, stopPropagation() {} });
+    harness.document.activeElement = menu;
+    harness.flushFrames();
+    expect(target.select).not.toHaveBeenCalled();
   });
 
   it("commits a valid number only once when Enter triggers blur", () => {

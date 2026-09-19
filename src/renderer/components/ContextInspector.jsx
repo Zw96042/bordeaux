@@ -237,7 +237,7 @@ import { UI } from "./ui";
         onBlur: (event) => validate(event.currentTarget.value, true),
         onKeyDown: (event) => {
           if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); if (validate(event.currentTarget.value, false)) event.currentTarget.blur(); }
-          else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setDraft(formatted); setError(''); requestAnimationFrame(() => document.getElementById(id)?.select()); }
+          else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setDraft(formatted); setError(''); requestAnimationFrame(() => { if (document.activeElement === event.target) event.target.select(); }); }
         },
       }),
       h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, valueType)),
@@ -278,7 +278,7 @@ import { UI } from "./ui";
         onBlur: (event) => validate(event.currentTarget.value, true),
         onKeyDown: (event) => {
           if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); if (validate(event.currentTarget.value, false)) event.currentTarget.blur(); }
-          else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setDraft(formatted); setError(''); requestAnimationFrame(() => document.getElementById(id)?.select()); }
+          else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setDraft(formatted); setError(''); requestAnimationFrame(() => { if (document.activeElement === event.target) event.target.select(); }); }
         },
       }),
       h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, valueType + ', exact integer')),
@@ -319,7 +319,7 @@ import { UI } from "./ui";
         onBlur: (event) => validate(event.currentTarget.value, true),
         onKeyDown: (event) => {
           if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); if (validate(event.currentTarget.value, false)) event.currentTarget.blur(); }
-          else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setDraft(formatted); setError(''); requestAnimationFrame(() => document.getElementById(id)?.select()); }
+          else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setDraft(formatted); setError(''); requestAnimationFrame(() => { if (document.activeElement === event.target) event.target.select(); }); }
         },
       }),
       h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, valueType + ', exact decimal')),

@@ -72,11 +72,11 @@ import "../styles/settings.css";
         value: display, disabled, inputMode: 'decimal', 'aria-label': label, min, max, step,
         'data-project-draft': true, 'aria-invalid': !!error, 'aria-describedby': error ? errorId : undefined,
         onChange: (e) => { cancelEdit.current = false; setEdit(e.target.value); if (error) setError(''); },
-        onFocus: (e) => { cancelEdit.current = false; if (edit == null) setEdit(String(displayValue)); requestAnimationFrame(() => e.target.select()); },
+        onFocus: (e) => { cancelEdit.current = false; if (edit == null) setEdit(String(displayValue)); requestAnimationFrame(() => { if (document.activeElement === e.target) e.target.select(); }); },
         onBlur: (e) => { const committed = cancelEdit.current || commitEdit(e.target.value); cancelEdit.current = false; if (committed) setEdit(null); },
         onKeyDown: (e) => {
           if (e.key === 'Enter') { e.preventDefault(); if (!cancelEdit.current && parseFiniteDraftNumber(e.currentTarget.value) == null) setError('Enter a finite number.'); else e.currentTarget.blur(); }
-          else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelEdit.current = true; setError(''); setEdit(null); requestAnimationFrame(() => e.target.select()); }
+          else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelEdit.current = true; setError(''); setEdit(null); requestAnimationFrame(() => { if (document.activeElement === e.target) e.target.select(); }); }
         },
       }),
       unit && h('span', { className: 'u' }, UnitPrefs.label(unit, imperialUnit)),
