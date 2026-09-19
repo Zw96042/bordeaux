@@ -73,12 +73,11 @@
 .library-structure .featrow.sel{background:var(--bg-3)}
 .library-structure .featselect{grid-column:2;min-height:34px;padding:0;border-radius:0}
 .library-structure .featgrip,.library-structure .featindent{grid-column:1;grid-row:1;margin:0;width:14px}
-.library-structure .featdel{grid-column:3;grid-row:1;display:flex;opacity:0;margin:0;border-radius:3px}
-.library-structure .featrow:hover .featdel,.library-structure .featrow:focus-within .featdel{opacity:.65}
+.library-structure .featdel{grid-column:3;grid-row:1;display:flex;opacity:.65;margin:0;border-radius:3px}
+.library-structure .featdel:focus-visible{opacity:1}
 .library-structure .featnm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:16px}
 .library-structure .featmeta{white-space:nowrap;line-height:16px}
 .library-structure .featempty{padding-left:25px}
-@media(hover:none){.library-structure .featdel{opacity:.65}}
 
 /* Use spacing and weight to distinguish labels from group headings. */
 .ctxinsp .fieldlabel,.ctxinsp .numlbl,.ctxinsp .cgroup-h,.ctxinsp-tag,.timeline-title{font-family:var(--ui);text-transform:none;letter-spacing:0!important}

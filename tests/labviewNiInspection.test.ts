@@ -21,6 +21,11 @@ function row(extraXml = "<DBL><Name>Setpoint</Name><Val>0</Val></DBL>") {
       extendedInformation: [[[]], statusMetadata("Command Info Out"), statusMetadata("Command Info In"), [[]]] as unknown[],
     } };
 }
+function addOutput(vi: ReturnType<typeof row>, name: string, xml: string, terminalNumber = 12) {
+  vi.connector.numConnections += 1;
+  vi.connector.captions.push(name); vi.connector.wireRequirements.push(1); vi.connector.ioStatus.push(1); vi.connector.conNum.push(terminalNumber);
+  vi.connector.dataTypes.push(xml); vi.connector.extendedInformation.push([[]]);
+}
 function report(vi = row()) {
   return { schemaVersion: "bordeaux-ni-inspection/1", projectFile: "C:\\Robot\\Robot.lvproj", labviewVersion: "25.3.3f3", inspectedAt: "2026-09-07T12:00:00.000Z", dirtyContext: false, vis: [vi] };
 }
@@ -40,6 +45,7 @@ async function cacheFixture() {
     const request = JSON.parse(await fs.readFile(requestFile, "utf8"));
     expect(request.sources.map((item: { file: string; target: string }) => ({ file: item.file, target: item.target }))).toEqual([source]);
     const vi = row();
+    addOutput(vi, "Acquired", "<Boolean><Name>Acquired</Name><Val>0</Val></Boolean>");
     vi.connector.extendedInformation[1] = [[[["Command Info Out"], typedef, false, 0, []]]];
     vi.connector.extendedInformation[2] = [[[["Command Info In"], typedef, false, 0, []]]];
     await fs.writeFile(responseFile, JSON.stringify({ ...report(vi), projectFile: project }));
@@ -54,6 +60,7 @@ describe("NI legacy connector discovery", () => {
     const command = result.commands[0];
     expect(command).toMatchObject({ member: source.file, confidence: "confirmed", runtimeReady: false, labviewLegacy: true });
     expect(command.parameters).toMatchObject([{ name: "Description", schema: { kind: "string" }, defaultValue: "" }, { name: "Setpoint", schema: { kind: "number", valueType: "DBL" }, defaultValue: 0 }]);
+    expect(command.outputs).toEqual([]);
     expect(robotInvocationErrors({ commandId: command.id, arguments: { Description: "", Setpoint: "wrong type" } }, command)).toContain("Setpoint must be a finite number");
     expect(command.labviewConnector).toMatchObject({ terminalNumbers: row().connector.conNum, typeXml: row().connector.dataTypes,
       directions: row().connector.ioStatus, defaults: row().defaults });
@@ -73,15 +80,43 @@ describe("NI legacy connector discovery", () => {
 
   it("retains typed inputs when a legacy command also has additional output terminals", () => {
     const vi = row();
-    vi.connector.numConnections = 5;
-    vi.connector.captions.push("Reading"); vi.connector.wireRequirements.push(1); vi.connector.ioStatus.push(1); vi.connector.conNum.push(12);
-    vi.connector.dataTypes.push("<DBL><Name>Reading</Name><Val>0</Val></DBL>"); vi.connector.extendedInformation.push([[]]);
+    addOutput(vi, "Sensor reading", "<DBL><Name>Reading</Name><Val>0</Val></DBL>");
     const result = decode(report(vi));
     expect(result.commands).toHaveLength(1);
     expect(result.commands[0].parameters.map((parameter) => parameter.name)).toEqual(["Description", "Setpoint"]);
-    expect(result.commands[0].description).toContain("Additional output terminals are not represented in this source command descriptor.");
+    expect(result.commands[0].outputs).toEqual([{ name: "Reading", label: "Sensor reading", terminalNumber: 12, schema: { kind: "number", valueType: "DBL" } }]);
+    expect(result.commands[0].description).toBe(vi.description);
     expect(result.commands[0].runtimeReady).toBe(false);
     expect(result.inspection.unsupported).toEqual([]);
+  });
+
+  it("represents Boolean, named, and numeric results without treating saved indicators as results", () => {
+    const vi = row();
+    addOutput(vi, "Acquired", "<Boolean><Name>Acquired</Name><Val>1</Val></Boolean>");
+    addOutput(vi, "Outcome", "<EW><Name>Outcome</Name><Choice>Ready</Choice><Choice>Empty</Choice><Val>1</Val></EW>", 13);
+    addOutput(vi, "Count", "<U64><Name>Count</Name><Val>18446744073709551615</Val></U64>", 14);
+    vi.defaults.Outcome = 500;
+    const result = decode(report(vi));
+    expect(result.commands[0].outputs).toEqual([
+      { name: "Acquired", terminalNumber: 12, schema: { kind: "boolean", valueType: "Boolean" } },
+      { name: "Outcome", terminalNumber: 13, schema: { kind: "enum", valueType: "Enum", enumValues: ["Ready", "Empty"] } },
+      { name: "Count", terminalNumber: 14, min: "0", max: "18446744073709551615", schema: { kind: "integerString", valueType: "U64" } },
+    ]);
+    expect(result.inspection.unsupported).toEqual([]);
+  });
+
+  it("reports unsupported and ambiguous outputs while keeping valid arguments and other results", () => {
+    const vi = row();
+    addOutput(vi, "Handle", "<Refnum><Name>Handle</Name><RefKind>LV Object</RefKind></Refnum>");
+    addOutput(vi, "Ready", "<Boolean><Name>Ready</Name><Val>1</Val></Boolean>", 13);
+    addOutput(vi, "Count", "<I32><Name>Count</Name><Val>0</Val></I32>", 14);
+    addOutput(vi, "Count again", "<I32><Name>Count</Name><Val>0</Val></I32>", 15);
+    const result = decode(report(vi));
+    expect(result.commands[0].parameters.map((parameter) => parameter.name)).toEqual(["Description", "Setpoint"]);
+    expect(result.commands[0].outputs?.map((output) => output.name)).toEqual(["Ready"]);
+    expect(result.inspection.unsupported).toHaveLength(3);
+    expect(result.inspection.unsupported[0].reason).toMatch(/Output Handle \(terminal 12\).*type mapping/);
+    expect(result.inspection.unsupported[1].reason).toMatch(/unique terminal names/);
   });
 
   it("never infers commands from matching status names, nested typedefs, wrappers or plain VIs", () => {
@@ -198,6 +233,9 @@ describe("NI legacy connector discovery", () => {
     const inspected = await inspectLabviewCommands(fixture.project, fixture.cache, fixture.adapter);
     expect(inspected.commands).toHaveLength(1);
     expect(inspected.commands[0]).toMatchObject({ id: "team.intake.start", label: "Team intake", labviewConnector: { file: source.file } });
+    expect(inspected.commands[0].outputs).toMatchObject([{ name: "Acquired", terminalNumber: 12, schema: { kind: "boolean" } }]);
+    const cached = await withCachedLabviewCommands(fixture.project, await discoverLabviewProject(fixture.project), fixture.cache);
+    expect(cached.commands[0].outputs).toEqual(inspected.commands[0].outputs);
     expect(bdxBindingsFromCatalog(inspected).parameterTypes["team.intake.start"].Setpoint.niType).toBe("DBL");
     declaration.commands[0].parameters[1].schema.kind = "integer";
     await fs.writeFile(path.join(fixture.root, "bordeaux-catalog.json"), JSON.stringify(declaration));

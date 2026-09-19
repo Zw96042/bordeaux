@@ -24,3 +24,7 @@
 .robotpage .rp-big .u{flex-shrink:0}
 
 .robotpage .rp-controls .rp-drive-model{grid-template-columns:repeat(auto-fit,minmax(155px,1fr))}
+
+.robotpage .rp-big.is-disabled{background:var(--bg-1);color:var(--txt-3);cursor:default}
+.robotpage .rp-big.is-disabled input{color:var(--txt-3);cursor:default;opacity:.65}
+.robotpage .rp-big.is-disabled .u{opacity:.65}

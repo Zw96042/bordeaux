@@ -30,6 +30,11 @@ export function buildRoutineRun(routine, paths, robot, outcomes, plannerId, deri
       } else if (node.type === 'path') flat.push({ node, kind: 'path' });
       else if (node.cat === 'generate' && node.preview) flat.push({ node, kind: 'gen' });
       else flat.push({ node, kind: 'event' });
+      if (node.type === 'function' && node.outputBranch) {
+        const routes = node.outputBranch.routes || [];
+        const route = routes.find((item) => item.id === outcomes[node.id]) || routes[0];
+        collect(route?.nodes);
+      }
     });
   };
   collect(routine.nodes);

@@ -66,7 +66,8 @@ function numericDraftHarness(kind: "Num" | "BigNum") {
         "RobotPageControls",
         { context, replacements: [["export { RobotPage };", "window.RobotPageControls = { BigNum };"]] },
       ).BigNum;
-  const props = { label: "Value", value: 1, unit: "m", imperialUnit: "in", onChange: () => undefined };
+  const onChange = vi.fn();
+  const props = { label: "Value", value: 1, unit: "m", imperialUnit: "in", onChange };
   const render = () => {
     let tree: ElementNode;
     for (let pass = 0; pass < 2; pass += 1) {
@@ -81,7 +82,7 @@ function numericDraftHarness(kind: "Num" | "BigNum") {
     }
     return inputIn(tree!)!;
   };
-  return { render, setUnitSystem: (next: string) => { unitSystem = next; } };
+  return { render, onChange, setUnitSystem: (next: string) => { unitSystem = next; } };
 }
 
 function numInput(projectDraft?: boolean): ElementNode {
@@ -171,6 +172,48 @@ describe("renderer numeric drafts", () => {
     expect(input.props.value).toBe("10.00");
   });
 
+  it("keeps an invalid number focused on Enter and associates its error", () => {
+    const harness = numericDraftHarness("Num");
+    let input = harness.render();
+    (input.props.onChange as Function)({ target: { value: "bad" } });
+    input = harness.render();
+    const blur = vi.fn();
+    (input.props.onKeyDown as Function)({ key: "Enter", preventDefault() {}, target: { value: "bad", blur } });
+    input = harness.render();
+    expect(blur).not.toHaveBeenCalled();
+    expect(harness.onChange).not.toHaveBeenCalled();
+    expect(input.props["aria-invalid"]).toBe(true);
+    expect(input.props["aria-describedby"]).toContain("numeric-draft-error");
+  });
+
+  it("cancels a number with Escape without losing focus or committing on subsequent blur", () => {
+    const harness = numericDraftHarness("Num");
+    let input = harness.render();
+    (input.props.onChange as Function)({ target: { value: "5" } });
+    input = harness.render();
+    const blur = vi.fn(), stopPropagation = vi.fn();
+    (input.props.onKeyDown as Function)({ key: "Escape", preventDefault() {}, stopPropagation, target: { value: "5", blur } });
+    input = harness.render();
+    expect(input.props.value).toBe("1.00");
+    expect(blur).not.toHaveBeenCalled();
+    expect(stopPropagation).toHaveBeenCalled();
+    (input.props.onBlur as Function)({ target: { value: "1.00" } });
+    expect(harness.onChange).not.toHaveBeenCalled();
+    (input.props.onChange as Function)({ target: { value: "3" } });
+    input = harness.render();
+    (input.props.onBlur as Function)({ target: { value: "3" } });
+    expect(harness.onChange).toHaveBeenCalledWith(3);
+  });
+
+  it("commits a valid number only once when Enter triggers blur", () => {
+    const harness = numericDraftHarness("Num");
+    const input = harness.render();
+    const blur = vi.fn(() => (input.props.onBlur as Function)({ target: { value: "2" } }));
+    (input.props.onKeyDown as Function)({ key: "Enter", preventDefault() {}, target: { value: "2", blur } });
+    expect(blur).toHaveBeenCalled();
+    expect(harness.onChange).toHaveBeenCalledExactlyOnceWith(2);
+  });
+
   it("commits the live command value when Save blurs before React rerenders", () => {
     const onChange = vi.fn();
     const input = commandNumberInput(onChange);
@@ -196,7 +239,10 @@ describe("renderer numeric drafts", () => {
     const control = commandNumberInput(changed, { integer: false, valueType: undefined, parameter: { min: .02, max: 15 } });
     (control.props.onBlur as Function)({ currentTarget: { value: String(value) } });
     expect(changed).toHaveBeenLastCalledWith(value);
-    (control.props.onKeyDown as Function)({ key: 'Enter', preventDefault() {}, currentTarget: { value: String(value), blur() {} } });
-    expect(changed).toHaveBeenLastCalledWith(value);
+    changed.mockClear();
+    const blur = vi.fn(() => (control.props.onBlur as Function)({ currentTarget: { value: String(value) } }));
+    (control.props.onKeyDown as Function)({ key: 'Enter', preventDefault() {}, stopPropagation() {}, currentTarget: { value: String(value), blur } });
+    expect(blur).toHaveBeenCalledOnce();
+    expect(changed).toHaveBeenCalledExactlyOnceWith(value);
   });
 });

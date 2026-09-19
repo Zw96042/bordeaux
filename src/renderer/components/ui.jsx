@@ -72,7 +72,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
 
   const MAX_RENDERED_PICKER_ITEMS = 80;
 
-  function Dropdown({ id, label, ariaLabel, value, items, onChange, disabled, placeholder, icon, searchThreshold = 7,
+  function Dropdown({ id, label, ariaLabel, value, items = [], onChange, disabled, placeholder, icon, searchThreshold = 7,
     compact = false, className = '', allowCustom = false, customLabel = 'Enter exact value', customPlaceholder = 'Exact runtime value' }) {
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState('');
@@ -83,11 +83,14 @@ import { UnitPrefs } from "../lib/unitPreferences";
     const panelRef = useRef(null);
     const searchRef = useRef(null);
     const optionRefs = useRef([]);
+    const customRef = useRef(null);
+    const typeahead = useRef({ text: '', time: 0 });
     const [panelStyle, setPanelStyle] = useState(null);
     const listboxId = id + '-listbox';
     const labelId = id + '-label';
     const pickerName = label || ariaLabel || 'options';
     const selected = items.find((item) => item.value === value);
+    const displayLabel = selected?.label ?? (value != null && value !== '' ? String(value) : placeholder || 'Select…');
     const normalizedQuery = query.trim().toLowerCase();
     const filteredItems = normalizedQuery
       ? items.filter((item) => [item.label, item.meta, item.searchText].some((part) => String(part || '').toLowerCase().includes(normalizedQuery)))
@@ -109,7 +112,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
         const below = window.innerHeight - rect.bottom - 8;
         const above = rect.top - 8;
         const openAbove = below < 230 && above > below;
-        const room = Math.max(140, openAbove ? above : below);
+        const room = Math.max(0, (openAbove ? above : below) - 8);
         setPanelStyle({
           position: 'fixed',
           left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
@@ -121,77 +124,100 @@ import { UnitPrefs } from "../lib/unitPreferences";
       };
       positionPanel();
       document.addEventListener('pointerdown', closeFromOutside);
+      document.addEventListener('focusin', closeFromOutside);
       window.addEventListener('resize', positionPanel);
       window.addEventListener('scroll', positionPanel, true);
       return () => {
         document.removeEventListener('pointerdown', closeFromOutside);
+        document.removeEventListener('focusin', closeFromOutside);
         window.removeEventListener('resize', positionPanel);
         window.removeEventListener('scroll', positionPanel, true);
       };
     }, [open]);
 
     useEffect(() => {
-      if (!open) { setQuery(''); setCustomDraft(''); return; }
-      const selectedIndex = Math.max(0, visibleItems.findIndex((item) => item.value === value));
-      setActiveIndex(selectedIndex);
-      requestAnimationFrame(() => {
-        if (showSearch) searchRef.current?.focus();
-        else optionRefs.current[selectedIndex]?.focus();
-      });
-    }, [open, panelStyle !== null]);
+      if (disabled) setOpen(false);
+    }, [disabled]);
 
     useEffect(() => {
-      if (open) setActiveIndex(0);
-    }, [query]);
+      if (!open) { setQuery(''); setCustomDraft(''); typeahead.current = { text: '', time: 0 }; return; }
+      const selectedIndex = Math.max(0, visibleItems.findIndex((item) => item.value === value));
+      setActiveIndex(selectedIndex);
+      const frame = requestAnimationFrame(() => {
+        if (showSearch) searchRef.current?.focus();
+        else (optionRefs.current[selectedIndex] || customRef.current || panelRef.current)?.focus();
+        optionRefs.current[selectedIndex]?.scrollIntoView({ block: 'nearest' });
+      });
+      return () => cancelAnimationFrame(frame);
+    }, [open, panelStyle !== null]);
 
     const choose = (nextValue) => {
+      if (disabled) return;
       onChange(nextValue);
       setOpen(false);
-      requestAnimationFrame(() => triggerRef.current && triggerRef.current.focus());
+      requestAnimationFrame(() => triggerRef.current?.focus());
     };
     const focusOption = (nextIndex) => {
       if (!visibleItems.length) return;
       const wrapped = (nextIndex + visibleItems.length) % visibleItems.length;
       setActiveIndex(wrapped);
-      requestAnimationFrame(() => optionRefs.current[wrapped] && optionRefs.current[wrapped].focus());
+      // A searchable combobox keeps the caret in its input while navigating results.
+      // Otherwise typing after an arrow key silently stops filtering the choices.
+      if (showSearch && document.activeElement === searchRef.current) {
+        optionRefs.current[wrapped]?.scrollIntoView({ block: 'nearest' });
+      } else optionRefs.current[wrapped]?.focus();
     };
     const focusAfterTrigger = (backward) => {
-      const focusable = Array.from(document.querySelectorAll('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'))
-        .filter((element) => element.getClientRects().length > 0 && !panelRef.current?.contains(element));
+      const focusable = Array.from(document.querySelectorAll('button, input, textarea, select, [href], [tabindex]'))
+        .filter((element) => element.tabIndex >= 0 && !element.matches(':disabled') && !element.closest('[inert]')
+          && element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden' && !panelRef.current?.contains(element));
       const index = focusable.indexOf(triggerRef.current);
       const next = focusable[index + (backward ? -1 : 1)];
       setOpen(false);
       requestAnimationFrame(() => (next || triggerRef.current)?.focus());
     };
     const handleKeyDown = (event) => {
+      if (disabled) return;
       if (!open) {
-        if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
+        if (['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(event.key)) {
           event.preventDefault();
           setOpen(true);
         }
         return;
       }
       if (event.key === 'Escape') {
-        event.stopPropagation();
-        event.preventDefault();
-        setOpen(false);
-        triggerRef.current && triggerRef.current.focus();
+        event.stopPropagation(); event.preventDefault();
+        setOpen(false); triggerRef.current?.focus();
       } else if (event.key === 'Tab') {
         event.preventDefault();
-        focusAfterTrigger(event.shiftKey);
-      } else if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        focusOption(activeIndex + 1);
-      } else if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        focusOption(activeIndex - 1);
-      } else if (event.key === 'Enter' && visibleItems[activeIndex]) {
-        event.preventDefault();
-        choose(visibleItems[activeIndex].value);
+        const customControls = Array.from(panelRef.current?.querySelectorAll('.cmd-picker-custom input, .cmd-picker-custom button:not(:disabled)') || []);
+        const customIndex = customControls.indexOf(event.target);
+        if (!event.shiftKey && customIndex < customControls.length - 1) customControls[customIndex + 1].focus();
+        else if (event.shiftKey && customIndex > 0) customControls[customIndex - 1].focus();
+        else if (event.shiftKey && customIndex === 0 && (searchRef.current || optionRefs.current[activeIndex])) {
+          (searchRef.current || optionRefs.current[activeIndex]).focus();
+        } else focusAfterTrigger(event.shiftKey);
+      } else if (!event.target.closest('.cmd-picker-custom')) {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault();
+          focusOption(activeIndex < 0 ? (event.key === 'ArrowDown' ? 0 : visibleItems.length - 1) : activeIndex + (event.key === 'ArrowDown' ? 1 : -1));
+        } else if ((event.key === 'Home' || event.key === 'End') && event.target !== searchRef.current) {
+          event.preventDefault(); focusOption(event.key === 'Home' ? 0 : visibleItems.length - 1);
+        } else if ((event.key === 'Enter' || (event.key === ' ' && event.target !== searchRef.current)) && visibleItems[activeIndex]) {
+          event.preventDefault(); choose(visibleItems[activeIndex].value);
+        } else if (!showSearch && event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+          event.preventDefault();
+          const now = Date.now();
+          const text = (now - typeahead.current.time < 700 ? typeahead.current.text : '') + event.key.toLocaleLowerCase();
+          typeahead.current = { text, time: now };
+          const prefix = [...text].every((char) => char === text[0]) ? text[0] : text;
+          const nextIndex = visibleItems.findIndex((_, offset) => String(visibleItems[(activeIndex + 1 + offset) % visibleItems.length].label).toLocaleLowerCase().startsWith(prefix));
+          if (nextIndex >= 0) focusOption(activeIndex + 1 + nextIndex);
+        }
       }
     };
 
-    const panel = open && panelStyle && createPortal(h('div', { ref: panelRef, className: 'cmd-picker-panel dropdown-panel', style: panelStyle, onKeyDown: (event) => { event.stopPropagation(); handleKeyDown(event); } },
+    const panel = open && panelStyle && createPortal(h('div', { ref: panelRef, tabIndex: -1, className: 'cmd-picker-panel dropdown-panel', style: panelStyle, onKeyDown: (event) => { event.stopPropagation(); handleKeyDown(event); } },
       showSearch && h('div', { className: 'cmd-picker-search' }, h(Icon, { name: 'search', size: 14 }),
         h('label', { className: 'sr-only', htmlFor: id + '-search' }, 'Filter ' + pickerName.toLowerCase()),
         h('input', { id: id + '-search', ref: searchRef, type: 'search', value: query,
@@ -199,15 +225,15 @@ import { UnitPrefs } from "../lib/unitPreferences";
           'data-lpignore': 'true', 'data-1p-ignore': true, 'aria-controls': listboxId,
           role: 'combobox', 'aria-expanded': true, 'aria-autocomplete': 'list',
           'aria-activedescendant': visibleItems[activeIndex] ? listboxId + '-option-' + activeIndex : undefined,
-          onChange: (event) => setQuery(event.target.value) })),
+          onChange: (event) => { setQuery(event.target.value); setActiveIndex(-1); } })),
       h('div', { id: listboxId, className: 'cmd-picker-list', role: 'listbox', 'aria-labelledby': label ? labelId : undefined, 'aria-label': label ? undefined : pickerName },
-        visibleItems.length === 0 ? h('div', { className: 'cmd-picker-empty' }, 'No matches')
+        visibleItems.length === 0 ? h('div', { className: 'cmd-picker-empty', role: 'status' }, items.length ? 'No matches' : 'No choices available')
           : visibleItems.map((item, index) => h('button', { key: item.value,
               id: listboxId + '-option-' + index,
               ref: (node) => { optionRefs.current[index] = node; },
               className: 'cmd-picker-option' + (index === activeIndex ? ' active' : ''), type: 'button',
               role: 'option', tabIndex: -1, 'aria-selected': item.value === value, 'data-value': item.value,
-              onMouseEnter: () => setActiveIndex(index), onClick: () => choose(item.value) },
+              onFocus: () => setActiveIndex(index), onMouseEnter: () => { if (showSearch) setActiveIndex(index); }, onClick: () => choose(item.value) },
             h('span', { className: 'cmd-picker-check' }, item.value === value && h(Icon, { name: 'check', size: 13 })),
             h('span', { className: 'cmd-picker-option-copy' }, h('strong', { title: item.label }, item.label), item.meta && h('small', null, item.meta)),
             item.badge && h('span', { className: 'cmd-picker-badge', title: item.badge }, item.badge))),
@@ -219,7 +245,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
         if (exactValue) choose(exactValue);
       } },
         h('label', { className: 'sr-only', htmlFor: id + '-custom' }, customLabel),
-        h('input', { id: id + '-custom', value: customDraft, placeholder: customPlaceholder,
+        h('input', { id: id + '-custom', ref: customRef, value: customDraft, placeholder: customPlaceholder,
           autoComplete: 'off', spellCheck: false, 'aria-label': customLabel,
           onKeyDown: (event) => { if (event.key !== 'Escape' && event.key !== 'Tab') event.stopPropagation(); },
           onChange: (event) => setCustomDraft(event.target.value) }),
@@ -232,7 +258,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
         'aria-controls': listboxId, 'aria-expanded': open,
         'aria-haspopup': 'listbox', disabled, onClick: () => setOpen((current) => !current) },
         icon && h(Icon, { name: icon, size: 14 }),
-        h('span', { id: id + '-value', title: selected ? selected.label : placeholder }, selected ? selected.label : placeholder),
+        h('span', { id: id + '-value', title: displayLabel }, displayLabel),
         selected && selected.badge && h('small', null, selected.badge),
         h(Icon, { name: 'chevron', size: 13 })),
       panel);
@@ -264,8 +290,8 @@ import { UnitPrefs } from "../lib/unitPreferences";
     };
     return h('section', { className: 'choice-browser', 'aria-label': label, onKeyDown: (event) => {
       if (event.key === 'Escape' && expanded) { event.preventDefault(); event.stopPropagation(); if (selected) { setEditing(false); requestAnimationFrame(() => changeRef.current?.focus()); } else { setQuery(''); setActive(-1); searchRef.current?.focus(); } }
-      if (event.target.getAttribute('role') === 'option' && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
-        event.preventDefault(); event.stopPropagation(); const index = optionRefs.current.indexOf(event.target); const next = (index + (event.key === 'ArrowDown' ? 1 : -1) + visible.length) % visible.length; move(next); optionRefs.current[next]?.focus();
+      if (event.target.getAttribute('role') === 'option' && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+        event.preventDefault(); event.stopPropagation(); const index = optionRefs.current.indexOf(event.target); const next = event.key === 'Home' ? 0 : event.key === 'End' ? visible.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + visible.length) % visible.length; move(next); optionRefs.current[next]?.focus();
       }
     } },
       h('div', { className: 'choice-browser-heading' }, h('span', { className: 'fieldlabel' }, label),
@@ -290,7 +316,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
           visible.map((item, index) => h('button', { key: item.value, id: id + '-result-' + index,
             ref: (node) => { optionRefs.current[index] = node; }, type: 'button', role: 'option', disabled, tabIndex: index === Math.max(0, active) ? 0 : -1,
             'aria-selected': item.value === value, className: 'choice-result' + (active === index ? ' active' : ''),
-            onClick: () => choose(item) },
+            onFocus: () => setActive(index), onClick: () => choose(item) },
             h('span', null, h('strong', null, item.label), item.meta && h('small', null, item.meta)),
             item.value === value && h(Icon, { name: 'check', size: 14 }))),
           visible.length === 0 && h('p', { className: 'choice-empty', role: 'status' }, query ? 'No matches. Try another name.' : emptyText)),
@@ -321,11 +347,13 @@ import { UnitPrefs } from "../lib/unitPreferences";
       return true;
     };
     const start = () => (down) => {
+      if (down.button !== 0) return;
       down.preventDefault();
+      let dragged = false;
       const sx = down.clientX, v0 = (typeof value === 'number' ? value : 0);
       const sens = step * 8;
-      const mv = (e) => { let nv = v0 + (e.clientX - sx) * sens; if (min != null) nv = Math.max(min, nv); if (max != null) nv = Math.min(max, nv); onChange(Math.round(nv / step) * step); };
-      pointerDrag.start(down, { move: mv, cursor: 'ew-resize' });
+      const mv = (e) => { if (!dragged && Math.abs(e.clientX - sx) < 4) return; dragged = true; let nv = v0 + (e.clientX - sx) * sens; if (min != null) nv = Math.max(min, nv); if (max != null) nv = Math.min(max, nv); onChange(Math.round(nv / step) * step); };
+      pointerDrag.start(down, { move: mv, cursor: 'ew-resize', end: () => { if (!dragged) ref.current?.focus(); } });
     };
     const displayValue = typeof value === 'number' ? UnitPrefs.fromCanonical(value, unit, imperialUnit) : value;
     const disp = edit != null ? edit : (typeof displayValue === 'number' ? displayValue.toFixed(precision) : displayValue);
@@ -333,15 +361,24 @@ import { UnitPrefs } from "../lib/unitPreferences";
       label != null && h('label', { className: 'numlbl', htmlFor: id, onPointerDown: start() }, label),
       h('div', { className: 'numbox' },
         h('input', {
-          id, ref, className: 'numinput', value: disp, inputMode: 'decimal', 'aria-describedby': unit ? id + '-unit' : undefined,
+          id, ref, className: 'numinput', value: disp, inputMode: 'decimal', 'aria-describedby': [unit && id + '-unit', error && id + '-error'].filter(Boolean).join(' ') || undefined,
           'data-project-draft': projectDraft ? true : undefined, 'aria-invalid': !!error,
-          onChange: (e) => { setEdit(e.target.value); if (error) setError(''); },
+          onChange: (e) => { cancelEdit.current = false; setEdit(e.target.value); if (error) setError(''); },
           onFocus: (e) => { cancelEdit.current = false; if (edit == null) setEdit(typeof displayValue === 'number' ? String(displayValue) : displayValue); requestAnimationFrame(() => e.target.select()); },
           onBlur: (e) => { const committed = cancelEdit.current || commitEdit(e.target.value); cancelEdit.current = false; if (committed) setEdit(null); },
-          onKeyDown: (e) => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { e.preventDefault(); cancelEdit.current = true; setError(''); setEdit(null); e.target.blur(); } },
+          onKeyDown: (e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              if (cancelEdit.current || commitEdit(e.target.value)) { cancelEdit.current = true; e.target.blur(); }
+            }
+            if (e.key === 'Escape') {
+              e.preventDefault(); e.stopPropagation(); cancelEdit.current = true; setError(''); setEdit(null);
+              requestAnimationFrame(() => ref.current?.select());
+            }
+          },
         }),
         unit && h('span', { id: id + '-unit', className: 'numunit' }, UnitPrefs.label(unit, imperialUnit))),
-      error && h('span', { className: 'cmd-param-error numerror', role: 'alert' }, error),
+      error && h('span', { id: id + '-error', className: 'cmd-param-error numerror', role: 'alert' }, error),
     );
   }
 

@@ -4,6 +4,7 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const output = process.env.BORDEAUX_UPDATES_UI_OUTPUT;
 const checks = [], errors = [];
+const releaseNotes = '## Path uploads\n- Save and reuse the robot address and destination, with `/home/lvuser/natinst/bin/Paths` as the default.\n- Support linked robot directories and SFTP servers without the optional OpenSSH rename feature.\n- Upload only the selected paths, preserve other files, and verify the uploaded bytes.\n\n## Updates on macOS and Windows\n- Preview release notes, download progress, cancellation, and retry in one place.\n- Restart and install after saving your project.\n\n## Editor and project fixes\n- Keep repair controls available when planning fails.\n- Improve project-open recovery and protection against losing edits during reload.\n\n### Updating from an older beta\nIf the old updater fails, install this release manually.';
 app.setPath('userData', path.join(output, 'user-data'));
 let win;
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -36,7 +37,7 @@ app.whenReady().then(async () => {
     for (const platform of ['darwin', 'win32']) for (const [width, height] of [[1440, 900], [1100, 720]]) {
       win.setContentSize(width, height);
       await evaluate(platform => { window.bordeauxAPI.platform = platform; window.__updateFixture.calls.length = 0; }, platform);
-      await set({ phase: 'idle', visible: false, version: null, releaseNotes: '', projectDirty: false });
+      await set({ phase: 'idle', visible: false, currentVersion: '0.2.0-beta.10', version: null, releaseNotes: '', projectDirty: false });
       await click('#update-trigger');
       const initial = await rect();
       await click('dialog button', 'Check for updates');
@@ -79,6 +80,22 @@ app.whenReady().then(async () => {
       assert.ok(await evaluate(() => window.__updateFixture.calls.includes('install')));
       await key('Escape');
       assert.equal(await evaluate(() => document.querySelector('dialog').open), true, 'Installation must keep the editor blocked until quit or failure');
+      await set({ phase: 'upToDate', version: null, currentVersion: '0.2.0-beta.11', releaseNotes, projectDirty: false });
+      assert.deepEqual(await rect(), initial);
+      assert.ok(await evaluate(() => document.querySelectorAll('.app-update-notes ul li').length >= 7));
+      assert.equal(await evaluate(() => document.querySelector('.app-update-notes code').textContent), '/home/lvuser/natinst/bin/Paths');
+      assert.ok(await evaluate(() => {
+        const rgb = getComputedStyle(document.querySelector('.app-update-action')).backgroundColor.match(/\d+/g).slice(0, 3).map(Number);
+        return Math.max(...rgb) - Math.min(...rgb) < 16;
+      }), 'Primary action should use a neutral surface');
+      assert.ok(await evaluate(() => document.querySelector('.app-update-notes').clientHeight > 340), 'Notes must have useful reading space');
+      await capture(`${platform}-${width}-up-to-date`);
+      await evaluate(() => document.querySelector('.app-update-close').focus());
+      await key('Tab', ['shift']);
+      assert.equal(await evaluate(() => document.activeElement.textContent), 'Done');
+      await key('Return');
+      assert.equal(await evaluate(() => document.querySelector('dialog').open), false);
+      assert.equal(await evaluate(() => document.activeElement.id), 'update-trigger');
       pass(`${platform} ${width}×${height}: safe notes, fixed layout, retry, progress, cancel, dirty guard, modal keyboard and focus`);
     }
     assert.deepEqual(errors, []);

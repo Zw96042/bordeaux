@@ -15,10 +15,44 @@ import { createRoutineNodeId } from "../../shared/project/ids";
   };
   const AUTHORABLE_STEPS = [
     { id: 'path', type: 'path', label: 'Path', description: 'Follow a planned trajectory', icon: 'route', color: 'var(--accent)' },
-    { id: 'decision', type: 'decision', label: 'Decision', description: 'Branch the routine on a condition', icon: 'branch', color: '#9aa3b0' },
     { id: 'command', type: 'function', cat: 'command', label: 'Command', description: 'Run a generated robot command between paths', icon: 'bolt', color: '#4fbf78' },
     { id: 'wait', type: 'builtin', cat: 'wait', label: 'Wait', description: 'Pause the routine before its next step', icon: 'pause', color: '#cf962f' },
   ];
+
+  function branches(node) {
+    if (node.type === 'decision') return [
+      { id: 'then', label: node.thenLabel || 'True', nodes: node.then || [], operator: 'eq', value: true },
+      { id: 'else', label: node.elseLabel || 'False', nodes: node.else || [], operator: 'eq', value: false },
+    ];
+    return node.outputBranch?.routes || [];
+  }
+
+  function selectedBranch(node, outcomes) {
+    const routes = branches(node);
+    return routes.find((route) => route.id === outcomes?.[node.id]) || routes[0];
+  }
+
+  function branchOutputs(command) {
+    return (command?.outputs || []).filter((output) =>
+      ['boolean', 'enum', 'number', 'integer', 'integerString', 'decimalString'].includes(output.schema?.kind)
+      && (output.schema.kind !== 'enum' || output.schema.enumValues.length <= 255));
+  }
+
+  function newOutputBranch(output) {
+    const route = (label, operator, value) => ({ id: createRoutineNodeId(), label, operator,
+      ...(value !== undefined ? { value } : {}), nodes: [] });
+    const kind = output.schema.kind;
+    const routes = kind === 'boolean' ? [route('True', 'eq', true), route('False', 'eq', false)]
+      : kind === 'enum' ? [...output.schema.enumValues.map((value) => route(value, 'eq', value)), route('Otherwise', 'otherwise')]
+      : [route('Match', 'gte', kind.endsWith('String') ? '0' : 0), route('Otherwise', 'otherwise')];
+    return { output: output.name, schema: output.schema, routes };
+  }
+
+  function routeSummary(route) {
+    if (route.operator === 'otherwise') return 'Otherwise';
+    const symbols = { eq: '=', neq: '≠', lt: '<', lte: '≤', gt: '>', gte: '≥' };
+    return (symbols[route.operator] || '=') + ' ' + String(route.value);
+  }
 
   function authoritativeConditions(catalog) {
     if (!catalog || catalog.authoritative !== true || !['1.1', '1.2', '1.3'].includes(catalog.generatedSchemaVersion)) return [];
@@ -113,7 +147,7 @@ import { createRoutineNodeId } from "../../shared/project/ids";
   function walk(nodes, fn, depth, branch) {
     (Array.isArray(nodes) ? nodes : []).forEach((n) => {
       fn(n, depth || 0, branch || null);
-      if (n.type === 'decision') { walk(n.then, fn, (depth || 0) + 1, 'then'); walk(n.else, fn, (depth || 0) + 1, 'else'); }
+      branches(n).forEach((route) => walk(route.nodes, fn, (depth || 0) + 1, route.id));
     });
   }
   function findNode(routine, id) { let hit = null; walk(routine.nodes, (n) => { if (n.id === id) hit = n; }); return hit; }
@@ -212,6 +246,8 @@ import { createRoutineNodeId } from "../../shared/project/ids";
           flat.push({ node: n, kind: 'gen' });
         } else {
           flat.push({ node: n, kind: 'event' });
+          const route = selectedBranch(n, outcomes);
+          if (route) collect(route.nodes);
         }
       });
     };
@@ -300,7 +336,7 @@ import { createRoutineNodeId } from "../../shared/project/ids";
     });
   }
 
-export const AUTO = { CATS, AUTHORABLE_STEPS, authoritativeConditions, conditionPickerItems, hasWaitBuiltIn, authorableSteps, nodeDeploymentState, nodeTitle, newNode, walk, findNode, countSteps, branchCount,
+export const AUTO = { branches, selectedBranch, branchOutputs, newOutputBranch, routeSummary, CATS, AUTHORABLE_STEPS, authoritativeConditions, conditionPickerItems, hasWaitBuiltIn, authorableSteps, nodeDeploymentState, nodeTitle, newNode, walk, findNode, countSteps, branchCount,
     buildRun, poseAt, stepAt, fieldOverlay,
     update, remove, insertAfter, prepend, appendBranch, append, move, siblingNodes, canReorderRelative, reorderRelative };
 
@@ -309,16 +345,16 @@ export const AUTO = { CATS, AUTHORABLE_STEPS, authoritativeConditions, condition
   function update(routine, id, patch) { const r = _clone(routine); walk(r.nodes, (n) => { if (n.id === id) Object.assign(n, patch); }); return r; }
   function remove(routine, id) {
     const r = _clone(routine);
-    const rm = (arr) => { const i = arr.findIndex((n) => n.id === id); if (i >= 0) { arr.splice(i, 1); return true; } for (const n of arr) { if (n.type === 'decision' && (rm(n.then) || rm(n.else))) return true; } return false; };
+    const rm = (arr) => { const i = arr.findIndex((n) => n.id === id); if (i >= 0) { arr.splice(i, 1); return true; } for (const n of arr) { if (branches(n).some((route) => rm(route.nodes))) return true; } return false; };
     rm(r.nodes); return r;
   }
   function insertAfter(routine, id, node) {
     const r = _clone(routine);
-    const ins = (arr) => { const i = arr.findIndex((n) => n.id === id); if (i >= 0) { arr.splice(i + 1, 0, node); return true; } for (const n of arr) { if (n.type === 'decision' && (ins(n.then) || ins(n.else))) return true; } return false; };
+    const ins = (arr) => { const i = arr.findIndex((n) => n.id === id); if (i >= 0) { arr.splice(i + 1, 0, node); return true; } for (const n of arr) { if (branches(n).some((route) => ins(route.nodes))) return true; } return false; };
     if (!ins(r.nodes)) r.nodes.push(node); return r;
   }
   function prepend(routine, node) { const r = _clone(routine); r.nodes.unshift(node); return r; }
-  function appendBranch(routine, decId, branch, node) { const r = _clone(routine); walk(r.nodes, (n) => { if (n.id === decId) { n[branch] = n[branch] || []; n[branch].push(node); } }); return r; }
+  function appendBranch(routine, decId, branch, node) { const r = _clone(routine); walk(r.nodes, (n) => { if (n.id === decId) { const route = branches(n).find((route) => route.id === branch); if (route) route.nodes.push(node); } }); return r; }
   function append(routine, node) { const r = _clone(routine); r.nodes.push(node); return r; }
   // move a node up/down within its own containing array
   function move(routine, id, dir) {
@@ -326,7 +362,7 @@ export const AUTO = { CATS, AUTHORABLE_STEPS, authoritativeConditions, condition
     const mv = (arr) => {
       const i = arr.findIndex((n) => n.id === id);
       if (i >= 0) { const j = i + dir; if (j < 0 || j >= arr.length) return true; const t = arr[i]; arr[i] = arr[j]; arr[j] = t; return true; }
-      for (const n of arr) { if (n.type === 'decision' && (mv(n.then) || mv(n.else))) return true; }
+      for (const n of arr) { if (branches(n).some((route) => mv(route.nodes))) return true; }
       return false;
     };
     mv(r.nodes); return r;
@@ -335,9 +371,10 @@ export const AUTO = { CATS, AUTHORABLE_STEPS, authoritativeConditions, condition
     const find = (nodes) => {
       if (nodes.some((node) => node.id === id)) return nodes;
       for (const node of nodes) {
-        if (node.type !== 'decision') continue;
-        const siblings = find(node.then || []) || find(node.else || []);
-        if (siblings) return siblings;
+        for (const route of branches(node)) {
+          const siblings = find(route.nodes);
+          if (siblings) return siblings;
+        }
       }
       return null;
     };

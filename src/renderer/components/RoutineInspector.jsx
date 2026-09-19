@@ -1,4 +1,6 @@
 import * as React from "react";
+import { CommandBranches } from "./CommandBranches";
+import "../styles/command-branches.css";
 import { AUTO } from "../lib/routineModel";
 import { UnitPrefs } from "../lib/unitPreferences";
 import { CommandParameterEditor, commandArguments, parameterValueError, safeControlId } from "./ContextInspector";
@@ -15,7 +17,7 @@ import { LabviewProjectPanel } from "./LabviewProjectSources";
   function FieldLabel(t, right) { return h('div', { className: 'fieldlabel' }, h('span', null, t), right || null); }
 
   function StepInspector(props) {
-    const { node, paths, acq, run, robotProject, conditionOptions = [] } = props;
+    const { node, paths, acq, run, robotProject } = props;
     if (!node) return null;
     const deployment = A.nodeDeploymentState(node, robotProject && robotProject.catalog);
     if (!deployment.deployable) {
@@ -68,15 +70,13 @@ import { LabviewProjectPanel } from "./LabviewProjectSources";
       icon = 'branch'; title = 'Decision'; tag = 'branch'; accent = '#9aa3b0';
       const out = acq.outcomes[node.id] || 'then';
       body = h(React.Fragment, null,
-        h(Dropdown, { id: 'routine-condition', label: 'Condition', value: node.cond,
-          items: A.conditionPickerItems(conditionOptions, node.cond), placeholder: 'Choose a registered condition', icon: 'branch',
-          onChange: (value) => set({ cond: value }) }),
+        h('div', { className: 'rt-callout' }, 'Legacy condition: ' + (node.cond || 'Unspecified') + '. Add output branches to a command to replace this decision. Existing routes are preserved.'),
         h('div', { className: 'grid2', style: { marginTop: '10px' } },
           h('div', null, FieldLabel('If true'), h('input', { className: 'textinput', 'aria-label': 'True branch label', value: node.thenLabel, spellCheck: false, onChange: (e) => set({ thenLabel: e.target.value }) })),
           h('div', null, FieldLabel('If false'), h('input', { className: 'textinput', 'aria-label': 'False branch label', value: node.elseLabel, spellCheck: false, onChange: (e) => set({ elseLabel: e.target.value }) }))),
         FieldLabel('Preview branch'),
         h(Seg, { value: out, options: [{ v: 'then', label: node.thenLabel || 'true' }, { v: 'else', label: node.elseLabel || 'false' }], onChange: (v) => acq.setOutcome(node.id, v) }),
-        h('div', { className: 'seg-hint' }, 'Choose a branch to preview. The robot evaluates the condition when running.'),
+        h('div', { className: 'seg-hint' }, 'Choose a branch to preview. This saved decision uses the legacy condition model.'),
         h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete decision'));
 
     } else {
@@ -101,7 +101,9 @@ import { LabviewProjectPanel } from "./LabviewProjectSources";
                 searchText: command.id + ' ' + command.member,
               }))], placeholder: 'Search commands', emptyText: 'No commands found in this project', icon: 'bolt', onChange: (value) => {
               const command = commands.find((candidate) => candidate.id === value);
-              set({ title: command ? command.label : 'Robot command', invocation: command ? { commandId: command.id, arguments: commandArguments(command) } : null });
+              if (value === invocationId) return;
+              if (node.outputBranch?.routes.some((route) => route.nodes.length) && !confirm('Changing this command removes its output branches and their steps. Continue?')) return;
+              set({ title: command ? command.label : 'Robot command', invocation: command ? { commandId: command.id, arguments: commandArguments(command) } : null, outputBranch: undefined });
             } })
           : null,
         invocationId && !selected && h('div', { className: 'cmd-project-error', role: 'status' }, 'This saved command is missing from the linked catalog.'),
@@ -109,7 +111,7 @@ import { LabviewProjectPanel } from "./LabviewProjectSources";
         selected && h('form', { className: 'cmd-parameters', onSubmit: (event) => event.preventDefault() },
           parameters.length === 0 ? h('div', { className: 'cmd-empty-params' }, 'No parameters')
             : parameters.map((parameter) => h(CommandParameterEditor, {
-                key: parameter.name,
+                key: node.id + ':' + selected.id + ':' + parameter.name,
                 id: 'routine-command-param-' + safeControlId(parameter.name),
                 label: parameter.label || parameter.name,
                 schema: parameter.schema,
@@ -117,6 +119,7 @@ import { LabviewProjectPanel } from "./LabviewProjectSources";
                 value: argumentsValue[parameter.name],
                 onChange: (value) => set({ invocation: { commandId: selected.id, arguments: { ...argumentsValue, [parameter.name]: value } } }),
               }))),
+        (selected || node.outputBranch) && h(CommandBranches, { node, command: selected, set, acq }),
         h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete command'));
 
     }

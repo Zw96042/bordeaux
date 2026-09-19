@@ -1,0 +1,12 @@
+import { spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import electron from 'electron';
+const output = await fs.mkdtemp(path.join(os.tmpdir(), 'bordeaux-command-branches-'));
+const env = { ...process.env, BORDEAUX_BRANCH_UI_OUTPUT: output, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' };
+delete env.ELECTRON_RUN_AS_NODE;
+console.log(`Command branch artifacts: ${output}`);
+const child = spawn(electron, ['scripts/verify-command-branches-ui-electron.cjs'], { env, stdio: 'inherit' });
+const timer = setTimeout(() => child.kill('SIGKILL'), 120000);
+child.on('exit', (code) => { clearTimeout(timer); process.exitCode = code === 0 ? 0 : 1; });

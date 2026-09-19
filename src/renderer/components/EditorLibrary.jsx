@@ -18,6 +18,7 @@ export function referencingRoutines(routines, pathId) {
   const references = (nodes) => (nodes || []).some((node) =>
     (node.type === 'path' && node.ref === pathId)
     || (node.type === 'decision' && (references(node.then) || references(node.else)))
+    || (node.type === 'function' && node.outputBranch?.routes?.some((route) => references(route.nodes)))
     || (node.type === 'generatedTrajectory' && node.fallback?.type === 'branch' && references(node.fallback.nodes)));
   return routines.filter((routine) => references(routine.nodes));
 }

@@ -44,18 +44,19 @@ import "../styles/settings.css";
     return sameFootprint(robot.footprint, footprintFor('trapezoid', robot.w, robot.l)) ? 'trapezoid' : 'custom';
   };
 
-  // big numeric field with drag-to-scrub on the label
-  function BigNum({ label, value, onChange, unit, imperialUnit = unit === 'm' ? 'in' : undefined, step = 0.01, min, max, precision = 2 }) {
+  // Numeric settings use explicit input; dragging units or errors must not edit robot configuration.
+  function BigNum({ label, value, onChange, unit, imperialUnit = unit === 'm' ? 'in' : undefined, step = 0.01, min, max, precision = 2, disabled = false }) {
+    const errorId = React.useId();
+    const cancelEdit = useRef(false);
     const [edit, setEdit] = useState(null);
     const [error, setError] = useState('');
-    const cancelEdit = useRef(false);
-    const pointerDrag = PointerDrag.useController();
     const unitSystem = UnitPrefs.current();
     useEffect(() => {
       setEdit(null);
       setError('');
-    }, [unitSystem]);
+    }, [unitSystem, disabled]);
     const commitEdit = (raw) => {
+      if (disabled) return true;
       const parsed = parseFiniteDraftNumber(raw);
       if (parsed == null) { setError('Enter a finite number.'); return false; }
       let next = UnitPrefs.toCanonical(parsed, unit, imperialUnit);
@@ -64,29 +65,22 @@ import "../styles/settings.css";
       setError(''); onChange(next);
       return true;
     };
-    const start = (down) => {
-      down.preventDefault();
-      const sx = down.clientX, v0 = (typeof value === 'number' ? value : 0);
-      const sens = step * 8;
-      const mv = (e) => { let nv = v0 + (e.clientX - sx) * sens; if (min != null) nv = Math.max(min, nv); if (max != null) nv = Math.min(max, nv); onChange(Math.round(nv / step) * step); };
-      pointerDrag.start(down, { move: mv, cursor: 'ew-resize' });
-    };
     const displayValue = typeof value === 'number' ? UnitPrefs.fromCanonical(value, unit, imperialUnit) : value;
     const display = edit != null ? edit : (typeof displayValue === 'number' ? displayValue.toFixed(precision) : '');
-    return h('div', { className: 'rp-big', onPointerDown: (e) => { if (e.target.tagName !== 'INPUT') start(e); } },
+    return h('div', { className: 'rp-big' + (disabled ? ' is-disabled' : '') },
       h('input', {
-        value: display, inputMode: 'decimal', 'aria-label': label, min, max, step,
-        'data-project-draft': true, 'aria-invalid': !!error,
-        onChange: (e) => { setEdit(e.target.value); if (error) setError(''); },
+        value: display, disabled, inputMode: 'decimal', 'aria-label': label, min, max, step,
+        'data-project-draft': true, 'aria-invalid': !!error, 'aria-describedby': error ? errorId : undefined,
+        onChange: (e) => { cancelEdit.current = false; setEdit(e.target.value); if (error) setError(''); },
         onFocus: (e) => { cancelEdit.current = false; if (edit == null) setEdit(String(displayValue)); requestAnimationFrame(() => e.target.select()); },
         onBlur: (e) => { const committed = cancelEdit.current || commitEdit(e.target.value); cancelEdit.current = false; if (committed) setEdit(null); },
         onKeyDown: (e) => {
-          if (e.key === 'Enter') e.currentTarget.blur();
-          else if (e.key === 'Escape') { e.preventDefault(); cancelEdit.current = true; setError(''); setEdit(null); e.currentTarget.blur(); }
+          if (e.key === 'Enter') { e.preventDefault(); if (!cancelEdit.current && parseFiniteDraftNumber(e.currentTarget.value) == null) setError('Enter a finite number.'); else e.currentTarget.blur(); }
+          else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelEdit.current = true; setError(''); setEdit(null); requestAnimationFrame(() => e.target.select()); }
         },
       }),
       unit && h('span', { className: 'u' }, UnitPrefs.label(unit, imperialUnit)),
-      error && h('span', { className: 'cmd-param-error', role: 'alert' }, error));
+      error && h('span', { id: errorId, className: 'cmd-param-error', role: 'alert' }, error));
   }
 
   function RobotPage({ robot, setRobot, unitSystem, setUnitSystem, pushController, mcpEnabled, updateState, onOpenUpdates, agentProposal, onApplyProposal, onRejectProposal }) {
@@ -158,9 +152,10 @@ import "../styles/settings.css";
         : planning;
       setRobot({ driveModel: next, maxSpeed, ...(nextPlanning !== planning ? { planning: nextPlanning } : {}) });
     };
+    const motorPresetSelected = DRIVE_MOTORS.some((motor) => motor.value === driveModel.motorId && motor.rpm);
     const driveFields = [
-      { label: 'Motor free speed', value: driveModel.motorFreeRpm, unit: 'RPM', min: 100, max: 30000, precision: 0, step: 25, onChange: (value) => setDriveModel({ motorId: 'custom', motorFreeRpm: value }) },
-      { label: 'Motor torque limit', value: driveModel.motorMaxTorqueNm, unit: 'N·m', min: 0.1, max: 20, precision: 2, step: 0.05, onChange: (value) => setDriveModel({ motorId: 'custom', motorMaxTorqueNm: value }) },
+      { label: 'Motor free speed', disabled: motorPresetSelected, value: driveModel.motorFreeRpm, unit: 'RPM', min: 100, max: 30000, precision: 0, step: 25, onChange: (value) => setDriveModel({ motorFreeRpm: value }) },
+      { label: 'Motor torque limit', disabled: motorPresetSelected, value: driveModel.motorMaxTorqueNm, unit: 'N·m', min: 0.1, max: 20, precision: 2, step: 0.05, onChange: (value) => setDriveModel({ motorMaxTorqueNm: value }) },
       { label: 'Drive reduction', value: driveModel.gearRatio, unit: ':1', min: 0.1, max: 50, precision: 2, step: 0.05, onChange: (value) => setDriveModel({ gearRatio: value }) },
       { label: 'Wheel diameter', value: driveModel.wheelDiameterM, unit: 'm', imperialUnit: 'in', min: 0.02, max: 0.5, precision: 4, step: 0.001, onChange: (value) => setDriveModel({ wheelDiameterM: value }) },
       { label: 'Drive motors', value: driveModel.motorCount, min: 2, max: 12, precision: 0, step: 1, onChange: (value) => setDriveModel({ motorCount: Math.round(value) }) },

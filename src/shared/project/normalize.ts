@@ -41,6 +41,10 @@ function normalizeNodes(nodes: unknown, paths: readonly unknown[], depth = 0): u
       node.then = normalizeNodes(node.then, paths, depth + 1);
       node.else = normalizeNodes(node.else, paths, depth + 1);
     }
+    if (isRecord(node.outputBranch) && Array.isArray(node.outputBranch.routes)) {
+      node.outputBranch = { ...node.outputBranch, routes: node.outputBranch.routes.map((route) => isRecord(route)
+        ? { ...route, nodes: normalizeNodes(route.nodes, paths, depth + 1) } : route) };
+    }
     return node;
   });
 }

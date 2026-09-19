@@ -1,0 +1,18 @@
+import { spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { build } from 'vite';
+import electron from 'electron';
+const root = process.cwd();
+const output = await fs.mkdtemp(path.join(os.tmpdir(), 'bordeaux-interface-ui-'));
+const html = path.join(output, 'index.html');
+await fs.writeFile(html, `<!doctype html><html><head><meta charset="utf-8"></head><body><div id="root"></div><script type="module" src="${path.join(root, 'scripts/interface-ui-harness.jsx')}"></script></body></html>`);
+await build({ configFile: false, root: output, base: './', publicDir: false, logLevel: 'error', define: { 'process.env.NODE_ENV': JSON.stringify('production') }, build: { outDir: path.join(output, 'dist'), emptyOutDir: true, rollupOptions: { input: html } } });
+const env = { ...process.env, BORDEAUX_INTERFACE_UI_OUTPUT: output, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' };
+delete env.ELECTRON_RUN_AS_NODE;
+console.log(`Interface verification artifacts: ${output}`);
+const child = spawn(electron, ['scripts/verify-interface-ui-electron.cjs'], { env, stdio: 'inherit' });
+const timer = setTimeout(() => child.kill('SIGKILL'), 120000);
+const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', resolve); });
+clearTimeout(timer); process.exitCode = code === 0 ? 0 : 1;

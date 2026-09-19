@@ -30,9 +30,9 @@ describe("authoritative routine conditions", () => {
     expect(AUTO.authoritativeConditions({ authoritative: true, generatedSchemaVersion: "1.0", conditions: [{ id: "legacy.ready" }] })).toEqual([]);
   });
 
-  it("wires the linked catalog's condition options into the routine inspector", () => {
+  it("does not offer condition authoring in the routine inspector", () => {
     const appSource = fs.readFileSync(path.join(process.cwd(), "src/renderer/app/App.jsx"), "utf8");
 
-    expect(appSource).toContain("conditionOptions: AUTO.authoritativeConditions(robotProjectState.catalog)");
+    expect(appSource).not.toContain("conditionOptions: AUTO.authoritativeConditions(robotProjectState.catalog)");
   });
 });

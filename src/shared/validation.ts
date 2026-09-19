@@ -1,4 +1,5 @@
-import type { ValidationIssue, ValidationResult } from "./types";
+import type { RobotValueSchema, ValidationIssue, ValidationResult } from "./types";
+import { robotSchemaValueError } from "./robotCommands";
 import { FIELD_H, FIELD_W } from "./math/fieldBounds";
 import { ACTIVE_FIELD_REFERENCE } from "./field/rebuilt2026";
 import { acceptedTrajectoryShapeError } from "./planners/acceptedTrajectoryIdentity";
@@ -214,6 +215,10 @@ function validateRoutineNodes(
     else if (nodeIds.has(node.id)) issues.push(issue(`${base}.id`, "Routine node IDs must be unique"));
     else nodeIds.add(node.id);
 
+    if (node.outputBranch !== undefined && (node.type !== "function" || node.cat !== "command")) {
+      issues.push(issue(`${base}.outputBranch`, "Only a command can branch on an output"));
+    }
+
     if (node.type === "path") {
       if (typeof node.ref !== "string" || !pathIds.has(node.ref)) issues.push(issue(`${base}.ref`, "Routine path reference must match a path ID"));
       continue;
@@ -249,6 +254,51 @@ function validateRoutineNodes(
     }
     if (!["command", "terminate", "sequence", "generate", "velocity"].includes(String(node.cat))) issues.push(issue(`${base}.cat`, "Routine function category is invalid"));
     validateOptionalFinite(issues, node.scale, `${base}.scale`, "Velocity scale", { nonnegative: true });
+    if (node.outputBranch !== undefined) {
+      const branch = node.outputBranch;
+      const branchPath = `${base}.outputBranch`;
+      if (!isRecord(branch)) { issues.push(issue(branchPath, "Command output branch must be an object")); continue; }
+      if (typeof branch.output !== "string" || !branch.output.trim() || branch.output.length > 256) issues.push(issue(`${branchPath}.output`, "A command output name of at most 256 characters is required"));
+      const schema = branch.schema;
+      const schemaValid = isRecord(schema) && ["boolean", "enum", "integer", "number", "integerString", "decimalString"].includes(String(schema.kind))
+        && typeof schema.valueType === "string" && Boolean(schema.valueType.trim())
+        && (schema.kind !== "enum" || (Array.isArray(schema.enumValues) && schema.enumValues.length > 0 && schema.enumValues.length <= 255
+          && schema.enumValues.every((item) => typeof item === "string" && item.length > 0)
+          && new Set(schema.enumValues).size === schema.enumValues.length));
+      if (!schemaValid) issues.push(issue(`${branchPath}.schema`, "Branch output must have a Boolean, named outcome, or numeric schema"));
+      if (!Array.isArray(branch.routes) || branch.routes.length < 2 || branch.routes.length > 256) {
+        issues.push(issue(`${branchPath}.routes`, "Output branches require between 2 and 256 routes"));
+        continue;
+      }
+      const routeIds = new Set<string>();
+      const routes = branch.routes;
+      const values = new Set<unknown>();
+      let otherwiseCount = 0;
+      routes.forEach((route, routeIndex) => {
+        const routePath = `${branchPath}.routes[${routeIndex}]`;
+        if (!isRecord(route)) { issues.push(issue(routePath, "Output route must be an object")); return; }
+        if (typeof route.id !== "string" || !route.id.trim() || routeIds.has(route.id)) issues.push(issue(`${routePath}.id`, "Output route IDs must be present and unique"));
+        else routeIds.add(route.id);
+        if (typeof route.label !== "string" || !route.label.trim()) issues.push(issue(`${routePath}.label`, "Output route label is required"));
+        if (route.operator === "otherwise") {
+          otherwiseCount += 1;
+          if (routeIndex !== routes.length - 1 || route.value !== undefined) issues.push(issue(routePath, "Otherwise must be the final route and have no comparison value"));
+        } else {
+          const allowed = isRecord(schema) && ["boolean", "enum"].includes(String(schema.kind)) ? ["eq"] : ["eq", "neq", "lt", "lte", "gt", "gte"];
+          if (!allowed.includes(String(route.operator))) issues.push(issue(`${routePath}.operator`, "Output route comparison is invalid for this output type"));
+          if (schemaValid) {
+            const error = robotSchemaValueError(route.value, schema as unknown as RobotValueSchema, "Comparison value");
+            if (error) issues.push(issue(`${routePath}.value`, error));
+          }
+          if (isRecord(schema) && ["boolean", "enum"].includes(String(schema.kind)) && values.has(route.value)) issues.push(issue(`${routePath}.value`, "Output routes must not repeat the same outcome"));
+          values.add(route.value);
+        }
+        validateRoutineNodes(issues, route.nodes, `${routePath}.nodes`, pathIds, nodeIds, state, depth + 1);
+      });
+      if (isRecord(schema) && schema.kind === "boolean") {
+        if (otherwiseCount !== 0 || branch.routes.length !== 2 || !values.has(true) || !values.has(false)) issues.push(issue(`${branchPath}.routes`, "Boolean output branches require one True route and one False route"));
+      } else if (otherwiseCount !== 1) issues.push(issue(`${branchPath}.routes`, "Named outcome and numeric branches require one final Otherwise route"));
+    }
   }
 }
 

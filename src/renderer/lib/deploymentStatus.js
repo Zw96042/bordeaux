@@ -7,6 +7,7 @@ function referencedPaths(nodes, ids = new Set()) {
   for (const node of nodes || []) {
     if (node.type === 'path') ids.add(node.ref);
     if (node.type === 'decision') { referencedPaths(node.then, ids); referencedPaths(node.else, ids); }
+    if (node.type === 'function') node.outputBranch?.routes?.forEach((route) => referencedPaths(route.nodes, ids));
     if (node.type === 'generatedTrajectory' && node.fallback?.type === 'branch') referencedPaths(node.fallback.nodes, ids);
   }
   return ids;

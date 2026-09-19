@@ -221,6 +221,19 @@ export interface RobotCommandParameter {
   schema: RobotValueSchema;
 }
 
+/** A command result available after completion; metadata alone does not authorize robot execution. */
+export interface RobotCommandOutput {
+  name: string;
+  label?: string;
+  description?: string;
+  unit?: string;
+  schema: RobotValueSchema;
+  min?: number | string;
+  max?: number | string;
+  /** Saved NI connector terminal identity, separate from its display caption. */
+  terminalNumber?: number;
+}
+
 export interface RobotCommandDescriptor {
   id: string;
   label: string;
@@ -243,6 +256,7 @@ export interface RobotCommandDescriptor {
     typeXml: string[]; extendedInfo: unknown[]; defaults: Record<string, unknown>;
   };
   parameters: RobotCommandParameter[];
+  outputs?: RobotCommandOutput[];
   source: {
     file: string;
     line: number;
@@ -443,6 +457,22 @@ export interface PathConstraints {
   maxAngJerk?: number;
 }
 
+export interface RoutineCommandOutputRoute {
+  id: string;
+  label: string;
+  operator: "eq" | "neq" | "lt" | "lte" | "gt" | "gte" | "otherwise";
+  value?: boolean | string | number;
+  nodes: RoutineNode[];
+}
+
+export interface RoutineCommandOutputBranch {
+  output: string;
+  /** Snapshot of the selected output type; retained when the source is unavailable. */
+  schema: RobotValueSchema;
+  /** Evaluated in order, with the first matching route selected. */
+  routes: RoutineCommandOutputRoute[];
+}
+
 export interface RoutineFunctionNode {
   id: string;
   type: "function";
@@ -456,6 +486,8 @@ export interface RoutineFunctionNode {
   target?: string;
   /** Generated Robot command invoked between path steps. */
   invocation?: CommandInvocation;
+  /** Local authoring and preview only until the robot execution contract supports outputs. */
+  outputBranch?: RoutineCommandOutputBranch;
 }
 
 export interface RoutinePathNode {

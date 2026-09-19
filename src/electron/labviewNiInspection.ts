@@ -90,8 +90,8 @@ function merge(catalog: RobotCommandCatalog, commands: RobotCommandDescriptor[],
       const { labviewConnector: _connector, ...withoutEvidence } = command;
       return withoutEvidence;
     }
-    // The declaration supplies durable IDs and labels; NI supplies saved byte types.
-    return { ...command, labviewConnector: inspected.labviewConnector };
+    // The declaration supplies durable IDs and labels; NI supplies saved byte types and command results.
+    return { ...command, outputs: inspected.outputs, labviewConnector: inspected.labviewConnector };
   });
   const additions = commands.filter((command) => !declared.has(memberKey(command.member)));
   return { ...catalog, commands: [...merged, ...additions],

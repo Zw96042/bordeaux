@@ -39,6 +39,9 @@ function hasNumericRoutineReference(nodes: unknown, depth = 0): boolean {
     if (node.type === "decision") {
       return hasNumericRoutineReference(node.then, depth + 1) || hasNumericRoutineReference(node.else, depth + 1);
     }
+    if (isRecord(node.outputBranch) && Array.isArray(node.outputBranch.routes)) {
+      return node.outputBranch.routes.some((route) => isRecord(route) && hasNumericRoutineReference(route.nodes, depth + 1));
+    }
     return false;
   });
 }

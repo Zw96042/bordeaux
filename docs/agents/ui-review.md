@@ -24,6 +24,10 @@ For renderer changes, review the affected workflow in the built app before calli
 
 Existing local harnesses:
 
+- `node scripts/verify-interface-ui.mjs`: shared dropdown search/custom values, keyboard navigation, numeric cancellation, command draft ownership, viewport bounds, and reduced motion.
+- `node scripts/verify-interface-workflows.mjs`: constraint-bar press stability, toolbar shortcut isolation, exact robot numeric cancellation, routine focus return, and timeline keyboard focus. Run foreground workflow harnesses sequentially so another Electron window cannot steal native focus.
+- `node scripts/verify-command-branches-ui.mjs`: command output selection, Boolean/named/numeric routes, nested steps, typed comparison editing, missing outputs, and save/reload using a mocked NI catalog.
+
 - `node scripts/verify-labview-project-ui.mjs`: visible project selection and command sync, Windows/Mac status, recent project rows, searchable source evidence, and keyboard access with mocked project callbacks.
 - `node scripts/verify-project-folder-ui.mjs`: folder selection/cancel, New, Save and BDX failure/retry, autosave error retention, keyboard navigation, and explicit legacy file command using mocked filesystem dialogs.
 - `node scripts/verify-library-ui.mjs`: paths, routines, settings, and mocked push integration.

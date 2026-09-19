@@ -31,4 +31,13 @@ describe('app update dialog', () => {
     expect(render({ phase: 'error', errorStage: 'download' })).toContain('Retry download');
     expect(render({ phase: 'error', errorStage: 'install' })).toContain('Retry install');
   });
+  it('renders readable lists and inline code, with a Done action when current', () => {
+    const html = render({ phase: 'upToDate', version: null, releaseNotes: '## Path uploads\n- **Save** the address.\n- Use `/home/lvuser/natinst/bin/Paths`.\n`Unclosed literal' });
+    expect(html).toContain('<ul><li><strong>Save</strong>');
+    expect(html).toContain('<code>/home/lvuser/natinst/bin/Paths</code>');
+    expect(html).toContain('`Unclosed literal');
+    expect(html).toContain('>Done</button>');
+    expect(html).toContain('>Check again</button>');
+    expect(html).not.toContain('class="primary"');
+  });
 });

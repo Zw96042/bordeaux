@@ -31,6 +31,10 @@ function referencedPaths(routine, paths, outcomes) {
       collect((outcomes?.[node.id] || 'then') === 'else' ? node.else : node.then);
       return;
     }
+    if (node.type === 'function' && node.outputBranch) {
+      const routes = node.outputBranch.routes || [];
+      collect((routes.find((route) => route.id === outcomes?.[node.id]) || routes[0])?.nodes);
+    }
     // Generated previews remain embedded on their routine node. Mixing them into
     // this authored-path lookup lets a preview with the same ID shadow the path.
     const path = node.type === 'path' ? byId.get(node.ref) : null;
@@ -45,6 +49,10 @@ function walkSelected(nodes, outcomes, visit) {
     visit(node);
     if (node.type === 'decision') {
       walkSelected((outcomes?.[node.id] || 'then') === 'else' ? node.else : node.then, outcomes, visit);
+    }
+    if (node.type === 'function' && node.outputBranch) {
+      const routes = node.outputBranch.routes || [];
+      walkSelected((routes.find((route) => route.id === outcomes?.[node.id]) || routes[0])?.nodes, outcomes, visit);
     }
   });
 }

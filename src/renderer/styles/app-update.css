@@ -1,33 +1,42 @@
-.app-update-dialog{width:min(600px,calc(100vw - 48px));height:min(560px,calc(100vh - 48px));padding:0;border:1px solid var(--line-2);border-radius:16px;background:var(--bg-1);color:var(--txt);box-shadow:0 24px 90px #0008;font:13px var(--sans);overflow:hidden}
+.app-update-dialog{width:min(720px,calc(100vw - 64px));height:min(660px,calc(100vh - 64px));padding:0;border:1px solid var(--line-2);border-radius:12px;background:var(--bg-1);color:var(--txt);box-shadow:0 20px 64px #0006;font:13px var(--sans);overflow:hidden}
 .app-update-dialog[open]{display:flex;flex-direction:column}
-.app-update-dialog::backdrop{background:#0008}
-.app-update-header{display:flex;justify-content:space-between;align-items:flex-start;padding:24px 24px 0;gap:16px}
-.app-update-eyebrow{display:flex;gap:12px;align-items:center;color:var(--txt-2);font-size:12px}
-.app-update-eyebrow span{font-size:11px;color:var(--txt-3)}
-.app-update-header h2{margin:12px 0 0;font-size:23px;line-height:1.25;font-weight:600;letter-spacing:-.5px}
-.app-update-dialog button{min-height:40px;border:1px solid var(--line-2);border-radius:8px;background:var(--bg-2);color:var(--txt);padding:0 13px;font:inherit;cursor:pointer;transition:background-color .15s}
-.app-update-dialog button:hover:not(:disabled){background:var(--bg-3)}
-.app-update-dialog button:focus-visible,.app-update-notes:focus-visible{outline:2px solid var(--txt-2);outline-offset:2px}
-.app-update-dialog .app-update-close{flex:none;width:40px;padding:0;border:0;background:transparent;font-size:24px;color:var(--txt-2)}
-.app-update-summary{height:98px;flex:none;padding:12px 24px 18px}
-.app-update-summary p{margin:0;line-height:1.5;max-height:58px;overflow:auto}
-.app-update-versions{display:flex;gap:18px;color:var(--txt-3);font-size:11px;margin-top:10px;font-variant-numeric:tabular-nums}
-.app-update-notes{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;margin:0 24px;padding:18px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);line-height:1.6;overflow-wrap:anywhere}
-.app-update-notes h3{margin:0 0 14px;font-size:13px;font-weight:600}
-.app-update-notes h4{margin:18px 0 8px;font-size:13px;font-weight:600}
-.app-update-notes p{margin:6px 0;color:var(--txt-2)}
-.app-update-notes .app-update-note-item{padding-left:16px;position:relative}
-.app-update-note-item::before{content:'•';position:absolute;left:1px;color:var(--txt-3)}
-.app-update-notes pre{white-space:pre-wrap;background:var(--bg-2);border-radius:6px;padding:10px;font:12px var(--mono);color:var(--txt-2)}
-.app-update-transfer{height:52px;flex:none;padding:12px 24px 0}
-.app-update-transfer progress{display:block;width:100%;height:4px;accent-color:var(--accent);border:0}
-.app-update-transfer-values{display:flex;justify-content:space-between;margin-top:7px;color:var(--txt-3);font-size:11px;font-variant-numeric:tabular-nums}
-.app-update-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 24px 24px;flex:none}
-.app-update-secondary,.app-update-primary{display:flex;gap:8px}
-.app-update-secondary button{padding:0 8px;background:transparent;border-color:transparent;font-size:12px;color:var(--txt-2)}
-.app-update-dialog button.primary{background:var(--accent-surface);border-color:var(--accent-surface);color:#fff}
+.app-update-dialog::backdrop{background:#0006}
+.app-update-header{display:flex;align-items:center;gap:16px;padding:12px 20px 12px 28px;border-bottom:1px solid var(--line);flex:none}
+.app-update-header h2{margin:0;font-size:14px;line-height:1.4;font-weight:600}
+.app-update-channel{margin-left:auto;color:var(--txt-3);font-size:12px}
+.app-update-dialog button{min-height:40px;border:1px solid var(--line-2);border-radius:6px;background:var(--bg-2);color:var(--txt);padding:0 14px;font:inherit;cursor:pointer;transition:background-color .15s,border-color .15s}
+.app-update-dialog button:hover:not(:disabled){background:var(--bg-3);border-color:var(--line-3)}
+.app-update-dialog button:focus-visible,.app-update-notes:focus-visible{outline:2px solid var(--txt-2);outline-offset:-3px}
+.app-update-dialog .app-update-close{flex:none;width:40px;padding:0;border-color:transparent;background:transparent;font-size:22px;color:var(--txt-2)}
+.app-update-summary{height:104px;box-sizing:border-box;flex:none;padding:20px 28px 16px}
+.app-update-status-row{display:flex;align-items:baseline;justify-content:space-between;gap:16px}
+.app-update-status{margin:0;font-size:18px;line-height:1.4;font-weight:500;letter-spacing:-.2px}
+.app-update-versions{color:var(--txt-3);font-size:12px;font-variant-numeric:tabular-nums}
+.app-update-description{margin:8px 0 0;color:var(--txt-2);font-size:12px;line-height:1.5;max-height:42px;overflow:auto}
+.app-update-notes{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:24px 28px 28px;border-top:1px solid var(--line);line-height:1.65;overflow-wrap:anywhere;background:var(--bg)}
+.app-update-notes-heading{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:24px}
+.app-update-notes h3{margin:0;font-size:18px;line-height:1.4;font-weight:600;letter-spacing:-.2px}
+.app-update-notes-heading>span{color:var(--txt-3);font-size:12px;font-variant-numeric:tabular-nums}
+.app-update-notes h4{margin:24px 0 10px;font-size:14px;font-weight:600;line-height:1.4}
+.app-update-notes-heading+h4{margin-top:0}
+.app-update-notes p{margin:10px 0;color:var(--txt-2)}
+.app-update-notes ul{margin:0;padding-left:19px;color:var(--txt-2)}
+.app-update-notes li{padding-left:3px;margin:8px 0}
+.app-update-notes li::marker{color:var(--txt-3)}
+.app-update-notes strong{font-weight:600;color:var(--txt)}
+.app-update-notes code{font:12px var(--mono);color:var(--txt);background:var(--bg-2);padding:2px 4px;border-radius:3px}
+.app-update-notes pre{white-space:pre-wrap;background:var(--bg-2);border-radius:6px;padding:12px;font:12px/1.6 var(--mono);color:var(--txt-2)}
+.app-update-empty{font-size:13px}
+.app-update-transfer{margin-top:12px}
+.app-update-transfer progress{display:block;width:100%;height:3px;accent-color:var(--txt-2);border:0;border-radius:2px;overflow:hidden}
+.app-update-transfer-values{display:flex;justify-content:space-between;margin-top:8px;color:var(--txt-3);font-size:11px;font-variant-numeric:tabular-nums}
+.app-update-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:16px 28px;border-top:1px solid var(--line);min-height:73px;box-sizing:border-box;flex:none}
+.app-update-secondary{display:flex;gap:8px}
+.app-update-secondary button{padding:0 10px;background:transparent;border-color:transparent;font-size:12px;color:var(--txt-2)}
+.app-update-dialog .app-update-action{background:var(--bg-3);border-color:var(--line-3);font-weight:500;min-width:88px}
+.app-update-dialog .app-update-action:hover:not(:disabled){background:var(--bg-4)}
 .app-update-dialog button:disabled{opacity:.45;cursor:default}
-
-.app-update-transfer progress[value]{appearance:none;border-radius:3px;overflow:hidden}
+.app-update-transfer progress[value]{appearance:none}
 .app-update-transfer progress[value]::-webkit-progress-bar{background:var(--bg-3)}
-.app-update-transfer progress[value]::-webkit-progress-value{background:var(--accent-surface)}
+.app-update-transfer progress[value]::-webkit-progress-value{background:var(--txt-2)}
+@media(prefers-reduced-motion:reduce){.app-update-dialog button{transition:none}}

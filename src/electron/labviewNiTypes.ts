@@ -1,7 +1,7 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
 import type { XElement } from "builder-util-runtime/out/xml";
-import type { RobotCommandDescriptor, LabviewProjectDiscovery } from "../shared/types";
+import type { RobotCommandDescriptor, RobotCommandOutput, LabviewProjectDiscovery } from "../shared/types";
 import type { LabviewNiSource } from "./labviewNiInspection";
 import { compileLabviewCatalog } from "./labviewProject";
 import { parseLabviewXml } from "./labviewProjectDiscovery";
@@ -61,6 +61,10 @@ function scalarDefault(value: unknown, schema: Record<string, unknown>): unknown
   }
   if (schema.kind === "integerString" && (typeof value === "string" || typeof value === "number" && Number.isSafeInteger(value))) return String(value);
   return value;
+}
+function unsignedBounds(xml: XElement): { min?: number | string; max?: number | string } {
+  return xml.name === "U8" ? { min: 0, max: 255 } : xml.name === "U16" ? { min: 0, max: 65535 }
+    : xml.name === "U32" ? { min: "0", max: "4294967295" } : xml.name === "U64" ? { min: "0", max: "18446744073709551615" } : {};
 }
 function typedefs(raw: unknown, name: string): { root?: string; paths: string[] } {
   const outer = list(raw, "NI terminal extended information", 4);
@@ -151,25 +155,39 @@ export function decodeLabviewNiInspection(raw: unknown, projectFile: string, sou
         if (!name.trim() || name.length > 256) throw new Error("NI connector requires a named terminal");
         const type = typedefs(extended[index], name);
         for (const dependency of type.paths) dependencyPaths.add(dependency);
-        return { name, xml, direction: directions[index], type };
+        return { name, xml, direction: directions[index], type, caption: captions[index] as string, terminalNumber: numbers[index] as number };
       });
       const statuses = terminals.filter((terminal) => terminal.type.root && path.win32.basename(terminal.type.root) === "Command Status Info.ctl");
       if (statuses.length !== 2) continue;
       if (!statuses.some((terminal) => terminal.direction === 0) || !statuses.some((terminal) => terminal.direction === 1) || !statuses.every((terminal) => statusCluster(terminal.xml))) throw new Error("Legacy status terminals do not match the observed input/output completion lifecycle");
-      const additionalOutputs = terminals.some((terminal) => terminal.direction === 1 && !statuses.includes(terminal));
       const defaults = record(row.defaults, "NI saved defaults");
       const parameters = terminals.filter((terminal) => terminal.direction === 0 && !statuses.includes(terminal)).map((terminal) => {
         const schema = parameterSchema(terminal.xml);
-        const bounds: Record<string, unknown> = terminal.xml.name === "U8" ? { min: 0, max: 255 } : terminal.xml.name === "U16" ? { min: 0, max: 65535 }
-          : terminal.xml.name === "U32" ? { min: "0", max: "4294967295" } : terminal.xml.name === "U64" ? { min: "0", max: "18446744073709551615" } : {};
-        return { name: terminal.name, schema, ...bounds, ...(Object.hasOwn(defaults, terminal.name) ? { defaultValue: scalarDefault(defaults[terminal.name], schema) } : {}) };
+        return { name: terminal.name, schema, ...unsignedBounds(terminal.xml), ...(Object.hasOwn(defaults, terminal.name) ? { defaultValue: scalarDefault(defaults[terminal.name], schema) } : {}) };
       });
       const id = `labview.legacy.${createHash("sha256").update(key).digest("hex").slice(0, 24)}`;
       const label = path.posix.basename(file, path.posix.extname(file));
       // Reuse the canonical catalog parser for parameter schemas and saved default validation.
       const checked = compileLabviewCatalog({ schemaVersion: "bordeaux-labview-catalog/1", catalogId: "ni-source-preview", commands: [{ id, label, vi: "Handler.vi", parameters }] }).catalog.commands[0];
+      const outputs: RobotCommandOutput[] = [];
+      const outputTerminals = terminals.filter((terminal) => terminal.direction === 1 && !statuses.includes(terminal));
+      for (const terminal of outputTerminals) {
+        try {
+          if (outputTerminals.filter((candidate) => candidate.name === terminal.name).length !== 1) throw new Error("NI outputs require unique terminal names");
+          const schema = parameterSchema(terminal.xml);
+          if (!["boolean", "enum", "number", "integer", "integerString"].includes(String(schema.kind))) throw new Error(`NI ${terminal.xml.name} outputs are not supported for branching; use a Boolean, enum, or numeric output`);
+          // Outputs share value types with inputs, but saved indicator values are not result defaults.
+          const bounds = unsignedBounds(terminal.xml);
+          const output = compileLabviewCatalog({ schemaVersion: "bordeaux-labview-catalog/1", catalogId: "ni-output-preview",
+            commands: [{ id, label, vi: "Handler.vi", parameters: [{ name: terminal.name, schema, ...bounds }] }] }).catalog.commands[0].parameters[0];
+          outputs.push({ name: terminal.name, schema: output.schema, ...bounds, terminalNumber: terminal.terminalNumber,
+            ...(terminal.caption.trim() && terminal.caption !== terminal.name ? { label: terminal.caption } : {}) });
+        } catch (error) {
+          unsupported.push({ file, target, reason: `Output ${terminal.name} (terminal ${terminal.terminalNumber}): ${error instanceof Error ? error.message : String(error)}` });
+        }
+      }
       const description = text(row.description, "NI VI description", 16384);
-      commands.push({ ...checked, description: description + (additionalOutputs ? `${description ? "\n\n" : ""}Additional output terminals are not represented in this source command descriptor.` : ""), ownerType: `LabVIEW (${target})`, member: file,
+      commands.push({ ...checked, description, outputs, ownerType: `LabVIEW (${target})`, member: file,
         source: { file, line: 1 }, labviewLegacy: true, runtimeReady: false,
         labviewConnector: { labviewVersion: report.labviewVersion, applicationContext: "My Computer", target, file,
           terminalNumbers: numbers as number[], directions: directions as number[], requirements: requirements as number[],

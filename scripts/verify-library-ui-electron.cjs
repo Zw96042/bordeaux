@@ -100,6 +100,41 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate(() => !!document.querySelector('.settings-general .library-connection')), true);
     await click('[aria-label="Display units"] button', 'Imperial');
     assert.equal(await evaluate(() => [...document.querySelectorAll('[aria-label="Display units"] button')].find((button) => button.textContent === 'Imperial').getAttribute('aria-pressed')), 'true');
+    for (const [width, height] of [[1440, 900], [1100, 720]]) {
+      win.setContentSize(width, height);
+      await click('[aria-label="Display units"] button', width === 1440 ? 'Metric' : 'Imperial');
+      await pointerClick('#robot-drive-motor');
+      await pointerClick('[role="option"][data-value="rev-neo"]');
+      const motorState = () => ({
+        locked: ['Motor free speed', 'Motor torque limit'].every(label => document.querySelector(`[aria-label="${label}"]`).disabled),
+        editable: ['Drive reduction', 'Wheel diameter', 'Drive motors', 'Mass'].every(label => !document.querySelector(`[aria-label="${label}"]`).disabled),
+        rpm: document.querySelector('[aria-label="Motor free speed"]').value,
+      });
+      assert.deepEqual(await evaluate(motorState), { locked: true, editable: true, rpm: '5676' });
+      // Scrubbing a preset's unit must not mutate its value or select Custom.
+      const p = await evaluate(() => { const el = document.querySelector('[aria-label="Motor free speed"]').nextElementSibling; el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; });
+      win.webContents.sendInputEvent({ type: 'mouseDown', ...p, button: 'left', clickCount: 1 });
+      win.webContents.sendInputEvent({ type: 'mouseMove', x: p.x + 50, y: p.y });
+      win.webContents.sendInputEvent({ type: 'mouseUp', x: p.x + 50, y: p.y, button: 'left', clickCount: 1 });
+      await delay(80);
+      assert.equal(await evaluate(() => document.querySelector('#robot-drive-motor').textContent.includes('REV NEO')), true);
+      assert.equal((await evaluate(motorState)).rpm, '5676');
+      await evaluate(() => window.getSelection().removeAllRanges());
+      await fs.writeFile(path.join(output, `motor-preset-${width}.png`), (await win.webContents.capturePage()).toPNG());
+      await pointerClick('#robot-drive-motor');
+      await pointerClick('[role="option"][data-value="custom"]');
+      assert.equal((await evaluate(motorState)).locked, false);
+      await pointerClick('[aria-label="Motor free speed"]');
+      await key('Home');
+      await key('End', ['shift']);
+      await win.webContents.insertText('5800');
+      await key('Tab');
+      assert.equal(await evaluate(() => document.activeElement.getAttribute('aria-label')), 'Motor torque limit');
+      assert.equal((await evaluate(motorState)).rpm, '5800');
+      await fs.writeFile(path.join(output, `motor-custom-${width}.png`), (await win.webContents.capturePage()).toPNG());
+      check(`Motor preset locks only published specs; custom accepts keyboard edits at ${width}`);
+    }
+    win.setContentSize(1440, 900);
     await click('.rp-shapes button', 'Custom');
     const vertexValue = async (raw, cancel = false) => {
       await evaluate(() => { const el = document.querySelector('[aria-label="Vertex 1 X"]'); el.focus(); el.select(); });

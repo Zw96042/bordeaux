@@ -20,6 +20,7 @@ import { UI } from "./ui";
     const overRef = useRef(null);
     const pointerDrag = PointerDrag.useController();
     const start = (id, e) => {
+      if (e.button !== 0) return;
       e.preventDefault(); e.stopPropagation();
       setDrag({ id }); overRef.current = null; setOver(null);
       const move = (ev) => {
@@ -71,13 +72,16 @@ import { UI } from "./ui";
         (target || trigger.current)?.focus();
       });
     };
+    const dismiss = (event) => {
+      if (open && event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setOpen(false); trigger.current?.focus(); }
+    };
     if (variant === 'gap') {
-      return h('div', { className: 'rt-gap' + (open ? ' open' : '') },
+      return h('div', { className: 'rt-gap' + (open ? ' open' : ''), onKeyDown: dismiss },
         h('button', { ref: trigger, className: 'rt-gap-btn', type: 'button', title: 'Insert step here', 'aria-label': open ? 'Close step chooser' : 'Insert step here', 'aria-expanded': open, onClick: () => setOpen((o) => !o) }, h(Icon, { name: open ? 'x' : 'plus', size: 13 })),
         open && h(Chooser, { onPick: pick, waitAvailable }));
     }
-    return h('div', { className: 'rt-addwrap' },
-      h('button', { ref: trigger, className: 'rt-add' + (open ? ' on' : ''), type: 'button', onClick: () => setOpen((o) => !o) },
+    return h('div', { className: 'rt-addwrap', onKeyDown: dismiss },
+      h('button', { ref: trigger, className: 'rt-add' + (open ? ' on' : ''), type: 'button', 'aria-expanded': open, onClick: () => setOpen((o) => !o) },
         h(Icon, { name: open ? 'x' : 'plus', size: 14 }), open ? 'Choose a step' : (label || 'Add step')),
       open && h(Chooser, { onPick: pick, waitAvailable }));
   }
@@ -121,7 +125,9 @@ import { UI } from "./ui";
       if (node.cat === 'generate') meta = (seg ? fmt(seg.t1 - seg.t0) + ', ' : '') + 'runtime, ' + node.trigger;
       else meta = node.trigger;
     }
-    const isDecision = node.type === 'decision';
+    const routes = A.branches(node);
+    const isDecision = routes.length > 0;
+    if (node.outputBranch) meta = 'Branch on ' + node.outputBranch.output + ' · Preview only';
     const isCollapsed = isDecision && collapsed.has(node.id);
 
     const cls = 'rt-step ' + kindCls + (sel ? ' sel' : '') + (active ? ' active' : '') + (fired ? ' fired' : '')
@@ -134,7 +140,7 @@ import { UI } from "./ui";
         : h('span', { className: 'rt-step-ic', style: { color } }, h(Icon, { name: icon, size: 15 })),
       h('button', { className: 'rt-step-body', type: 'button', 'aria-pressed': sel, onClick: () => onSelect(sel ? null : node.id) },
         h('div', { className: 'rt-step-title' }, A.nodeTitle(node, paths, catalog)),
-        h('div', { className: 'rt-step-meta' }, isCollapsed ? (A.branchCount(node.then) + A.branchCount(node.else)) + ' steps in 2 branches' : meta),
+        h('div', { className: 'rt-step-meta' }, isCollapsed ? routes.reduce((count, route) => count + A.branchCount(route.nodes), 0) + ' steps in ' + routes.length + ' branches' : meta),
         tag && h('span', { className: 'rt-step-tag', style: { color } }, tag),
         active && h('span', { className: 'rt-step-live' }, node.type === 'path' || node.type === 'builtin' || node.cat === 'generate' ? 'Running' : 'Firing')),
       h('span', { className: 'rt-step-tools' },
@@ -147,20 +153,23 @@ import { UI } from "./ui";
     }
     if (isCollapsed) return h('div', { className: 'rt-step-wrap' }, card);
 
-    const out = acq.outcomes[node.id] || 'then';
+    const out = A.selectedBranch(node, acq.outcomes)?.id;
     return h('div', { className: 'rt-step-wrap' }, card,
       h('div', { className: 'rt-branches' },
-        ['then', 'else'].map((br) => {
-          const cnt = A.branchCount(node[br]);
+        routes.map((route) => {
+          const br = route.id;
+          const cnt = A.branchCount(route.nodes);
           return h('div', { key: br, className: 'rt-branch' + (out === br ? ' live' : '') },
             h('button', { className: 'rt-brlbl', type: 'button', onClick: () => acq.setOutcome(node.id, br), title: 'Make this branch the simulated outcome' },
               h('span', { className: 'rt-brdot' }),
-              h('span', { className: 'rt-brkey' }, br === 'then' ? 'True' : 'False'),
-              h('span', { className: 'rt-brname' }, br === 'then' ? node.thenLabel : node.elseLabel),
+              (route.operator !== 'otherwise' && (typeof route.value === 'number' || !['boolean', 'enum'].includes(node.outputBranch?.schema.kind))
+                || (route.label || '').toLowerCase() !== String(route.operator === 'otherwise' ? 'Otherwise' : route.value).toLowerCase())
+                && h('span', { className: 'rt-brkey' }, A.routeSummary(route)),
+              h('span', { className: 'rt-brname' }, route.label),
               h('span', { className: 'rt-brcount' }, plural(cnt, 'step')),
               out === br && h('span', { className: 'rt-brlive' }, 'Preview')),
             h('div', { className: 'rt-brbody' },
-              (Array.isArray(node[br]) ? node[br] : []).map((cn, index) => h(StepCard, { key: cn.id || index, node: cn, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction: cn.type === 'function', nested: true, waitAvailable, catalog, previewIncluded: previewIncluded && out === br })),
+              route.nodes.map((cn, index) => h(StepCard, { key: cn.id || index, node: cn, paths, run, selId, onSelect, acq, activeId, firedIds, dnd, collapsed, toggleCollapse, isFunction: cn.type === 'function', nested: true, waitAvailable, catalog, previewIncluded: previewIncluded && out === br })),
               h(AddStep, { variant: 'end', label: 'Add step', waitAvailable, onPick: (t, c) => acq.addBranch(node.id, br, t, c) })));
         })));
   }
@@ -169,7 +178,7 @@ import { UI } from "./ui";
     return h('div', { className: 'rt-empty' },
       h('span', { className: 'rt-empty-ic' }, h(Icon, { name: 'layers', size: 18 })),
       h('div', { className: 'rt-empty-t' }, 'Build the run order'),
-      h('p', null, 'Add paths, decisions, and robot commands. Steps run from top to bottom.'),
+      h('p', null, 'Add paths and robot commands. Commands can branch on an output. Steps run from top to bottom.'),
       h(AddStep, { variant: 'end', label: 'Add first step', waitAvailable, onPick: (t, c) => acq.addEnd(t, c) }));
   }
 

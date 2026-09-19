@@ -12,15 +12,12 @@
   font: 600 11px/1 var(--ui);
   cursor: pointer;
   white-space: nowrap;
-  transition: color 140ms ease-out, background-color 140ms ease-out, border-color 140ms ease-out, transform 80ms ease-out;
+  transition: color 140ms ease-out, background-color 140ms ease-out, border-color 140ms ease-out;
 }
 .robot-push-trigger:hover {
   border-color: var(--line-2);
   background: var(--bg-3);
   color: var(--txt);
-}
-.robot-push-trigger:active {
-  transform: scale(0.96);
 }
 .robot-push-trigger-deploy svg {
   color: var(--accent);

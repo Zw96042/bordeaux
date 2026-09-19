@@ -13,6 +13,16 @@ const renderConnection = (patch) => renderToStaticMarkup(React.createElement(Rob
 describe('robot settings review regressions', () => {
   afterEach(() => UnitPrefs.set('metric'));
 
+  it.each(['rev-neo', 'rev-vortex', 'ctre-kraken-x60', 'ctre-falcon-500', 'custom'])('locks only motor-provided specifications for %s', (motorId) => {
+    const robot = createDemoProject().robot;
+    robot.driveModel = { ...robot.driveModel, motorId, motorFreeRpm: 5676, motorMaxTorqueNm: 2.6 };
+    const markup = renderToStaticMarkup(React.createElement(RobotPage, { robot, pushController: {} }));
+    for (const label of ['Motor free speed', 'Motor torque limit', 'Drive reduction', 'Wheel diameter', 'Drive motors', 'Mass']) {
+      const input = markup.match(new RegExp(`<input(?=[^>]*aria-label="${label}")[^>]*>`))[0];
+      expect(input.includes('disabled=""')).toBe(motorId !== 'custom' && ['Motor free speed', 'Motor torque limit'].includes(label));
+    }
+  });
+
   it.each([
     ['metric', '0.254', 'm'],
     ['imperial', '10.000', 'in'],

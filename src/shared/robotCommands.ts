@@ -328,6 +328,9 @@ export function validateProjectRobotInvocations(project: BordeauxProject, catalo
         if (fallback.depth > 8) issues.push({ path: base, message: "Generated trajectory fallback cannot exceed 8 decision levels", severity: "error" });
       }
       const nodeId = typeof node.id === "string" && node.id ? node.id : "unknown";
+      if (node.outputBranch !== undefined) {
+        issues.push({ path: `${base}.outputBranch`, message: "Command output branching is available for local authoring and preview only; robot execution support is not available yet", severity: "error" });
+      }
       if (node.type === "path") {
         if (typeof node.ref !== "string" || !exportablePathIds.has(node.ref)) {
           issues.push({ path: `${base}.ref`, message: "Routine path reference must identify an exported path", severity: "error" });

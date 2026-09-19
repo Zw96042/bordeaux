@@ -196,7 +196,7 @@ import { UI } from "./ui";
       const onVisitKey = (event) => {
         if (event.defaultPrevented || document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')) return;
         const target = event.target;
-        if (target && ((target.matches && target.matches('input, textarea, select')) || target.isContentEditable)) return;
+        if (target && (target.closest?.('input, textarea, select, button, summary, a[href], [role="menu"], [role="listbox"], .editor-library') || target.isContentEditable)) return;
         if (event.key === 'Escape' && visitFocusRef.current) { updateVisitFocus(null); return; }
         const direction = event.key === ']' || event.code === 'BracketRight' ? 1
           : (event.key === '[' || event.code === 'BracketLeft' ? -1 : 0);

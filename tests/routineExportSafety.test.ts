@@ -47,9 +47,9 @@ describe("routine export safety", () => {
     expect(markup).not.toContain("Remove unsupported step");
   });
 
-  it("authors only paths, decisions, commands, and an available Wait", () => {
-    expect(AUTO.authorableSteps(catalog()).map((step: { id: string }) => step.id)).toEqual(["path", "decision", "command", "wait"]);
-    expect(AUTO.authorableSteps({ ...catalog(), generatedSchemaVersion: "1.1", builtIns: [] }).map((step: { id: string }) => step.id)).toEqual(["path", "decision", "command"]);
+  it("authors paths, commands, and an available Wait with branching attached to commands", () => {
+    expect(AUTO.authorableSteps(catalog()).map((step: { id: string }) => step.id)).toEqual(["path", "command", "wait"]);
+    expect(AUTO.authorableSteps({ ...catalog(), generatedSchemaVersion: "1.1", builtIns: [] }).map((step: { id: string }) => step.id)).toEqual(["path", "command"]);
     expect(AUTO.newNode("function", "command")).toMatchObject({ type: "function", cat: "command" });
     expect(AUTO.nodeDeploymentState({ id: "legacy", type: "function", cat: "generate" })).toMatchObject({ deployable: false, legacy: true });
     expect(() => AUTO.nodeTitle({ id: "unknown", type: "future" }, [])).not.toThrow();

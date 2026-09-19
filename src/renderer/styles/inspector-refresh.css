@@ -47,7 +47,6 @@
 .inspector-refresh .cmd-toggle-copy { min-width: 0; }
 .inspector-refresh .cmd-toggle-copy strong { font-size: 12px; }
 .inspector-refresh .cmd-toggle-copy small { font-size: 11px; line-height: 1.4; }
-.inspector-refresh .cmd-param input { font-size: 13px !important; }
 .inspector-refresh .cmd-param-meta { white-space: normal; overflow-wrap: anywhere; }
 
 /* Fix iconless triggers, which previously assigned the name to an auto column. */

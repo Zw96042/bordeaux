@@ -2,7 +2,6 @@ import { PathLinks } from "../lib/pathLinks";
 import { SharedWaypointPosition } from "./SharedWaypointPosition";
 import { LabviewProjectPanel } from "./LabviewProjectSources";
 import * as React from "react";
-import { AUTO } from "../lib/routineModel";
 import { PM } from "../lib/pathMath";
 import { UnitPrefs } from "../lib/unitPreferences";
 import { FIELD_DIMS } from "./FieldView";
@@ -236,7 +235,10 @@ import { UI } from "./ui";
         'aria-describedby': error ? id + '-error' : id + '-type',
         onChange: (event) => { setDraft(event.target.value); if (error) validate(event.target.value, false); },
         onBlur: (event) => validate(event.currentTarget.value, true),
-        onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(event.currentTarget.value, true); event.currentTarget.blur(); } },
+        onKeyDown: (event) => {
+          if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); if (validate(event.currentTarget.value, false)) event.currentTarget.blur(); }
+          else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setDraft(formatted); setError(''); requestAnimationFrame(() => document.getElementById(id)?.select()); }
+        },
       }),
       h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, valueType)),
       error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
@@ -274,7 +276,10 @@ import { UI } from "./ui";
         'aria-describedby': error ? id + '-error' : id + '-type',
         onChange: (event) => { setDraft(event.target.value); if (error) validate(event.target.value, false); },
         onBlur: (event) => validate(event.currentTarget.value, true),
-        onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(event.currentTarget.value, true); event.currentTarget.blur(); } },
+        onKeyDown: (event) => {
+          if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); if (validate(event.currentTarget.value, false)) event.currentTarget.blur(); }
+          else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setDraft(formatted); setError(''); requestAnimationFrame(() => document.getElementById(id)?.select()); }
+        },
       }),
       h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, valueType + ', exact integer')),
       error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
@@ -312,7 +317,10 @@ import { UI } from "./ui";
         'aria-describedby': error ? id + '-error' : id + '-type',
         onChange: (event) => { setDraft(event.target.value); if (error) validate(event.target.value, false); },
         onBlur: (event) => validate(event.currentTarget.value, true),
-        onKeyDown: (event) => { if (event.key === 'Enter') { event.preventDefault(); validate(event.currentTarget.value, true); event.currentTarget.blur(); } },
+        onKeyDown: (event) => {
+          if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); if (validate(event.currentTarget.value, false)) event.currentTarget.blur(); }
+          else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setDraft(formatted); setError(''); requestAnimationFrame(() => document.getElementById(id)?.select()); }
+        },
       }),
       h('span', { id: id + '-type', className: 'cmd-param-type' }, parameterMetadata(parameter, valueType + ', exact decimal')),
       error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
@@ -356,7 +364,10 @@ import { UI } from "./ui";
         'aria-describedby': error ? id + '-error' : id + '-type',
         onChange: (event) => { setDraft(event.target.value); if (error) validate(event.target.value, false); },
         onBlur: (event) => validate(event.currentTarget.value, true),
-        onKeyDown: (event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); validate(event.currentTarget.value, true); } },
+        onKeyDown: (event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); validate(event.currentTarget.value, true); }
+          else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setDraft(formatted); setError(''); }
+        },
       }),
       h('span', { id: id + '-type', className: 'cmd-param-type' }, valueType + ', JSON' + (schema && schema.kind === 'opaque' ? '. Custom values use JSON' : '')),
       error && h('span', { id: id + '-error', className: 'cmd-param-error', role: 'alert' }, error));
@@ -727,7 +738,6 @@ import { UI } from "./ui";
 
 
       const commands = catalog ? catalog.commands || [] : [];
-      const conditionOptions = AUTO.authoritativeConditions(catalog);
       const invocationId = m.invocation && m.invocation.commandId ? m.invocation.commandId : (m.cmd && m.cmd !== 'none' ? m.cmd : '');
       const selectedCommand = commands.find((command) => command.id === invocationId);
       const unresolved = invocationId && !selectedCommand;
@@ -800,7 +810,7 @@ import { UI } from "./ui";
             argumentParameters.length === 0
               ? h('div', { className: 'cmd-empty-params' }, 'No parameters')
               : argumentParameters.map((parameter) => h(CommandParameterEditor, {
-                  key: parameter.name,
+                  key: doc.id + ':' + sel.idx + ':' + selectedCommand.id + ':' + parameter.name,
                   id: 'event-command-param-' + safeControlId(parameter.name),
                   label: parameter.label || parameter.name,
                   schema: parameter.schema,
@@ -838,10 +848,8 @@ import { UI } from "./ui";
           h('span', { className: 'inrow-l' }, 'End time', h('small', null, 'expire or stop repeating')),
           h(Toggle, { on: schedule.endTimeS != null, ariaLabel: 'Limit event end time', onChange: (on) => actions.setMarker(sel.idx, { schedule: { ...schedule, endTimeS: on ? (derived.prof.totalTime || 0) : undefined } }) })),
         schedule.endTimeS != null && h(Num, { label: 'End path time', value: schedule.endTimeS, unit: 's', min: 0, max: derived.prof.totalTime || 0, step: 0.1, precision: 2, onChange: (v) => actions.setMarker(sel.idx, { schedule: { ...schedule, endTimeS: v } }) }),
-        h(Dropdown, { id: 'event-condition-id', label: 'Condition (optional)', value: schedule.conditionId || '',
-          items: AUTO.conditionPickerItems(conditionOptions, schedule.conditionId || '', 'No condition'),
-          placeholder: 'Choose a generated condition', icon: 'branch',
-          onChange: (value) => actions.setMarker(sel.idx, { schedule: { ...schedule, conditionId: value || undefined } }) }),
+        schedule.conditionId && h('div', { className: 'cmd-project-error' }, 'Legacy condition: ' + schedule.conditionId,
+          h('button', { type: 'button', className: 'rt-openbtn', onClick: () => actions.setMarker(sel.idx, { schedule: { ...schedule, conditionId: undefined } }) }, 'Remove legacy condition')),
         h('div', { className: 'marker-position-group' },
           h('div', { className: 'fieldlabel' }, 'Anchor position'),
           h(Seg, { value: markerAnchor, ariaLabel: 'Anchor position', options: [{ v: 'param', label: 'Path %' }, { v: 'dist', label: 'Distance' }], onChange: (v) => actions.setMarker(sel.idx, { anchor: v }) }),

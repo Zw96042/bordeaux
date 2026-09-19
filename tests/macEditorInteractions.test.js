@@ -31,16 +31,22 @@ describe('Mac editor linked waypoint identity', () => {
     expect(PathLinks.waypointName(project, path, 0)).toBe('Intake');
   });
 });
-describe('velocity display', () => {
-  it('uses one continuous luminance ramp for the field and legend', () => {
-    const levels = Array.from({ length: 101 }, (_, i) => metricColor('velocity', i / 100).match(/\d+/g).map(Number));
-    for (let i = 1; i < levels.length; i++) {
-      for (let channel = 0; channel < 3; channel++) {
-        expect(levels[i][channel]).toBeGreaterThanOrEqual(levels[i - 1][channel]);
-        expect(levels[i][channel] - levels[i - 1][channel]).toBeLessThanOrEqual(3);
-      }
+describe('metric heatmap display', () => {
+  it('shares a continuous, increasingly bright palette between all field metrics and their legends', () => {
+    const metrics = ['velocity', 'accel', 'angvel', 'curvature'];
+    const reference = Array.from({ length: 101 }, (_, i) => metricColor('velocity', i / 100));
+    const lightness = reference.map(color => Number(color.match(/oklch\(([\d.]+)/)[1]));
+    for (let i = 1; i < lightness.length; i++) {
+      expect(lightness[i]).toBeGreaterThan(lightness[i - 1]);
+      expect(lightness[i] - lightness[i - 1]).toBeLessThan(0.004);
     }
-    expect(metricGradient('velocity')).toContain('#31516e 0%');
-    expect(metricGradient('velocity')).toContain('#a2e3eb 100%');
+    expect(new Set(reference.map(color => color.match(/ ([\d.]+)\)$/)[1])).size).toBe(1);
+    for (const metric of metrics) {
+      expect(Array.from({ length: 101 }, (_, i) => metricColor(metric, i / 100))).toEqual(reference);
+      expect(metricGradient(metric)).toBe(metricGradient('velocity'));
+      for (const t of [0, 0.5, 1]) expect(metricGradient(metric)).toContain(`${metricColor(metric, t)} ${t * 100}%`);
+      expect(metricColor(metric, -1)).toBe(reference[0]);
+      expect(metricColor(metric, 2)).toBe(reference[100]);
+    }
   });
 });

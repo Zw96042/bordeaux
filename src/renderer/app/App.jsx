@@ -1559,12 +1559,23 @@ import { createPlaybackStore } from "../lib/playbackStore";
       del: (id) => {
         const node = AUTO.findNode(routine, id);
         const label = node ? AUTO.nodeTitle(node, project.paths, robotProjectState.catalog) : 'this routine step';
-        if (!confirm('Delete “' + label + '” from the routine? Decision branches beneath it will also be removed.')) return;
+        if (!confirm('Delete “' + label + '” from the routine? Branches beneath it will also be removed.')) return;
+        const siblings = AUTO.siblingNodes(routine, id) || [];
+        const at = siblings.findIndex((candidate) => candidate.id === id);
+        const next = siblings[at + 1] || siblings[at - 1];
         setRoutine((r) => AUTO.remove(r, id)); setRoutineSel(null);
+        requestAnimationFrame(() => {
+          const step = [...document.querySelectorAll('.rt-step')].find((element) => element.dataset.id === next?.id);
+          (step?.querySelector('.rt-step-body') || document.querySelector('.rt-panel .rt-add'))?.focus();
+        });
       },
       move: (id, dir) => setRoutine((r) => AUTO.move(r, id, dir)),
       reorder: (id, targetId, before) => setRoutine((r) => AUTO.reorderRelative(r, id, targetId, before)),
-      select: (id) => setRoutineSel(id),
+      select: (id) => {
+        const selectedStep = document.querySelector('.rt-step.sel .rt-step-body');
+        setRoutineSel(id);
+        if (id == null) requestAnimationFrame(() => { if (selectedStep?.isConnected) selectedStep.focus(); });
+      },
       addAfter: (id, type, cat) => setRoutine((r) => { const nn = AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return AUTO.insertAfter(r, id, nn); }),
       addBranch: (decId, br, type, cat) => setRoutine((r) => { const nn = AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return AUTO.appendBranch(r, decId, br, nn); }),
       addEnd: (type, cat) => setRoutine((r) => { const nn = AUTO.newNode(type, cat, project.paths[0].id); setRoutineSel(nn.id); return AUTO.append(r, nn); }),
@@ -1797,6 +1808,8 @@ import { createPlaybackStore } from "../lib/playbackStore";
         if (formControl) return;
         if ((e.metaKey || e.ctrlKey) && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
         if ((e.metaKey || e.ctrlKey) && k === 'y') { e.preventDefault(); redo(); return; }
+        // Native controls own navigation and deletion keys during keyboard use.
+        if (nativeKeyboardControl) return;
         if (page !== 'plan') return;
         if (!derivationCurrent) return;
         if (e.key.indexOf('Arrow') === 0 && sel.kind) {
@@ -1887,7 +1900,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
                   run.planningError && h('span', null, run.planningError))),
               transport: h(RoutineTransportPlayback, { store: routinePlaybackStore, run }) }),
             h('aside', { className: 'rail rail-r' + (selNode ? '' : ' collapsed'), 'aria-label': 'Routine step inspector' },
-              selNode && h(StepInspector, { node: selNode, paths: project.paths, acq, run, robotProject: { ...robotProjectState, link: linkRobotProject, refresh: refreshRobotProject, openRecent: openRecentRobotProject, build: buildRobotCatalog, inspect: inspectLabviewCommands }, conditionOptions: AUTO.authoritativeConditions(robotProjectState.catalog) })))
+              selNode && h(StepInspector, { node: selNode, paths: project.paths, acq, run, robotProject: { ...robotProjectState, link: linkRobotProject, refresh: refreshRobotProject, openRecent: openRecentRobotProject, build: buildRobotCatalog, inspect: inspectLabviewCommands } })))
         : h('main', { className: 'stage stage-plan' },
             renderLibrary('paths', (secOpen, setSecOpen) => h('div', { style: { height: '100%' }, inert: derivationCurrent || repairMode ? undefined : '' }, h(Panels.Outline, { project, open: true, setOpen: () => {}, doc: outlineDoc, derived: outlinePreview, sel, actions: inspActions, secOpen, setSecOpen, robot, ready: derivationCurrent }))),
             h('div', { className: 'fieldcol', inert: derivationCurrent ? undefined : '', 'aria-disabled': derivationCurrent ? undefined : true },

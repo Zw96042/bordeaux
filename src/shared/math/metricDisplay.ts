@@ -1,30 +1,16 @@
-// ---- colour scales for the metric overlays ----
-function hex2rgb(hx: string) { return [parseInt(hx.slice(1, 3), 16), parseInt(hx.slice(3, 5), 16), parseInt(hx.slice(5, 7), 16)]; }
+// Shared muted blue scale. Increasing OKLCH lightness keeps
+// low, middle and high values distinct on the dark field in every metric.
+const HEATMAP = [[0.55, 0.055, 250], [0.70, 0.070, 250], [0.85, 0.040, 250]] as const;
 
-const RAMPS_M: Record<string, Array<[number, string]>> = {
-  velocity:  [[0, '#31516e'], [0.5, '#488db4'], [1, '#a2e3eb']],
-  accel:     [[0, '#3f6fd0'], [0.5, '#4d535e'], [1, '#cf4f4a']],
-  angvel:    [[0, '#343d47'], [0.5, '#2f8fa6'], [1, '#5fcfe6']],
-  curvature: [[0, '#39342b'], [0.5, '#a87c30'], [1, '#edbf5c']],
-};
-
-export function metricColor(mode: string, tt: number) {
-  const s = RAMPS_M[mode] || RAMPS_M.velocity;
-  let t = Math.max(0, Math.min(1, tt));
-  for (let i = 0; i < s.length - 1; i++) {
-    const a = s[i], b = s[i + 1];
-    if (t >= a[0] && t <= b[0]) {
-      const u = (t - a[0]) / Math.max(1e-6, b[0] - a[0]);
-      const ca = hex2rgb(a[1]), cb = hex2rgb(b[1]);
-      return `rgb(${Math.round(ca[0] + (cb[0] - ca[0]) * u)},${Math.round(ca[1] + (cb[1] - ca[1]) * u)},${Math.round(ca[2] + (cb[2] - ca[2]) * u)})`;
-    }
-  }
-  return s[s.length - 1][1];
+export function metricColor(_mode: string, value: number) {
+  const t = Math.max(0, Math.min(1, Number.isNaN(value) ? 0 : value)) * 2;
+  const index = Math.min(1, Math.floor(t));
+  const before = HEATMAP[index], after = HEATMAP[index + 1];
+  return `oklch(${before.map((channel, i) => (channel + (after[i] - channel) * (t - index)).toFixed(4)).join(" ")})`;
 }
 
 export function metricGradient(mode: string) {
-  const s = RAMPS_M[mode] || RAMPS_M.velocity;
-  return 'linear-gradient(90deg,' + s.map((x) => x[1] + ' ' + Math.round(x[0] * 100) + '%').join(',') + ')';
+  return 'linear-gradient(90deg in oklch,' + [0, 0.5, 1].map(t => `${metricColor(mode, t)} ${t * 100}%`).join(',') + ')';
 }
 
 export const METRICS = [

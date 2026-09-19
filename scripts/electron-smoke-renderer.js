@@ -243,9 +243,9 @@
   // legitimately when an earlier autosave finishes, making the close probe race.
   document.querySelector('button[aria-label="Close robot files"]').click();
   [...document.querySelectorAll('.pageswitch button')].find(button => button.textContent.trim() === 'Settings').click();
-  await waitFor(() => document.querySelector('input[aria-label="Motor free speed"]'), 'dirty close-guard draft input');
+  await waitFor(() => document.querySelector('input[aria-label="Drive reduction"]'), 'dirty close-guard draft input');
   await new Promise(resolve => setTimeout(resolve, 1100));
-  const unsavedInput = document.querySelector('input[aria-label="Motor free speed"]');
+  const unsavedInput = document.querySelector('input[aria-label="Drive reduction"]');
   unsavedInput.focus();
   setInputValue.call(unsavedInput, '-');
   unsavedInput.dispatchEvent(new Event('input', { bubbles: true }));

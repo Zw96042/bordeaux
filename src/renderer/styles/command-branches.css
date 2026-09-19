@@ -1,0 +1,6 @@
+.command-branches { margin-top: 20px; min-width: 0; }
+.command-branch-route { margin: 16px 0; min-width: 0; }
+.command-branch-route > .textinput { width: 100%; box-sizing: border-box; }
+.command-branch-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.command-branch-actions .rt-openbtn { width: auto; flex: 1 1 110px; }
+.command-branches .fieldlabel { white-space: normal; overflow-wrap: anywhere; }

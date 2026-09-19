@@ -174,6 +174,9 @@ function deployableRoutine(project: BordeauxProject, pathIds: Set<string>): Robo
     return source.map((node) => {
       nodeCount += 1;
       if (nodeCount > MAX_ROUTINE_NODE_COUNT) throw new Error(`Robot trajectory export exceeds ${MAX_ROUTINE_NODE_COUNT} routine nodes`);
+      if ("outputBranch" in node && node.outputBranch !== undefined) {
+        throw new Error(`Routine command ${node.id} branches on an output; robot execution support is not available yet`);
+      }
       if (node.type === "path") {
         if (!pathIds.has(node.ref)) throw new Error(`Routine path ${node.ref} is not exportable`);
         return { id: node.id, type: "path", ref: node.ref };
