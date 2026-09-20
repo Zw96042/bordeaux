@@ -887,6 +887,95 @@ app.whenReady().then(async () => {
     assert.deepEqual(saved.paths[2], independentBefore, 'Unrelated path remains unchanged');
     await fs.writeFile(path.join(output, 'shared-position-inspector.png'), (await win.webContents.capturePage()).toPNG());
     check('searchable shared position links propagate coordinates only, support project undo/redo, and unlink cleanly');
+    // Restoring a linked relationship never jumps over a newer edit to the former neighbor.
+    const sharedVerification = structuredClone(saved);
+    const linkedFixture = (kind) => {
+      const make = (id, name) => { const item = { ...structuredClone(source), id, name }; delete item.folderId; return item; };
+      const paths = [make('linked-a', 'Linked A'), make('linked-b', 'Linked B'), make('unrelated-c', 'Unrelated C')];
+      if (kind === 'shared') paths[0].waypoints[0].positionLink = paths[1].waypoints[0].positionLink = 'fixture-shared';
+      return { ...saved, name: 'Linked undo verification', paths, pathFolders: [], routines: [], activeRoutineId: '', editor: { activePathId: 'linked-a' },
+        pathLinks: kind === 'endpoint' ? [{ id: 'fixture-endpoint', fromPathId: 'linked-a', toPathId: 'linked-b' }] : [] };
+    };
+    const planningReady = (label) => wait(() => evaluate(() => !document.querySelector('.fieldcol[data-planning-ready="false"]')), label);
+    const openLinkedFixture = async (kind) => {
+      saved = linkedFixture(kind);
+      await win.loadFile(path.resolve('dist-renderer/index.html'));
+      await wait(() => evaluate(() => document.querySelector('.library-current-name')?.textContent === 'Linked A' && !document.querySelector('.fieldcol[data-planning-ready="false"]')), kind + ' link fixture');
+      await evaluate(() => { window.confirm = () => true; });
+      await saveCurrent();
+    };
+    const showPath = async (id) => { await evaluate((id) => document.querySelector('[data-library-item="' + id + '"]').click(), id); await planningReady('path ' + id); };
+    const inspectWaypoint = async (index) => {
+      await evaluate((index) => { const row = document.querySelectorAll('.outline .featselect')[index]; row.click(); row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); }, index);
+      await delay(100);
+    };
+    const savedPath = (id) => saved.paths.find((item) => item.id === id);
+    const undoAvailable = () => evaluate(() => !document.querySelector('[title^="Undo"]').disabled);
+    const linkedGeometry = () => ({ links: saved.pathLinks.map((link) => [link.fromPathId, link.toPathId]), paths: saved.paths.map((item) => [item.id, item.waypoints.map((point) => [point.x, point.y, point.positionLink])]) });
+    const reopenLinked = async () => {
+      const before = linkedGeometry();
+      await win.loadFile(path.resolve('dist-renderer/index.html'));
+      await wait(() => evaluate(() => document.querySelectorAll('.library-pick').length > 0 && !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'linked fixture reopened');
+      await saveCurrent();
+      assert.deepEqual(linkedGeometry(), before, 'Reopening keeps linked geometry unchanged');
+    };
+
+    await openLinkedFixture('shared');
+    const sharedB = structuredClone(savedPath('linked-b'));
+    const sharedStart = structuredClone(savedPath('linked-a').waypoints[0]);
+    await click('[aria-label="Actions for Linked B"]'); await click('.library-menu button', 'Delete'); await saveCurrent();
+    assert.ok(!savedPath('linked-b'));
+    await showPath('linked-a'); await inspectWaypoint(0);
+    const neighborX = Math.round((sharedStart.x + .3) * 100) / 100;
+    await editNumber('X', neighborX);
+    assert.equal(savedPath('linked-a').waypoints[0].x, neighborX);
+    await showPath('unrelated-c');
+    assert.equal(await undoAvailable(), false, 'Undo on an unrelated path cannot restore the deleted neighbor past its newer edit');
+    await keyboardUndo(); await saveCurrent();
+    assert.ok(!savedPath('linked-b'), 'Blocked Undo leaves the deletion');
+    assert.equal(savedPath('linked-a').waypoints[0].x, neighborX, 'Blocked Undo leaves the newer edit');
+    await showPath('linked-a');
+    await click('[title^="Undo"]'); await saveCurrent();
+    assert.deepEqual(savedPath('linked-a').waypoints[0], sharedStart, 'The neighbor edit is undone on its own path first');
+    await showPath('unrelated-c');
+    await click('[title^="Undo"]'); await saveCurrent();
+    assert.deepEqual(savedPath('linked-b'), sharedB, 'Then the deletion restores the path with matching shared geometry');
+    assert.equal(savedPath('linked-b').waypoints[0].x, savedPath('linked-a').waypoints[0].x);
+    await reopenLinked();
+    check('a shared-position deletion cannot be undone past a newer neighbor edit; undoing the edit first restores consistent geometry after reload');
+
+    await openLinkedFixture('endpoint');
+    const endpointLast = savedPath('linked-a').waypoints.length - 1;
+    const endpointStart = structuredClone(savedPath('linked-b').waypoints[0]);
+    assert.deepEqual([endpointStart.x, endpointStart.y], [savedPath('linked-a').waypoints[endpointLast].x, savedPath('linked-a').waypoints[endpointLast].y]);
+    await inspectWaypoint(endpointLast);
+    await click('.shared-waypoint-position button', 'Unlink'); await saveCurrent();
+    assert.deepEqual(saved.pathLinks, [], 'Unlink removes only the endpoint link');
+    await showPath('linked-b'); await inspectWaypoint(0);
+    const unlinkedX = Math.round((endpointStart.x + .3) * 100) / 100;
+    await editNumber('X', unlinkedX);
+    await showPath('linked-a');
+    assert.equal(await undoAvailable(), false, 'Undo on A cannot relink B past its newer edit');
+    await keyboardUndo(); await saveCurrent();
+    assert.deepEqual(saved.pathLinks, []);
+    assert.equal(savedPath('linked-b').waypoints[0].x, unlinkedX);
+    await showPath('linked-b');
+    await click('[title^="Undo"]'); await saveCurrent();
+    assert.deepEqual(savedPath('linked-b').waypoints[0], endpointStart);
+    await showPath('linked-a');
+    await click('[title^="Undo"]'); await saveCurrent();
+    assert.deepEqual(saved.pathLinks.map((link) => [link.fromPathId, link.toPathId]), [['linked-a', 'linked-b']], 'Undo on A restores the endpoint link');
+    assert.deepEqual(savedPath('linked-b').waypoints[0], endpointStart);
+    await click('[title^="Redo"]'); await saveCurrent();
+    assert.deepEqual(saved.pathLinks, [], 'Redo unlinks again');
+    await showPath('linked-b');
+    await click('[title^="Redo"]'); await saveCurrent();
+    assert.equal(savedPath('linked-b').waypoints[0].x, unlinkedX, 'Redo replays the newer edit');
+    await reopenLinked();
+    check('an endpoint unlink cannot be undone past a newer edit to the unlinked path; undo order, redo, and reload stay consistent');
+    saved = sharedVerification;
+    await win.loadFile(path.resolve('dist-renderer/index.html'));
+    await wait(() => evaluate(() => document.querySelector('.library-current-name')?.textContent === 'Opening move' && !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'shared waypoint fixture reopened');
     await evaluate(() => {
       window.__routinePendingCheck = { samples: 0, violations: [] };
       window.__routinePendingObserver = new MutationObserver(() => {
@@ -1019,6 +1108,72 @@ app.whenReady().then(async () => {
       await click('[aria-label="Close step inspector"]'); await click('.library-tabs button', 'Paths');
     }
     check('waypoint badges and long routine names remain readable without hover layout shifts at both supported sizes');
+
+    // Undoing an applied robot profile proposal reverts its own change and keeps later Settings notes.
+    const facing = { directionDeg: 0, requiresTargetFacing: true };
+    saved = { ...corpus, paths: [{ ...structuredClone(source), id: 'profile-path', name: 'Profile path' }], routines: [], pathLinks: [], editor: { activePathId: 'profile-path' },
+      robot: { ...corpus.robot, planning: { notes: 'existing notes', shooter: facing } } };
+    await win.loadFile(path.resolve('dist-renderer/index.html'));
+    await editorReady('robot profile fixture');
+    await evaluate(() => window.bordeauxAPI.__libraryAgent.setAccess(true, 1));
+    // Propose against the settled published context, as the MCP bridge does.
+    let session = null;
+    await wait(async () => { await delay(250); const latest = await evaluate(() => window.bordeauxAPI.__libraryAgent.latestSession()); const settled = latest && session && latest.revision === session.revision; session = latest; return settled; }, 'published agent session');
+    const proposedPlanning = { ...session.project.robot.planning, shooter: { directionDeg: 90, requiresTargetFacing: true } };
+    await evaluate((proposal) => window.bordeauxAPI.__libraryAgent.propose(proposal), {
+      id: 'profile-proposal', operation: 'configureRobot', status: 'ready', createdAt: new Date().toISOString(),
+      baseSessionId: session.sessionId, baseRevision: session.revision, baseActivePathId: session.activePathId,
+      intent: 'Shooter fires to the robot left', summary: ['Shooter direction: 90°'], planning: proposedPlanning,
+    });
+    await wait(() => evaluate(() => !!document.querySelector('.rp-proposal-actions .primary')), 'robot profile proposal in Settings');
+    await pointerClick('.rp-proposal-actions .primary');
+    await wait(() => evaluate(() => document.querySelector('.rp-proposal')?.textContent.includes('Applied as one undoable project change.')), 'applied robot profile');
+    assert.deepEqual(await evaluate(() => window.bordeauxAPI.__libraryAgent.statuses()), [{ id: 'profile-proposal', status: 'applied' }], 'The proposal applies without becoming stale');
+    win.webContents.focus();
+    await pointerClick('.rp-notes');
+    const notesSelection = () => evaluate(() => { const el = document.querySelector('.rp-notes'); return { focused: document.activeElement === el, start: el.selectionStart, end: el.selectionEnd, length: el.value.length }; });
+    assert.equal((await notesSelection()).focused, true, 'The pointer click focuses the Settings notes');
+    // If the select-all shortcut leaves the caret collapsed, use real Backspace presses to clear the
+    // checked fixture notes.
+    await key('a', [process.platform === 'darwin' ? 'meta' : 'control']);
+    let selection = await notesSelection();
+    let notesClearedBy = 'select-all shortcut';
+    if (!(selection.start === 0 && selection.end === selection.length)) {
+      assert.deepEqual(selection, { focused: true, start: selection.length, end: selection.length, length: 'existing notes'.length }, 'The caret is collapsed at the end of the existing notes before deleting');
+      for (let i = 0; i < selection.length; i++) await key('Backspace');
+      selection = await notesSelection();
+      assert.deepEqual(selection, { focused: true, start: 0, end: 0, length: 0 }, 'Backspace clears the existing notes');
+      notesClearedBy = 'Backspace';
+    }
+    await win.webContents.insertText('new operator notes'); await delay(100);
+    assert.equal(await evaluate(() => document.querySelector('.rp-notes').value), 'new operator notes');
+    for (const [width, height] of [[1440, 900], [1100, 720]]) {
+      win.setContentSize(width, height); await delay(100);
+      await evaluate(() => document.querySelector('.rp-notes').scrollIntoView({ block: 'center' }));
+      await fs.writeFile(path.join(output, `settings-notes-edited-${width}.png`), (await win.webContents.capturePage()).toPNG());
+    }
+    assert.equal((await notesSelection()).focused, true, 'Settings notes keep focus through the screenshots');
+    await click('.pageswitch button', 'Editor'); await editorReady('editor after Settings');
+    await keyboardUndo(); await click('[aria-label="Save project"]');
+    assert.deepEqual(saved.robot.planning, { notes: 'new operator notes', shooter: facing }, 'Undo reverts the proposal and keeps the newer Settings notes');
+    await click('[title^="Redo"]'); await click('[aria-label="Save project"]');
+    assert.deepEqual(saved.robot.planning, { notes: 'new operator notes', shooter: { directionDeg: 90, requiresTargetFacing: true } }, 'Redo reapplies only the proposal');
+    await click('[title^="Undo"]'); await click('[aria-label="Save project"]');
+    assert.deepEqual(saved.robot.planning, { notes: 'new operator notes', shooter: facing });
+    await win.loadFile(path.resolve('dist-renderer/index.html'));
+    await editorReady('reopened robot profile');
+    await click('.pageswitch button', 'Settings');
+    await evaluate(() => window.bordeauxAPI.__libraryAgent.setAccess(true, 1));
+    await wait(() => evaluate(() => document.querySelector('.rp-notes')?.value === 'new operator notes'), 'reopened Settings notes');
+    assert.equal(await evaluate(() => document.querySelector('input[aria-label="Shooter direction"]').value), '0', 'The reopened shooter direction is the pre-proposal value');
+    for (const [width, height] of [[1440, 900], [1100, 720]]) {
+      win.setContentSize(width, height); await delay(100);
+      await evaluate(() => document.querySelector('.rp-notes').scrollIntoView({ block: 'center' }));
+      await fs.writeFile(path.join(output, `settings-notes-reopened-${width}.png`), (await win.webContents.capturePage()).toPNG());
+    }
+    await click('.pageswitch button', 'Editor');
+    console.log('Settings notes cleared by ' + notesClearedBy);
+    check('Undo of an applied robot profile proposal keeps newer Settings notes through Redo, save, and reload');
     if (process.env.BORDEAUX_DURATION_PROJECT) {
       saved = JSON.parse(await fs.readFile(process.env.BORDEAUX_DURATION_PROJECT, 'utf8'));
       saved.editor = { activePathId: saved.paths[0].id };
