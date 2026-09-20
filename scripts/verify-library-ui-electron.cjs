@@ -449,15 +449,85 @@ app.whenReady().then(async () => {
     await click('.library-menu button', 'Append path'); await click('[aria-label="Save name"]');
     await click('[aria-label="Save project"]');
     assert.ok(saved.pathLinks.some((link) => link.fromPathId === managed.id));
-    await evaluate(() => { window.confirm = () => true; });
+    const practiceId = saved.pathFolders.find((folder) => folder.name === 'Practice').id;
+    const practiceMembers = saved.paths.filter((item) => item.folderId === practiceId).map((item) => item.id);
+    assert.ok(practiceMembers.length >= 2, 'Practice has several members: ' + JSON.stringify(practiceMembers));
+    await evaluate(() => { window.__confirms = []; window.confirm = (message) => { window.__confirms.push(message); return true; }; });
     await click('[aria-label="Actions for folder Practice"]'); await click('.library-menu button', 'Delete folder');
     await click('[aria-label="Save project"]');
     assert.ok(!saved.pathFolders.some((folder) => folder.name === 'Practice'));
     assert.ok(!saved.paths.find((item) => item.id === managed.id).folderId);
+    await click('[title^="Undo"]'); await click('[aria-label="Save project"]');
+    assert.equal(saved.paths.find((item) => item.id === managed.id).folderId, saved.pathFolders.find((folder) => folder.name === 'Practice')?.id, 'Undo restores the folder and its members');
+    await click('[title^="Redo"]'); await click('[aria-label="Save project"]');
+    assert.ok(!saved.pathFolders.some((folder) => folder.name === 'Practice'));
+    // Library work after the deletion is not journaled; undoing the older deletion must keep it.
+    const moveToFolder = async (name, folderName) => {
+      await click('[aria-label="Actions for ' + name + '"]'); await click('.library-menu button', 'Move or link…');
+      await evaluate((folderName) => {
+        const select = document.querySelector('.library-properties select');
+        select.value = [...select.options].find((option) => option.text === folderName).value;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      }, folderName);
+      await delay(60); await click('[aria-label="Close path properties"]');
+    };
+    const folderReferencesResolve = () => saved.paths.every((item) => !item.folderId || saved.pathFolders.some((folder) => folder.id === item.folderId));
+    await click('[aria-label="New folder"]');
+    await input('.library-rename input', 'Later'); await click('[aria-label="Save name"]');
+    await moveToFolder('Collect second', 'Later');
+    await moveToFolder('Managed path copy', 'Later');
+    await click('[aria-label="Save project"]');
+    const laterId = saved.pathFolders.find((folder) => folder.name === 'Later').id;
+    const geometryBeforeFolderUndo = saved.paths.map((item) => [item.id, item.name, item.waypoints]);
+    const folderUndoChecks = () => {
+      assert.ok(folderReferencesResolve(), 'Every folder membership resolves: ' + JSON.stringify(saved.paths.filter((item) => item.folderId).map((item) => [item.name, item.folderId])));
+      assert.ok(saved.pathFolders.some((folder) => folder.id === laterId), 'A folder created after the deletion remains');
+      assert.equal(saved.paths.find((item) => item.name === 'Collect second').folderId, laterId, 'An unrelated later move remains');
+      assert.equal(saved.paths.find((item) => item.id === managed.id).folderId, laterId, 'A former member moved later keeps its new folder');
+      assert.deepEqual(saved.paths.map((item) => [item.id, item.name, item.waypoints]), geometryBeforeFolderUndo, 'Names and geometry are unchanged');
+    };
+    await click('[title^="Undo"]'); await click('[aria-label="Save project"]');
+    assert.equal(saved.pathFolders.find((folder) => folder.id === practiceId)?.name, 'Practice', 'Undo restores the deleted folder');
+    for (const id of practiceMembers.filter((id) => id !== managed.id)) assert.equal(saved.paths.find((item) => item.id === id).folderId, practiceId, 'Unmoved members rejoin the folder');
+    folderUndoChecks();
+    await click('[title^="Redo"]'); await click('[aria-label="Save project"]');
+    assert.ok(!saved.pathFolders.some((folder) => folder.id === practiceId), 'Redo deletes the folder again');
+    folderUndoChecks();
+    await click('[title^="Undo"]'); await click('[aria-label="Save project"]');
+    const restoredLibrary = structuredClone({ paths: saved.paths, pathFolders: saved.pathFolders });
+    const confirmsBeforeReload = await evaluate(() => window.__confirms);
+    await win.loadFile(path.resolve('dist-renderer/index.html'));
+    await editorReady('library reopened after folder undo');
+    await evaluate((list) => { window.__confirms = list; window.confirm = (message) => { window.__confirms.push(message); return true; }; }, confirmsBeforeReload);
+    await click('[aria-label="Save project"]');
+    assert.deepEqual({ paths: saved.paths, pathFolders: saved.pathFolders }, restoredLibrary, 'Save and reload keep the restored library');
+    folderUndoChecks();
+    check('undoing a folder deletion keeps later folders, moves, names, and geometry, and every membership resolves after reload');
+    const managedOriginal = structuredClone(saved.paths.find((item) => item.name === 'Managed path'));
+    const managedIndex = saved.paths.findIndex((item) => item.id === managedOriginal.id);
     await click('[aria-label="Actions for Managed path"]'); await click('.library-menu button', 'Delete');
     await click('[aria-label="Save project"]');
     assert.ok(!saved.paths.some((item) => item.name === 'Managed path'));
-    check('create, duplicate, move, append/link, folder deletion, and path deletion preserve data');
+    const confirms = await evaluate(() => window.__confirms);
+    assert.equal(confirms.length, 2);
+    assert.ok(confirms.every((message) => message.includes('You can undo this.') && !/cannot be undone/i.test(message)), 'Deletion confirmations describe Undo truthfully: ' + JSON.stringify(confirms));
+    // A newer edit to the visible path is undone before the older deletion; Redo replays both in order.
+    await editorReady('path editor after deletion');
+    const visiblePathId = await activePathId();
+    const beforeVisibleEdit = structuredClone(saved.paths.find((item) => item.id === visiblePathId).waypoints[1]);
+    await nudgeSecondWaypoint(); await click('[aria-label="Save project"]');
+    assert.ok(Math.abs(saved.paths.find((item) => item.id === visiblePathId).waypoints[1].x - beforeVisibleEdit.x - .05) < 1e-6);
+    await click('[title^="Undo"]'); await click('[aria-label="Save project"]');
+    assert.deepEqual(saved.paths.find((item) => item.id === visiblePathId).waypoints[1], beforeVisibleEdit, 'First Undo reverses the newer path edit');
+    assert.ok(!saved.paths.some((item) => item.id === managedOriginal.id), 'The older deletion waits for the next Undo');
+    await click('[title^="Undo"]'); await click('[aria-label="Save project"]');
+    assert.deepEqual(saved.paths[managedIndex], managedOriginal, 'Second Undo restores the deleted path in place');
+    assert.equal(await activePathId(), visiblePathId, 'Restoring another path keeps the visible path');
+    await click('[title^="Redo"]'); await click('[aria-label="Save project"]');
+    assert.ok(!saved.paths.some((item) => item.id === managedOriginal.id), 'Redo deletes the path again');
+    await click('[title^="Redo"]'); await click('[aria-label="Save project"]');
+    assert.ok(Math.abs(saved.paths.find((item) => item.id === visiblePathId).waypoints[1].x - beforeVisibleEdit.x - .05) < 1e-6, 'Redo replays the path edit');
+    check('create, duplicate, move, append/link, and undoable folder and path deletion preserve data in chronological order');
     await click('.library-tabs button', 'Routines'); await click('[data-library-item="routine-a"]');
     const dragRoutine = async (from, to, valid) => {
       const points = await evaluate((from, to) => {
@@ -480,10 +550,27 @@ app.whenReady().then(async () => {
     assert.deepEqual(saved.routines.find((r) => r.id === 'routine-a'), routineBeforeDrag);
     await dragRoutine('step-a', 'step-finish', true);
     assert.equal(saved.routines.find((r) => r.id === 'routine-a').nodes.at(-1).id, 'step-a');
+    const routineAfterDrag = structuredClone(saved.routines.find((r) => r.id === 'routine-a'));
+    // Undo on a path never reaches back into the routine edited before switching.
+    await click('.library-tabs button', 'Paths');
+    await editorReady('path editor after routine edit');
+    const scopedPathId = await activePathId();
+    const beforeScopedEdit = structuredClone(saved.paths.find((item) => item.id === scopedPathId).waypoints[1]);
+    await nudgeSecondWaypoint(); await click('[aria-label="Save project"]');
+    assert.notDeepEqual(saved.paths.find((item) => item.id === scopedPathId).waypoints[1], beforeScopedEdit);
+    await keyboardUndo(); await click('[aria-label="Save project"]');
+    assert.deepEqual(saved.paths.find((item) => item.id === scopedPathId).waypoints[1], beforeScopedEdit, 'First Undo reverses the path edit');
+    await keyboardUndo(); await click('[aria-label="Save project"]');
+    assert.deepEqual(saved.routines.find((r) => r.id === 'routine-a'), routineAfterDrag, 'A second path Undo leaves the routine intact');
+    await click('.library-tabs button', 'Routines'); await click('[data-library-item="routine-a"]');
+    await click('[title^="Undo"]'); await click('[aria-label="Save project"]');
+    assert.deepEqual(saved.routines.find((r) => r.id === 'routine-a'), routineBeforeDrag);
+    await click('[title^="Redo"]'); await click('[aria-label="Save project"]');
+    assert.deepEqual(saved.routines.find((r) => r.id === 'routine-a'), routineAfterDrag, 'Redo restores the routine edit on its own surface');
     await click('[title^="Undo"]'); await click('[aria-label="Save project"]');
     assert.deepEqual(saved.routines.find((r) => r.id === 'routine-a'), routineBeforeDrag);
     await click('.library-tabs button', 'Paths');
-    check('native routine drag rejects cross-branch moves and commits supported sibling moves');
+    check('native routine drag commits supported sibling moves; path and routine Undo stay on their own surfaces');
     for (const [width, height] of [[1440, 900], [1280, 800], [1100, 720]]) {
       win.setContentSize(width, height); await delay(150);
       const geometry = await evaluate(() => {
