@@ -873,14 +873,16 @@ app.whenReady().then(async () => {
     check('interactive planning failure retains the preview, exposes the current error, and recovers through Undo');
 
     const beforeRepair = structuredClone(saved);
+    // Explicit angular limits make heading tracking fail authoritative validation.
+    // Omitted angular limits inherit the path defaults and no longer make this fixture invalid.
     const repairPath = { ...structuredClone(corpus.paths.find((item) => item.id === 'corpus-neutral-slalom')),
-      id: 'repair-path', name: 'Restored path with an invalid local limit', targets: [{ f: .5, deg: 135 }],
-      ranges: [{ f0: .3, f1: .65, anchor: 'param', maxVel: 1.5, maxAccel: 2, maxDecel: 2 }] };
+      id: 'repair-path', name: 'Restored path', targets: [{ f: .5, deg: 135 }],
+      ranges: [{ f0: .3, f1: .65, anchor: 'param', maxAngVel: .01, maxAngAccel: .01 }] };
     saved = { ...corpus, paths: [repairPath], routines: [], pathLinks: [], editor: { activePathId: repairPath.id } };
     await win.loadFile(path.resolve('dist-renderer/index.html'));
     await wait(() => evaluate(() => document.querySelector('.library-current-name')?.textContent.includes('Restored path')), 'restored repair fixture');
     await pointerClick('.optimizer-toggle');
-    await wait(() => evaluate(() => document.querySelector('.optimizer-failure')), 'real final-planning failure');
+    await wait(() => evaluate(() => document.querySelector('.optimizer-failure')?.textContent.includes('Heading tracking could not satisfy the configured angular limits')), 'real final-planning failure');
     assert.equal(await evaluate(() => document.querySelector('.optimizer-main').textContent), 'Edit path');
     await pointerClick('.optimizer-main');
     if (await evaluate(() => [...document.querySelectorAll('.sechead-toggle')].some((el) => el.textContent.includes('Zones') && el.getAttribute('aria-expanded') === 'false'))) { await evaluate(() => [...document.querySelectorAll('.sechead-toggle')].find((el) => el.textContent.includes('Zones')).setAttribute('data-repair-section', '')); await pointerClick('[data-repair-section]'); }
