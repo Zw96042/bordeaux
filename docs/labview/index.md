@@ -4,7 +4,9 @@ Bordeaux authors paths and routines for LabVIEW robot code. Commands come from a
 
 ## Path files
 
-Export a selected path as a `.bdx` binary. The [binary format](binary-format.md) fixes byte order, metadata, trajectory samples, follow sections, command arguments and event scheduling fields. The writer has independent byte-layout tests and synthetic golden fixtures. Eventless paths require no command catalog; commanded paths require saved NI parameter type evidence.
+Export a selected path as a `.bdx` binary. The [binary format](binary-format.md) fixes byte order, metadata, trajectory samples, follow sections, command arguments and event scheduling fields. The writer has independent byte-layout tests and synthetic golden fixtures. Eventless paths require no command catalog; commanded paths require saved NI parameter type evidence. Event records resolve GUI IDs through those descriptors to original command VI basenames for the existing dynamic wrapper dispatcher (`bordeaux-dynamic-wrappers/1`). Old files containing hashed command IDs must be re-exported. Only markers with command invocations produce events; an eventless path runs no event commands.
+
+This export profile supports time markers, optional time repeats, scalar arguments and saved defaults. Conditional/position markers, position-follow sections, automatic path-end cancellation, arrays and clusters are rejected explicitly. Wrappers remain reentrant VIs included by static reference for deployment and resolved dynamically by robot code; Bordeaux requires no catalog VI or filename mapping.
 
 ## Robot code
 
@@ -23,5 +25,7 @@ Direct BDX export is available locally. **Push path** uploads the selected path 
 Set up the robot once and confirm its SSH identity. Subsequent pushes go directly to the selected-file review with the saved robot and directory; no separate connection or trust step is required. **Edit destination** keeps the selection and reuses the known identity if the address and SSH key still match. A different robot or changed key requires identity confirmation. After a failed upload, **Review and retry** prepares current selected paths using the remembered robot. Connection checks report missing required parent directories before trust; only missing descendants inside the allowed upload area are created during upload.
 
 Review lists the exact filenames and destination before sending. Each file is written to a temporary file, read back, then published at its matching filename and read back again. Publication uses an atomic rename when supported, or the selected-file copy fallback described above. Other files are preserved. Multi-path uploads commit each file separately; if a later transfer fails or is canceled, the error reports already verified files and any uncertain replacement. The account must have write access to the destination; Bordeaux does not change robot permissions.
+
+For selecting a complete path and converting BDX field velocities into the legacy swerve coordinate system, see [robot playback integration](robot-playback-integration.md).
 
 “Uploaded and verified” means the selected BDX bytes are stored on the robot. It does not require a Bordeaux receiver, acknowledge runtime compatibility, activate a routine, or start execution. LabVIEW code remains responsible for loading and validating the files. Routine delivery, full-project replacement, and runtime pin/rollback are not part of direct file upload. Routine documents autosave locally; AQU robot execution remains deferred.

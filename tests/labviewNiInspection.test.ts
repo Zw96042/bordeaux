@@ -7,6 +7,8 @@ import { eligibleLabviewLegacySource, inspectLabviewCommands, withCachedLabviewC
 import { discoverLabviewProject } from "../src/electron/labviewProject";
 import { bdxBindingsFromCatalog } from "../src/electron/bdxBindings";
 import { robotInvocationErrors } from "../src/shared/robotCommands";
+import { buildRobotBinary } from "../src/shared/export/robotBinary";
+import { binaryWriterFixture } from "./fixtures/binaryWriterFixture";
 
 // Sanitized shape of NI 2025 _ExportInterface2 output. No private VI binary is included.
 const statusXml = (name: string) => `<Cluster><Name>${name}</Name><NumElts>3</NumElts><String><Name>Name</Name><Val/></String><EW><Name>Status</Name><Choice>Successful</Choice><Choice>Aborted</Choice><Choice>Incomplete</Choice><Val>0</Val></EW><Refnum><Name>notifier out</Name><RefKind>Notifier</RefKind><Val>0x00000000</Val></Refnum></Cluster>`;
@@ -54,6 +56,25 @@ async function cacheFixture() {
 }
 
 describe("NI legacy connector discovery", () => {
+  it("exports newly inspected commands by original basename without any filename registration", () => {
+    for (const file of ["Intake/Commands/Start.vi", "New subsystem/Brand new action.vi"]) {
+      const vi = { ...row(), file, defaults: { Description: "saved text", Setpoint: -0.625 } };
+      const result = decodeLabviewNiInspection(report(vi), "C:\\Robot\\Robot.lvproj", [{ file, target: vi.target }]);
+      expect(result.commands).toHaveLength(1);
+      const command = result.commands[0], f = binaryWriterFixture(false, false);
+      expect(command.id).toMatch(/^labview\.legacy\.[0-9a-f]{24}$/);
+      f.bindings = bdxBindingsFromCatalog({ ...f.bindings.catalog, commands: result.commands });
+      f.path.markers = [{ id: "discovered-event", name: "Independent marker label", f: 1,
+        invocation: { commandId: command.id, arguments: {}, cancelOnPathEnd: false } }];
+      const built = buildRobotBinary(f.project, { kind: "path", id: f.path.id }, f.bindings);
+      const bytes = Buffer.from(built.bytes);
+      expect(bytes.includes(Buffer.from(file.split("/").at(-1)!))).toBe(true);
+      expect(bytes.includes(Buffer.from(command.id))).toBe(false);
+      expect(built.eventCount).toBe(1);
+      expect(built.document.paths[0].events[0].arguments).toEqual({ Description: "saved text", Setpoint: -0.625 });
+    }
+  });
+
   it("recognizes the exact root typedef pair and preserves typed arguments without authorizing execution", () => {
     const result = decode();
     expect(result.commands).toHaveLength(1);

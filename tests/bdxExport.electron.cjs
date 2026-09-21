@@ -72,7 +72,7 @@ app.whenReady().then(async () => {
     await wait(() => !!resolveSave, 'pending native save'); await evaluate(() => window.bordeauxAPI.newProject()); resolveSave({ canceled: false, filePath: path.join(output, 'stale.bdx') });
     await assert.rejects(pending, /project changed during BDX export/); assert.equal(fs.existsSync(path.join(output, 'stale.bdx')), false);
     const bad = structuredClone(fixture); bad.paths[0].markers = [{ id: 'bad', f: .5, name: 'Missing NI binding', invocation: { commandId: 'missing.command', arguments: {} } }];
-    await assert.rejects(evaluate((project, id) => window.bordeauxAPI.exportBdx(project, id), bad, route.id), /saved NI parameter type evidence/);
+    await assert.rejects(evaluate((project, id) => window.bordeauxAPI.exportBdx(project, id), bad, route.id), /command missing.command is missing in the linked LabVIEW project/);
     assert.equal(calls.some((channel) => /^robot:(probe|confirmPairing|inspect|prepare|confirmPush|confirmRetention)/.test(channel)), false);
     fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: true, byteLength: expected.length, checks: ['production menu -> renderer -> preload -> IPC -> worker -> byte writer -> atomic local file', 'selected path only', 'native save cancellation', 'existing file replacement', 'project change while dialog pending rejects', 'missing NI command type evidence rejects', 'no robot transport operations', '1440x900 and 1100x720 captures', 'pointer notice/settings and keyboard Tab/Escape', 'imperial display'], dialogs, calls }, null, 2));
     app.exit(0);

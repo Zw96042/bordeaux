@@ -52,11 +52,16 @@ describe("direct VI binary path", () => {
   });
   it("preserves full samples, separate canonical travel direction, follow sections, schedules and raw NI argument widths", () => {
     const fixture = binaryWriterFixture(true), built = build(fixture), decoded = inspect(built.bytes), path = built.document.paths[0];
-    expect(decoded.strings[0]).toBe(fixture.path.id); expect(decoded.strings[6]).toBe(fixture.bindings.catalog.catalogId);
-    const tangents = buildCanonicalPathState(fixture.path, path.samples).points.map((p) => p.tangentRad);
+    expect(decoded.strings[0]).toBe(fixture.path.id); expect(decoded.strings[6]).toBe("bordeaux-dynamic-wrappers/1");
+    expect(decoded.strings[7]).toBe(fixture.bindings.catalog.catalogHash);
+    const bytes = Buffer.from(built.bytes);
+    expect(bytes.readUInt32BE(16)).toBe(bytes.length - 32);
+    expect(bytes.readUInt32BE(20)).toBe(crc32(bytes.subarray(32)));
+    const tangents = built.travelHeadings;
     expect(decoded.samples).toEqual(path.samples.map((s, i) => [s.t, s.s, s.f, s.x, s.y, s.headingRad, tangents[i], s.velocityMps, s.accelerationMps2, s.angularVelocityRadps, s.curvatureInvM]));
     expect(decoded.follow).toEqual(path.followSections.map((s) => [s.segmentIndex, s.startSample, s.endSample, s.mode === "time" ? 0 : 1, 0]));
-    expect(decoded.events[1].schedule).toEqual([path.events[1].timeS, 0.6, 0.2, -1]); expect(decoded.events[1].trigger).toBe(1);
+    expect(decoded.events[1].schedule).toEqual([path.events[1].timeS, 0.6, 0.2, -1]); expect(decoded.events[1].trigger).toBe(0);
+    expect(decoded.events.map(event => [event.ids[2], event.ids[3], event.cancel])).toEqual([["TestOnly.vi", "", 0], ["TestOnly.vi", "", 0]]);
     expect(decoded.events[0].args.map((a) => a.tag)).toEqual([1, 11, 6, 8, 14, 12]);
     expect(decoded.events[0].args[3].raw.readBigInt64BE()).toBe(9007199254740993n); expect(decoded.events[0].args[4].raw.readUInt16BE()).toBe(1);
     expect(decoded.events[0].args[5].raw.toString()).toBe("Café 🤖");
@@ -67,10 +72,118 @@ describe("direct VI binary path", () => {
     expect(inspect(build(f).bytes).events.map((event) => event.ids[0])).toEqual(["z-first", "a-second"]);
     f.path.markers[0].group = "parallel"; expect(() => build(f)).toThrow(/parallel groups/);
   });
+  it("densifies exports while retaining every source knot, travel direction, event and follow boundary", () => {
+    const f = binaryWriterFixture(true);
+    f.path.waypoints[1].stop = true;
+    f.path.waypoints[1].wait = 0.13;
+    f.path.waypoints[2].stop = true;
+    f.path.waypoints[2].wait = 0.17;
+    const original = trajectory.buildRobotTrajectory(f.project, f.bindings.catalog).document.paths[0];
+    const headings = buildCanonicalPathState(f.path, original.samples).points.map(point => point.tangentRad);
+    const built = build(f), result = built.document.paths[0], decoded = inspect(built.bytes);
+    const indices: number[] = [];
+    let cursor = 0;
+    for (const source of original.samples) {
+      while (result.samples[cursor].t !== source.t) cursor += 1;
+      expect(result.samples[cursor]).toEqual({ ...source, i: cursor });
+      expect(decoded.samples[cursor][6]).toBe(headings[source.i]);
+      indices.push(cursor++);
+    }
+    expect(result.followSections).toEqual(original.followSections.map(section => ({ ...section,
+      startSample: indices[section.startSample], endSample: indices[section.endSample],
+    })));
+    expect(result.events).toEqual(original.events);
+    expect(result.totalTimeS).toBe(original.totalTimeS);
+    expect(result.totalDistanceM).toBe(original.totalDistanceM);
+    expect(result.samples.at(-1)!.t).toBe(original.totalTimeS);
+    expect((result.samples.length - 1) * 0.02).toBeGreaterThanOrEqual(result.totalTimeS);
+    result.samples.slice(1).forEach((row, index) => expect(row.t - result.samples[index].t).toBeLessThanOrEqual(0.020000001));
+  });
   it("requires saved NI evidence for commands and fails explicitly for unsupported compound arguments", () => {
     const f = binaryWriterFixture(); delete f.bindings.parameterTypes["fixture.command"];
     expect(() => build(f)).toThrow(/saved NI parameter type evidence/);
     for (const niType of ["Array", "Cluster", "Variant"]) expect(() => encodeBdxArgument({ niType }, {})).toThrow(/not supported/);
+  });
+  it.each(["Commands/Newly discovered command.vi", "C:\\Robot\\Commands\\Newly discovered command.vi"])("resolves a hashed GUI ID using inspected filename %s without changing the project", file => {
+    const f = binaryWriterFixture();
+    const command = f.bindings.catalog.commands[0];
+    command.id = "labview.legacy.0123456789abcdef01234567";
+    command.labviewConnector!.file = file;
+    command.label = "Command label is not its filename";
+    command.member = "NotTheInspectedFile.vi";
+    f.bindings = bdxBindingsFromCatalog(f.bindings.catalog);
+    f.path.markers = [f.path.markers[0]];
+    f.path.markers[0].name = "Marker label is also different";
+    f.path.markers[0].invocation!.commandId = command.id;
+    f.path.markers[0].schedule!.conditionId = "";
+    const before = structuredClone(f.project), built = build(f), decoded = inspect(built.bytes);
+    expect(decoded.events).toHaveLength(1);
+    expect(decoded.events[0].ids).toEqual([f.path.markers[0].id, "Marker label is also different", "Newly discovered command.vi", ""]);
+    expect(built.document.paths[0].events[0].commandId).toBe(command.id);
+    expect(f.project).toEqual(before);
+  });
+  it("emits no events for a markerless path even with inspected commands", () => {
+    const f = binaryWriterFixture(false, false), decoded = inspect(build(f).bytes);
+    expect(f.bindings.catalog.commands.length).toBeGreaterThan(0);
+    expect(decoded.events).toEqual([]);
+    expect(decoded.strings.slice(6)).toEqual(["", ""]);
+  });
+  it("materializes saved optional defaults, preserves overrides and rejects missing required arguments", () => {
+    const f = binaryWriterFixture(), command = f.bindings.catalog.commands[0];
+    const defaults = { enabled: false, power: -0.375, count: -7, sequence: "-9007199254740993", mode: "Idle", label: "saved default" };
+    for (const parameter of command.parameters) parameter.defaultValue = defaults[parameter.name as keyof typeof defaults];
+    f.path.markers[0].invocation!.arguments = { power: -1.25 };
+    f.bindings = bdxBindingsFromCatalog(f.bindings.catalog);
+    // Exercise SGL through the event writer as well as the primitive encoder.
+    f.bindings.parameterTypes[command.id].power.niType = "SGL";
+    const event = inspect(build(f).bytes).events[0];
+    expect(event.args.map(a => [a.key, a.tag, a.raw.toString("hex")])).toEqual([
+      ["enabled", 1, "00"], ["power", 10, "bfa00000"], ["count", 6, "fffffff9"],
+      ["sequence", 8, "ffdfffffffffffff"], ["mode", 14, "0000"], ["label", 12, Buffer.from(defaults.label).toString("hex")],
+    ]);
+    delete command.parameters.find(p => p.name === "count")!.defaultValue;
+    expect(() => build(f)).toThrow(/count is required/);
+  });
+  it("retains repeated and endpoint event IDs, timing, repeat bounds and cancellation settings", () => {
+    const f = binaryWriterFixture();
+    f.path.markers[0].f = 0;
+    f.path.markers[0].schedule = { trigger: "time", repeatEveryS: 0.125, endTimeS: 0.5 };
+    f.path.markers[1].f = 1;
+    const built = build(f), events = inspect(built.bytes).events;
+    expect(events.map(e => e.ids[0])).toEqual(f.path.markers.map(m => m.id));
+    expect(events[0].schedule).toEqual([0, 0, 0.125, 0.5]);
+    expect(events[1].schedule).toEqual([built.document.paths[0].totalTimeS, 1, 0.2, -1]);
+    expect(events.map(e => [e.trigger, e.cancel])).toEqual([[0, 0], [0, 0]]);
+  });
+  it("rejects missing, duplicate and colliding inspected command identities", () => {
+    const missing = binaryWriterFixture(); missing.bindings.catalog.commands = [];
+    expect(() => build(missing)).toThrow(/fixture.command.*missing.*linked LabVIEW/);
+    const duplicate = binaryWriterFixture(); duplicate.bindings.catalog.commands.push(structuredClone(duplicate.bindings.catalog.commands[0]));
+    expect(() => build(duplicate)).toThrow(/fixture.command.*ambiguous/);
+    const collision = binaryWriterFixture(), other = structuredClone(collision.bindings.catalog.commands[0]);
+    other.id = "another.command"; other.labviewConnector!.file = "Other/testonly.vi";
+    collision.bindings.catalog.commands.push(other);
+    expect(() => build(collision)).toThrow(/ambiguous runtime VI basename TestOnly.vi/);
+    for (const file of ["", "Commands/", "NotAVI.txt"]) {
+      const f = binaryWriterFixture(); f.bindings.catalog.commands[0].labviewConnector!.file = file;
+      expect(() => build(f)).toThrow(/no inspected original VI filename/);
+    }
+    const uninspected = binaryWriterFixture(); delete uninspected.bindings.catalog.commands[0].labviewConnector;
+    expect(() => build(uninspected)).toThrow(/no inspected original VI filename/);
+  });
+  it("rejects unsupported robot settings and compound parameters at export", () => {
+    const condition = binaryWriterFixture(); condition.path.markers[0].schedule!.conditionId = "fixture.ready";
+    expect(() => build(condition)).toThrow(/conditional markers are not supported/);
+    const position = binaryWriterFixture(); position.path.markers[0].schedule!.trigger = "position";
+    expect(() => build(position)).toThrow(/only time-triggered/);
+    const cancel = binaryWriterFixture(); cancel.path.markers[0].invocation!.cancelOnPathEnd = true;
+    expect(() => build(cancel)).toThrow(/CancelOnPathEnd must be false/);
+    const follow = binaryWriterFixture(false, false); follow.path.followMode = "position";
+    expect(() => build(follow)).toThrow(/position-follow sections are not supported/);
+    for (const niType of ["Array", "Cluster"]) {
+      const f = binaryWriterFixture(); f.bindings.parameterTypes["fixture.command"].power.niType = niType;
+      expect(() => build(f)).toThrow(new RegExp(`NI ${niType} arguments are not supported`));
+    }
   });
   it("encodes every primitive NI representation exactly and rejects overflow/lossy integers", () => {
     const cases: Array<[string, unknown, string]> = [["I8", -128, "80"], ["U8", 255, "ff"], ["I16", -32768, "8000"], ["U16", 65535, "ffff"], ["I32", -2147483648, "80000000"], ["U32", "4294967295", "ffffffff"], ["I64", "-9223372036854775808", "8000000000000000"], ["U64", "18446744073709551615", "ffffffffffffffff"], ["SGL", 1.5, "3fc00000"], ["DBL", -0, "8000000000000000"], ["Boolean", false, "00"], ["String", "a\0b", "610062"]];

@@ -8,7 +8,7 @@ export function binaryWriterFixture(curved = false, withEvents = true) {
   path.id = curved ? "fixture-curve" : "fixture-straight";
   if (curved) {
     path.waypoints = buildWaypoints([{ x: 2.2, y: 4, theta: 90, segType: "bezier" }, { x: 3.5, y: 5, theta: 0, segType: "bezier" }, { x: 5, y: 4, theta: -90 }]);
-    path.followMode = "position"; path.waypoints[0].segmentFollowMode = "time";
+    path.followMode = "time"; path.waypoints[0].segmentFollowMode = "time";
   }
   const declaration = { schemaVersion: "bordeaux-labview-catalog/1", catalogId: "test-only.binary-fixtures", commands: [{
     id: "fixture.command", label: "Typed command fixture", vi: "TestOnly.vi", parameters: [
@@ -23,9 +23,9 @@ export function binaryWriterFixture(curved = false, withEvents = true) {
       labviewConnector: { labviewVersion: "TEST ONLY", applicationContext: "My Computer", target: "Synthetic test", file: "TestOnly.vi",
         terminalNumbers: names.map((_, i) => i), directions: names.map(() => 0), requirements: names.map(() => 1), captions: names,
         typeXml: names.map((name, i) => `<${types[i]}><Name>${name}</Name>${types[i] === "EW" ? "<Choice>Idle</Choice><Choice>Active</Choice>" : ""}</${types[i]}>`), extendedInfo: [], defaults: {} } })) });
-  if (withEvents) path.markers = [0.2, 0.6].map((f, index) => ({ id: `fixture-event-${index}`, name: index ? "Position event" : "Timed event", f, group: "sequential",
-    invocation: { commandId: "fixture.command", arguments: { enabled: true, power: 0.125, count: -12, sequence: "9007199254740993", mode: "Active", label: "Café 🤖" }, cancelOnPathEnd: true },
-    schedule: index ? { trigger: "position", conditionId: "fixture.ready", repeatEveryS: 0.2 } : { trigger: "time" } }));
+  if (withEvents) path.markers = [0.2, 0.6].map((f, index) => ({ id: `fixture-event-${index}`, name: index ? "Repeated event" : "Timed event", f, group: "sequential",
+    invocation: { commandId: "fixture.command", arguments: { enabled: true, power: 0.125, count: -12, sequence: "9007199254740993", mode: "Active", label: "Café 🤖" }, cancelOnPathEnd: false },
+    schedule: index ? { trigger: "time", repeatEveryS: 0.2 } : { trigger: "time" } }));
   project.paths = [path]; project.routines = [{ id: "unrelated-routine", name: "Unrelated draft", nodes: [] }]; project.activeRoutineId = "unrelated-routine"; project.editor = { activePathId: path.id };
   return { project, path, bindings };
 }

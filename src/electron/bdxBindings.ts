@@ -25,7 +25,8 @@ export function bdxBindingsFromCatalog(catalog: RobotCommandCatalog | null): Bin
     types[command.id] = parameters;
     return { id: command.id, target: raw.target, file: raw.file, parameters: command.parameters.filter((item) => item.role === "argument").map((parameter) => ({ name: parameter.name, type: parameters[parameter.name], schema: parameter.schema, required: parameter.defaultValue === undefined, defaultValue: parameter.defaultValue })) };
   });
-  // This stable authoring identity is also the pure-data input to NI resolver code generation.
+  // Preserve the inspected type hash as authoring provenance. The binary writer supplies
+  // the dynamic wrapper protocol identity separately; no generated resolver is required.
   // Absolute inspection-machine paths, timestamps and execution claims are deliberately absent.
   const definitionBytes = Buffer.from(JSON.stringify({ schema: "bordeaux-ni-command-types/1", commands: definitions }));
   const catalogId = definitions.length ? "bordeaux-ni-command-types/1" : "";

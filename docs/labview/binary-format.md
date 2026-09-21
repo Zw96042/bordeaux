@@ -18,7 +18,7 @@ All numbers are big-endian, no alignment/padding. DBL is finite IEEE754 binary64
 
 Limits: payload ≤16,777,216 bytes; metadata ≤65,536; samples 2..100,000; follow sections 1..4,096; events 0..2,000; arguments/event 0..64. IDs/catalog hashes/field revisions ≤256 UTF-8 bytes; display names ≤1,024; string argument ≤65,536. Check counts and remaining bytes BEFORE allocation/indexing; use subtraction (`needed <= remaining`) or wider arithmetic, never unchecked U32 multiplication/addition. Every subsection must consume exactly its declared bytes. Reject trailing bytes, duplicate event IDs, duplicate argument keys, unsupported flags/tags/modes and truncated reads. Header/sample/follow/event bounds are reader limits, not robot motion limits.
 
-eventId, commandId and argumentKey are nonblank, valid UTF-8, NUL-free and ≤256 bytes. conditionId is either empty or has the same ID constraints. Names are display-only; the current app requires nonblank path/event display names. Preserve identifiers exactly, without case folding or Unicode normalization.
+eventId, runtime command VI basename and argumentKey are nonblank, valid UTF-8, NUL-free and ≤256 bytes. conditionId is either empty or has the same ID constraints. Names are display-only; the current app requires nonblank path/event display names. Preserve identifiers exactly, without case folding or Unicode normalization.
 
 ## Header — exactly 32 bytes
 
@@ -52,7 +52,7 @@ U32 `metadataBytes`, then these fields exactly:
 | 10 | U16 | `reserved=0` |
 | 11–15 | DBL each | `totalTimeS`, `totalDistanceM`, `robotWidthM`, `robotLengthM`, `robotMaxSpeedMps` |
 
-The app writes both catalog strings empty when eventCount=0. Otherwise catalogId is `bordeaux-ni-command-types/1` and catalogHash is bare lowercase SHA256 of the exact UTF-8 compact `definitionJson` returned by `bdxBindingsFromCatalog` (no BOM or trailing newline). Its ordered shape is `{schema:"bordeaux-ni-command-types/1",commands:[...]}`. Commands with saved raw NI connector evidence are sorted by stable ID. Each entry has `id,target,file,parameters`, in that order. Argument parameters preserve inspected order and contain `name,type:{niType,choices?},schema,required,defaultValue?`; undefined properties are omitted by JSON.stringify. This is a pure definition handoff for generating real resolver constants, not an installed runtime manifest or assertion of NI execution readiness. The actual compiled robot resolver must match it before commanded execution. Path/field/planner identifiers are nonblank. Time ≥0, distance ≥0, robot dimensions/max speed >0. Robot metadata is comparison information, never configuration authority; it is not a complete robot configuration (height/footprint/all limits omitted). Robot-code preflight compares the compiled team's known configuration and limits independently. An authored mismatch rejects motion even when CRC matches.
+The app writes both catalog strings empty when eventCount=0. Otherwise `commandCatalogId` is the runtime protocol identity `bordeaux-dynamic-wrappers/1`. `commandCatalogHash` remains provenance: bare lowercase SHA256 of the exact UTF-8 compact `definitionJson` returned by `bdxBindingsFromCatalog` (no BOM or trailing newline). Its ordered shape is `{schema:"bordeaux-ni-command-types/1",commands:[...]}`. Commands with saved raw NI connector evidence are sorted by stable ID. Each entry has `id,target,file,parameters`, in that order. Argument parameters preserve inspected order and contain `name,type:{niType,choices?},schema,required,defaultValue?`; undefined properties are omitted by JSON.stringify. This hash is not a dispatcher identity or runtime readiness assertion. Dynamic wrapper dispatch requires no generated catalog VI, hardcoded command list, or manually maintained filename mapping; the actual loaded wrapper controls validate the supplied parameters. Path/field/planner identifiers are nonblank. Time ≥0, distance ≥0, robot dimensions/max speed >0. Robot metadata is comparison information, never configuration authority; it is not a complete robot configuration (height/footprint/all limits omitted). Robot-code preflight compares the compiled team's known configuration and limits independently. An authored mismatch rejects motion even when CRC matches.
 
 Units are fixed by major version: field x/y/distance meters, time seconds, headings radians CCW, speed m/s, acceleration m/s², angular velocity rad/s, curvature 1/m. XY origin/axis orientation is the exact `coordinateSchemaId`, not an invented extra rotation. Reader requires a compiled known field ID/revision/schema mapping. Samples remain in that canonical field frame; NI applies the selected alliance and team conversion once in `BDX To Auto Data.vi`. Unknown/invalid alliance or unverified transform rejects preflight; no automatic pose reset from file. App must not silently bake an alliance flip into this version. Final team mapping remains a diagram-verification item, separate from these bytes.
 
@@ -68,13 +68,15 @@ Require finite fields; t[0]=0 and nondecreasing t; s[0]=0 and nondecreasing s; 0
 
 Equal-time samples must have equivalent s/f/pose and dynamics using that same tolerance. Preserve them: boundedly advance across equal-time indexes before interpolation, without dividing by zero, changing event times or dropping follow-section boundaries. If totalTime=0, every sample must have exactly zero speed and angular velocity, s equivalent to zero, and x/y/robot heading equivalent to the first sample. Small planner roundoff in position and distance is permitted by the tolerance; it does not imply motion.
 
-The writer obtains travel heading from the existing `buildCanonicalPathState(selectedPath, samples).points[].tangentRad`, preserving the planner's stationary/jiggle and geometry rules. It does not copy robot heading into travel heading or use a new adjacent-unit-vector average. The reader consumes the stored travel heading directly; at zero speed its translation contribution is zero. Test turn-only, wait-only, zero-duration stationary, jiggle/reverse, curved and endpoint samples against actual app output.
+The writer obtains travel heading from the existing `buildCanonicalPathState(selectedPath, samples).points[].tangentRad` on the original planner samples, preserving the planner's stationary/jiggle and geometry rules. It then subdivides intervals longer than 20 ms, retaining every original sample and exact final timestamp. Inserted scalar fields use linear time interpolation; headings use shortest-arc interpolation. Travel headings are interpolated from the original canonical values, not recomputed from the denser geometry. Follow-section indices are remapped; event times and path totals are unchanged. Expansion exceeding 100,000 samples is rejected before allocating the expanded array.
+
+These remain **timestamped samples, not a fixed 20 ms row table**. Retaining all velocity corners preserves the velocity-time area, including triangular profiles whose peaks fall between control ticks. Consumers must interpolate by elapsed time and finish at the terminal timestamp; never infer duration from sample count. The reader consumes stored travel heading directly; at zero speed its translation contribution is zero. Test turn-only, wait-only, zero-duration stationary, jiggle/reverse, curved and endpoint samples against actual app output.
 
 ### 3. Follow sections
 
 U32 `followCount`; each record is exactly 16 bytes: U32 `segmentIndex`, U32 `startSample`, U32 `endSample`, U16 `mode` (0=time, 1=position), U16 reserved=0.
 
-Indices are inclusive. Require start≤end<sampleCount, first start=0, last end=sampleCount−1, and each next start=previous end (shared boundary). Preserve exporter ordering and same-s departure/arrival time sections; allow zero-span sections and advance through them once without an infinite loop. Repeated segmentIndex is valid for stationary/time splits. Position following and position events require a verified measured-pose implementation; reader can store them but preflight rejects until the NI branch exists and passes fixtures. Never reinterpret mode 1 as time mode.
+Indices are inclusive. Require start≤end<sampleCount, first start=0, last end=sampleCount−1, and each next start=previous end (shared boundary). Preserve exporter ordering and same-s departure/arrival time sections; allow zero-span sections and advance through them once without an infinite loop. Repeated segmentIndex is valid for stationary/time splits. The current dynamic wrapper integration does not support position following or position-triggered events; the exporter rejects both, including position-follow sections on eventless paths. Mode 1 remains reserved in the layout. Never reinterpret mode 1 as time mode.
 
 ### 4. Command events
 
@@ -82,7 +84,7 @@ U32 `eventCount`; each event is U32 `eventBytes`, then:
 
 | Order | Type | Field |
 |---:|---|---|
-| 1–4 | Text each | eventId, displayName, commandId, conditionId (empty means unconditional) |
+| 1–4 | Text each | eventId, displayName, runtime command VI basename, conditionId (empty means unconditional) |
 | 5–8 | DBL each | timeS, fraction, repeatEveryS, endTimeS |
 | 9 | U8 | trigger: 0=time, 1=measured position |
 | 10 | U8 | cancelOnPathEnd Boolean |
@@ -90,7 +92,11 @@ U32 `eventCount`; each event is U32 `eventBytes`, then:
 | 12 | U32 | argumentCount |
 | 13 | records | argumentCount argument records below |
 
-timeS in [0,totalTime], fraction in [0,1]. repeatEveryS=0 means once, otherwise >0. endTimeS=−1 means absent, otherwise in [timeS,totalTime]. conditionId resolves only to an actually implemented compiled NI predicate; unknown/unverified conditions reject before drive. For equal due times preserve original event array order. Event IDs unique; repeats use a separate occurrence counter, not modified IDs.
+timeS in [0,totalTime], fraction in [0,1]. repeatEveryS=0 means once, otherwise >0. endTimeS=−1 means absent, otherwise in [timeS,totalTime]. The current exporter requires an empty conditionId, trigger=0 and cancelOnPathEnd=false; conditional markers, position triggers and automatic path-end cancellation are rejected before writing. For equal due times preserve original event array order. Event IDs unique; repeats use a separate occurrence counter, not modified IDs.
+
+The third identity string is the **original command VI basename, including `.vi`**, resolved from the selected command's saved NI connector descriptor (`labviewConnector.file`) in the linked project. For example, a GUI ID `labview.legacy.<hash>` inspected at `Commands/Start Intake.vi` exports `Start Intake.vi`; the robot derives `Start Intake_wrapper.vi`. Never export the GUI ID, marker label, wrapper name or absolute inspection path. Missing/duplicate IDs, absent filename evidence and ambiguous basenames (including case-only collisions across folders/targets) reject export. GUI IDs and saved-project references remain unchanged. Only invoked event markers become event records; available commands are never emitted as events. Preparation resolves commands without executing them.
+
+Existing exports containing hashed IDs require re-exporting. An eventless file such as the previous `NewPath.bdx` sample cannot validate event support. Re-exported event fixtures must still be checked with the team's reader, preparation and dispatcher in a separately authorized robot test; application byte tests do not verify hardware execution.
 
 Each argument: Text `argumentKey`, U16 `typeTag`, U16 reserved=0, U32 `valueBytes`, then that many bytes. Primitive tags:
 
@@ -105,13 +111,15 @@ Each argument: Text `argumentKey`, U16 `typeTag`, U16 reserved=0, U32 `valueByte
 | 12 | UTF-8 string | raw UTF-8 `valueBytes`; no second length |
 | 13,14,15 | enum with U8,U16,U32 representation | 1,2,4 |
 
-Enum payload is the exact ordinal in the compiled command's inspected enum; validate ordinal and labels against authoring evidence/catalog before writing. Type tags do not define a connector or authorize a cast. Robot command-specific case checks key/tag/required values against its actual wired types, creates exact typed values and converts to in-memory Variant only when required by existing indexed-control infrastructure. No file-supplied VI paths, control indices, connector indices, defaults, refnums or serialized Variant descriptors.
+Enum payload is the exact ordinal in the selected command's inspected enum; validate ordinal and labels against authoring evidence/catalog before writing. Type tags do not define a connector or authorize a cast. The dynamic dispatcher checks key/tag/required values against the actual loaded wrapper controls, creates exact typed values and converts to in-memory Variant only when required by existing indexed-control infrastructure. No file-supplied VI paths, control indices, connector indices, defaults, refnums or serialized Variant descriptors.
 
 The app materializes actual inspected optional defaults into each event. If a valid file omits an optional argument, the robot resolver must still use its explicit compiled default **on every invocation**, never previous clone/control values. Omitted required, unknown/duplicate keys, tag mismatch, range/enum mismatch reject preflight. Exact U64/I64 values never pass through DBL. Null, arrays, clusters, maps, objects, opaque values and byte strings are **not supported by this small v1 argument format**: reject export/runtime preflight explicitly. A needed compound parameter must get a concrete command-specific adapter/contract before support is advertised; do not add a generic recursive serialization framework.
 
 Marker group is not stored. Missing group or `sequential` is the existing standalone marker default and is accepted without introducing a new execution group. Explicit `parallel` or `deadline` groups are rejected by export until their semantics have a concrete contract. This concerns standalone path events only.
 
 ## Runtime semantics carried by these bytes
+
+The current export profile supports time-triggered events with optional time repeats and end times, empty condition IDs and `cancelOnPathEnd=false`. Conditional/position behavior and path-end cancellation described below are broader reserved semantics, not capabilities enabled by this exporter. Array and cluster arguments are rejected; no binary extensions are introduced.
 
 The NI event step uses one monotonic path clock and monotonic measured fraction. Time events become eligible at timeS; position events at measured f≥fraction. Nonrepeating events whose condition is false remain pending until true or expiry. Expiry comparisons allow 1e-9 seconds; equality remains eligible.
 

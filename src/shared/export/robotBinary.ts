@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import type { BordeauxProject, RobotCommandCatalog, TrajectorySample } from "../types";
+import type { BordeauxProject, RobotCommandCatalog, RobotCommandDescriptor, TrajectorySample } from "../types";
 import { buildRobotTrajectory, type RobotTrajectoryDocument } from "./robotTrajectory";
 import { buildCanonicalPathState } from "../planners/pathState";
 import { BinaryWriter, encodeBinaryEnvelope, utf8, type BinaryKind } from "./binaryCodec";
+import { densifyRobotSamples } from "./robotSamples";
 
 export interface BinarySelection { kind: BinaryKind; id: string }
 export interface BdxParameterType { niType: string; choices?: string[] }
@@ -18,6 +19,22 @@ const bounded = (value: number, min: number, max: number, label: string) => {
 const count = (value: number, min: number, max: number, label: string) => { bounded(value, min, max, label); if (!Number.isInteger(value)) throw new Error(`${label} must be integral`); };
 const close = (a: number, b: number) => Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(b));
 const sampleFields: Array<keyof TrajectorySample> = ["t", "s", "f", "x", "y", "headingRad", "velocityMps", "accelerationMps2", "angularVelocityRadps", "curvatureInvM"];
+const DYNAMIC_WRAPPER_PROTOCOL = "bordeaux-dynamic-wrappers/1";
+
+// Inspection paths are portable Windows or POSIX paths; never derive identity from labels.
+const commandBasename = (command: RobotCommandDescriptor) => command.labviewConnector?.file.split(/[\\/]/).at(-1) ?? "";
+
+function resolveCommand(catalog: RobotCommandCatalog, commandId: string, eventName: string) {
+  const matches = catalog.commands.filter((command) => command.id === commandId);
+  const context = `Event ${eventName}: command ${commandId}`;
+  if (matches.length !== 1) throw new Error(`${context} is ${matches.length ? "ambiguous" : "missing"} in the linked LabVIEW project. Inspect commands before exporting BDX.`);
+  const command = matches[0], name = commandBasename(command);
+  if (!/^.+\.vi$/i.test(name)) throw new Error(`${context} has no inspected original VI filename. Inspect the linked LabVIEW project before exporting BDX.`);
+  // The runtime receives only a basename, so distinct folders/targets cannot disambiguate it.
+  const collisions = catalog.commands.filter((candidate) => commandBasename(candidate).toLowerCase() === name.toLowerCase());
+  if (collisions.length !== 1) throw new Error(`${context} has ambiguous runtime VI basename ${name}: ${collisions.map((candidate) => `${candidate.id} (${candidate.labviewConnector!.target}/${candidate.labviewConnector!.file})`).join(", ")}`);
+  return { command, name };
+}
 
 export function encodeBdxArgument(type: BdxParameterType, value: unknown): { tag: number; bytes: Buffer } {
   const writer = new BinaryWriter(65536);
@@ -56,15 +73,25 @@ export function buildRobotBinary(project: BordeauxProject, selection: BinarySele
   const { folderId: _folderId, ...selected } = matches[0];
   if (selected.exportable === false) throw new Error(`${selected.name} is not exportable`);
   if (project.robot.drive !== "swerve") throw new Error("BDX v1 currently supports swerve paths only");
+  const commands = new Map<string, ReturnType<typeof resolveCommand>>();
   for (const marker of selected.markers) {
     if (marker.group && marker.group !== "sequential") throw new Error(`Event ${marker.name}: ${marker.group} groups are not supported by standalone BDX`);
+    if (marker.schedule?.trigger && marker.schedule.trigger !== "time") throw new Error(`Event ${marker.name}: only time-triggered markers are supported by ${DYNAMIC_WRAPPER_PROTOCOL}`);
+    if (marker.schedule?.conditionId) throw new Error(`Event ${marker.name}: conditional markers are not supported by ${DYNAMIC_WRAPPER_PROTOCOL}`);
+    if (marker.invocation?.cancelOnPathEnd) throw new Error(`Event ${marker.name}: CancelOnPathEnd must be false; automatic command cancellation is not supported by ${DYNAMIC_WRAPPER_PROTOCOL}`);
+    if (marker.invocation && !commands.has(marker.invocation.commandId)) commands.set(marker.invocation.commandId, resolveCommand(bindings.catalog, marker.invocation.commandId, marker.name));
     if (marker.invocation && !bindings.parameterTypes[marker.invocation.commandId]) throw new Error(`Command ${marker.invocation.commandId} has no saved NI parameter type evidence. Inspect the linked LabVIEW project before exporting BDX.`);
   }
   // Materialize only actual inspected defaults; missing required values remain errors.
   selected.markers = selected.markers.map((marker) => {
+    // Empty wire condition IDs mean unconditional; generic authoring validation uses absence.
+    if (marker.schedule?.conditionId === "") {
+      const { conditionId: _conditionId, ...schedule } = marker.schedule;
+      marker = { ...marker, schedule };
+    }
     if (!marker.invocation) return marker;
-    const command = bindings.catalog.commands.find((item) => item.id === marker.invocation!.commandId);
-    const defaults = Object.fromEntries((command?.parameters ?? []).filter((parameter) => parameter.role === "argument" && parameter.defaultValue !== undefined).map((parameter) => [parameter.name, parameter.defaultValue!]));
+    const { command } = commands.get(marker.invocation.commandId)!;
+    const defaults = Object.fromEntries(command.parameters.filter((parameter) => parameter.role === "argument" && parameter.defaultValue !== undefined).map((parameter) => [parameter.name, parameter.defaultValue!]));
     return { ...marker, invocation: { ...marker.invocation, arguments: { ...defaults, ...marker.invocation.arguments } } };
   });
   const planningRoutine = { id: "binary-path-only", name: "Path only", nodes: [] };
@@ -72,18 +99,24 @@ export function buildRobotBinary(project: BordeauxProject, selection: BinarySele
   const built = buildRobotTrajectory(scoped, bindings.catalog), document = built.document;
   document.routine = null;
   const path = document.paths[0];
+  if (path.followSections.some((section) => section.mode !== "time")) throw new Error(`Path ${path.name}: position-follow sections are not supported by ${DYNAMIC_WRAPPER_PROTOCOL}`);
+  const sampled = densifyRobotSamples(path.samples, buildCanonicalPathState(selected, path.samples).points.map((point) => point.tangentRad));
+  path.samples = sampled.samples;
+  path.followSections = path.followSections.map((section) => ({ ...section,
+    startSample: sampled.sourceIndices[section.startSample], endSample: sampled.sourceIndices[section.endSample],
+  }));
+  const travelHeadings = sampled.travelHeadings;
   count(path.samples.length, 2, 100000, "Sample count"); count(path.events.length, 0, 2000, "Event count"); count(path.followSections.length, 1, 4096, "Follow section count");
   bounded(path.totalTimeS, 0, Number.MAX_VALUE, "Path duration"); bounded(path.totalDistanceM, 0, Number.MAX_VALUE, "Path distance");
   for (const value of [document.robot.widthM, document.robot.lengthM, document.robot.maxSpeedMps]) if (!(value > 0 && Number.isFinite(value))) throw new Error("BDX robot dimensions and maximum speed must be positive and finite");
   const metadata = new BinaryWriter(65536);
   metadata.text(path.id, "Path ID"); metadata.text(path.name, "Path name", 1024); metadata.text(path.planner, "Planner ID");
   metadata.text(document.field.id, "Field ID"); metadata.text(document.field.revision, "Field revision"); metadata.text(document.field.coordinateSchemaId, "Coordinate schema");
-  metadata.text(path.events.length ? bindings.catalog.catalogId ?? "" : "", "NI catalog ID", 256, !path.events.length);
+  metadata.text(path.events.length ? DYNAMIC_WRAPPER_PROTOCOL : "", "Command protocol ID", 256, !path.events.length);
   metadata.text(path.events.length ? bindings.catalog.catalogHash ?? "" : "", "NI catalog hash", 256, !path.events.length);
   metadata.integer(0, 2); metadata.integer(0, 2);
   for (const value of [path.totalTimeS, path.totalDistanceM, document.robot.widthM, document.robot.lengthM, document.robot.maxSpeedMps]) metadata.dbl(value);
   const payload = new BinaryWriter(); payload.section(metadata); payload.integer(path.samples.length, 4);
-  const travelHeadings = buildCanonicalPathState(selected, path.samples).points.map((point) => point.tangentRad);
   path.samples.forEach((sample, index) => {
     if (sample.i !== index || sampleFields.some((key) => !Number.isFinite(sample[key]))) throw new Error("BDX sample values/indexes are invalid");
     bounded(sample.f, 0, 1, "Sample fraction"); bounded(sample.velocityMps, 0, document.robot.maxSpeedMps + 1e-9, "Sample speed");
@@ -109,7 +142,9 @@ export function buildRobotBinary(project: BordeauxProject, selection: BinarySele
     if (event.repeatEveryS !== undefined && !(event.repeatEveryS > 0 && Number.isFinite(event.repeatEveryS))) throw new Error("Event repeat interval must be positive");
     if (event.endTimeS !== undefined) bounded(event.endTimeS, event.timeS, path.totalTimeS, "Event end time");
     const output = new BinaryWriter();
-    output.text(event.eventId, "Event ID"); output.text(event.name, "Event name", 1024); output.text(event.commandId, "Command ID"); output.text(event.conditionId ?? "", "Condition ID", 256, true);
+    const resolved = commands.get(event.commandId);
+    if (!resolved) throw new Error(`Event ${event.name}: command ${event.commandId} has no resolved inspected VI`);
+    output.text(event.eventId, "Event ID"); output.text(event.name, "Event name", 1024); output.text(resolved.name, "Runtime command VI basename"); output.text(event.conditionId ?? "", "Condition ID", 256, true);
     for (const value of [event.timeS, event.fraction, event.repeatEveryS ?? 0, event.endTimeS ?? -1]) output.dbl(value);
     output.integer(event.trigger === "time" ? 0 : 1, 1); output.integer(event.cancelOnPathEnd ? 1 : 0, 1); output.integer(0, 2);
     const args = Object.entries(event.arguments); count(args.length, 0, 64, "Event argument count"); output.integer(args.length, 4);
