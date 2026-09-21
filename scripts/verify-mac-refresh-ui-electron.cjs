@@ -74,7 +74,7 @@ app.whenReady().then(async () => {
     win.webContents.on('console-message', (details) => { if (details.level === 'error' && !details.message.startsWith("Loading the font 'data:font/woff2")) errors.push(details.message); });
     await win.loadFile(path.resolve('dist-renderer/index.html'));
     win.webContents.focus();
-    await wait(() => evaluate(() => document.querySelector('.library-current-name')?.textContent === 'Original path' && !document.querySelector('.fieldcol[inert]')), 'initial App');
+    await wait(() => evaluate(() => document.querySelector('.library-current-name')?.textContent === 'Original path' && !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'initial App');
     await wait(() => evaluate(() => document.querySelector('.library-save-status')?.textContent.includes('Choose a folder')), 'unsaved location');
     // Confirm is isolated here so cancel tests exercise the folder result boundary.
     await evaluate(() => { window.confirm = () => true; });
@@ -95,7 +95,7 @@ app.whenReady().then(async () => {
     await shot('folder-saved-original-1440');
     await pointer('.library-pick', 'Follower path');
     await delay(350);
-    await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'follower planning');
+    await wait(() => evaluate(() => !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'follower planning');
     await pointer('.wpfeatrow:first-child .featselect');
     assert.ok(await evaluate(() => document.querySelector('.wpfeatrow .featnm').textContent.includes('Shared launch point')));
     await numeric('X', '10.2');
@@ -113,7 +113,7 @@ app.whenReady().then(async () => {
     await wait(() => saved?.paths[1].waypoints[0].x === 10.1, 'autosave after canceled folder chooser');
     assert.equal(saved.paths[0].waypoints[0].x, 10.1);
     check('canceling a folder chooser preserves pending edited autosave');
-    await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'settled planning');
+    await wait(() => evaluate(() => !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'settled planning');
     await pointer('.sechead-toggle', 'Rotation targets');
     await pointer('.featselect:has(.featdot.n)', '35°');
     await wait(() => evaluate(() => !!document.querySelector('[aria-label="Anchor position"]')), 'rotation inspector');

@@ -1,5 +1,5 @@
 import type { AppUpdateState } from "../shared/appUpdates";
-import type { RobotFileEndpoint, RobotFileConnection, RobotFilePreview, RobotFileResult } from "../shared/robotFileDelivery";
+import type { RobotFileEndpoint, RobotFileConnection, RobotFilePreview, RobotFileResult, RobotFileSettings } from "../shared/robotFileDelivery";
 import type { RobotPushScope, RobotDeploymentComparison } from "../shared/export/robotDeployment";
 import { contextBridge, ipcRenderer } from "electron";
 import type { BordeauxProject, RobotDeliveryCapabilities } from "../shared/types";
@@ -24,7 +24,8 @@ const bordeauxAPI = {
     return () => ipcRenderer.removeListener("appUpdates:state", listener);
   },
   robotDeliveryCapabilities: Object.freeze({ pathPush: true, routinePush: false, fileTransfer: true } satisfies RobotDeliveryCapabilities),
-  getRobotFileConnection: (): Promise<RobotFileConnection | null> => ipcRenderer.invoke("robotFiles:connection"),
+  getRobotFileConnection: (): Promise<RobotFileSettings | null> => ipcRenderer.invoke("robotFiles:connection"),
+  saveRobotFileSettings: (endpoint: RobotFileEndpoint): Promise<RobotFileSettings> => ipcRenderer.invoke("robotFiles:save", endpoint),
   probeRobotFiles: (endpoint: RobotFileEndpoint): Promise<RobotFileConnection> => ipcRenderer.invoke("robotFiles:probe", endpoint),
   trustRobotFiles: (fingerprint: string): Promise<RobotFileConnection> => ipcRenderer.invoke("robotFiles:trust", fingerprint),
   prepareRobotFiles: (project: BordeauxProject, pathIds: string[]): Promise<RobotFilePreview> => ipcRenderer.invoke("robotFiles:prepare", project, pathIds),

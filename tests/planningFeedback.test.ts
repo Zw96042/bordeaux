@@ -16,6 +16,10 @@ describe("planning feedback presentation", () => {
     expect(shouldPresentPlanningError(error, "interactive", 0)).toBe(true);
   });
 
+  it("shows serialized worker error messages", () => {
+    expect(planningErrorMessage({ name: "Error", message: "Velocity limit could not be satisfied" }, "interactive")).toBe("Velocity limit could not be satisfied");
+  });
+
   it("removes fallback boilerplate from a final-planning notice", () => {
     const error = new Error("Final planning failed: Heading tracking could not satisfy the configured angular limits. Continuing with the last interactive result.");
 

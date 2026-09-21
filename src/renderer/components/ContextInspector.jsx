@@ -25,10 +25,9 @@ import { UI } from "./ui";
       h('div', { className: 'cgroup-h' }, 'Translation'),
       h('div', { className: 'grid2' },
         h(Num, { label: 'Max vel', value: c.maxVel, unit: 'm/s', min: 0.1, max: robot.maxSpeed, onChange: (v) => setC({ maxVel: v }) }),
-        h(Num, { label: 'Max accel', value: c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxAccel: v }) })),
-      h('div', { className: 'grid2' },
-        h(Num, { label: 'Max decel', value: c.maxDecel != null ? c.maxDecel : c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxDecel: v }) }),
-        h(Num, { label: 'Corner accel', value: c.maxCentripetalAccel != null ? c.maxCentripetalAccel : c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxCentripetalAccel: v }) })),
+        h(Num, { label: 'Acceleration', value: c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxAccel: v, maxDecel: v }) })),
+      c.maxDecel != null && c.maxDecel !== c.maxAccel && h('div', { className: 'seg-hint' }, 'Saved slowing limit: ' + UnitPrefs.format(c.maxDecel, 'm/s²', 2) + '. Editing acceleration sets both limits.'),
+      h(Num, { label: 'Corner accel', value: c.maxCentripetalAccel != null ? c.maxCentripetalAccel : c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxCentripetalAccel: v }) }),
       h('button', { className: 'morebtn' + (moreLimits ? ' on' : ''), type: 'button', 'aria-expanded': moreLimits, onClick: () => setMoreLimits(!moreLimits) }, h('span', null, moreLimits ? 'Fewer limits' : 'Rotation limits'), h(Icon, { name: 'chevron', size: 13 })),
       rotation);
   }
@@ -37,22 +36,25 @@ import { UI } from "./ui";
     const options = [
       ['maxVel', 'Velocity', 'm/s'],
       ['maxAccel', 'Acceleration', 'm/s²'],
-      ['maxDecel', 'Deceleration', 'm/s²'],
       ['maxAngVel', 'Angular velocity', '°/s'],
       ['maxAngAccel', 'Angular acceleration', '°/s²'],
     ];
-    const active = options.filter(([key]) => range[key] != null);
-    const available = options.filter(([key]) => range[key] == null);
+    const values = { ...range, maxAccel: range.maxAccel ?? range.maxDecel };
+    const limitFor = (key) => key === 'maxAccel' ? Math.min(limits.maxAccel, limits.maxDecel ?? limits.maxAccel) : limits[key];
+    const change = (key, value) => onChange(key === 'maxAccel' ? { maxAccel: value, maxDecel: value } : { [key]: value });
+    const active = options.filter(([key]) => values[key] != null);
+    const available = options.filter(([key]) => values[key] == null);
     return h('section', { className: 'range-limits', 'aria-label': 'Zone limits' },
       active.map(([key, label, unit]) => h('div', { key, className: 'range-limit' },
-        h(Num, { label, value: range[key], unit, min: 0.01, max: limits[key],
+        h(Num, { label, value: values[key], unit, min: 0.01, max: Math.max(limitFor(key), values[key]),
           step: key.startsWith('maxAng') ? 1 : 0.01, precision: key.startsWith('maxAng') ? 0 : 2,
-          onChange: (value) => onChange({ [key]: value }) }),
+          onChange: (value) => change(key, value) }),
         h('button', { type: 'button', className: 'iconbtn', 'aria-label': 'Remove ' + label.toLowerCase() + ' limit',
-          title: 'Remove ' + label.toLowerCase() + ' limit', onClick: () => onChange({ [key]: undefined }) }, h(Icon, { name: 'x', size: 14 })))),
+          title: 'Remove ' + label.toLowerCase() + ' limit', onClick: () => change(key, undefined) }, h(Icon, { name: 'x', size: 14 })))),
       available.length > 0 && h(Dropdown, { id: 'range-add-limit', ariaLabel: 'Add limit', placeholder: 'Add limit',
         value: '', icon: 'plus', compact: true, items: available.map(([value, label]) => ({ value, label })),
-        onChange: (key) => onChange({ [key]: limits[key] }) }),
+        onChange: (key) => change(key, limitFor(key)) }),
+      values.maxAccel != null && range.maxDecel !== range.maxAccel && h('div', { className: 'seg-hint' }, 'Saved limits differ for speeding up and slowing down. Editing acceleration sets both.'),
       active.length === 0 && h('div', { className: 'seg-hint' }, 'Uses path limits.'));
   }
 

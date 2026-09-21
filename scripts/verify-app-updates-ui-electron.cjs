@@ -79,6 +79,17 @@ app.whenReady().then(async () => {
       assert.ok(await evaluate(() => window.__updateFixture.calls.includes('install')));
       await key('Escape');
       assert.equal(await evaluate(() => document.querySelector('dialog').open), true, 'Installation must keep the editor blocked until quit or failure');
+      await set({ phase: 'installing', installStalled: true });
+      assert.equal(await evaluate(() => document.querySelector('progress')), null);
+      assert.equal(await evaluate(() => [...document.querySelectorAll('dialog button')].some(b => b.textContent === 'Retry install')), false);
+      await capture(`${platform}-${width}-restart-stalled`);
+      await key('Escape');
+      assert.equal(await evaluate(() => document.querySelector('dialog').open), false, 'Stalled restart must release the editor');
+      await click('#update-trigger');
+      await click('dialog button', 'Close');
+      assert.equal(await evaluate(() => document.querySelector('dialog').open), false);
+      await click('#update-trigger');
+      await set({ installStalled: false });
       await set({ phase: 'upToDate', version: null, currentVersion: '0.2.0-beta.11', releaseNotes, projectDirty: false });
       assert.deepEqual(await rect(), initial);
       assert.ok(await evaluate(() => document.querySelectorAll('.app-update-notes ul li').length >= 7));

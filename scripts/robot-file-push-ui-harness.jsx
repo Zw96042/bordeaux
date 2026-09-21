@@ -25,11 +25,12 @@ function Harness() { controller = useRobotPushController(props); return <><butto
 async function mount(saved = connection) {
   await act(async () => root.render(null));
   props = { getProject: () => ({ paths: files.map((f) => ({ id: f.pathId, name: f.name })), routines: [] }), projectKey: 'project-1', catalogKey: 'catalog-1' };
-  mock = { probes: [], trusts: [], prepares: [], confirms: [], canceled: [] };
+  mock = { probes: [], trusts: [], prepares: [], confirms: [], canceled: [], saves: [] };
   const enqueue = (name,args) => { const request = { args: structuredClone(args), ...deferred() }; mock[name].push(request); return request.promise; };
   window.bordeauxAPI = { robotDeliveryCapabilities: { fileTransfer: true, pathPush: true, routinePush: false },
     previewBetaDiagnostic: async () => ({ previewId: 'diagnostic', contents: '{}' }),
     getRobotFileConnection: async () => saved,
+    saveRobotFileSettings: (...args) => enqueue('saves',args),
     probeRobotFiles: (...args) => enqueue('probes',args), trustRobotFiles: (...args) => enqueue('trusts',args),
     prepareRobotFiles: (...args) => enqueue('prepares',args), confirmRobotFiles: (...args) => enqueue('confirms',args),
     cancelRobotFiles: async (id) => { mock.canceled.push(id); return { canceled: true }; } };
@@ -37,6 +38,31 @@ async function mount(saved = connection) {
 }
 async function prepare() { await pointer('Push selection'); await resolve(mock.prepares.at(-1), preview); assert(controller.phase === 'review', 'Must review immutable files'); }
 async function test(name, run, saved) { try { await mount(saved); await run(); results.push({ name, ok: true }); } catch (error) { results.push({ name, ok: false, error: error.stack }); } }
+await test('Saved robot settings can be edited offline, saved by keyboard and restored without transport', async () => {
+  await action(() => controller.openConnection()); await pointer('Edit connection');
+  await action(() => { controller.setHost('practice-robot.local'); controller.setPort('2222'); controller.setDirectory('/home/lvuser/practice'); });
+  await native({ capture: 'offline-settings-edit' });
+  button('Save settings').focus(); await act(async () => native({ key: 'Enter' }));
+  assert(mock.saves.length === 1 && controller.phase === 'saving', 'Keyboard saves locally once');
+  assert(!mock.probes.length && !mock.trusts.length && !mock.prepares.length && !mock.confirms.length, 'Saving never connects or uploads');
+  const saved = { endpoint: mock.saves[0].args[0] };
+  await resolve(mock.saves[0], saved);
+  assert(!controller.connection && !controller.editing, 'Changed host requires SSH verification');
+  await native({ capture: 'offline-settings-saved' });
+  await act(async () => native({ key: 'Escape' })); assert(!controller.open, 'Escape closes saved settings');
+  await mount(saved); await action(() => controller.openConnection());
+  assert(controller.host === 'practice-robot.local' && controller.port === '2222' && controller.directory === '/home/lvuser/practice', 'Saved values restore');
+  assert(!mock.probes.length && !mock.confirms.length, 'Restoring never connects or uploads');
+  await native({ capture: 'offline-settings-restored' });
+});
+await test('Offline save failure keeps edits and offers retry without connecting', async () => {
+  await action(() => controller.openConnection()); await pointer('Edit connection');
+  await action(() => controller.setDirectory('/home/lvuser/practice'));
+  await pointer('Save settings'); await reject(mock.saves[0], 'Settings could not be saved. Disk is full.');
+  assert(controller.editing && controller.directory === '/home/lvuser/practice', 'Failed save retains edits');
+  assert(!button('Save settings').disabled && !mock.probes.length, 'Retry available without connection');
+  await native({ capture: 'offline-settings-failure' });
+});
 await test('Pointer and keyboard connect, trust identity, review multiple files, upload and verify', async () => {
   await pointer('Push selection');
   assert(controller.directory === DEFAULT_ROBOT_PATH_DIRECTORY, 'Required default directory');

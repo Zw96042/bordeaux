@@ -82,7 +82,32 @@ describe("folder BDX generation", () => {
     expect(manifest.pendingGeneratedFiles).toBeUndefined();
   });
 
-  it("serializes outputs with source autosaves and preserves removed outputs", async () => {
+  it("removes an old binary only after its replacement succeeds and preserves unrelated files", async () => {
+    const directory = await folder();
+    await writeProjectFolderBdx(directory, [output("Before.bdx")]);
+    await fs.writeFile(path.join(directory, "Paths/Unrelated.bdx"), "keep");
+    const link = fs.link.bind(fs); let fail = true;
+    vi.spyOn(fs, "link").mockImplementation(async (from, to) => {
+      if (String(to).endsWith("After.bdx") && fail) { fail = false; throw new Error("disk interrupted"); }
+      return link(from, to);
+    });
+    await expect(writeProjectFolderBdx(directory, [output("After.bdx", "new")])).rejects.toThrow("disk interrupted");
+    expect(await fs.readFile(path.join(directory, "Paths/Before.bdx"), "utf8")).toBe("first");
+    await writeProjectFolderBdx(directory, [output("After.bdx", "new")]);
+    await expect(fs.stat(path.join(directory, "Paths/Before.bdx"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(path.join(directory, "Paths/After.bdx"), "utf8")).toBe("new");
+    expect(await fs.readFile(path.join(directory, "Paths/Unrelated.bdx"), "utf8")).toBe("keep");
+  });
+
+  it("replaces case-only renamed outputs without removing the new binary", async () => {
+    const directory = await folder();
+    await writeProjectFolderBdx(directory, [output("CaseTest.bdx")]);
+    await writeProjectFolderBdx(directory, [output("casetest.bdx", "new")]);
+    expect((await fs.readdir(path.join(directory, "Paths"))).filter((file) => file.endsWith(".bdx"))).toEqual(["casetest.bdx"]);
+    expect(await fs.readFile(path.join(directory, "Paths/casetest.bdx"), "utf8")).toBe("new");
+  });
+
+  it("serializes outputs with source autosaves and removes obsolete managed outputs", async () => {
     const directory = await folder(); const project = createDemoProject(); project.paths[0].name = "Next edit";
     await Promise.all([
       writeProjectFolderBdx(directory, [output()]),
@@ -91,6 +116,6 @@ describe("folder BDX generation", () => {
     ]);
     expect((await openProjectFolder(directory)).project?.paths[0].name).toBe("Next edit");
     await writeProjectFolderBdx(directory, []);
-    expect(await fs.readFile(path.join(directory, "Paths/Test.bdx"), "utf8")).toBe("latest");
+    await expect(fs.stat(path.join(directory, "Paths/Test.bdx"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

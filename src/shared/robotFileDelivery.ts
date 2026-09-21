@@ -1,6 +1,7 @@
 /** SFTP file delivery confirms stored bytes, never robot activation or execution. */
 export const DEFAULT_ROBOT_PATH_DIRECTORY = "/home/lvuser/natinst/bin/Paths";
 export interface RobotFileEndpoint { host: string; port: number; directory: string }
+export interface RobotFileSettings { endpoint: RobotFileEndpoint; hostKeyFingerprint?: string }
 export interface RobotFileConnection { endpoint: RobotFileEndpoint; hostKeyFingerprint: string }
 export interface RobotFilePreview {
   operationId: string;

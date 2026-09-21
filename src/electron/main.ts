@@ -24,7 +24,7 @@ import {
   summarizeRobotProjectBookmarks,
   writeRobotProjectBookmarks,
 } from "./robotProjectBookmarks";
-import { writeBufferAtomically, openProjectFolder, autosaveProjectFolder, projectFileName, writeProjectFolderBdx } from "./projectFiles";
+import { writeBufferAtomically, openProjectFolder, autosaveProjectFolder, projectWorkspacePath, writeProjectFolderBdx } from "./projectFiles";
 import { loadProjectFolderSelection, loadProjectSelection, type ProjectSelection } from "./projectOpening";
 import { requestProjectReload } from "./projectReload";
 import { describeUpdateFailure, OFFICIAL_RELEASES_URL } from "./updateFailure";
@@ -410,7 +410,7 @@ function createWindow() {
         const closed = new Promise<void>(resolve => window.once("closed", resolve));
         window.close();
         await closed;
-        const filesWritten = fs.existsSync(path.join(smokeDirectory, "project.bordeaux")) && fs.existsSync(path.join(smokeDirectory, "Smoke.bdx")) && fs.existsSync(path.join(smokeDirectory, "Paths")) && fs.existsSync(path.join(smokeDirectory, "Routines"));
+        const filesWritten = fs.existsSync(projectWorkspacePath(smokeDirectory)) && fs.existsSync(path.join(smokeDirectory, "Smoke.bdx")) && fs.existsSync(path.join(smokeDirectory, "Paths")) && fs.existsSync(path.join(smokeDirectory, "Routines"));
         result.filesWritten = filesWritten;
         result.closedWithoutSavePrompt = closingUnsavedProject && window.isDestroyed();
         clearInterval(inputTimer);
@@ -428,7 +428,8 @@ function createWindow() {
 }
 
 function sendCommand(command: string, payload?: unknown) {
-  if (appUpdates?.snapshot().phase === "installing") return;
+  const update = appUpdates?.snapshot();
+  if (update?.phase === "installing" && !update.installStalled) return;
   mainWindow?.webContents.send("menu-command", { command, payload });
 }
 
@@ -437,7 +438,8 @@ function sendMcpStatus(): void {
 }
 
 function reloadProjectWindow(ignoreCache: boolean): void {
-  if (appUpdates?.snapshot().phase === "installing") return;
+  const update = appUpdates?.snapshot();
+  if (update?.phase === "installing" && !update.installStalled) return;
   const window = mainWindow;
   if (!window || window.isDestroyed()) return;
   void requestProjectReload({
@@ -558,7 +560,7 @@ async function openProjectFile(filePath: string) {
 }
 
 handle("project:open", async () => {
-  if (smokeDirectory) return openProjectFile(path.join(smokeDirectory, "project.bordeaux"));
+  if (smokeDirectory) return openProjectFile(projectWorkspacePath(smokeDirectory));
   return chooseProjectFolder();
 });
 
@@ -609,7 +611,7 @@ handle("project:save", async (_event, project, rawSaveAs) => {
   let createProject = false;
   if (!target) {
     let folder = rawSaveAs === true ? null : currentProjectFolder;
-    if (smokeDirectory) target = path.join(smokeDirectory, "project.bordeaux");
+    if (smokeDirectory) target = projectWorkspacePath(smokeDirectory);
     else {
       if (!folder) {
         const result = await dialog.showOpenDialog(mainWindow!, {
@@ -624,11 +626,12 @@ handle("project:save", async (_event, project, rawSaveAs) => {
           throw new Error("That folder already contains a Bordeaux project. Open it or choose a different folder.");
         }
       }
-      target = folder === currentProjectFolder && currentProjectPath ? currentProjectPath : path.join(folder, projectFileName((project as BordeauxProject).name || "Project"));
+      target = projectWorkspacePath(folder);
       createProject = target !== currentProjectPath;
     }
   }
-  await autosaveProjectFolder(path.dirname(target), project, target, { createProject });
+  const source = await autosaveProjectFolder(path.dirname(target), project, target, { createProject });
+  target = projectWorkspacePath(path.dirname(target));
   if (sourceGeneration !== projectTargetGeneration) throw new Error("The project changed during saving. Its files were saved; open that folder to continue.");
   if (currentProjectPath !== target) activateProjectTarget(target);
   await rememberFile(path.dirname(target));
@@ -636,7 +639,6 @@ handle("project:save", async (_event, project, rawSaveAs) => {
   // Persist editable sources first, so a planner or command-binding failure can
   // never prevent saving a work in progress.
   try {
-    const source = project as BordeauxProject;
     const selected = source.paths.filter(candidate => candidate.waypoints.length >= 2);
     const projectFile = linkedLabviewProjectFile, bookmark = linkedRobotProjectBookmarkId;
     const hasCommands = selected.some(candidate => candidate.markers.some(marker => marker.invocation));
@@ -663,7 +665,11 @@ handle("project:autosave", async (_event, project) => {
   const validation = validateProject(project);
   if (!validation.ok) return { saved: false, error: "Finish the invalid field before saving.", location: projectLocation() };
   try {
+    const generation = projectTargetGeneration;
     await autosaveProjectFolder(folder, project, currentProjectPath);
+    if (generation !== projectTargetGeneration) return { saved: false, location: projectLocation() };
+    const target = projectWorkspacePath(folder);
+    if (currentProjectPath !== target) activateProjectTarget(target);
     return { saved: true, location: projectLocation() };
   } catch (error) {
     return { saved: false, error: error instanceof Error ? error.message : String(error), location: projectLocation() };
@@ -870,7 +876,8 @@ handle("robot:inspect", async () => {
   if (!robotPairing) throw new Error("Pair a robot before inspecting its Bordeaux runtime");
   return robotTransport.inspect(robotPairing, { password: "" });
 });
-handle("robotFiles:connection", () => robotFileDelivery.current());
+handle("robotFiles:connection", () => robotFileDelivery.settings());
+handle("robotFiles:save", (_event, endpoint) => robotFileDelivery.saveSettings(endpoint as RobotFileEndpoint));
 handle("robotFiles:probe", (_event, endpoint) => robotFileDelivery.probe(endpoint as RobotFileEndpoint));
 handle("robotFiles:trust", (_event, fingerprint) => {
   if (typeof fingerprint !== "string") throw new Error("Review the robot SSH identity first");
@@ -1016,7 +1023,9 @@ app.on("will-quit", (event) => {
     console.warn("Could not stop Bordeaux background services cleanly:", error);
   }).finally(() => {
     backgroundServicesReadyForExit = true;
-    app.quit();
+    // Electron resets its quitting flag after the canceled will-quit event.
+    // A microtask can run before that reset, so resume on the next event-loop turn.
+    setImmediate(() => app.quit());
   });
 });
 app.on("web-contents-created", (_event, contents) => contents.on("will-attach-webview", (event) => event.preventDefault()));

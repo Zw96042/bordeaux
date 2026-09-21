@@ -1,6 +1,6 @@
 {
   "name": "bordeaux",
-  "version": "0.2.0-beta.13",
+  "version": "0.2.0-beta.14",
   "private": true,
   "productName": "Bordeaux",
   "author": "FRC Team 2468",
@@ -172,6 +172,7 @@
       ]
     },
     "nsis": {
+      "include": "build/installer.nsh",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "artifactName": "${productName}-${version}-windows-${arch}-setup.${ext}"

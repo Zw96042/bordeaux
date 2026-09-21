@@ -37,7 +37,7 @@ app.whenReady().then(async () => {
     win.webContents.on('console-message', (details) => { if (details.level === 'error' && !details.message.startsWith("Loading the font 'data:")) errors.push(details.message); });
     await win.loadFile(path.resolve('dist-renderer/index.html'));
     win.focus(); win.webContents.focus();
-    await wait(() => evaluate(() => document.querySelectorAll('.wpfeatrow .featselect').length > 0 && !document.querySelector('.fieldcol[inert]')), 'editable path');
+    await wait(() => evaluate(() => document.querySelectorAll('.wpfeatrow .featselect').length > 0 && !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'editable path');
     for (const [width, height] of [[1440, 900], [1100, 720]]) {
       win.setContentSize(width, height); await delay(120);
       const rect = () => evaluate(() => { const r = document.querySelector('.cbar').getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; });

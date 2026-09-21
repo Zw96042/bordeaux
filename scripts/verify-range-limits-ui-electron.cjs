@@ -36,9 +36,6 @@ ipcMain.handle('branches:restore', () => ({ project: saved }));
 ipcMain.handle('branches:catalog', () => ({ catalog: { projectName: 'Fixture', commands: [], warnings: [] }, bookmarkId: 'fixture' }));
 ipcMain.handle('branches:save', (_event, project) => { saved = project; saves++; return { saved: true }; });
 async function save() { const before = saves; await click('button[aria-label="Project menu"]'); await click('[role="menuitem"]', 'Save'); await wait(() => saves > before, 'save');
-  // The shared preload mocks autosave; let its 900 ms draft preflight settle
-  // while the menu has focus before starting the next editing interaction.
-  await delay(1000);
 }
 app.whenReady().then(async () => {
   try {
@@ -52,7 +49,7 @@ app.whenReady().then(async () => {
     const load = async () => {
       await win.loadFile(path.resolve('dist-renderer/index.html'));
       win.focus(); win.webContents.focus();
-      await wait(() => evaluate(() => !!document.querySelector('.sechead-toggle') && !document.querySelector('.fieldcol[inert]')), 'editable path');
+      await wait(() => evaluate(() => !!document.querySelector('.sechead-toggle') && !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'editable path');
       if (!await evaluate(() => !!document.querySelector('button[aria-label^="Zone,"]'))) await click('.sechead-toggle', 'Zones1');
       await click('button[aria-label^="Zone,"]', undefined, 2);
       await wait(() => evaluate(() => !!document.querySelector('.range-limits')), 'region limits');
@@ -83,8 +80,9 @@ app.whenReady().then(async () => {
     await evaluate(() => document.querySelector('.range-limits input').select());
     await win.webContents.insertText('1.23'); await key('Enter');
     await save();
-    assert.deepEqual(activeLimits(), ['maxAccel']);
+    assert.deepEqual(activeLimits(), ['maxAccel', 'maxDecel']);
     assert.equal(saved.paths[0].ranges[0].maxAccel, 1.23);
+    assert.equal(saved.paths[0].ranges[0].maxDecel, 1.23);
     await click('.range-limits input');
     assert.equal(await evaluate(() => document.activeElement === document.querySelector('.range-limits input')), true, 'Native pointer input must focus the numeric field');
     win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'a', modifiers: [process.platform === 'darwin' ? 'meta' : 'control'] });
@@ -93,6 +91,7 @@ app.whenReady().then(async () => {
     await evaluate(() => document.querySelector('.range-limits input').select());
     await win.webContents.insertText('invalid'); await key('Escape'); await key('Enter');
     await save(); assert.equal(saved.paths[0].ranges[0].maxAccel, 1.23);
+    assert.equal(saved.paths[0].ranges[0].maxDecel, 1.23);
     await load();
     assert.equal(await evaluate(() => document.querySelector('.range-limits input').value), '1.23');
     for (const system of ['metric', 'imperial']) {
@@ -111,13 +110,14 @@ app.whenReady().then(async () => {
         await snapshot(system + '-closed-' + width);
         await click('button[aria-label^="Zone,"]', undefined, 2);
       }
-      await save(); assert.deepEqual(activeLimits(), ['maxAccel']);
+      await save(); assert.deepEqual(activeLimits(), ['maxAccel', 'maxDecel']);
       assert.equal(saved.paths[0].ranges[0].maxAccel, 1.23);
+    assert.equal(saved.paths[0].ranges[0].maxDecel, 1.23);
       await load();
       assert.equal(await evaluate(() => document.querySelector('.range-limits input').value), expected);
     }
     } else {
-      saved.paths[0].ranges[0].maxAccel = 1.23;
+      saved.paths[0].ranges[0].maxAccel = saved.paths[0].ranges[0].maxDecel = 1.23;
       await load();
       for (const [width, height] of [[1440, 900], [1100, 720]]) {
         win.setContentSize(width, height); await delay(150); await snapshot('metric-acceleration-' + width);
@@ -136,19 +136,25 @@ app.whenReady().then(async () => {
     await key('Space'); await delay(350);
     await save(); assert.deepEqual(activeLimits(), []);
     assert.equal(Object.hasOwn(saved.paths[0].ranges[0], 'maxAccel'), false);
+    assert.equal(Object.hasOwn(saved.paths[0].ranges[0], 'maxDecel'), false);
     await load();
     assert.equal(await evaluate(() => document.querySelectorAll('.range-limits input').length), 0);
     await snapshot('disabled-restored-1100');
-    saved.paths[0].ranges[0] = { ...saved.paths[0].ranges[0], maxVel: 2.3, maxAccel: 1.23, maxDecel: 2.1, maxAngVel: 123, maxAngAccel: 234 };
+    saved.paths[0].ranges[0] = { ...saved.paths[0].ranges[0], maxVel: 2.3, maxAccel: 6.5, maxDecel: 2.1, maxAngVel: 123, maxAngAccel: 234 };
     await load();
-    assert.equal(await evaluate(() => document.querySelectorAll('.range-limits .range-limit').length), 5);
+    assert.equal(await evaluate(() => document.querySelectorAll('.range-limits .range-limit').length), 4);
     for (const [width, height] of [[1440, 900], [1100, 720]]) {
       win.setContentSize(width, height); await delay(150);
       await snapshot('legacy-all-enabled-' + width);
-      await click('.range-limits .range-limit:last-child input');
+      await click('.range-limits .range-limit:nth-child(4) input');
       await evaluate(() => document.querySelector('.ctxinsp-body')?.scrollTo(0, 10000));
       await snapshot('legacy-all-enabled-scrolled-' + width);
     }
+    await click('.range-limits .range-limit:nth-child(2) input');
+    await key('Tab');
+    await save();
+    assert.equal(saved.paths[0].ranges[0].maxAccel, 6.5);
+    assert.equal(saved.paths[0].ranges[0].maxDecel, 2.1, 'Opening legacy differing limits must preserve both until edited');
     await click('button[aria-label="Delete zone"]');
     await click('button[aria-label="Zone"]');
     const drag = await evaluate(() => {
@@ -167,6 +173,19 @@ app.whenReady().then(async () => {
     assert.equal(saved.paths[0].ranges.length, 1);
     assert.deepEqual(Object.keys(saved.paths[0].ranges[0]).filter((key) => key.startsWith('max')), []);
     await snapshot('new-dragged-region-1100');
+    await click('.pageswitch button', 'Settings');
+    await click('[aria-label="Display units"] button', 'Metric');
+    await click('.pageswitch button', 'Editor');
+    await click('button[aria-label^="Zone,"]', undefined, 2);
+    await click('#range-add-limit');
+    await click('[role="option"]', 'Velocity');
+    await click('.range-limits input');
+    await evaluate(() => document.querySelector('.range-limits input').select());
+    await win.webContents.insertText('0.5'); await key('Enter');
+    await wait(() => evaluate(() => document.querySelector('.fieldcol')?.dataset.planningReady === 'true'), '0.5 velocity zone trajectory');
+    await save();
+    assert.equal(saved.paths[0].ranges[0].maxVel, 0.5);
+    await snapshot('low-velocity-zone-1100');
     assert.deepEqual(errors, []);
     console.log(process.env.BORDEAUX_RANGE_LIMITS_REMAINDER_ONLY ? 'PASS Native Tab/Space removal, cleared save/reload, all enabled layouts and native empty region creation' : 'PASS Independent acceleration add/remove, native pointer/arrow/Enter/Space/Tab, menu and numeric Escape, canonical values, save/reload, both units, open/closed inspector at 1440x900 and 1100x720');
   } catch (error) { console.error(error, errors); if (win) await snapshot('failure'); process.exitCode = 1; }

@@ -56,7 +56,6 @@ import { UI } from "./ui";
     const chips = [
       { k: 'Max V', v: UnitPrefs.fromCanonical(Math.min(limits.maxVel, robot.maxSpeed), 'm/s').toFixed(1), u: UnitPrefs.label('m/s') },
       { k: 'Max A', v: UnitPrefs.fromCanonical(limits.maxAccel, 'm/s²').toFixed(1), u: UnitPrefs.label('m/s²') },
-      { k: 'Decel', v: UnitPrefs.fromCanonical(limits.maxDecel != null ? limits.maxDecel : limits.maxAccel, 'm/s²').toFixed(1), u: UnitPrefs.label('m/s²') },
       { k: 'Max \u03c9', v: (limits.maxAngVel || 0).toFixed(0), u: '\u00b0/s' },
     ];
     return h('button', { className: 'cbar', type: 'button', title: 'Edit global constraints', onClick: onOpen },

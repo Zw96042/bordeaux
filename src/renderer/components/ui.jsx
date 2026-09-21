@@ -423,7 +423,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
     const candidates = [
       { key: 'maxVel', base: velocityBase, order: 0, text: (v) => 'v \u2264 ' + UnitPrefs.format(v, 'm/s', 1), aria: (v) => 'maximum velocity ' + UnitPrefs.format(v, 'm/s', 1) },
       { key: 'maxAccel', base: c.maxAccel, order: 1, text: (v) => 'a \u2264 ' + UnitPrefs.format(v, 'm/s²', 1), aria: (v) => 'maximum acceleration ' + UnitPrefs.format(v, 'm/s²', 1) },
-      { key: 'maxDecel', base: c.maxDecel != null ? c.maxDecel : c.maxAccel, order: 2, text: (v) => 'decel \u2264 ' + UnitPrefs.format(v, 'm/s²', 1), aria: (v) => 'maximum deceleration ' + UnitPrefs.format(v, 'm/s²', 1) },
+      { key: 'maxDecel', base: c.maxDecel != null ? c.maxDecel : c.maxAccel, order: 2, text: (v) => 'a \u2264 ' + UnitPrefs.format(v, 'm/s²', 1), aria: (v) => 'maximum acceleration ' + UnitPrefs.format(v, 'm/s²', 1) },
       { key: 'maxAngVel', base: c.maxAngVel, order: 3, text: (v) => '\u03c9 \u2264 ' + v.toFixed(0) + '\u00b0/s', aria: (v) => 'maximum angular velocity ' + v.toFixed(0) + ' degrees per second' },
       { key: 'maxAngAccel', base: c.maxAngAccel, order: 4, text: (v) => '\u03b1 \u2264 ' + v.toFixed(0) + '\u00b0/s\u00b2', aria: (v) => 'maximum angular acceleration ' + v.toFixed(0) + ' degrees per second squared' },
     ].filter((candidate) => {

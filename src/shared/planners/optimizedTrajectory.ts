@@ -12,6 +12,7 @@ import { profiledSplineOptimizationSeed, profiledSplinePlanner } from "./profile
 import { solveReachabilityProfile, type ReachabilityInput, type ReachabilityStatus } from "./reachability";
 import { validateOptimizedTrajectory, type TrajectoryValidationResult } from "./trajectoryValidation";
 import { buildCanonicalPathState, isStationaryHeadingTransition } from "./pathState";
+import { effectiveRanges } from "./rotationPriority";
 
 const R = (value: number, places = 4) => Number(value.toFixed(places));
 const MAX_REFINEMENT_PASSES = 2;
@@ -147,6 +148,8 @@ function remapProfileForValidation(
   timedSamples: TrajectorySample[],
 ): TrajectorySample[] {
   const timedState = buildCanonicalPathState(input.path, timedSamples);
+  const zoneBoundaries = effectiveRanges(input.path, timedSamples, timedSamples.at(-1)?.s ?? 0)
+    .flatMap((range) => [range.start, range.end]);
   const stationaryTurnAt = (index: number) => (
     isStationaryHeadingTransition(
       input.path,
@@ -164,8 +167,13 @@ function remapProfileForValidation(
       velocity: Math.abs(endpoint.velocityMps),
     };
     while (sourceIndex < timedSamples.length - 2 && timedSamples[sourceIndex + 1].f < sample.f) sourceIndex += 1;
+    const atZoneBoundary = zoneBoundaries.some((fraction) => Math.abs(fraction - sample.f) <= 1e-12);
     for (let candidate = Math.max(0, sourceIndex - 2); candidate <= Math.min(timedSamples.length - 1, sourceIndex + 3); candidate += 1) {
-      if (Math.hypot(timedSamples[candidate].x - sample.x, timedSamples[candidate].y - sample.y) <= 1e-8) {
+      // Authored constraint knots have the same fraction at both resolutions,
+      // even when their interpolated geometry differs slightly. Preserve the
+      // solved speed at that knot instead of projecting it outside its Zone.
+      if ((atZoneBoundary && Math.abs(timedSamples[candidate].f - sample.f) <= 1e-12)
+        || Math.hypot(timedSamples[candidate].x - sample.x, timedSamples[candidate].y - sample.y) <= 1e-8) {
         sourceIndex = candidate;
         return {
           sample: { ...sample, headingRad: timedSamples[candidate].headingRad },

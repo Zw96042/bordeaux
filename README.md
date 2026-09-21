@@ -46,9 +46,9 @@ For swerve paths, drag the start heading arrow or edit **Initial robot facing** 
 
 Field feedback uses one compact status with an **Optimize** action when attention is needed; expanded **Details** holds diagnostics. Normal trajectory rebuilding remains automatic.
 
-Choose **New project** or **Open folder** and select any regular folder; no existing project file is required. Bordeaux automatically saves editable paths in `Paths/*.path` and autonomous routines in `Routines/*.routine`, with a recovery snapshot in the folder. **Save** also writes the `.bordeaux` project and generates `Paths/*.bdx` for paths with at least two waypoints. Unfinished paths remain editable; if BDX generation fails, the project stays saved and the error offers a retry. Saving is local and never connects to a robot.
+Choose **New project** or **Open folder** and select any regular folder; no existing project file is required. The project uses the folder name. Bordeaux automatically saves committed edits in `.bordeaux-workspace.json`, the single project file, and keeps readable path and routine files in `Paths/*.path` and `Routines/*.routine`. Background saving leaves active input drafts and keyboard focus alone; **Save** commits valid drafts and also generates `Paths/*.bdx` for paths with at least two waypoints. Renaming or deleting an item removes its previous managed source file after the replacement save succeeds; successful BDX generation also removes obsolete managed BDX files. Unfinished paths remain editable; if BDX generation fails, the project stays saved and the error offers a retry. Saving is local and never connects to a robot.
 
-Use **Save to another folder…** to copy the project into another folder, or **Open project file…** to open an existing `.bordeaux` file. Bordeaux preserves unrelated files and reports conflicts with externally modified generated files.
+Use **Save to another folder…** to copy the project into another folder, or **Open project file…** to open an existing `.bordeaux` file. Existing `.bordeaux` files remain importable. Folder saving migrates a verified matching legacy project into the workspace file without maintaining a duplicate. Bordeaux preserves unrelated or externally modified files and reports conflicts instead of deleting them.
 
 ## License and asset rights
 

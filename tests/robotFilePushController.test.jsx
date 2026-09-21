@@ -35,7 +35,7 @@ beforeEach(() => {
   hooks.values = []; hooks.effects = []; hooks.cleanups = [];
   project = { paths: [{ id: 'A', name: 'Original' }], routines: [] };
   props = { getProject: () => project, projectKey: 'project', catalogKey: 'catalog' };
-  bridge = { getRobotFileConnection: vi.fn(async () => connection), prepareRobotFiles: vi.fn(async () => preview),
+  bridge = { getRobotFileConnection: vi.fn(async () => connection), saveRobotFileSettings: vi.fn(async endpoint => ({ endpoint })), prepareRobotFiles: vi.fn(async () => preview),
     confirmRobotFiles: vi.fn(async () => ({ state: 'transferred', files: preview.files, directory: connection.endpoint.directory })),
     cancelRobotFiles: vi.fn(async () => ({ canceled: true })), probeRobotFiles: vi.fn(async () => connection), trustRobotFiles: vi.fn(async () => connection) };
   vi.stubGlobal('window', { bordeauxAPI: bridge }); vi.stubGlobal('document', { activeElement: null });
@@ -45,6 +45,26 @@ afterEach(() => { for (const cleanup of hooks.cleanups) cleanup(); vi.unstubAllG
 const ready = async () => { render(); await Promise.resolve(); return render(); };
 const prepare = async () => { const c = await ready(); await c.requestPush({ kind: 'paths', pathIds: ['A'] }); return render(); };
 describe('SFTP file push controller', () => {
+  it('saves edited settings without probing, trusting, preparing or transmitting', async () => {
+    await ready(); await render().chooseAnotherRobot();
+    render().setHost('other.local'); render().setPort('2222'); render().setDirectory('/home/lvuser/practice');
+    await render().saveSettings();
+    expect(bridge.saveRobotFileSettings).toHaveBeenCalledExactlyOnceWith({ host: 'other.local', port: 2222, directory: '/home/lvuser/practice' });
+    expect(render()).toMatchObject({ editing: false, connection: null, settings: { endpoint: { host: 'other.local', port: 2222 } } });
+    for (const name of ['probeRobotFiles', 'trustRobotFiles', 'prepareRobotFiles', 'confirmRobotFiles']) expect(bridge[name]).not.toHaveBeenCalled();
+  });
+  it('restores unverified settings and waits for explicit connection before push', async () => {
+    bridge.getRobotFileConnection.mockResolvedValueOnce({ endpoint: connection.endpoint });
+    await ready(); await render().requestPush({ kind: 'paths', pathIds: ['A'] });
+    expect(render()).toMatchObject({ phase: 'idle', connection: null, host: connection.endpoint.host });
+    expect(bridge.probeRobotFiles).not.toHaveBeenCalled(); expect(bridge.prepareRobotFiles).not.toHaveBeenCalled();
+  });
+  it('keeps edit fields and error after local save fails', async () => {
+    await ready(); await render().chooseAnotherRobot(); render().setHost('other.local');
+    bridge.saveRobotFileSettings.mockRejectedValueOnce(new Error('disk full'));
+    await render().saveSettings();
+    expect(render()).toMatchObject({ phase: 'idle', editing: true, host: 'other.local', error: 'disk full' });
+  });
   it('reuses the saved robot for repeated pushes and failed-upload retries', async () => {
     const c = await prepare();
     await c.confirmPush();

@@ -161,12 +161,12 @@ app.whenReady().then(async () => {
     check('custom footprint respects displayed units, invalid drafts, Escape, and narrow layout');
     await click('.pageswitch button', 'Editor');
     check('Settings contains connection and working display units; toolbar has no connection, units, or JSON export');
-    await wait(() => evaluate(() => document.querySelector('[data-role="wp"]') && !document.querySelector('.fieldcol[inert]')), 'editable field');
+    await wait(() => evaluate(() => document.querySelector('[data-role="wp"]') && !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'editable field');
     await pointerClick('.wpfeatrow:nth-child(2) .featselect', ['shift']);
     await click('[aria-label="Save project"]');
     assert.equal(saved.paths[0].waypoints.length, 2, 'Shift-click deletes the authored waypoint');
     await key('Z', ['meta']);
-    await wait(() => evaluate(() => document.querySelectorAll('.wpfeatrow').length === 3 && !document.querySelector('.fieldcol[inert]')), 'undo deleted waypoint');
+    await wait(() => evaluate(() => document.querySelectorAll('.wpfeatrow').length === 3 && !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'undo deleted waypoint');
     check('Shift-click deletes a waypoint and Undo restores it');
     await evaluate(() => document.querySelectorAll('.outline .featselect')[1].click());
     const numericBefore = await evaluate(() => document.querySelector('.numinput').value);
@@ -184,7 +184,7 @@ app.whenReady().then(async () => {
     await evaluate(() => document.querySelectorAll('.outline .featselect')[1].click());
     assert.equal(await evaluate(() => document.querySelector('.numinput').value), numericBefore, 'Escape must discard the numeric draft');
     check('numeric typing preserves focus and tool selection, and Escape discards the draft');
-    await wait(() => evaluate(() => document.querySelector('[data-heading-control]') && !document.querySelector('.fieldcol[inert]')), 'heading menu target');
+    await wait(() => evaluate(() => document.querySelector('[data-heading-control]') && !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'heading menu target');
     await evaluate(() => document.querySelector('[data-heading-control]').focus());
     await key('F10', ['shift']);
     await wait(() => evaluate(() => document.querySelector('.ctxmenu [role="menuitem"]') === document.activeElement), 'heading menu focus');
@@ -256,7 +256,7 @@ app.whenReady().then(async () => {
     const maxVelocityBefore = saved.paths[0].constraints.maxVel;
     await click('.cbar');
     const enterVelocity = async (raw) => {
-      await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'editable numeric constraints');
+      await wait(() => evaluate(() => !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'editable numeric constraints');
       await evaluate(() => {
         const input = [...document.querySelectorAll('.numrow')].find((row) => row.querySelector('label')?.textContent === 'Max vel').querySelector('input');
         input.focus(); input.select();
@@ -309,7 +309,7 @@ app.whenReady().then(async () => {
     win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Right' }); win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Right' });
     await delay(80); await click('[aria-label="Save project"]');
     assert.ok(Math.abs(saved.paths[0].waypoints[1].x - beforeNudge.x - .05) < 1e-6);
-    await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'nudge settles');
+    await wait(() => evaluate(() => !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'nudge settles');
     await evaluate(() => document.querySelectorAll('.outline .featselect')[1].focus());
     win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Delete' }); win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Delete' });
     await delay(80); await click('[aria-label="Save project"]');
@@ -323,7 +323,7 @@ app.whenReady().then(async () => {
     await delay(80); await click('[aria-label="Save project"]');
     assert.deepEqual(saved.paths[0].waypoints[1], beforeNudge);
     check('outline focus preserves arrow nudge, Delete, and undo shortcuts');
-    await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'restored trajectory');
+    await wait(() => evaluate(() => !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'restored trajectory');
     const original = structuredClone(saved.paths[0].waypoints[1]);
     const point = await evaluate(() => { const r = document.querySelector('[data-role="wp"][data-idx="1"]').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; });
     win.webContents.sendInputEvent({ type: 'mouseMove', ...point }); await delay(50);
@@ -680,7 +680,7 @@ app.whenReady().then(async () => {
     check('simultaneous passive statuses occupy one consistent-size row with bounded diagnostic details');
     saved = { ...saved, name: 'Shared waypoint verification', paths: [...saved.paths, { ...structuredClone(saved.paths[0]), id: 'unlinked-path', name: 'Independent path' }].map((path, index) => ({ ...path, headingMode: 'tangent', startVel: .4, goalVel: .6, waypoints: path.waypoints.map((waypoint, at) => ({ ...waypoint, theta: index === 0 ? 15 : 130, thetaOn: true, stop: false })) })) };
     await win.loadFile(path.resolve('dist-renderer/index.html'));
-    await wait(() => evaluate(() => document.querySelector('.library-current-name')?.textContent === 'Opening move' && !document.querySelector('.fieldcol[inert]')), 'shared waypoint fixture ready');
+    await wait(() => evaluate(() => document.querySelector('.library-current-name')?.textContent === 'Opening move' && !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'shared waypoint fixture ready');
     const saveCurrent = async () => { await click('[aria-label="Save project"]'); };
     const editNumber = async (label, value) => {
       await wait(() => evaluate((label) => { const field = [...document.querySelectorAll('.numrow')].find((row) => row.querySelector('label')?.textContent === label)?.querySelector('input'); return field && !field.matches(':disabled') && !field.closest('[inert]'); }, label), 'editable ' + label);
@@ -722,7 +722,7 @@ app.whenReady().then(async () => {
     await editNumber('Entry speed', .5); await editNumber('Exit speed', .7);
     assert.equal(saved.paths[0].startVel, .5); assert.equal(saved.paths[0].goalVel, .7);
     for (const [index, toggle, label, speed] of [[0, 'Stop at entry', 'Entry speed', .5], [saved.paths[0].waypoints.length - 1, 'Stop at exit', 'Exit speed', .7]]) {
-      await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'endpoint ready');
+      await wait(() => evaluate(() => !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'endpoint ready');
       await evaluate((index) => document.querySelectorAll('.outline .featselect')[index].click(), index);
       await click('[aria-label="' + toggle + '"]'); await saveCurrent();
       assert.equal(saved.paths[0].waypoints[index].stop, true);
@@ -734,14 +734,14 @@ app.whenReady().then(async () => {
       assert.deepEqual(await numericState(label), { value: speed, disabled: false }, 'Removing the stop restores the stored endpoint speed');
     }
     check('summary facing changes preserve tangents; vi/vf edit independently and endpoint stops show effective zero');
-    await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'waypoint link inspector ready');
+    await wait(() => evaluate(() => !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'waypoint link inspector ready');
     await evaluate(() => document.querySelector('.outline .featselect').click());
     const independentBefore = structuredClone(saved.paths[2]);
     const linkBaseline = saved.paths.slice(0, 2).map((path) => structuredClone(path.waypoints[0]));
     assert.equal(await evaluate(() => document.querySelectorAll('#waypoint-position-link-results [role="option"]').length), 0, 'Ordinary waypoints are absent from the inline chooser');
     assert.equal(await evaluate(() => document.querySelector('#waypoint-position-link-results .choice-empty')?.textContent), 'Name a shared point in another path to link it here.');
     await evaluate((id) => document.querySelector('[data-library-item="' + id + '"]').click(), saved.paths[1].id);
-    await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'target point ready');
+    await wait(() => evaluate(() => !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'target point ready');
     await evaluate(() => document.querySelector('.outline .featselect').click());
     await click('[aria-label="Linkable waypoint"]');
     await wait(() => evaluate(() => { const input = document.querySelector('[aria-label="Linkable point name"]'); return input && !input.disabled && !input.closest('[inert]'); }), 'named point editable');
@@ -755,7 +755,7 @@ app.whenReady().then(async () => {
     assert.equal(saved.paths[1].waypoints[0].positionName, 'Scoring position', 'Named point saved from actual typing');
     linkBaseline[1] = structuredClone(saved.paths[1].waypoints[0]);
     await evaluate((id) => document.querySelector('[data-library-item="' + id + '"]').click(), saved.paths[0].id);
-    await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'source point ready');
+    await wait(() => evaluate(() => !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'source point ready');
     await evaluate(() => document.querySelector('.outline .featselect').click());
     await pointerClick('#waypoint-position-link');
     assert.equal(await evaluate(() => document.querySelectorAll('#waypoint-position-link-results [role="option"]').length), 1, 'Only the opted-in named point is offered');
@@ -789,7 +789,7 @@ app.whenReady().then(async () => {
     assert.deepEqual(saved.paths.slice(0, 2).map((path) => path.waypoints[0]), linkedBeforeEdit, 'Redo link restores both members');
     await click('[title^="Redo"]'); await saveCurrent();
     assert.ok(saved.paths.slice(0, 2).every((path) => path.waypoints[0].x === newX && path.waypoints[0].positionLink === linkId));
-    await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'unlink ready');
+    await wait(() => evaluate(() => !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'unlink ready');
     await fs.writeFile(path.join(output, 'linked-position-inspector.png'), (await win.webContents.capturePage()).toPNG());
     await click('.shared-waypoint-position button', 'Unlink'); await saveCurrent();
     assert.equal(saved.paths[0].waypoints[0].positionLink, undefined);
@@ -843,7 +843,7 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate(() => document.querySelector('.library-pick[aria-current="true"]').dataset.libraryItem), saved.paths[0].id);
     await fs.writeFile(path.join(output, 'restored-path-durations.png'), (await win.webContents.capturePage()).toPNG());
     check('unopened paths receive current trajectory times after restore, with vertically centered names and durations');
-    await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'fault injection baseline ready');
+    await wait(() => evaluate(() => !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'fault injection baseline ready');
     const beforeFailure = structuredClone(saved.paths[0]);
     await evaluate((pathId) => {
       const post = Worker.prototype.postMessage;
@@ -860,12 +860,12 @@ app.whenReady().then(async () => {
     await editNumber('X', 2.25);
     await click('.optimizer-toggle');
     await wait(() => evaluate(() => document.querySelector('.optimizer-failure')?.textContent.includes('Injected interactive planning failure')), 'current error shown over retained preview');
-    assert.equal(await evaluate(() => Boolean(document.querySelector('.fieldcol[inert]'))), true, 'Stale geometry must stay inert');
+    assert.equal(await evaluate(() => Boolean(document.querySelector('.fieldcol[data-planning-ready="false"]'))), true, 'Stale geometry must stay inert');
     assert.equal(await evaluate(() => Boolean(document.querySelector('.optimizer-panel').closest('[inert]'))), false, 'Error recovery must remain usable');
     assert.equal(await evaluate(() => document.querySelector('.optimizer-main').textContent), 'Undo last edit');
     await fs.writeFile(path.join(output, 'optimizer-interactive-failure.png'), (await win.webContents.capturePage()).toPNG());
     await click('.optimizer-main');
-    await wait(() => evaluate(() => !document.querySelector('.optimizer-failure') && !document.querySelector('.fieldcol[inert]')), 'Undo recovers planning');
+    await wait(() => evaluate(() => !document.querySelector('.optimizer-failure') && !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'Undo recovers planning');
     await evaluate(() => window.__restoreWorkerPost());
     await click('[aria-label="Save project"]');
     assert.deepEqual(saved.paths[0].waypoints, beforeFailure.waypoints);
@@ -888,7 +888,7 @@ app.whenReady().then(async () => {
     if (await evaluate(() => [...document.querySelectorAll('.sechead-toggle')].some((el) => el.textContent.includes('Zones') && el.getAttribute('aria-expanded') === 'false'))) { await evaluate(() => [...document.querySelectorAll('.sechead-toggle')].find((el) => el.textContent.includes('Zones')).setAttribute('data-repair-section', '')); await pointerClick('[data-repair-section]'); }
     await pointerClick('[aria-label^="Zone,"]');
     assert.ok(await evaluate(() => document.querySelector('.ctxinsp-body')?.textContent.includes('Planning failed.')));
-    assert.equal(await evaluate(() => Boolean(document.querySelector('.fieldcol[inert]'))), true);
+    assert.equal(await evaluate(() => Boolean(document.querySelector('.fieldcol[data-planning-ready="false"]'))), true);
     for (const [width, height] of [[1440, 900], [1100, 720]]) {
       win.setContentSize(width, height); await delay(100);
       await fs.writeFile(path.join(output, `planning-repair-${width}.png`), (await win.webContents.capturePage()).toPNG());
@@ -897,7 +897,7 @@ app.whenReady().then(async () => {
     await key('Space'); await delay(120);
     assert.equal(await evaluate(() => document.querySelector('.timecode-now').textContent), '0.00', 'Space cannot play invalid timing');
     await pointerClick('.ctxinsp .delbtn');
-    await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]')), 'deleting the invalid range restores planning');
+    await wait(() => evaluate(() => !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'deleting the invalid range restores planning');
     await click('[aria-label="Save project"]');
     assert.equal(saved.paths[0].ranges.length, 0);
     assert.deepEqual(saved.paths[0].waypoints, repairPath.waypoints);
@@ -905,7 +905,7 @@ app.whenReady().then(async () => {
     saved = beforeRepair;
     win.setContentSize(1440, 900);
     await win.loadFile(path.resolve('dist-renderer/index.html'));
-    await wait(() => evaluate(() => document.querySelector('.fieldcol') && !document.querySelector('.fieldcol[inert]')), 'normal fixture after repair');
+    await wait(() => evaluate(() => document.querySelector('.fieldcol') && !document.querySelector('.fieldcol[data-planning-ready="false"]')), 'normal fixture after repair');
 
 
     saved.paths[0] = { ...structuredClone(source), id: saved.paths[0].id, name: 'Collect the second game piece from the far loading station' };
@@ -913,7 +913,7 @@ app.whenReady().then(async () => {
     saved.routines = [{ id: 'long-flow', name: 'Long content check', nodes: [{ id: 'long-step', type: 'path', ref: saved.paths[0].id }] }];
     saved.activeRoutineId = 'long-flow';
     await win.loadFile(path.resolve('dist-renderer/index.html'));
-    await wait(() => evaluate(() => !document.querySelector('.fieldcol[inert]') && document.querySelectorAll('.wpfeatrow').length === 3), 'badge-rich waypoint fixture');
+    await wait(() => evaluate(() => !document.querySelector('.fieldcol[data-planning-ready="false"]') && document.querySelectorAll('.wpfeatrow').length === 3), 'badge-rich waypoint fixture');
     for (const [width, height] of [[1440, 900], [1100, 720]]) {
       win.setContentSize(width, height); await delay(100);
       const waypointLayout = await evaluate(() => { const row = document.querySelectorAll('.wpfeatrow')[1], name = row.querySelector('.featnm'), details = row.querySelector('.featdetails'); return { name: name.textContent, fits: name.scrollWidth <= name.clientWidth, separated: details.getBoundingClientRect().top >= name.getBoundingClientRect().bottom, detailsFit: details.scrollWidth <= details.clientWidth }; });

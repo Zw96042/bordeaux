@@ -65,6 +65,7 @@ export class AppUpdateController {
   private downloadToken: CancellationToken | null = null;
   private downloaded = false;
   private installing = false;
+  private installWatchdog: ReturnType<typeof setTimeout> | null = null;
   private offeredVersions = new Set<string>();
   private state: AppUpdateState;
 
@@ -74,7 +75,7 @@ export class AppUpdateController {
     private readonly onState: (state: AppUpdateState) => void = () => undefined,
   ) {
     this.state = {
-      phase: this.available ? "idle" : "unsupported", currentVersion: runtime.currentVersion,
+      phase: this.available ? "idle" : "unsupported", installStalled: false, currentVersion: runtime.currentVersion,
       version: null, releaseNotes: "", progress: null, error: null, errorDetails: null,
       errorStage: null, projectDirty: runtime.isProjectDirty(), channel: this.channel, visible: false,
     };
@@ -90,7 +91,7 @@ export class AppUpdateController {
     this.onState(this.snapshot());
   }
   setVisible(visible: boolean): void {
-    if (!visible && this.installing) return;
+    if (!visible && this.installing && !this.state.installStalled) return;
     this.publish({ visible });
   }
   refreshDirty(): void { this.publish(); }
@@ -101,8 +102,10 @@ export class AppUpdateController {
   private fail(error: unknown, stage: NonNullable<AppUpdateState["errorStage"]>): void {
     // electron-updater emits an error and rejects the same operation's promise.
     if (this.state.phase === "error" && this.state.errorStage === stage) return;
+    if (this.installWatchdog) clearTimeout(this.installWatchdog);
+    this.installWatchdog = null;
     this.runtime.warn("Bordeaux update failed", error);
-    this.publish({ phase: "error", errorStage: stage,
+    this.publish({ phase: "error", installStalled: false, errorStage: stage,
       error: this.runtime.describeError?.(error) || "The update could not be completed. Try again or download the installer from Releases.",
       errorDetails: errorMessage(error), progress: null });
   }
@@ -197,9 +200,16 @@ export class AppUpdateController {
   async install(): Promise<void> {
     if (!this.downloaded || this.installing || !this.updater) return;
     this.installing = true;
-    this.publish({ phase: "installing", visible: true, ...this.clearError() });
+    this.publish({ phase: "installing", installStalled: false, visible: true, ...this.clearError() });
+    // Native staging may still be running. Offer an escape without treating a
+    // timeout as cancellation or registering a second native install request.
+    this.installWatchdog = setTimeout(() => {
+      this.installWatchdog = null;
+      if (this.installing) this.publish({ installStalled: true });
+    }, 60_000);
+    this.installWatchdog.unref();
     try {
-      this.updater.quitAndInstall(false, true);
+      this.updater.quitAndInstall(true, true);
     } catch (error) { this.installing = false; this.fail(error, "install"); }
   }
 }

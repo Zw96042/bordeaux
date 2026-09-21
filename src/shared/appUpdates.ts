@@ -7,6 +7,7 @@ export interface AppUpdateProgress {
 }
 export interface AppUpdateState {
   phase: "idle" | "checking" | "available" | "downloading" | "downloaded" | "installing" | "upToDate" | "error" | "unsupported";
+  installStalled?: boolean;
   currentVersion: string;
   version: string | null;
   releaseNotes: string;

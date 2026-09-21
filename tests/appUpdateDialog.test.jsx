@@ -35,6 +35,15 @@ describe('app update dialog', () => {
     expect(render({ phase: 'error', errorStage: 'download' })).toContain('Retry download');
     expect(render({ phase: 'error', errorStage: 'install' })).toContain('Retry install');
   });
+  it('offers a dismissible manual recovery state without repeating a pending install', () => {
+    const html = render({ phase: 'installing', installStalled: true });
+    expect(html).toContain('Restart is taking longer than expected');
+    expect(html).toContain('All releases');
+    expect(html).toContain('>Close</button>');
+    expect(html).not.toContain('Retry install');
+    expect(html).not.toContain('disabled');
+    expect(html).not.toContain('<progress');
+  });
   it('renders readable lists and inline code, with a Done action when current', () => {
     const html = render({ phase: 'upToDate', version: null, releaseNotes: '## Path uploads\n- **Save** the address.\n- Use `/home/lvuser/natinst/bin/Paths`.\n`Unclosed literal' });
     expect(html).toContain('<ul><li><strong>Save</strong>');

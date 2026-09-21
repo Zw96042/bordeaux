@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDemoProject } from "../src/shared/project/defaults";
-import { autosaveProjectFolder, readProject } from "../src/electron/projectFiles";
+import { autosaveProjectFolder, readProject, projectWorkspacePath } from "../src/electron/projectFiles";
 import { loadProjectSelection } from "../src/electron/projectOpening";
 
 const directories: string[] = [];
@@ -15,7 +15,7 @@ describe("project selection before activation", () => {
     const a = await folder(), b = await folder();
     const projectA = createDemoProject(), projectB = createDemoProject();
     projectA.name = "Project A"; projectB.name = "Project B";
-    const targetA = path.join(a, "A.bordeaux"), targetB = path.join(b, "B.bordeaux");
+    const targetA = projectWorkspacePath(a), targetB = projectWorkspacePath(b);
     await autosaveProjectFolder(a, projectA, targetA);
     await autosaveProjectFolder(b, projectB, targetB);
     const directory = path.join(b, extension === "path" ? "Paths" : "Routines");

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { FixedGeometryCorpus } from "../src/electron/benchmark/fixedGeometry";
 import { getPlanner } from "../src/shared/planners";
-import { optimizeFixedGeometryFinal } from "../src/shared/planners/fixedGeometryFinal";
+import { optimizeFixedGeometryFinal, validateFinal } from "../src/shared/planners/fixedGeometryFinal";
 import { evaluateDrivetrainForces } from "../src/shared/planners/drivetrainProjection";
 import { validateOptimizedTrajectory } from "../src/shared/planners/trajectoryValidation";
 import { robotHardLimits } from "../src/shared/robotLimits";
@@ -40,6 +40,44 @@ describe("fixed-geometry final optimization", () => {
       expect(final.samples.at(-1)!.y).toBeCloseTo(interactive.samples.at(-1)!.y, 5);
       expect(final.samples.at(-1)!.headingRad).toBeCloseTo(interactive.samples.at(-1)!.headingRad, 5);
       expect(final.samples.at(-1)!.velocityMps).toBeCloseTo(interactive.samples.at(-1)!.velocityMps, 5);
+    }
+  });
+
+  it.each([
+    ["corpus-neutral-slalom", 0.1, 0.3, 0.65],
+    ["corpus-neutral-stop", 0.1, 0.3, 0.65],
+    ["corpus-neutral-stop", 0.3, 0.3, 0.65],
+    ["corpus-neutral-stop", 0.5, 0.3, 0.65],
+    ["corpus-red-away-trench", 0.1, 0.13, 0.31],
+    ["corpus-red-away-trench", 0.5, 0.13, 0.31],
+    ["corpus-red-away-trench", 1.5, 0.13, 0.31],
+  ] as const)("keeps %s available after lowering a Zone velocity to %s m/s", (pathId, maxVel, f0, f1) => {
+    const path = structuredClone(project.paths.find((candidate) => candidate.id === pathId)!);
+    path.ranges.push({ anchor: "param", f0, f1, maxVel });
+    const input = { path, robot: project.robot };
+
+    const result = optimizeFixedGeometryFinal(input);
+
+    expect(result.diagnostics.filter((issue) => issue.severity === "error")).toEqual([]);
+    expect(result.optimization).toMatchObject({
+      status: expect.stringMatching(/^(optimal|feasible|equivalent)$/),
+      constraintViolations: 0,
+    });
+    expect(validateFinal(input, result).failure).toBeUndefined();
+    const withinZone = result.samples.filter((sample) => sample.f >= f0 && sample.f <= f1);
+    expect(withinZone.length).toBeGreaterThan(2);
+    expect(Math.max(...withinZone.map((sample) => Math.abs(sample.velocityMps)))).toBeLessThanOrEqual(maxVel + 1e-6);
+  });
+
+  it("keeps whole-path velocity at 0.5 m/s available across the corpus", () => {
+    for (const source of project.paths) {
+      const path = structuredClone(source);
+      path.constraints.maxVel = 0.5;
+      const input = { path, robot: project.robot };
+      const result = optimizeFixedGeometryFinal(input);
+      expect(result.diagnostics.filter((issue) => issue.severity === "error"), path.id).toEqual([]);
+      expect(validateFinal(input, result).failure, path.id).toBeUndefined();
+      expect(Math.max(...result.samples.map((sample) => Math.abs(sample.velocityMps))), path.id).toBeLessThanOrEqual(0.5 + 1e-6);
     }
   });
 

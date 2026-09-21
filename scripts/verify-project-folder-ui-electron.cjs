@@ -34,7 +34,7 @@ ipcMain.handle('fixture:save', (_e, value, saveAs) => {
   if (saveMode === 'pending') return new Promise((resolve) => { finishSave = resolve; });
   if (saveMode === 'cancel') return { canceled: true };
   if (saveMode === 'failure') throw new Error('The project folder is not writable. Choose another folder.');
-  if (!location) location = { folderPath: '/fixture/My saved project', projectPath: '/fixture/My saved project/Project.bordeaux' };
+  if (!location) location = { folderPath: '/fixture/My saved project', projectPath: '/fixture/My saved project/.bordeaux-workspace.json' };
   return { saved: true, location, ...(saveMode === 'error' ? { exportError: 'Project saved; BDX saving did not complete. Some BDX files may have been updated. Opening move has an invalid command. Correct the command and save again.' } : {}) };
 });
 ipcMain.on('fixture:dirty', (_e, value) => { dirty = value; });
@@ -100,11 +100,13 @@ app.whenReady().then(async () => {
     assert.equal(project.paths[0].name, 'Opening move');
     assert.equal(project.paths.length, 2);
     assert.equal(await evaluate(() => window.discardPrompts), 0);
-    check('Retry saves the current project without quitting or discarding it');
-    nextOpen = { project: { ...project, name: 'Autonomous paths and competition routines with a long project name', editor: { ...project.editor, unitSystem: 'imperial' } }, location: { folderPath: '/fixture/Autonomous paths and competition routines', projectPath: '/fixture/Autonomous paths and competition routines/Project.bordeaux' } };
+    assert.ok(await evaluate(() => document.querySelector('[aria-label="Project menu"]').textContent.includes('My saved project')));
+    check('Retry saves the current project without quitting or discarding it and names it after the folder');
+    nextOpen = { project: { ...project, name: 'Autonomous paths and competition routines with a long project name', editor: { ...project.editor, unitSystem: 'imperial' } }, location: { folderPath: '/fixture/Autonomous paths and competition routines', projectPath: '/fixture/Autonomous paths and competition routines/.bordeaux-workspace.json' } };
     await projectAction('Open project…');
     await wait(async () => !(await status()), 'folder opened');
     await delay(1100);
+    assert.equal(project.name, 'Autonomous paths and competition routines');
     saveMode = 'pending'; await projectAction('Save');
     assert.equal(await evaluate(() => document.querySelector('[aria-label="Project menu"]').getAttribute('aria-busy')), 'true'); await screenshot('saving-1440');
     finishSave({ saved: true, location, exportError: 'Project saved; BDX saving did not complete. Some BDX files may have been updated. Opening move has an invalid command. Correct the command and save again.' });
@@ -174,7 +176,7 @@ app.whenReady().then(async () => {
       await pointer('[aria-label="Project menu"]');
       const bounds = await evaluate(() => { const r = document.querySelector('#project-menu').getBoundingClientRect(); return { left: r.left, right: r.right, bottom: r.bottom }; });
       assert.ok(bounds.left >= 0 && bounds.right <= width && bounds.bottom <= height);
-      assert.ok(await evaluate(() => document.querySelector('.project-menu-heading').textContent.includes('Autonomous paths and competition routines with a long project name')));
+      assert.ok(await evaluate(() => document.querySelector('.project-menu-heading').textContent.includes('Autonomous paths and competition routines')));
       await screenshot('project-menu-' + width);
       await key('Escape');
     }

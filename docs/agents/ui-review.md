@@ -34,8 +34,10 @@ Existing local harnesses:
 - `node scripts/verify-robot-push-ui.mjs`: legacy mocked activation controller transitions.
 - `node scripts/verify-robot-file-push-ui.mjs`: direct SFTP connection, SSH identity, immutable file review, upload/readback success and failure using mocked transport.
 - `node scripts/verify-optimizer-ui.mjs`: optimizer comparison, exact apply/save/reload timing, units, keyboard reorder, and current-normal routine fallback.
+- `node scripts/verify-planning-recovery-ui.mjs`: usable failure details and limit editing, blocked stale geometry/playback, combined acceleration, folder titles, and autosave focus.
+- `node scripts/verify-update-quit.mjs`: production window/quit cleanup with unsaved edits and a controlled installer handoff; no native installation.
 - `node scripts/verify-range-limits-ui.mjs`: zone add/remove, exact metric/imperial values, save/reload, keyboard focus, and open/closed layouts at both supported sizes.
-- `node scripts/verify-app-updates-ui.mjs`: update notes, fixed panel dimensions, progress, cancellation, retry, installation with unsaved edits, keyboard access, and focus return with mocked updater states. Mac/Windows fixtures do not verify native installers.
+- `node scripts/verify-app-updates-ui.mjs`: update notes, fixed panel dimensions, progress, cancellation, retry, installation with unsaved edits, stalled-restart recovery, keyboard access, and focus return with mocked updater states. Mac/Windows fixtures do not verify native installers.
 
 Use isolated fixtures and mock robot transports for UI checks. Report a failing check as failing. Do not weaken assertions to get a green result; distinguish an obsolete expectation from a product regression using code and rendered behavior.
 

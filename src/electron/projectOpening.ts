@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createDemoProject } from "../shared/project/defaults";
 import type { BordeauxProject } from "../shared/types";
-import { openProjectFolder, readProject, saveTargetForOpenedProject } from "./projectFiles";
+import { openProjectFolder, readProject, saveTargetForOpenedProject, PROJECT_WORKSPACE_FILE } from "./projectFiles";
 
 export interface ProjectSelection {
   project: BordeauxProject;
@@ -12,13 +12,13 @@ export interface ProjectSelection {
 }
 
 async function hasRecovery(folder: string): Promise<boolean> {
-  try { await fs.lstat(path.join(folder, ".bordeaux-workspace.json")); return true; }
+  try { await fs.lstat(path.join(folder, PROJECT_WORKSPACE_FILE)); return true; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
 }
 
 export async function loadProjectFolderSelection(folder: string): Promise<ProjectSelection> {
   const opened = await openProjectFolder(folder);
-  return { project: opened.project ?? { ...createDemoProject(), name: path.basename(folder) },
+  return { project: { ...(opened.project ?? createDemoProject()), name: path.basename(path.resolve(folder)) },
     projectPath: opened.projectPath, folderPath: folder, recentPath: folder };
 }
 
@@ -26,6 +26,7 @@ export async function loadProjectFolderSelection(folder: string): Promise<Projec
 // The caller commits a selection only after every read and parse has succeeded.
 export async function loadProjectSelection(filePath: string): Promise<ProjectSelection> {
   if ((await fs.lstat(filePath)).isDirectory()) return loadProjectFolderSelection(filePath);
+  if (path.basename(filePath) === PROJECT_WORKSPACE_FILE) return loadProjectFolderSelection(path.dirname(filePath));
   if (/\.(path|routine)$/i.test(filePath) && ["Paths", "Routines"].includes(path.basename(path.dirname(filePath)))) {
     const folder = path.dirname(path.dirname(filePath));
     if (await hasRecovery(folder)) {

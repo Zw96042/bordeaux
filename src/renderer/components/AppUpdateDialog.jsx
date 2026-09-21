@@ -51,13 +51,14 @@ export function AppUpdateDialog({ state, onClose, onCheck, onDownload, onCancel,
   }, [state?.visible]);
   if (!state) return null;
   const { phase, version, currentVersion, progress, error } = state;
-  const busy = ['checking', 'downloading', 'installing'].includes(phase);
-  const title = ({ available: 'An update is available', downloading: 'Download in progress', downloaded: 'Ready to install', upToDate: 'You’re up to date', error: 'Update interrupted', unsupported: 'Manual update available', installing: 'Restarting Bordeaux' })[phase] || 'Bordeaux';
-  const subtitle = phase === 'error' ? error : phase === 'unsupported' ? 'Download an installer from the official releases page.' : '';
+  const stalled = phase === 'installing' && state.installStalled;
+  const busy = !stalled && ['checking', 'downloading', 'installing'].includes(phase);
+  const title = stalled ? 'Restart is taking longer than expected' : ({ available: 'An update is available', downloading: 'Download in progress', downloaded: 'Ready to install', upToDate: 'You’re up to date', error: 'Update interrupted', unsupported: 'Manual update available', installing: 'Restarting Bordeaux' })[phase] || 'Bordeaux';
+  const subtitle = stalled ? 'You can close this panel. If Bordeaux does not restart, save your work and install the update from All releases.' : phase === 'error' ? error : phase === 'unsupported' ? 'Download an installer from the official releases page.' : '';
   const notes = releaseNoteBlocks(state.releaseNotes);
   const percent = Number.isFinite(progress?.percent) ? Math.min(100, Math.max(0, progress.percent)) : null;
-  const close = () => { if (phase !== 'installing') onClose?.(); };
-  const action = phase === 'downloading' ? { label: 'Cancel download', onClick: onCancel }
+  const close = () => { if (phase !== 'installing' || stalled) onClose?.(); };
+  const action = stalled ? { label: 'Close', onClick: close } : phase === 'downloading' ? { label: 'Cancel download', onClick: onCancel }
     : phase === 'downloaded' ? { label: 'Restart and install', onClick: onInstall }
     : phase === 'available' ? { label: 'Download update', onClick: onDownload }
     : phase === 'error' ? {
@@ -69,7 +70,7 @@ export function AppUpdateDialog({ state, onClose, onCheck, onDownload, onCancel,
   return h('dialog', { ref: dialog, className: 'app-update-dialog', 'aria-labelledby': 'app-update-title', onCancel: (event) => { event.preventDefault(); close(); } },
     h('header', { className: 'app-update-header' },
       h('h2', { id: 'app-update-title' }, 'Software updates'),
-      h('button', { type: 'button', className: 'app-update-close', 'aria-label': 'Close updates', disabled: phase === 'installing', onClick: close }, '×')),
+      h('button', { type: 'button', className: 'app-update-close', 'aria-label': 'Close updates', disabled: phase === 'installing' && !stalled, onClick: close }, '×')),
     h('div', { className: 'app-update-summary' },
       h('div', { className: 'app-update-status-row' },
         h('p', { className: 'app-update-status', role: phase === 'error' ? undefined : 'status' }, title),

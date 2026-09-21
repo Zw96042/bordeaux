@@ -12,6 +12,36 @@ function setup(initial: RobotFileConnection | null = connection) {
   return { delivery: new RobotFileDelivery(initial, persist, transport), persist, transport };
 }
 describe("reviewed robot file delivery", () => {
+  it("saves directory edits locally, preserves host trust and invalidates old file reviews", async () => {
+    const { delivery, transport, persist } = setup();
+    const preview = delivery.prepare([file()], async () => undefined);
+    const endpoint = { ...connection.endpoint, directory: "/home/lvuser/practice" };
+    expect(await delivery.saveSettings(endpoint)).toEqual({ ...connection, endpoint });
+    expect(delivery.current()).toEqual({ ...connection, endpoint });
+    expect(persist).toHaveBeenCalledExactlyOnceWith({ ...connection, endpoint });
+    await expect(delivery.confirm(preview.operationId)).rejects.toThrow(/Review/);
+    expect(transport.probe).not.toHaveBeenCalled(); expect(transport.upload).not.toHaveBeenCalled();
+  });
+  it.each([{ host: "other.local" }, { port: 2222 }])("forgets SSH trust after editing identity %j without connecting", async (change) => {
+    const { delivery, transport } = setup();
+    const endpoint = { ...connection.endpoint, ...change };
+    expect(await delivery.saveSettings(endpoint)).toEqual({ endpoint });
+    expect(delivery.settings()).toEqual({ endpoint }); expect(delivery.current()).toBeNull();
+    expect(() => delivery.prepare([file()], async () => undefined)).toThrow(/Connect/);
+    expect(transport.probe).not.toHaveBeenCalled(); expect(transport.upload).not.toHaveBeenCalled();
+  });
+  it("retains saved settings after persistence failure and rejects stale probes", async () => {
+    const { delivery, persist, transport } = setup();
+    let finish!: (value: RobotFileConnection) => void;
+    transport.probe.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const probing = delivery.probe(connection.endpoint);
+    const rejectedProbe = expect(probing).rejects.toThrow(/newer connection/);
+    persist.mockRejectedValueOnce(new Error("disk full"));
+    await expect(delivery.saveSettings({ ...connection.endpoint, host: "other.local" })).rejects.toThrow("disk full");
+    expect(delivery.settings()).toEqual(connection); expect(delivery.current()).toEqual(connection);
+    finish(connection); await rejectedProbe;
+    await expect(delivery.trust(connection.hostKeyFingerprint)).rejects.toThrow(/review/);
+  });
   it("probes without writing and trusts only the observed SSH identity", async () => {
     const { delivery, transport, persist } = setup(null);
     await expect(delivery.trust(connection.hostKeyFingerprint)).rejects.toThrow(/Connect and review/);
@@ -66,6 +96,17 @@ describe("reviewed robot file delivery", () => {
 });
 
 describe("remembered robot destination", () => {
+  it("restores unverified settings without manufacturing SSH trust", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "bordeaux-file-settings-"));
+    try {
+      const filePath = path.join(directory, "connection.json"), value = { endpoint: connection.endpoint };
+      await writeRobotFileConnection(filePath, value);
+      const saved = await readRobotFileConnection(filePath);
+      expect(saved).toEqual(value);
+      const delivery = new RobotFileDelivery(saved, async () => undefined);
+      expect(delivery.settings()).toEqual(value); expect(delivery.current()).toBeNull();
+    } finally { await fs.rm(directory, { recursive: true, force: true }); }
+  });
   it.each([
     ["/natinst/bin/Paths", "/home/lvuser/natinst/bin/Paths"],
     ["/home/lvuser/practice", "/home/lvuser/practice"],

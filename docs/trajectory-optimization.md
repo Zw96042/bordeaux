@@ -12,9 +12,9 @@ An already-good route may have no meaningful gain. Improvements must save at lea
 
 ## Zone limits
 
-Zones are stored as constraint ranges. Each limit is optional: speed, acceleration, deceleration, angular speed, and angular acceleration can be enabled independently. An omitted limit inherits the path limit; overlapping enabled limits use the tightest value. An acceleration-only range does not lower deceleration. Angular acceleration continues to constrain both angular acceleration and braking. A range with no enabled limits does not change timing.
+Zones are stored as constraint ranges. The editor offers optional speed, acceleration, angular speed, and angular acceleration limits. Acceleration is one control for speeding up and slowing down: adding or editing it writes both stored `maxAccel` and `maxDecel`, and removing it clears both. The whole-path Acceleration control also writes both values. Omitted limits inherit the path limits; overlapping enabled limits use the tightest value. Angular acceleration continues to constrain both angular acceleration and braking. A zone with no enabled limits does not change timing.
 
-Saved numeric limits retain their values. Sparse imported ranges without `maxDecel` now inherit path deceleration in optimized planning, matching normal planning, instead of implicitly reusing the range acceleration.
+Existing saved values, including differing acceleration and deceleration limits, remain unchanged until explicitly edited. The inspector explains when an older path or zone has different speeding and slowing limits. The planner continues to support independent stored fields; an omitted `maxDecel` inherits path deceleration rather than implicitly copying zone acceleration.
 
 ## Saved-result contract
 

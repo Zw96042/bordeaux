@@ -14,7 +14,8 @@ export function shouldPresentPlanningError(
 }
 
 export function planningErrorMessage(error: unknown, kind: PlanningErrorKind): string {
-  const raw = error instanceof Error ? error.message : String(error);
+  const raw = error && typeof error === "object" && "message" in error && typeof error.message === "string"
+    ? error.message : String(error);
   if (kind !== "final") return raw;
   return raw
     .replace(/^Final planning failed:\s*/i, "")

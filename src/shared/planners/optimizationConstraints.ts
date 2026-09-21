@@ -134,12 +134,16 @@ export function insertOptimizationBoundaries(
     .filter((fraction, index, values) => index === 0 || Math.abs(fraction - values[index - 1]) > EPSILON);
   const missing = boundaries.filter((fraction) => {
     const boundaryDistance = fraction * totalDistance;
-    const hardHeadingBoundary = targetBoundaries.some((target) => (
+    // Keep exact Zone edges even beside an existing sample. Otherwise the
+    // dense grid can straddle an edge and apply its speed cap outside the Zone.
+    const hardConstraintBoundary = targetBoundaries.some((target) => (
       Math.abs(target.fraction - fraction) <= EPSILON
+    )) || ranges.some((range) => (
+      Math.abs(range.start - fraction) <= EPSILON || Math.abs(range.end - fraction) <= EPSILON
     ));
     return !samples.some((sample) => (
       Math.abs(sample.f - fraction) <= EPSILON
-      || (!hardHeadingBoundary
+      || (!hardConstraintBoundary
         && Math.abs(sample.s - boundaryDistance) <= OPTIMIZATION_BOUNDARY_POSITION_TOLERANCE_M)
     ));
   });

@@ -56,7 +56,7 @@ async function snapshot() {
     geometry: document.querySelector('svg path[stroke="#05060a"][stroke-opacity="0.75"]')?.getAttribute('d'),
     path: document.querySelector('.library-current-name')?.textContent,
     status: document.querySelector('.optimizer-outcome[role="status"]')?.textContent,
-    pending: Boolean(document.querySelector('.stage-plan .fieldcol[inert]')),
+    pending: Boolean(document.querySelector('.stage-plan .fieldcol[data-planning-ready="false"]')),
   }));
 }
 async function ready() {

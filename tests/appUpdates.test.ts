@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CancellationToken } from "builder-util-runtime";
 import type { AppUpdateState } from "../src/shared/appUpdates";
 import { appUpdateChannel, AppUpdateController, supportsAppUpdates, usesGitHubAppUpdates, updateReleaseNotes, type UpdateRuntime } from "../src/electron/appUpdates";
@@ -42,6 +42,7 @@ function fixture(overrides: Partial<UpdateRuntime> = {}) {
 }
 
 describe("application update state", () => {
+  afterEach(() => vi.useRealTimers());
   it("selects supported package formats and stable/beta feeds", () => {
     expect(supportsAppUpdates("darwin")).toBe(true);
     expect(supportsAppUpdates("aix")).toBe(false);
@@ -135,7 +136,7 @@ describe("application update state", () => {
     const f = fixture(); await f.ready(); f.setDirty(true);
     await f.controller.install(); await f.controller.install();
     expect(f.controller.snapshot()).toMatchObject({ phase: "installing", projectDirty: true });
-    expect(f.updater.quitAndInstall).toHaveBeenCalledExactlyOnceWith(false, true);
+    expect(f.updater.quitAndInstall).toHaveBeenCalledExactlyOnceWith(true, true);
   });
   it("retains downloaded update after installer failure for an unsaved install retry", async () => {
     const f = fixture(); await f.ready(); f.setDirty(true);
@@ -167,6 +168,25 @@ describe("application update state", () => {
     f.updater.emit("error", new Error("native verification failed"));
     f.controller.setVisible(false);
     expect(f.controller.snapshot()).toMatchObject({ phase: "error", visible: false });
+  });
+  it("unlocks manual recovery when native restart stalls without issuing another install", async () => {
+    vi.useFakeTimers();
+    const f = fixture(); await f.ready(); await f.controller.install();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "installing", installStalled: true });
+    f.controller.setVisible(false);
+    expect(f.controller.snapshot().visible).toBe(false);
+    await f.controller.check(true); await f.controller.install();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "installing", installStalled: true, visible: true });
+    expect(f.updater.quitAndInstall).toHaveBeenCalledOnce();
+    expect(f.updater.checkForUpdates).not.toHaveBeenCalled();
+  });
+  it("cancels the restart watchdog when native installation reports failure", async () => {
+    vi.useFakeTimers();
+    const f = fixture(); await f.ready(); await f.controller.install();
+    f.updater.emit("error", new Error("native verification failed"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "error", errorStage: "install", installStalled: false });
   });
   it("shows current release notes when already up to date without presenting older notes", async () => {
     const f = fixture();

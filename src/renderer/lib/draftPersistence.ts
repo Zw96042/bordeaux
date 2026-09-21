@@ -41,3 +41,13 @@ export function flushFocusedProjectDraft(
   invalid.focus();
   return false;
 }
+
+/** Background saves must leave live editor drafts and focus alone. */
+export function hasProjectInputDraft(source: Pick<Document, "activeElement" | "querySelector"> = document): boolean {
+  return Boolean(source.activeElement?.matches(PROJECT_DRAFT_SELECTOR)
+    || source.querySelector(`${PROJECT_DRAFT_SELECTOR}[aria-invalid="true"]`));
+}
+
+export function projectFolderName(location: { folderPath?: string | null } | null | undefined): string | null {
+  return location?.folderPath?.replace(/[\\/]+$/, "").split(/[\\/]/).at(-1) || null;
+}

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   enqueuePersistenceAfterPreflight,
   flushFocusedProjectDraft,
+  hasProjectInputDraft,
+  projectFolderName,
   noteProjectDraftInput,
   projectPersistenceStayedCurrent,
 } from "../src/renderer/lib/draftPersistence";
@@ -35,6 +37,22 @@ describe("renderer draft persistence", () => {
     expect(markDirty).toHaveBeenCalledOnce();
     expect(scheduleAutosave).toHaveBeenCalledOnce();
     vi.unstubAllGlobals();
+  });
+
+  it("detects a live numeric draft without blurring it during background saves", () => {
+    const element = draft(true);
+    expect(hasProjectInputDraft({ activeElement: element as any, querySelector: () => null })).toBe(true);
+    expect(element.blur).not.toHaveBeenCalled();
+    expect(hasProjectInputDraft({ activeElement: null, querySelector: () => element as any })).toBe(true);
+    expect(hasProjectInputDraft({ activeElement: null, querySelector: () => null })).toBe(false);
+  });
+
+  it.each([
+    ["/Users/team/Auto routes/", "Auto routes"],
+    ["C:\\Robot\\Auto routes", "Auto routes"],
+  ])("uses the opened folder name from %s", (folderPath, expected) => {
+    expect(projectFolderName({ folderPath })).toBe(expected);
+    expect(projectFolderName(null)).toBe(null);
   });
 
   it("flushes a valid focused draft before persistence continues", () => {
