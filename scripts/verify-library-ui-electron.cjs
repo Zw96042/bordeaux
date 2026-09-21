@@ -673,6 +673,263 @@ app.whenReady().then(async () => {
       await click('.library-tabs button', 'Paths');
     }
     check('200-item library keeps fixed width; populated flow owns central workspace at three desktop sizes and preserves selection across preview');
+    // At the minimum library height, a long selected name and a save failure still leave Push and Retry usable.
+    const longName = 'Opening move from the far source side through the center line and back to the scoring position';
+    await pointerClick('[data-library-item="library-path-0"]');
+    await click('[aria-label="Actions for Opening move"]'); await click('.library-menu button', 'Rename');
+    await input('.library-rename input', longName); await click('[aria-label="Save name"]');
+    saveFailure = 'Could not save Library verification: the project folder /Volumes/Field laptop/Bordeaux projects/Library verification is read-only.';
+    await click('[aria-label="Save project"]');
+    await wait(() => evaluate(() => !!document.querySelector('.library-save-status button')), 'save failure with retry');
+    const minimumLayout = () => evaluate(() => {
+      const top = document.querySelector('.library-top'), library = top.firstElementChild, divider = document.querySelector('.library-divider'), rail = document.querySelector('.library-rail');
+      const bounds = top.getBoundingClientRect();
+      const reach = (element) => {
+        if (!element) return null;
+        const r = element.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
+        return { inside: r.top >= bounds.top - .5 && r.bottom <= bounds.bottom + .5 && r.height > 0, hit: element.contains(document.elementFromPoint(x, y)), text: element.textContent.trim() };
+      };
+      return { push: reach(document.querySelector('.library-push > button')), retry: reach(document.querySelector('.library-save-status button')),
+        name: reach(document.querySelector('.library-current-name')), clipped: library.scrollHeight - top.clientHeight,
+        now: Number(divider.getAttribute('aria-valuenow')), min: Number(divider.getAttribute('aria-valuemin')), max: Number(divider.getAttribute('aria-valuemax')),
+        height: bounds.height, rail: rail.clientHeight };
+    });
+    for (const [width, height] of [[1100, 720], [1440, 900]]) {
+      win.setContentSize(width, height); await delay(150);
+      await evaluate(() => document.querySelector('.library-divider').focus()); await key('Home');
+      const layout = await minimumLayout();
+      assert.equal(layout.name.text, longName);
+      const ordinaryTitle = await evaluate(() => { const t = document.querySelector('.ctxinsp .ctxinsp-t'); return t && { text: t.textContent, height: t.clientHeight, content: t.scrollHeight }; });
+      assert.ok(ordinaryTitle && ordinaryTitle.text === longName && ordinaryTitle.content <= ordinaryTitle.height + 1, 'An ordinary long inspector title is shown whole without scrolling at ' + width + ': ' + JSON.stringify(ordinaryTitle));
+      assert.ok(layout.clipped <= 1, 'Nothing is clipped at the minimum library height at ' + width + ': ' + JSON.stringify(layout));
+      for (const control of ['push', 'retry', 'name']) assert.deepEqual([layout[control].inside, layout[control].hit], [true, true], control + ' is visible and hit-testable at ' + width + ': ' + JSON.stringify(layout));
+      assert.equal(layout.now, layout.min, 'Home reports the effective minimum');
+      assert.ok(Math.abs(layout.height - layout.rail * layout.min / 100) <= layout.rail / 100, 'The rendered minimum matches the reported range: ' + JSON.stringify(layout));
+      await key('Down');
+      const lower = await minimumLayout();
+      assert.ok(lower.now > layout.now && lower.height > layout.height + 1, 'The next key step moves the rendered divider: ' + JSON.stringify([layout, lower]));
+      assert.ok(Math.abs(lower.height - lower.rail * lower.now / 100) <= lower.rail / 100, 'Divider geometry tracks its reported value');
+      await key('Home');
+      await fs.writeFile(path.join(output, `divider-minimum-save-error-${width}.png`), (await win.webContents.capturePage()).toPNG());
+      // Keyboard: Shift+Tab from the divider reaches Push; Tab from the active tab reaches Retry.
+      await evaluate(() => document.querySelector('.library-divider').focus()); await key('Tab', ['shift']);
+      assert.equal(await evaluate(() => document.activeElement === document.querySelector('.library-push > button')), true, 'Push is reachable by keyboard at ' + width);
+      await evaluate(() => document.querySelector('.library-tabs [aria-selected="true"]').focus()); await key('Tab');
+      assert.equal(await evaluate(() => document.activeElement === document.querySelector('.library-save-status button')), true, 'Retry is reachable by keyboard at ' + width);
+      // Pointer: Retry runs another save; it fails again and keeps its recovery action.
+      const attempts = saveAttempts;
+      await pointerClick('.library-save-status button');
+      await wait(async () => saveAttempts > attempts && await evaluate(() => !!document.querySelector('.library-save-status button')), 'retry attempted');
+      assert.ok((await minimumLayout()).push.hit, 'Push stays reachable after a failed retry');
+    }
+    // A pending retry leaves Push reachable; completing it clears the failure.
+    saveFailure = ''; deferredSave = {}; deferredSave.promise = new Promise((resolve) => { deferredSave.resolve = resolve; });
+    const pendingAttempts = saveAttempts;
+    await pointerClick('.library-save-status button');
+    await wait(async () => saveAttempts > pendingAttempts && await evaluate(() => !document.querySelector('.library-save-status')), 'pending retry');
+    const pendingLayout = await minimumLayout();
+    assert.deepEqual([pendingLayout.push.inside, pendingLayout.push.hit], [true, true], 'Push stays reachable while a retry is pending');
+    assert.ok(pendingLayout.clipped <= 1);
+    await fs.writeFile(path.join(output, 'divider-minimum-save-pending-1440.png'), (await win.webContents.capturePage()).toPNG());
+    deferredSave.resolve(); deferredSave = null;
+    const openingName = () => saved.paths.find((item) => item.id === 'library-path-0').name;
+    await wait(async () => openingName() === longName && await evaluate(() => !document.querySelector('.library-save-status')), 'retry saved');
+    await click('[aria-label="Actions for ' + longName + '"]'); await click('.library-menu button', 'Rename');
+    await input('.library-rename input', 'Opening move'); await click('[aria-label="Save name"]');
+    await click('[aria-label="Save project"]');
+    assert.equal(openingName(), 'Opening move');
+    win.setContentSize(1100, 720); await delay(150);
+    await evaluate(() => document.querySelector('.library-divider').focus()); await key('End');
+    for (let index = 0; index < 5; index++) await key('Up');
+    check('minimum library height with a long name and a failed or pending save keeps Push and Retry visible, reachable, and tracks the divider range');
+    // Any nonblank name is valid, so a 5000-character name must keep the same bounded minimum,
+    // a complete and scrollable name, reachable actions and outline, and a working divider.
+    const hugeName = 'W'.repeat(5000), moreButton = '.library-pick[data-library-item="library-path-0"] + .library-more';
+    await pointerClick(moreButton); await click('.library-menu button', 'Rename');
+    await input('.library-rename input', hugeName); await click('[aria-label="Save name"]');
+    await click('[aria-label="Save project"]');
+    assert.equal(openingName(), hugeName, 'Save keeps the complete name');
+    const hugeLayout = async () => ({ ...await minimumLayout(), ...await evaluate(() => {
+      const name = document.querySelector('.library-current-name'), top = document.querySelector('.library-top');
+      const outline = document.querySelector('.outline .featselect'), r = outline.getBoundingClientRect();
+      return { nameScroll: { height: name.clientHeight, content: name.scrollHeight, lineHeight: parseFloat(getComputedStyle(name).lineHeight), label: name.title }, cssMin: parseFloat(getComputedStyle(top).minHeight),
+        outline: r.height > 0 && outline.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)) };
+    }) });
+    // The inspector header stays bounded: the complete title scrolls within it, while the close
+    // button and body actions remain visible and topmost at their centers.
+    const inspectorLayout = () => evaluate(() => {
+      const panel = document.querySelector('.ctxinsp'), header = panel?.querySelector('.ctxinsp-hd'), title = panel?.querySelector('.ctxinsp-t');
+      const close = panel?.querySelector('.ctxinsp-x'), body = panel?.querySelector('.ctxinsp-body');
+      if (!header || !title || !close || !body) return null;
+      const reach = (element, container) => {
+        if (!element) return null;
+        const r = element.getBoundingClientRect(), c = container.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
+        return { x: Math.round(x), y: Math.round(y), hit: document.elementFromPoint(x, y)?.closest('button') === element,
+          inside: r.width > 0 && r.height > 0 && r.left >= c.left - .5 && r.right <= c.right + .5 && r.top >= Math.max(0, c.top) - .5 && r.bottom <= Math.min(innerHeight, c.bottom) + .5 };
+      };
+      const swap = header.querySelector('.ctxinsp-act[aria-label="Swap start/end"]'), place = document.querySelector('.toolrail-b[aria-label="Place waypoint"]');
+      const b = body.getBoundingClientRect(), t = title.getBoundingClientRect();
+      return { header: header.getBoundingClientRect().height, close: reach(close, panel), swap: reach(swap, panel), place: reach(place, document.querySelector('.toolrail') || document.body),
+        title: { text: title.textContent, label: title.title, height: title.clientHeight, content: title.scrollHeight, top: title.scrollTop, wide: title.scrollWidth > title.clientWidth,
+          lineHeight: parseFloat(getComputedStyle(title).lineHeight), point: { x: Math.round(t.x + t.width / 2), y: Math.round(t.y + t.height / 2) } },
+        // The left padding of the body is its own surface, so the wheel cannot land on a control.
+        body: { height: body.clientHeight, content: body.scrollHeight, top: body.scrollTop, point: { x: Math.round(b.left + 6), y: Math.round(b.top + b.height / 2) } },
+        tool: document.querySelector('.toolrail-b[aria-pressed="true"]')?.getAttribute('aria-label'), features: document.querySelectorAll('.outline .featselect').length,
+        time: document.querySelector('.timecode-now')?.textContent };
+    });
+    const assertInspectorUsable = (layout, width) => {
+      assert.ok(layout, 'The path inspector is open at ' + width);
+      assert.equal(layout.title.text, hugeName, 'The inspector title keeps the complete name at ' + width);
+      assert.equal(layout.title.label, hugeName);
+      assert.ok(layout.title.height <= layout.title.lineHeight * 5 + 1 && layout.title.content > layout.title.height && !layout.title.wide, 'The title scrolls vertically within five lines at ' + width + ': ' + JSON.stringify(layout.title));
+      assert.ok(layout.header <= Math.max(53, layout.title.height + 24), 'The header stays bounded by its title at ' + width + ': ' + layout.header);
+      for (const control of ['close', 'swap', 'place']) assert.deepEqual([layout[control]?.inside, layout[control]?.hit], [true, true], control + ' is visible and topmost at ' + width + ': ' + JSON.stringify(layout));
+      assert.ok(layout.body.height >= 200, 'The inspector body keeps a usable height at ' + width + ': ' + JSON.stringify(layout.body));
+    };
+    const nativeClick = async ({ x, y }) => {
+      win.webContents.sendInputEvent({ type: 'mouseMove', x, y });
+      win.webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+      win.webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+      await delay(80);
+    };
+    const wheelAt = ({ x, y }, deltaY) => {
+      win.webContents.sendInputEvent({ type: 'mouseMove', x, y });
+      win.webContents.sendInputEvent({ type: 'mouseWheel', x, y, deltaY, canScroll: true });
+    };
+    // The scroller under the wheel point, what the point actually hits, and both inspector offsets.
+    const scrollState = (selector, point) => evaluate((selector, point) => {
+      const el = document.querySelector(selector), hit = document.elementFromPoint(point.x, point.y);
+      const describe = (node) => node && node.tagName.toLowerCase() + [...node.classList].map((name) => '.' + name).join('');
+      return el && { top: el.scrollTop, height: el.clientHeight, content: el.scrollHeight, owned: Boolean(hit && el.contains(hit)), hit: describe(hit),
+        title: document.querySelector('.ctxinsp .ctxinsp-t')?.scrollTop, body: document.querySelector('.ctxinsp-body')?.scrollTop };
+    }, selector, point);
+    // One huge wheel step can be capped or merged into an animation still in flight, so this sends
+    // bounded native steps, each settled before the next, until the scroller reaches its end.
+    const wheelUntil = async (selector, point, direction, reached, label) => {
+      let state = await scrollState(selector, point), stalled = 0;
+      const history = [state?.top];
+      const fail = (reason) => new Error('Timed out: ' + label + ' (' + reason + '): ' + JSON.stringify({ point, state, history: history.slice(-12) }));
+      if (!state?.owned) throw fail('the wheel point is not over the scroller');
+      const step = Math.min(600, Math.max(100, 3 * state.height));
+      for (let index = 0; index < 200 && !reached(state); index++) {
+        const before = state.top;
+        wheelAt(point, -direction * step);
+        // Settled: moved and then steady for two reads, or unmoved for 500ms.
+        for (let read = 0, steady = 0; read < 30 && steady < 2; read++) {
+          await delay(50);
+          const next = await scrollState(selector, point);
+          steady = next?.top === state?.top && (next?.top !== before || read >= 9) ? steady + 1 : 0;
+          state = next;
+        }
+        history.push(state?.top);
+        if (!state?.owned) throw fail('the wheel point stopped hitting the scroller');
+        stalled = state.top === before ? stalled + 1 : 0;
+        if (stalled >= 3) throw fail('three settled wheel steps did not move the scroller');
+      }
+      if (!reached(state)) throw fail('200 wheel steps did not reach the end');
+    };
+    const titleEnd = (s) => s.top > 0 && s.top + s.height >= s.content - 1, scrollStart = (s) => s.top === 0;
+    let inspectorBodyScrolled = false;
+    for (const [width, height] of [[1100, 720], [1440, 900]]) {
+      win.setContentSize(width, height); await delay(150);
+      await evaluate(() => document.querySelector('.library-divider').focus()); await key('Home');
+      const layout = await hugeLayout();
+      assert.equal(layout.name.text, hugeName, 'The selected name is not truncated at ' + width);
+      // The footer names the push target on one clamped line; the inspector title below keeps the whole name readable.
+      assert.ok(layout.nameScroll.height <= layout.nameScroll.lineHeight + 1 && layout.nameScroll.label === hugeName, 'The long push-target name stays on one line with its full text available: ' + JSON.stringify({ ...layout.nameScroll, label: layout.nameScroll.label.length }));
+      assert.ok(layout.cssMin <= layout.rail * layout.max / 100 + 1, 'The CSS minimum stays within the divider maximum at ' + width + ': ' + JSON.stringify(layout));
+      assert.ok(layout.clipped <= 1, 'Nothing is clipped at the minimum at ' + width + ': ' + JSON.stringify(layout));
+      for (const control of ['push', 'name']) assert.deepEqual([layout[control].inside, layout[control].hit], [true, true], control + ' is visible and hit-testable at ' + width + ': ' + JSON.stringify(layout));
+      assert.equal(layout.outline, true, 'The path outline stays reachable at ' + width);
+      assert.equal(layout.now, layout.min);
+      assert.ok(layout.min < layout.max, 'The divider keeps a usable range at ' + width + ': ' + JSON.stringify(layout));
+      assert.ok(Math.abs(layout.height - layout.rail * layout.min / 100) <= layout.rail / 100, 'The rendered minimum matches the reported range: ' + JSON.stringify(layout));
+      let previous = layout;
+      while (previous.now < previous.max) {
+        await key('Down');
+        const next = await hugeLayout();
+        assert.ok(next.now > previous.now && next.height > previous.height + 1, 'Each Down step moves the rendered divider at ' + width + ': ' + JSON.stringify([previous, next]));
+        assert.ok(Math.abs(next.height - next.rail * next.now / 100) <= next.rail / 100, 'Divider geometry tracks its reported value');
+        assert.ok(next.push.hit && next.clipped <= 1);
+        previous = next;
+      }
+      await key('Home');
+      // Keyboard: Shift+Tab from the divider reaches Push.
+      await fs.writeFile(path.join(output, `divider-minimum-5000-character-name-${width}.png`), (await win.webContents.capturePage()).toPNG());
+      await evaluate(() => document.querySelector('.library-divider').focus()); await key('Tab', ['shift']);
+      assert.equal(await evaluate(() => document.activeElement === document.querySelector('.library-push > button')), true, 'Push is reachable by keyboard at ' + width);
+      // The row menu still opens within the viewport from its pointer trigger, and Escape returns focus.
+      await pointerClick(moreButton);
+      const menu = await evaluate(() => { const el = document.querySelector('.library-menu'), r = el?.getBoundingClientRect(); return el && { top: r.top, bottom: r.bottom, height: innerHeight, focused: el.contains(document.activeElement) }; });
+      assert.ok(menu && menu.top >= 0 && menu.bottom <= menu.height && menu.focused, 'The row menu stays usable at ' + width + ': ' + JSON.stringify(menu));
+      await key('Escape');
+      assert.equal(await evaluate((selector) => !document.querySelector('.library-menu') && document.activeElement === document.querySelector(selector), moreButton), true);
+      // Inspector: the bounded header keeps the close button and body actions reachable.
+      const inspector = await inspectorLayout();
+      assertInspectorUsable(inspector, width);
+      // The wheel reads the whole title in place, to its last line, without scrolling the body.
+      wheelAt(inspector.title.point, -100);
+      await wait(() => evaluate(() => document.querySelector('.ctxinsp .ctxinsp-t').scrollTop > 0), 'wheel scrolls the inspector title at ' + width);
+      await wheelUntil('.ctxinsp .ctxinsp-t', inspector.title.point, 1, titleEnd, 'wheel reaches the end of the inspector title at ' + width);
+      await wait(() => evaluate(() => { const t = document.querySelector('.ctxinsp .ctxinsp-t'); return t.scrollTop > 0 && t.scrollTop + t.clientHeight >= t.scrollHeight - 1; }), 'wheel reaches the end of the inspector title at ' + width);
+      assert.equal((await inspectorLayout()).body.top, 0, 'Scrolling the title leaves the body in place at ' + width);
+      await wheelUntil('.ctxinsp .ctxinsp-t', inspector.title.point, -1, scrollStart, 'wheel returns to the start of the inspector title at ' + width);
+      await wait(() => evaluate(() => document.querySelector('.ctxinsp .ctxinsp-t').scrollTop === 0), 'wheel returns to the start of the inspector title at ' + width);
+      // Pointer: the tool rail's Place waypoint arms placement; Select clears it before the field is touched.
+      await nativeClick(inspector.place);
+      await wait(() => evaluate(() => document.querySelector('.toolrail-b[aria-pressed="true"]')?.getAttribute('aria-label') === 'Place waypoint'), 'pointer reaches Place waypoint at ' + width);
+      const selectTool = await evaluate(() => {
+        const button = document.querySelector('.toolrail-b[aria-label="Select / move"]'), r = button.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
+        return { x: Math.round(x), y: Math.round(y), hit: document.elementFromPoint(x, y)?.closest('button') === button };
+      });
+      assert.equal(selectTool.hit, true, 'The select tool is topmost at ' + width);
+      await nativeClick(selectTool);
+      const cleared = await inspectorLayout();
+      assert.equal(cleared.tool, 'Select / move', 'Placement is cleared at ' + width);
+      assert.equal(cleared.features, inspector.features, 'Arming placement adds no waypoint at ' + width);
+      assertInspectorUsable(cleared, width);
+      // The wheel scrolls an overflowing body and returns it to the top.
+      if (cleared.body.content > cleared.body.height + 1) {
+        wheelAt(cleared.body.point, -200);
+        await wait(() => evaluate(() => document.querySelector('.ctxinsp-body').scrollTop > 0), 'wheel scrolls the inspector body at ' + width);
+        assert.equal((await inspectorLayout()).title.top, 0, 'Scrolling the body leaves the title in place at ' + width);
+        await wheelUntil('.ctxinsp-body', cleared.body.point, -1, scrollStart, 'wheel returns the inspector body to the top at ' + width);
+        await wait(() => evaluate(() => document.querySelector('.ctxinsp-body').scrollTop === 0), 'wheel returns the inspector body to the top at ' + width);
+        inspectorBodyScrolled = true;
+      }
+      // Pointer closes at the exact close button and focus returns to the tab; keyboard reopens.
+      await nativeClick((await inspectorLayout()).close);
+      await wait(() => evaluate(() => !document.querySelector('.ctxinsp') && document.activeElement === document.querySelector('.inspector-tab')), 'pointer closes the inspector and focuses its tab at ' + width);
+      await key('Tab', ['shift']); await key('Tab');
+      assert.equal(await evaluate(() => document.activeElement === document.querySelector('.inspector-tab')), true, 'Keyboard reaches the inspector tab at ' + width);
+      await key('Space');
+      await wait(() => evaluate(() => !!document.querySelector('.ctxinsp .ctxinsp-x')), 'keyboard reopens the inspector at ' + width);
+      const reopenedInspector = await inspectorLayout();
+      assertInspectorUsable(reopenedInspector, width);
+      assert.equal(reopenedInspector.time, inspector.time, 'Space on the inspector tab does not start playback at ' + width);
+      await fs.writeFile(path.join(output, `inspector-5000-character-name-${width}.png`), (await win.webContents.capturePage()).toPNG());
+    }
+    assert.equal(inspectorBodyScrolled, true, 'The inspector body overflowed and wheel-scrolled at a supported size');
+    await win.loadFile(path.resolve('dist-renderer/index.html'));
+    await wait(() => evaluate((name) => document.querySelector('.library-current-name')?.textContent === name, hugeName), 'reopened 5000-character name');
+    assert.equal(await evaluate((name) => document.querySelector('.library-pick[data-library-item="library-path-0"] .library-name').textContent === name, hugeName), true, 'Reload shows the complete name');
+    // After reload the inspector body stays inert until planning settles, so wait for current
+    // planning and an enabled Swap action; the layout assertions stay below.
+    await wait(() => evaluate((name) => {
+      const title = document.querySelector('.ctxinsp .ctxinsp-t'), body = document.querySelector('.ctxinsp-body');
+      const swap = document.querySelector('.ctxinsp-hd [aria-label="Swap start/end"]');
+      return title?.textContent === name && !document.querySelector('.fieldcol[data-planning-ready="false"]')
+        && body && !body.closest('[inert]') && swap && !swap.disabled;
+    }, hugeName), 'reloaded inspector shows the complete name with planning settled');
+    assertInspectorUsable(await inspectorLayout(), 'reload');
+    await pointerClick(moreButton); await click('.library-menu button', 'Rename');
+    await input('.library-rename input', 'Opening move'); await click('[aria-label="Save name"]');
+    await click('[aria-label="Save project"]');
+    assert.equal(openingName(), 'Opening move');
+    win.setContentSize(1100, 720); await delay(150);
+    await evaluate(() => document.querySelector('.library-divider').focus()); await key('End');
+    for (let index = 0; index < 5; index++) await key('Up');
+    check('a valid 5000-character name keeps the capped minimum, divider range, Push, outline, menus, and a bounded inspector title with reachable close, Swap start/end, Place waypoint, and scrolling body usable at both supported sizes and survives save/reload');
     await click('.library-tabs button', 'Routines'); await click('[data-library-item="routine-a"]');
     await click('.rt-branches .rt-add');
     const branchBefore = saved.routines.find((routine) => routine.id === 'routine-a').nodes.find((node) => node.id === 'decision-a').then.length;
@@ -1134,7 +1391,10 @@ app.whenReady().then(async () => {
       win.setContentSize(width, height); await delay(100);
       const waypointLayout = await evaluate(() => { const row = document.querySelectorAll('.wpfeatrow')[1], name = row.querySelector('.featnm'), details = row.querySelector('.featdetails'); return { name: name.textContent, fits: name.scrollWidth <= name.clientWidth, separated: details.getBoundingClientRect().top >= name.getBoundingClientRect().bottom, detailsFit: details.scrollWidth <= details.clientWidth }; });
       assert.deepEqual(waypointLayout, { name: 'Waypoint 1', fits: true, separated: true, detailsFit: true });
-      assert.equal(await evaluate(() => ['.library-name', '.library-current-name', '.ctxinsp-t'].every((selector) => { const el = document.querySelector(selector); return el.scrollWidth <= el.clientWidth && getComputedStyle(el).whiteSpace === 'normal'; })), true, 'Primary path names stay readable across library and inspector');
+      assert.equal(await evaluate(() => ['.library-name', '.library-current-name', '.ctxinsp-t'].every((selector) => { const el = document.querySelector(selector); return el.scrollWidth <= el.clientWidth && getComputedStyle(el).whiteSpace === 'normal'; })), true, 'Primary path names wrap instead of clipping across library and inspector');
+      // Library rows clamp long names to two lines and the push footer to one; the inspector title shows the whole name.
+      assert.deepEqual(await evaluate(() => { const row = document.querySelector('.library-pick[aria-current="true"] .library-name'), footer = document.querySelector('.library-current-name'), title = document.querySelector('.ctxinsp-t'), line = (el) => parseFloat(getComputedStyle(el).lineHeight);
+        return { row: row.clientHeight <= line(row) * 2 + 1, footer: footer.clientHeight <= line(footer) + 1 && footer.title === footer.textContent, title: title.textContent === title.title && title.scrollHeight <= title.clientHeight + 1 }; }), { row: true, footer: true, title: true }, 'Clamped library names keep the complete name in the inspector title');
       await fs.writeFile(path.join(output, `waypoint-badges-${width}.png`), (await win.webContents.capturePage()).toPNG());
       await click('.library-tabs button', 'Routines');
       await click('.rt-step-body');
