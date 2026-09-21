@@ -28,10 +28,40 @@ export function selectedPathIds(paths, checkedIds) {
   return paths.filter((path) => checked.has(path.id)).map((path) => path.id);
 }
 
+// The library keeps its tabs, tools, search, at least two rows, and Push visible.
+// A save error or a long selected name raises the minimum to fit them, up to the
+// divider maximum. That capped height is the CSS minimum, so every divider value
+// changes the layout; anything still taller scrolls within the library.
+// LIST_MIN_HEIGHT matches the .library-scroll minimum in library.css.
+const LIBRARY_MIN_HEIGHT = 280, LIST_MIN_HEIGHT = 80;
+const MIN_RATIO = 25, MAX_RATIO = 75;
+
 export function LibraryRail({ preferenceKey, mode, children, ...props }) {
   const storageKey = 'bordeaux.library.' + preferenceKey + '.' + mode;
   const [prefs, setPrefs] = useState(() => readPreferences(storageKey));
-  const latest = useRef(prefs), rail = useRef(null), structureBody = useRef(null), timer = useRef(null);
+  const [railHeight, setRailHeight] = useState(0);
+  const [minHeight, setMinHeight] = useState(LIBRARY_MIN_HEIGHT);
+  const latest = useRef(prefs), rail = useRef(null), top = useRef(null), structureBody = useRef(null), timer = useRef(null);
+  const resizable = Boolean(children);
+  React.useLayoutEffect(() => {
+    if (!resizable) return undefined;
+    const element = rail.current;
+    const measure = () => setRailHeight(element.clientHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [resizable]);
+  // Content outside the list changes with library props, so measure after each render.
+  React.useLayoutEffect(() => {
+    if (!resizable) return;
+    const library = top.current.firstElementChild, list = library.querySelector('.library-scroll');
+    setMinHeight(Math.max(LIBRARY_MIN_HEIGHT, Math.ceil(library.scrollHeight - list.offsetHeight) + LIST_MIN_HEIGHT));
+  });
+  const effectiveMinHeight = railHeight > 0 ? Math.min(minHeight, railHeight * MAX_RATIO / 100) : minHeight;
+  const minRatio = railHeight > 0 ? Math.max(MIN_RATIO, effectiveMinHeight / railHeight * 100) : MIN_RATIO;
+  const ratio = Math.max(minRatio, Math.min(MAX_RATIO, prefs.ratio));
+  const clampRatio = (value) => Math.max(minRatio, Math.min(MAX_RATIO, value));
   const update = (patch) => {
     const next = { ...latest.current, ...patch };
     latest.current = next; memory.set(storageKey, next); setPrefs(next);
@@ -49,17 +79,17 @@ export function LibraryRail({ preferenceKey, mode, children, ...props }) {
   const resize = (event) => {
     if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
     const bounds = rail.current.getBoundingClientRect();
-    update({ ratio: Math.max(25, Math.min(75, (event.clientY - bounds.top) / bounds.height * 100)) });
+    update({ ratio: clampRatio((event.clientY - bounds.top) / bounds.height * 100) });
   };
   return h('nav', { ref: rail, className: 'rail rail-l library-rail' + (children ? '' : ' library-only'), 'aria-label': mode === 'paths' ? 'Paths and outline' : 'Routines',
-    style: { '--library-ratio': prefs.ratio + '%' },
+    style: { '--library-ratio': ratio + '%', '--library-min-height': effectiveMinHeight + 'px' },
     onKeyDown: (event) => { if (event.target.closest('.editor-library,.library-divider')) event.stopPropagation(); } },
-    h('section', { className: 'library-top' },
+    h('section', { ref: top, className: 'library-top' },
       h(EditorLibrary, { ...props, mode, prefs, update })),
-    children && h('div', { className: 'library-divider', role: 'separator', tabIndex: 0, 'aria-label': 'Resize library and structure', 'aria-orientation': 'horizontal', 'aria-valuemin': 25, 'aria-valuemax': 75, 'aria-valuenow': Math.round(prefs.ratio),
+    children && h('div', { className: 'library-divider', role: 'separator', tabIndex: 0, 'aria-label': 'Resize library and structure', 'aria-orientation': 'horizontal', 'aria-valuemin': Math.round(minRatio), 'aria-valuemax': MAX_RATIO, 'aria-valuenow': Math.round(ratio),
       onPointerDown: (event) => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); }, onPointerMove: resize,
       onPointerUp: (event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); },
-      onKeyDown: (event) => { const change = { ArrowUp: -5, ArrowDown: 5, Home: 25 - prefs.ratio, End: 75 - prefs.ratio }[event.key]; if (change !== undefined) { event.preventDefault(); update({ ratio: Math.max(25, Math.min(75, prefs.ratio + change)) }); } } }),
+      onKeyDown: (event) => { const next = { ArrowUp: ratio - 5, ArrowDown: ratio + 5, Home: minRatio, End: MAX_RATIO }[event.key]; if (next !== undefined) { event.preventDefault(); update({ ratio: clampRatio(next) }); } } }),
     children && h('section', { className: 'library-structure' },
       h('div', { className: 'library-section-title' }, mode === 'paths' ? 'Path outline' : 'Routine steps'),
       h('div', { ref: structureBody, className: 'library-structure-body', onScrollCapture: (event) => { if (event.target.matches('.outline-scroll,.rt-scroll')) update({ structureScroll: event.target.scrollTop }); } }, children(prefs.sections, (sections) => update({ sections: typeof sections === 'function' ? sections(latest.current.sections) : sections })))));

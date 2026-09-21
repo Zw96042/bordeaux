@@ -64,8 +64,32 @@ async function input(selector, value) {
   }, selector, value); await delay(50);
 }
 const check = (name) => { checks.push(name); console.log('PASS ' + name); };
+// Reported divider values and the rendered library height, which must change together.
+const dividerState = () => evaluate(() => {
+  const divider = document.querySelector('.library-divider');
+  return { now: Number(divider.getAttribute('aria-valuenow')), min: Number(divider.getAttribute('aria-valuemin')), max: Number(divider.getAttribute('aria-valuemax')), height: document.querySelector('.library-top').getBoundingClientRect().height };
+});
+const activePathId = () => evaluate(() => document.querySelector('.library-pick[aria-current="true"]').dataset.libraryItem);
+const editorReady = (label) => wait(() => evaluate(() => !document.querySelector('.fieldcol[data-planning-ready="false"]') && document.querySelectorAll('.outline .featselect').length > 1), label);
+// Selects the second outline waypoint and nudges it right with a real key press.
+async function nudgeSecondWaypoint() {
+  await evaluate(() => { const row = document.querySelectorAll('.outline .featselect')[1]; row.click(); row.focus(); });
+  win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Right' }); win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Right' });
+  await delay(80);
+}
+async function keyboardUndo() {
+  await evaluate(() => document.querySelector('.outline .featselect').focus());
+  win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'z', modifiers: ['control'] }); win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'z', modifiers: ['control'] });
+  await delay(80);
+}
 ipcMain.handle('library:restore', () => ({ project: saved }));
-ipcMain.handle('library:save', (_event, project) => { saved = project; return { saved: true }; });
+let saveFailure = '', deferredSave = null, saveAttempts = 0;
+ipcMain.handle('library:save', async (_event, project) => {
+  saveAttempts++;
+  if (saveFailure) throw new Error(saveFailure);
+  if (deferredSave) await deferredSave.promise;
+  saved = project; return { saved: true };
+});
 ipcMain.handle('library:diagnostic-preview', (_event, project) => {
   diagnosticPreviews.push(project);
   return { previewId: 'fixture-preview-capability', contents: JSON.stringify({ version: 'fixture', project: project.name }) };
@@ -419,8 +443,11 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate(() => document.querySelector('.library-search').value), 'no matches');
     await input('.library-search', '');
     await evaluate(() => document.querySelector('.library-divider').focus());
+    const dividerBefore = await dividerState();
     win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Down' }); win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Down' }); await delay(60);
-    assert.equal(await evaluate(() => document.querySelector('.library-divider').getAttribute('aria-valuenow')), '53');
+    const dividerAfter = await dividerState();
+    assert.equal(dividerAfter.now, 53);
+    assert.ok(dividerAfter.height > dividerBefore.height + 20, 'The divider key moves the rendered library boundary: ' + JSON.stringify([dividerBefore, dividerAfter]));
     check('search persists per tab and divider works from the keyboard');
     await click('[aria-label="New folder"]');
     await input('.library-rename input', 'Practice'); await click('[aria-label="Save name"]');
@@ -583,6 +610,19 @@ app.whenReady().then(async () => {
 
       await evaluate(() => document.querySelector('.library-divider').focus()); await key('Home');
       assert.equal(await evaluate(() => { const button = document.querySelector('.library-push > button').getBoundingClientRect(), section = document.querySelector('.library-top').getBoundingClientRect(); return button.bottom <= section.bottom; }), true, 'Push remains reachable at the minimum library height');
+      // The reported minimum is the rendered minimum, and every key step moves the boundary.
+      const atMinimum = await dividerState();
+      assert.equal(atMinimum.now, atMinimum.min, 'Home reports the effective minimum at ' + width);
+      assert.ok(Math.abs(atMinimum.height - 280) <= 1, 'The effective minimum is the rendered minimum: ' + JSON.stringify(atMinimum));
+      for (const [keyCode, direction] of [['Down', 1], ['Up', -1]]) {
+        let previous = await dividerState();
+        while (direction > 0 ? previous.now < previous.max : previous.now > previous.min) {
+          await key(keyCode);
+          const next = await dividerState();
+          assert.ok((next.height - previous.height) * direction > 1, keyCode + ' moves the rendered divider at ' + width + ': ' + JSON.stringify([previous, next]));
+          previous = next;
+        }
+      }
       await pointerClick('[data-library-item="library-path-0"]');
       await pointerClick('[data-library-item="library-path-1"]', [process.platform === 'darwin' ? 'meta' : 'control']);
       assert.equal(await evaluate(() => document.querySelector('.library-push > button').checkVisibility()), true);
