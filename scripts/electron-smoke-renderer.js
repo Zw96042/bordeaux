@@ -18,7 +18,7 @@
     // Wait for the same interactive state before each native marker placement.
     await waitFor(() => {
       const field = document.querySelector('.stage-plan .fieldcol');
-      return field && !field.inert && field.getAttribute('aria-disabled') !== 'true';
+      return field?.dataset.planningReady === 'true';
     }, 'interactive field before marker placement');
     const segment = document.querySelector('.fieldsvg path[data-role="seg"]');
     if (!segment) throw new Error('Smoke marker placement requires a visible path');
@@ -77,7 +77,7 @@
   [...document.querySelectorAll('.library-tabs button')].find((button) => button.textContent.trim() === 'Paths')?.click();
   for (let attempt = 0; attempt < 100; attempt++) {
     const planStage = document.querySelector('.stage-plan .fieldcol');
-    if (planStage && planStage.getAttribute('aria-disabled') !== 'true') break;
+    if (planStage?.dataset.planningReady === 'true') break;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   await addMarker(0.4);
