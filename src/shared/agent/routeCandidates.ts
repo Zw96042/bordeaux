@@ -421,7 +421,7 @@ function splitContainingRangeForBump(path: PathDoc, containerIndex: number, anch
   replacements.push({
     ...container,
     ...anchor,
-    maxVel: Math.min(container.maxVel, 2),
+    maxVel: Math.min(container.maxVel ?? Infinity, 2),
     name: `${baseName} + BUMP traversal${suffix ? ` ${suffix + 1}` : ""}`,
   });
   if (bumpEnd < end - 1e-6) replacements.push({ ...container, w0: anchor.w1, t0: anchor.t1, name: baseName });

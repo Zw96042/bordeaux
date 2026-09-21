@@ -87,7 +87,7 @@ describe("agent route candidates", () => {
     const direct = generateRouteCandidates(project, { intent: "Cross the bump directly", alliance: "blue", start: { x: 1.5, y: 2.59 }, goals: [{ x: 7, y: 2.59 }], traversal: "compare", maximumCandidates: 5 });
     const bumpRoutes = direct.filter((candidate) => candidate.valid && (candidate.traversal.startsWith("bump-") || candidate.traversal === "direct"));
     expect(bumpRoutes.length).toBeGreaterThan(0);
-    expect(bumpRoutes.every((candidate) => candidate.path.ranges.some((range) => range.name?.startsWith("BUMP traversal") && range.maxVel <= 2))).toBe(true);
+    expect(bumpRoutes.every((candidate) => candidate.path.ranges.some((range) => range.name?.startsWith("BUMP traversal") && (range.maxVel ?? Infinity) <= 2))).toBe(true);
     expect(bumpRoutes.every((candidate) => candidate.path.ranges.filter((range) => range.name?.startsWith("BUMP traversal")).length === 1)).toBe(true);
     expect(bumpRoutes.every((candidate) => candidate.path.ranges.filter((range) => range.name?.startsWith("BUMP traversal")).every((range) => range.anchor === "wp"))).toBe(true);
   });
@@ -169,7 +169,7 @@ describe("agent route candidates", () => {
     expect(candidate.path.targets.length).toBeLessThan(150);
     const collectionRanges = candidate.path.ranges.filter((range) => range.name?.includes("FUEL collection"));
     expect(candidate.metrics.totalTimeS, JSON.stringify(candidate.path.ranges)).toBeLessThan(20);
-    expect(Math.min(...collectionRanges.map((range) => range.maxVel))).toBeGreaterThan(0.5);
+    expect(Math.min(...collectionRanges.map((range) => range.maxVel ?? 0))).toBeGreaterThan(0.5);
     expect(collectionRanges).toHaveLength(1);
     expect(collectionRanges[0]).toMatchObject({ anchor: "wp", maxVel: 2 });
     expect(bumpRanges[0]).toMatchObject({ anchor: "wp", maxVel: 2 });

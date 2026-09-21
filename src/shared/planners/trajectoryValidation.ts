@@ -65,9 +65,9 @@ function angularLimitsForRanges(input: PlannerInput, ranges: readonly EffectiveR
   let acceleration = input.path.constraints.maxAngAccel * DEG;
   let deceleration = (input.path.constraints.maxAngDecel ?? input.path.constraints.maxAngAccel) * DEG;
   for (const range of ranges) {
-    velocity = Math.min(velocity, range.maxAngVel * DEG);
-    acceleration = Math.min(acceleration, range.maxAngAccel * DEG);
-    deceleration = Math.min(deceleration, range.maxAngAccel * DEG);
+    velocity = Math.min(velocity, (range.maxAngVel ?? Infinity) * DEG);
+    acceleration = Math.min(acceleration, (range.maxAngAccel ?? Infinity) * DEG);
+    deceleration = Math.min(deceleration, (range.maxAngAccel ?? Infinity) * DEG);
   }
   return { velocity, acceleration, deceleration };
 }

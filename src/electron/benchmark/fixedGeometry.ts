@@ -307,11 +307,11 @@ function geometricCentripetalAt(
 function limitsAt(path: PathDoc, project: BordeauxProject, ranges: ReturnType<typeof effectiveRanges>, fraction: number) {
   const active = activeRanges(ranges, fraction);
   return {
-    velocity: Math.min(project.robot.maxSpeed, path.constraints.maxVel, ...active.map((range) => range.maxVel)),
-    acceleration: Math.min(path.constraints.maxAccel, ...active.map((range) => range.maxAccel)),
-    deceleration: Math.min(path.constraints.maxDecel, ...active.map((range) => range.maxDecel ?? range.maxAccel)),
-    angularVelocity: Math.min(path.constraints.maxAngVel, ...active.map((range) => range.maxAngVel)) * Math.PI / 180,
-    angularAcceleration: Math.min(path.constraints.maxAngAccel, ...active.map((range) => range.maxAngAccel)) * Math.PI / 180,
+    velocity: Math.min(project.robot.maxSpeed, path.constraints.maxVel, ...active.map((range) => range.maxVel ?? Infinity)),
+    acceleration: Math.min(path.constraints.maxAccel, ...active.map((range) => range.maxAccel ?? Infinity)),
+    deceleration: Math.min(path.constraints.maxDecel, ...active.map((range) => range.maxDecel ?? Infinity)),
+    angularVelocity: Math.min(path.constraints.maxAngVel, ...active.map((range) => range.maxAngVel ?? Infinity)) * Math.PI / 180,
+    angularAcceleration: Math.min(path.constraints.maxAngAccel, ...active.map((range) => range.maxAngAccel ?? Infinity)) * Math.PI / 180,
     centripetal: path.constraints.maxCentripetalAccel ?? path.constraints.maxAccel,
   };
 }

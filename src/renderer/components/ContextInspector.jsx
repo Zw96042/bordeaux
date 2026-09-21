@@ -33,6 +33,29 @@ import { UI } from "./ui";
       rotation);
   }
 
+  function RangeLimits({ range, limits, onChange }) {
+    const options = [
+      ['maxVel', 'Velocity', 'm/s'],
+      ['maxAccel', 'Acceleration', 'm/s²'],
+      ['maxDecel', 'Deceleration', 'm/s²'],
+      ['maxAngVel', 'Angular velocity', '°/s'],
+      ['maxAngAccel', 'Angular acceleration', '°/s²'],
+    ];
+    const active = options.filter(([key]) => range[key] != null);
+    const available = options.filter(([key]) => range[key] == null);
+    return h('section', { className: 'range-limits', 'aria-label': 'Zone limits' },
+      active.map(([key, label, unit]) => h('div', { key, className: 'range-limit' },
+        h(Num, { label, value: range[key], unit, min: 0.01, max: limits[key],
+          step: key.startsWith('maxAng') ? 1 : 0.01, precision: key.startsWith('maxAng') ? 0 : 2,
+          onChange: (value) => onChange({ [key]: value }) }),
+        h('button', { type: 'button', className: 'iconbtn', 'aria-label': 'Remove ' + label.toLowerCase() + ' limit',
+          title: 'Remove ' + label.toLowerCase() + ' limit', onClick: () => onChange({ [key]: undefined }) }, h(Icon, { name: 'x', size: 14 })))),
+      available.length > 0 && h(Dropdown, { id: 'range-add-limit', ariaLabel: 'Add limit', placeholder: 'Add limit',
+        value: '', icon: 'plus', compact: true, items: available.map(([value, label]) => ({ value, label })),
+        onChange: (key) => onChange({ [key]: limits[key] }) }),
+      active.length === 0 && h('div', { className: 'seg-hint' }, 'Uses path limits.'));
+  }
+
   function Stat3(items) {
     return h('div', { className: 'rt-stat' }, items.map((it, i) =>
       h('div', { key: i, className: 'rt-stat-i' }, h('span', { className: 'rt-stat-v', style: it.color ? { color: it.color } : null }, it.v), h('span', { className: 'rt-stat-k' }, it.k))));
@@ -449,7 +472,6 @@ import { UI } from "./ui";
   function ContextInspector(props) {
     const { doc, sel, derived, actions, drive, robot, robotProject, onClose } = props;
     const [moreLimits, setMoreLimits] = React.useState(false);
-    const [moreRangeLimits, setMoreRangeLimits] = React.useState(false);
     const [jiggleDistance, setJiggleDistance] = React.useState(JIGGLE_DEFAULTS.distanceM);
     const [jiggleStrokes, setJiggleStrokes] = React.useState(JIGGLE_DEFAULTS.strokes);
     const [jiggleStart, setJiggleStart] = React.useState(JIGGLE_DEFAULTS.startDeg);
@@ -507,22 +529,18 @@ import { UI } from "./ui";
       const target = sel.kind === 'rt' && doc.targets?.[sel.idx];
       const marker = sel.kind === 'em' && doc.markers?.[sel.idx];
       icon = range ? 'gauge' : waypoint ? 'waypoint' : target ? 'rotation' : marker ? 'flag2' : 'route';
-      title = range ? range.name || 'Constraint range' : waypoint ? waypointLabel(sel.idx)
+      title = range ? range.name || 'Zone' : waypoint ? waypointLabel(sel.idx)
         : target ? 'Rotation target' : marker ? marker.name || 'Command' : doc.name || 'Path';
       const remove = range ? () => actions.delRange(sel.idx) : target ? () => actions.delTarget(sel.idx)
         : marker ? () => actions.delMarker(sel.idx) : waypoint && n > 2 ? () => actions.delWp(sel.idx) : null;
-      const removeLabel = range ? 'Delete range' : target ? 'Delete rotation target' : marker ? 'Delete marker' : 'Delete waypoint';
+      const removeLabel = range ? 'Delete zone' : target ? 'Delete rotation target' : marker ? 'Delete marker' : 'Delete waypoint';
       body = h(React.Fragment, null,
         h('p', { className: 'seg-hint', role: 'status' }, 'Planning failed. Edit the saved values or remove a feature below to try again. Select other features in the path outline.'),
         waypoint && h('div', { className: 'grid2' },
           h(Num, { label: 'X', value: waypoint.x, unit: 'm', onChange: (x) => actions.setWp(sel.idx, { x }) }),
           h(Num, { label: 'Y', value: waypoint.y, unit: 'm', onChange: (y) => actions.setWp(sel.idx, { y }) })),
         target && h(Num, { label: 'Heading', value: target.deg, unit: '°', onChange: (deg) => actions.setTarget(sel.idx, { deg }) }),
-        range && h('div', { className: 'grid2' }, [
-          ['maxVel', 'Max velocity', 'm/s'], ['maxAccel', 'Max accel', 'm/s²'],
-          ['maxDecel', 'Max decel', 'm/s²'], ['maxAngVel', 'Max ω', '°/s'], ['maxAngAccel', 'Max α', '°/s²'],
-        ].map(([key, label, unit]) => h(Num, { key, label, unit, value: range[key] ?? pathLimits[key], min: 0, max: pathLimits[key],
-          onChange: (value) => actions.setRange(sel.idx, { [key]: value }) }))),
+        range && h(RangeLimits, { range, limits: pathLimits, onChange: (patch) => actions.setRange(sel.idx, patch) }),
         !waypoint && !range && !target && !marker && h(ConstraintsBody, {
           c: pathLimits, robot, setC: actions.setConstraint, moreLimits, setMoreLimits,
         }),
@@ -694,13 +712,13 @@ import { UI } from "./ui";
             h(Num, { label: 'Target X', value: wps[i].segmentLookAt.x, unit: 'm', min: 0, max: FIELD_W, onChange: (v) => actions.setSegmentLookAt(i, { x: v }) }),
             h(Num, { label: 'Target Y', value: wps[i].segmentLookAt.y, unit: 'm', min: 0, max: FIELD_H, onChange: (v) => actions.setSegmentLookAt(i, { y: v }) })),
           h('div', { className: 'seg-hint' }, 'Drag target on field.')),
-        h('div', { className: 'fieldlabel' }, 'Ranges'),
+        h('div', { className: 'fieldlabel' }, 'Zones'),
         affecting.length === 0
           ? h('div', { className: 'seg-hint', style: { marginTop: '0' } }, 'None.')
           : h('div', { className: 'segranges' }, affecting.map((x) => {
               const summary = constraintRangeSummary(x.rg, pathLimits, robot);
-              const label = summary ? summary.text : (x.rg.name || 'Constraint range');
-              return h('button', { key: x.ri, className: 'segrange', type: 'button', 'aria-label': 'Open constraint range, ' + (summary ? summary.ariaLabel : label), onClick: () => actions.select('cr', x.ri) },
+              const label = summary ? summary.text : (x.rg.name || 'Zone');
+              return h('button', { key: x.ri, className: 'segrange', type: 'button', 'aria-label': 'Open zone, ' + (summary ? summary.ariaLabel : label), onClick: () => actions.select('cr', x.ri) },
                 h(Icon, { name: 'gauge', size: 13 }), label, summary && x.rg.name ? h('span', { className: 'segrange-nm' }, x.rg.name) : null);
             })),
         h('button', { className: 'qbtn wide', type: 'button', style: { marginTop: '14px' }, onClick: () => actions.insertWp(i) }, h(Icon, { name: 'plus', size: 14 }), 'Insert waypoint'));
@@ -867,14 +885,14 @@ import { UI } from "./ui";
       const loF = Math.min(effR.f0, effR.f1), hiF = Math.max(effR.f0, effR.f1);
       const clampFraction = (value) => Math.max(0, Math.min(1, value / 100));
       const rangeAnchor = rg.anchor === 'dist' ? 'dist' : 'param';
-      const anchorOptions = [{ v: 'param', label: 'Proportional' }, { v: 'dist', label: 'Distance' }];
-      icon = 'gauge'; title = rg.name || 'Constraint range';
+      const anchorOptions = [{ v: 'param', label: 'Path %' }, { v: 'dist', label: 'Distance' }];
+      icon = 'gauge'; title = rg.name || 'Zone';
       tag = UnitPrefs.fromCanonical(loF * len, 'm').toFixed(1) + '\u2013' + UnitPrefs.format(hiF * len, 'm', 1);
       body = h(React.Fragment, null,
-        h(Num, { label: 'Max velocity', value: rg.maxVel, unit: 'm/s', min: 0, max: pathLimits.maxVel, onChange: (v) => actions.setRange(sel.idx, { maxVel: v }) }),
-        h('section', { className: 'range-anchor-editor', 'aria-label': 'Range position lock' },
-          h('div', { className: 'fieldlabel' }, 'Anchor position'),
-          h(Seg, { value: rangeAnchor, ariaLabel: 'Anchor position', options: anchorOptions, onChange: (v) => actions.setRangeAnchor(sel.idx, v) }),
+        h(RangeLimits, { range: rg, limits: pathLimits, onChange: (patch) => actions.setRange(sel.idx, patch) }),
+        h('section', { className: 'range-anchor-editor', 'aria-label': 'Zone position' },
+          h('div', { className: 'fieldlabel' }, 'Position'),
+          h(Seg, { value: rangeAnchor, ariaLabel: 'Position', options: anchorOptions, onChange: (v) => actions.setRangeAnchor(sel.idx, v) }),
           rangeAnchor === 'dist'
             ? h('div', { className: 'grid2' },
                 h(Num, { label: 'Start distance', value: loF * len, unit: 'm', min: 0, max: len, step: 0.1, precision: 2, onChange: (v) => actions.setRange(sel.idx, { d0: Math.min(v, hiF * len) }) }),
@@ -882,23 +900,11 @@ import { UI } from "./ui";
             : h('div', { className: 'grid2' },
                   h(Num, { label: 'Start position', value: loF * 100, unit: '%', min: 0, max: 100, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { anchor: 'param', f0: Math.min(clampFraction(v), hiF), f1: hiF }) }),
                   h(Num, { label: 'End position', value: hiF * 100, unit: '%', min: 0, max: 100, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { anchor: 'param', f0: loF, f1: Math.max(clampFraction(v), loF) }) })),
-          h('div', { className: 'seg-hint' }, rangeAnchor === 'dist' ? 'Keeps both distances from the start when the path changes.' : 'Moves proportionally when the path changes.')),
-        h('button', { className: 'range-disclosure' + (moreRangeLimits ? ' on' : ''), type: 'button', 'aria-expanded': moreRangeLimits, onClick: () => setMoreRangeLimits(!moreRangeLimits) },
-          h('span', { className: 'range-disclosure-copy' }, h('strong', null, 'Acceleration & rotation'), h('small', null, 'Optional local limits')),
-          h(Icon, { name: 'chevron', size: 14 })),
-        moreRangeLimits && h(React.Fragment, null,
-          h('div', { className: 'cgroup-h' }, 'Translation'),
-          h('div', { className: 'grid2' },
-            h(Num, { label: 'Max accel', value: rg.maxAccel, unit: 'm/s\u00b2', min: 0, max: pathLimits.maxAccel, onChange: (v) => actions.setRange(sel.idx, { maxAccel: v }) }),
-            h(Num, { label: 'Max decel', value: rg.maxDecel, unit: 'm/s\u00b2', min: 0, max: pathLimits.maxDecel, onChange: (v) => actions.setRange(sel.idx, { maxDecel: v }) })),
-          h('div', { className: 'cgroup-h' }, 'Rotation'),
-          h('div', { className: 'grid2' },
-            h(Num, { label: 'Max \u03c9', value: rg.maxAngVel, unit: '\u00b0/s', max: pathLimits.maxAngVel, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { maxAngVel: v }) }),
-            h(Num, { label: 'Max \u03b1', value: rg.maxAngAccel, unit: '\u00b0/s\u00b2', max: pathLimits.maxAngAccel, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { maxAngAccel: v }) }))),
-        h('label', { className: 'fieldlabel', htmlFor: 'constraint-range-label' }, 'Label'),
-        h('input', { id: 'constraint-range-label', className: 'textinput', value: rg.name || '', placeholder: 'e.g. Reef approach', autoComplete: 'off', spellCheck: false, 'data-lpignore': 'true', 'data-1p-ignore': true, onChange: (e) => actions.setRange(sel.idx, { name: e.target.value }) }),
-        h('div', { className: 'chint' }, 'Drag endpoints to resize. Overlaps use the lowest limit.'),
-        h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delRange(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete range'));
+          h('div', { className: 'seg-hint' }, rangeAnchor === 'dist' ? 'Keeps the same distances from the start as the path changes.' : 'Keeps the same percentages as the path changes.')),
+        h('label', { className: 'fieldlabel', htmlFor: 'constraint-range-label' }, 'Name'),
+        h('input', { id: 'constraint-range-label', className: 'textinput', value: rg.name || '', placeholder: 'Zone', autoComplete: 'off', spellCheck: false, 'data-lpignore': 'true', 'data-1p-ignore': true, onChange: (e) => actions.setRange(sel.idx, { name: e.target.value }) }),
+        h('div', { className: 'chint' }, 'Drag either end to resize. Overlapping zones use the lowest limit.'),
+        h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delRange(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete zone'));
     } else {
       return null;
     }

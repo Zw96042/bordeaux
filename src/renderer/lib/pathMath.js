@@ -574,9 +574,11 @@ import { headingTransitionWindows, headingTransitionGoals, smoothHeadingTransiti
     let maxAccel = (doc.constraints.maxAngAccel || 0) * D2R;
     let maxDecel = (doc.constraints.maxAngDecel || doc.constraints.maxAngAccel || 0) * D2R;
     active.forEach((range) => {
-      maxOmega = Math.min(maxOmega, range.maxAngVel * D2R);
-      maxAccel = Math.min(maxAccel, range.maxAngAccel * D2R);
-      maxDecel = Math.min(maxDecel, range.maxAngAccel * D2R);
+      if (range.maxAngVel != null) maxOmega = Math.min(maxOmega, range.maxAngVel * D2R);
+      if (range.maxAngAccel != null) {
+        maxAccel = Math.min(maxAccel, range.maxAngAccel * D2R);
+        maxDecel = Math.min(maxDecel, range.maxAngAccel * D2R);
+      }
     });
     let ticks = 0;
     while ((Math.abs(target - actual) > 0.05 * D2R || Math.abs(omega) > 0.05 * D2R) && ticks < 250000) {

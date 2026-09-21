@@ -26,12 +26,12 @@ describe('LabVIEW inspector', () => {
     expect(markup).toContain('Change');
     expect(markup).not.toContain('cmd-picker-trigger');
   });
-  it('offers distance anchoring for new proportional constraint ranges', () => {
+  it('offers path percentage and distance positions for zones', () => {
     const project = createDemoProject(); const doc = project.paths[0];
     doc.ranges = [{ f0: .2, f1: .6, maxVel: 1, anchor: 'param' }];
     const derived = PM.derivePath(doc, project.robot, project.perSegmentConstraints, project.plannerId);
     const html = renderToStaticMarkup(h(ContextInspector, { project, doc, derived, sel: { kind: 'cr', idx: 0 }, actions: {}, robot: project.robot }));
-    expect(html).toContain('Proportional'); expect(html).toContain('Distance');
+    expect(html).toContain('Path %'); expect(html).toContain('Distance');
     expect(html).not.toContain('>Local<'); expect(html).not.toContain('Legacy distance');
   });
   it('resolves the linked waypoint name for segment headings', () => {
@@ -64,8 +64,8 @@ describe('planning recovery inspector', () => {
     const derived = new Proxy({}, { get() { throw new Error('Failed geometry must not be used for repair'); } });
     const html = renderToStaticMarkup(h(ContextInspector, { project, doc, derived, repairMode: true,
       sel: { kind: 'cr', idx: 0 }, actions: {}, robot: project.robot }));
-    expect(html).toContain('Max velocity');
-    expect(html).toContain('Delete range');
+    expect(html).toContain('Velocity');
+    expect(html).toContain('Delete zone');
     expect(html).not.toContain('inert=');
     expect(html).not.toContain('Anchor position');
     expect(html).not.toContain('>Distance<');

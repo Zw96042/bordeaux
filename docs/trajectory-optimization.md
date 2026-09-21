@@ -10,6 +10,12 @@ A search can finish early when no further improvement is found. A physics evalua
 
 An already-good route may have no meaningful gain. Improvements must save at least the greater of 20 ms or 0.5% of normal time. The search is bounded and does not prove a global optimum. Current geometry search varies Bézier handle lengths while preserving handle directions. Mixed geometry, jiggle actions, or ambiguous portal topology can retain normal timing with an explicit unsupported-search reason.
 
+## Zone limits
+
+Zones are stored as constraint ranges. Each limit is optional: speed, acceleration, deceleration, angular speed, and angular acceleration can be enabled independently. An omitted limit inherits the path limit; overlapping enabled limits use the tightest value. An acceleration-only range does not lower deceleration. Angular acceleration continues to constrain both angular acceleration and braking. A range with no enabled limits does not change timing.
+
+Saved numeric limits retain their values. Sparse imported ranges without `maxDecel` now inherit path deceleration in optimized planning, matching normal planning, instead of implicitly reusing the range acceleration.
+
 ## Saved-result contract
 
 `PathDoc.optimization` stores the corridor and optional accepted artifact. The artifact carries its planner version, physical input identity, resolution, and exact result samples/geometry/actions/markers. Cosmetic path names, folders, and robot planning notes do not invalidate it. Changing geometry, constraints, robot physics, field revision, or corridor makes it outdated: playback, routine timing, and export then use the current normal trajectory automatically. The saved artifact remains available if the edit is undone; no new optimization is applied automatically. An artifact that matches current inputs but fails validation still blocks export until the user chooses normal or applies a valid candidate.

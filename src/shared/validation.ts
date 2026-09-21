@@ -595,8 +595,8 @@ function validateProjectInner(project: unknown): ValidationResult {
             else if ((segmentIndex as number) < 0 || (segmentIndex as number) >= segmentCount) issues.push(issue(`${rangeBase}.${key}`, "Local constraint range segment is outside the path"));
           });
         }
-        ["f0", "f1", "maxVel", "maxAccel", "maxAngVel", "maxAngAccel"].forEach((key) => validateFinite(issues, range[key], `${rangeBase}.${key}`, `Range ${key}`, key.startsWith("max") ? { positive: true } : {}));
-        ["d0", "d1", "w0", "w1", "maxDecel"].forEach((key) => validateOptionalFinite(issues, range[key], `${rangeBase}.${key}`, `Range ${key}`, key === "maxDecel" ? { positive: true } : { nonnegative: true }));
+        ["f0", "f1"].forEach((key) => validateFinite(issues, range[key], `${rangeBase}.${key}`, `Range ${key}`));
+        ["d0", "d1", "w0", "w1", "maxVel", "maxAccel", "maxDecel", "maxAngVel", "maxAngAccel"].forEach((key) => validateOptionalFinite(issues, range[key], `${rangeBase}.${key}`, `Range ${key}`, key.startsWith("max") ? { positive: true } : { nonnegative: true }));
       });
 
       if (!isRecord(path.constraints)) {

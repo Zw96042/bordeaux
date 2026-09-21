@@ -79,9 +79,9 @@ function metricLimit(path: PathDoc, sample: TrajectorySample, totalDistance: num
     if (!active) return;
     const local = metric === "velocity" ? range.maxVel
       : metric === "acceleration" ? range.maxAccel
-        : metric === "deceleration" ? (range.maxDecel ?? range.maxAccel)
-          : metric === "angularVelocity" ? range.maxAngVel * Math.PI / 180
-            : metric === "angularAcceleration" || metric === "angularDeceleration" ? range.maxAngAccel * Math.PI / 180
+        : metric === "deceleration" ? range.maxDecel
+          : metric === "angularVelocity" ? (range.maxAngVel ?? Infinity) * Math.PI / 180
+            : metric === "angularAcceleration" || metric === "angularDeceleration" ? (range.maxAngAccel ?? Infinity) * Math.PI / 180
               : undefined;
     if (local !== undefined && (limit === undefined || local < limit)) { limit = local; source = `path.ranges[${index}]`; }
   });

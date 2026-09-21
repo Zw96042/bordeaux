@@ -35,8 +35,8 @@ function activeAngularLimits(path: PathDoc, fraction: number, waypointIndex: num
       active = fraction >= lo - EPSILON && fraction <= hi + EPSILON;
     }
     if (active) {
-      velocity = Math.min(velocity, range.maxAngVel * DEG);
-      acceleration = Math.min(acceleration, range.maxAngAccel * DEG);
+      velocity = Math.min(velocity, (range.maxAngVel ?? Infinity) * DEG);
+      acceleration = Math.min(acceleration, (range.maxAngAccel ?? Infinity) * DEG);
     }
   });
   return { velocity: Math.max(velocity, EPSILON), acceleration: Math.max(acceleration, EPSILON), jerk };
@@ -58,9 +58,9 @@ function activeLinearLimits(path: PathDoc, fraction: number, waypointIndex: numb
       active = fraction >= Math.min(first, last) - EPSILON && fraction <= Math.max(first, last) + EPSILON;
     }
     if (active) {
-      velocity = Math.min(velocity, range.maxVel);
-      acceleration = Math.min(acceleration, range.maxAccel);
-      deceleration = Math.min(deceleration, range.maxDecel ?? range.maxAccel);
+      velocity = Math.min(velocity, range.maxVel ?? Infinity);
+      acceleration = Math.min(acceleration, range.maxAccel ?? Infinity);
+      deceleration = Math.min(deceleration, range.maxDecel ?? Infinity);
     }
   });
   return {

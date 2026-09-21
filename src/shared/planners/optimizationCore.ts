@@ -31,9 +31,8 @@ function linearLimitProfile(
   const base = linearLimits(input);
   const ranges = effectiveRanges(input.path, samples, samples.at(-1)?.s ?? 0, waypointSampleIndices);
   const fractions = samples.map((sample) => sample.f);
-  const policies = ranges.map((range) => ({ ...range, maxDecel: range.maxDecel ?? range.maxAccel }));
-  const pointIndex = indexPointPolicies(fractions, policies);
-  const intervalIndex = indexIntervalPolicies(fractions, policies);
+  const pointIndex = indexPointPolicies(fractions, ranges);
+  const intervalIndex = indexIntervalPolicies(fractions, ranges);
   const limitsAt = (index: typeof pointIndex, sampleIndex: number) => ({
     ...base,
     velocity: Math.min(base.velocity, index.maxVel[sampleIndex]),

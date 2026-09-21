@@ -281,7 +281,7 @@ app.whenReady().then(async () => {
     assert.equal(await enterVelocity(String(maxVelocityBefore)), maxVelocityBefore);
     check('numeric text commits respect bounds and reject nonfinite, malformed, and empty values');
     assert.deepEqual(await evaluate(() => [...document.querySelectorAll('.toolrail-b')].map((button) => button.getAttribute('aria-label'))),
-      ['Select / move', 'Place waypoint', 'Rotation target', 'Place command', 'Constraint region']);
+      ['Select / move', 'Place waypoint', 'Rotation target', 'Place command', 'Zone']);
     await pointerClick('[aria-label="Place waypoint"]');
     await evaluate(() => document.activeElement.blur());
     for (const code of ['6', 'b']) {
@@ -883,8 +883,8 @@ app.whenReady().then(async () => {
     await wait(() => evaluate(() => document.querySelector('.optimizer-failure')), 'real final-planning failure');
     assert.equal(await evaluate(() => document.querySelector('.optimizer-main').textContent), 'Edit path');
     await pointerClick('.optimizer-main');
-    if (await evaluate(() => [...document.querySelectorAll('.sechead-toggle')].some((el) => el.textContent.includes('Constraint regions') && el.getAttribute('aria-expanded') === 'false'))) { await evaluate(() => [...document.querySelectorAll('.sechead-toggle')].find((el) => el.textContent.includes('Constraint regions')).setAttribute('data-repair-section', '')); await pointerClick('[data-repair-section]'); }
-    await pointerClick('[aria-label^="Constraint range,"]');
+    if (await evaluate(() => [...document.querySelectorAll('.sechead-toggle')].some((el) => el.textContent.includes('Zones') && el.getAttribute('aria-expanded') === 'false'))) { await evaluate(() => [...document.querySelectorAll('.sechead-toggle')].find((el) => el.textContent.includes('Zones')).setAttribute('data-repair-section', '')); await pointerClick('[data-repair-section]'); }
+    await pointerClick('[aria-label^="Zone,"]');
     assert.ok(await evaluate(() => document.querySelector('.ctxinsp-body')?.textContent.includes('Planning failed.')));
     assert.equal(await evaluate(() => Boolean(document.querySelector('.fieldcol[inert]'))), true);
     for (const [width, height] of [[1440, 900], [1100, 720]]) {

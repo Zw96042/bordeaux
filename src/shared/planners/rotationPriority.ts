@@ -191,9 +191,9 @@ function angularLimits(path: PathDoc, ranges: readonly EffectiveRange[], fractio
   let acceleration = path.constraints.maxAngAccel * DEG;
   let deceleration = (path.constraints.maxAngDecel ?? path.constraints.maxAngAccel) * DEG;
   activeRanges(ranges, fraction).forEach((range) => {
-    velocity = Math.min(velocity, range.maxAngVel * DEG);
-    acceleration = Math.min(acceleration, range.maxAngAccel * DEG);
-    deceleration = Math.min(deceleration, range.maxAngAccel * DEG);
+    velocity = Math.min(velocity, (range.maxAngVel ?? Infinity) * DEG);
+    acceleration = Math.min(acceleration, (range.maxAngAccel ?? Infinity) * DEG);
+    deceleration = Math.min(deceleration, (range.maxAngAccel ?? Infinity) * DEG);
   });
   return {
     velocity: Math.max(velocity, EPSILON),

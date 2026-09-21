@@ -111,3 +111,8 @@
 .labview-recent-projects strong{font-size:11px;font-weight:550}
 .labview-recent-projects span{font-size:10px;color:var(--txt-3)}
 .labview-source-warnings{overflow-wrap:anywhere}
+
+.inspector-refresh .range-limits { display: grid; gap: 10px; }
+.inspector-refresh .range-limit { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: end; gap: 6px; }
+.inspector-refresh .range-limit > .numrow { margin: 0; }
+.inspector-refresh .range-limit > .iconbtn { margin-bottom: 2px; }

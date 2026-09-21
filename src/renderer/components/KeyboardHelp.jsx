@@ -6,7 +6,7 @@ export function KeyboardHelp() {
   const mod = /Mac/.test(navigator.platform) ? '⌘' : 'Ctrl+';
   const close = () => { dialog.current?.close(); trigger.current?.focus(); };
   const shortcuts = [
-    ['Select / move', '1 or V'], ['Place waypoint', '2 or W'], ['Place rotation', '3 or R'], ['Place command', '4 or M'], ['Create constraint region', '5 or C'],
+    ['Select / move', '1 or V'], ['Place waypoint', '2 or W'], ['Place rotation', '3 or R'], ['Place command', '4 or M'], ['Create zone', '5 or C'],
     ['Delete a field or outline feature', 'Shift-click'], ['Delete selection', 'Delete / Backspace'], ['Play / pause', 'Space'], ['Fit field', 'F'], ['Toggle grid', 'G'], ['Cancel / select tool', 'Esc'],
     ['Move selection', 'Arrow keys'], ['Larger move', 'Shift + arrows'], ['Fine waypoint move', 'Alt + arrows'], ['Undo', mod + 'Z'], ['Redo', mod + 'Shift+Z'],
     ['Open project folder', mod + 'O'], ['Open project file', mod + 'Shift+O'], ['Save project and BDX files', mod + 'S'], ['Save to another folder', mod + 'Shift+S'], ['Rename library item', 'F2'],

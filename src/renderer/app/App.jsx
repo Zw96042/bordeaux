@@ -1191,12 +1191,16 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const addRange = useCallback((f0, f1) => commit((d) => {
       if (!d.ranges) d.ranges = [];
       const a = Math.max(0, Math.min(f0, f1)), b = Math.min(1, Math.max(f0, f1));
-      const c = PM.effectiveConstraints(d.constraints, robot);
-      // purely where it was drawn (percent of path), inheriting the robot limits
-      d.ranges.push({ f0: a, f1: b, anchor: 'param', maxVel: c.maxVel, maxAccel: c.maxAccel, maxDecel: (c.maxDecel != null ? c.maxDecel : c.maxAccel), maxAngVel: c.maxAngVel, maxAngAccel: c.maxAngAccel });
+      d.ranges.push({ f0: a, f1: b, anchor: 'param' });
       d._selR = d.ranges.length - 1; return d;
-    }), [commit, robot]);
-    const setRange = useCallback((i, patch) => commit((d) => { Object.assign(d.ranges[i], patch); return d; }), [commit]);
+    }), [commit]);
+    const setRange = useCallback((i, patch) => commit((d) => {
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === undefined) delete d.ranges[i][key];
+        else d.ranges[i][key] = value;
+      }
+      return d;
+    }), [commit]);
     const localRangeEndpoint = (fraction, fractions) => {
       const f = Math.max(0, Math.min(1, fraction));
       let segment = Math.max(0, fractions.length - 2);
@@ -1957,7 +1961,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
     if (tool === 'waypoint') return 'Click the field to place the <b>next endpoint</b>';
     if (tool === 'rotation') return 'Click the path to set a <b>rotation target</b>';
     if (tool === 'marker') return 'Click the path to place an <b>event marker</b>';
-    if (tool === 'range') return 'Drag along the path to define a <b>constraint range</b>, then edit its limits';
+    if (tool === 'range') return 'Drag along the path to add a <b>zone</b>, then set its limits';
     return '';
   }
 

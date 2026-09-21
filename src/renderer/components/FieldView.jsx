@@ -713,7 +713,7 @@ import { UI } from "./ui";
             const leaderLength = Math.hypot(leaderDx, leaderDy) || 1;
             const leaderEndX = label.x - leaderDx / leaderLength * (th / 2 + P(2));
             const leaderEndY = label.y - leaderDy / leaderLength * (th / 2 + P(2));
-            els.push(h('g', { key: 'rl' + ri, style: { cursor: 'pointer' }, role: 'button', tabIndex: 0, 'aria-label': 'Open constraint range, ' + summary.ariaLabel, onKeyDown: (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); actions.select('cr', ri); } } },
+            els.push(h('g', { key: 'rl' + ri, style: { cursor: 'pointer' }, role: 'button', tabIndex: 0, 'aria-label': 'Open zone, ' + summary.ariaLabel, onKeyDown: (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); actions.select('cr', ri); } } },
               h('line', { x1: mc.x, y1: mc.y, x2: leaderEndX, y2: leaderEndY, stroke: col, strokeOpacity: 0.72, strokeWidth: P(1.2), strokeLinecap: 'round', 'data-role': 'cr', 'data-idx': ri }),
               h('rect', { x: label.x - tw / 2, y: label.y - th / 2, width: tw, height: th, rx: P(6), fill: 'oklch(0.17 0.012 260 / 0.96)', stroke: isSel ? accent : 'oklch(0.73 0.13 86 / 0.72)', strokeWidth: P(1), 'data-role': 'cr', 'data-idx': ri }),
               h('text', { x: label.x, y: label.y + P(4.2), fill: isSel ? accent : 'oklch(0.84 0.12 88)', fontSize: P(12), fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, letterSpacing: P(0.1), textAnchor: 'middle', 'data-role': 'cr', 'data-idx': ri }, text)));

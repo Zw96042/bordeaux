@@ -33,6 +33,18 @@ describe("renderer application", () => {
     }
   });
 
+  it("keeps terminal heading previews finite with acceleration-only regions", () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    path.waypoints = buildWaypoints([{ x: 1, y: 1, theta: 0 }, { x: 2, y: 1, theta: 180 }]);
+    path.targets = [{ f: 0, deg: 0 }, { f: 1, deg: 180 }];
+    path.ranges = [{ f0: 0, f1: 1, anchor: "param", maxAccel: 0.5 }];
+    const preview = rendererMath.derivePath(path, project.robot, 56, "profiledSpline");
+    expect(Number.isFinite(preview.prof.totalTime)).toBe(true);
+    expect(preview.prof.head.every(Number.isFinite)).toBe(true);
+    expect(preview.prof.head.at(-1)).toBeCloseTo(Math.PI, 2);
+  });
+
   it("uses the same curvature-continuous linked geometry in interactive and final planning", () => {
     const project = createDemoProject();
     const path = project.paths[0];

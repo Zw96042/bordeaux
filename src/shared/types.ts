@@ -401,11 +401,12 @@ export interface ConstraintRange {
   /** Local fraction within segment w0/w1. Omitted on legacy whole-waypoint spans. */
   t0?: number;
   t1?: number;
-  maxVel: number;
-  maxAccel: number;
+  /** Omitted limits inherit the path constraints. */
+  maxVel?: number;
+  maxAccel?: number;
   maxDecel?: number;
-  maxAngVel: number;
-  maxAngAccel: number;
+  maxAngVel?: number;
+  maxAngAccel?: number;
   /** @deprecated Legacy files may contain this; planning now couples translation and heading. */
   rotationPriority?: "heading" | "translation";
   name?: string;

@@ -81,7 +81,7 @@ function minimumConstraint(constraints, ranges, key, fallbackKey = key, allowZer
     throw new TypeError('Generated path preview constraints are incomplete.');
   }
   return (ranges || []).reduce((value, range) => {
-    const candidate = Number(range?.[key] ?? range?.[fallbackKey] ?? value);
+    const candidate = Number(range?.[key] ?? (key === 'maxDecel' ? undefined : range?.[fallbackKey]) ?? value);
     if (!Number.isFinite(candidate) || (allowZero ? candidate < 0 : candidate <= 0)) {
       throw new TypeError('Generated path preview constraints are incomplete.');
     }

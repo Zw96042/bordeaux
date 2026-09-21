@@ -339,11 +339,14 @@ import { UnitPrefs } from "../lib/unitPreferences";
     const commitEdit = (raw) => {
       const parsed = parseFiniteDraftNumber(raw);
       if (parsed == null) { setError('Enter a finite number.'); return false; }
-      let next = UnitPrefs.toCanonical(parsed, unit, imperialUnit);
+      // An untouched display value must not round-trip through unit conversion:
+      // floating-point drift can invalidate planning and move keyboard focus.
+      let next = typeof value === 'number' && parsed === UnitPrefs.fromCanonical(value, unit, imperialUnit)
+        ? value : UnitPrefs.toCanonical(parsed, unit, imperialUnit);
       if (min != null) next = Math.max(min, next);
       if (max != null) next = Math.min(max, next);
       setError('');
-      onChange(next);
+      if (!Object.is(next, value)) onChange(next);
       return true;
     };
     const start = () => (down) => {

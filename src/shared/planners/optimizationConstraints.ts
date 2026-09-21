@@ -56,10 +56,10 @@ function tightenLinearLimits(limits: LinearLimits, ranges: readonly EffectiveRan
   let acceleration = limits.acceleration;
   let deceleration = limits.deceleration;
   ranges.forEach((range) => {
-    if (range.maxVel > 0) velocity = Math.min(velocity, range.maxVel);
-    if (range.maxAccel > 0) acceleration = Math.min(acceleration, range.maxAccel);
-    const rangeDeceleration = range.maxDecel ?? range.maxAccel;
-    if (rangeDeceleration > 0) deceleration = Math.min(deceleration, rangeDeceleration);
+    if (range.maxVel !== undefined && range.maxVel > 0) velocity = Math.min(velocity, range.maxVel);
+    if (range.maxAccel !== undefined && range.maxAccel > 0) acceleration = Math.min(acceleration, range.maxAccel);
+    const rangeDeceleration = range.maxDecel;
+    if (rangeDeceleration !== undefined && rangeDeceleration > 0) deceleration = Math.min(deceleration, rangeDeceleration);
   });
   return { ...limits, velocity, acceleration, deceleration };
 }
@@ -238,7 +238,7 @@ function angularVelocityLimitForInterval(
   after: number,
 ): number {
   let limit = input.path.constraints.maxAngVel * DEG;
-  for (const range of intervalRanges(ranges, before, after)) limit = Math.min(limit, range.maxAngVel * DEG);
+  for (const range of intervalRanges(ranges, before, after)) limit = Math.min(limit, (range.maxAngVel ?? Infinity) * DEG);
   return limit;
 }
 
@@ -251,8 +251,8 @@ function angularAccelerationLimitsForInterval(
   let acceleration = input.path.constraints.maxAngAccel * DEG;
   let deceleration = (input.path.constraints.maxAngDecel ?? input.path.constraints.maxAngAccel) * DEG;
   for (const range of intervalRanges(ranges, before, after)) {
-    acceleration = Math.min(acceleration, range.maxAngAccel * DEG);
-    deceleration = Math.min(deceleration, range.maxAngAccel * DEG);
+    acceleration = Math.min(acceleration, (range.maxAngAccel ?? Infinity) * DEG);
+    deceleration = Math.min(deceleration, (range.maxAngAccel ?? Infinity) * DEG);
   }
   return { acceleration, deceleration };
 }
