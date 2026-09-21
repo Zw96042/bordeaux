@@ -13,11 +13,15 @@ describe('app update dialog', () => {
     expect(html).not.toContain('href=');
     expect(html).not.toContain('bad.example');
   });
-  it('disables restart with explicit save guidance for unsaved work', () => {
+  it('allows restart and retry with unsaved work without redundant header or restart copy', () => {
     const html = render({ phase: 'downloaded', projectDirty: true });
-    expect(html).toContain('Save your project before restarting');
-    expect(html).toMatch(/disabled="">Restart and install/);
-    expect(render({ phase: 'downloaded', projectDirty: false })).not.toContain('disabled');
+    expect(html).not.toContain('Save your project before restarting');
+    expect(html).not.toContain('Beta channel');
+    expect(html).not.toContain('disabled');
+    expect(render({ phase: 'error', errorStage: 'install', projectDirty: true })).not.toContain('disabled');
+    const saved = render({ phase: 'downloaded', projectDirty: false });
+    expect(saved).not.toContain('disabled');
+    expect(saved).not.toContain('Restart Bordeaux to finish installing');
   });
   it('shows determinate progress, transfer totals and explicit cancellation', () => {
     const html = render({ phase: 'downloading', progress: { percent: 43, transferred: 45 * 1048576, total: 100 * 1048576, bytesPerSecond: 2 * 1048576 } });

@@ -197,8 +197,10 @@
     && markerAutosave.project.paths[0].markers[1].name === 'event2';
   await window.bordeauxAPI.newProject();
   let missingTypeEvidenceRejected = false;
-  try { await window.bordeauxAPI.exportBdx(persistedProject, persistedProject.paths[0].id); }
-  catch (error) { missingTypeEvidenceRejected = /NI|catalog|command/i.test(String(error && error.message || error)); }
+  const unlinkedExport = structuredClone(persistedProject);
+  unlinkedExport.paths[0].markers[0].invocation.cancelOnPathEnd = false;
+  try { await window.bordeauxAPI.exportBdx(unlinkedExport, unlinkedExport.paths[0].id); }
+  catch (error) { missingTypeEvidenceRejected = /missing in the linked LabVIEW project/.test(String(error && error.message || error)); }
   await window.bordeauxAPI.openRecentRobotProject(recentRobotProjects[0].id);
   const eventless = structuredClone(persistedProject);
   for (const path of eventless.paths) path.markers = [];
@@ -243,7 +245,7 @@
   // legitimately when an earlier autosave finishes, making the close probe race.
   document.querySelector('button[aria-label="Close robot files"]').click();
   [...document.querySelectorAll('.pageswitch button')].find(button => button.textContent.trim() === 'Settings').click();
-  await waitFor(() => document.querySelector('input[aria-label="Drive reduction"]'), 'dirty close-guard draft input');
+  await waitFor(() => document.querySelector('input[aria-label="Drive reduction"]'), 'unsaved draft input');
   await new Promise(resolve => setTimeout(resolve, 1100));
   const unsavedInput = document.querySelector('input[aria-label="Drive reduction"]');
   unsavedInput.focus();

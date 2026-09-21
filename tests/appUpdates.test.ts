@@ -27,7 +27,7 @@ function fixture(overrides: Partial<UpdateRuntime> = {}) {
   let dirty = false;
   const runtime: UpdateRuntime = {
     packaged: true, supported: true, currentVersion: "0.2.0-beta.1",
-    isProjectDirty: () => dirty, prepareToInstall: vi.fn(), warn: vi.fn(),
+    isProjectDirty: () => dirty, warn: vi.fn(),
     describeError: () => "Try again or open Releases.", ...overrides,
   };
   const controller = new AppUpdateController(updater, runtime, state => states.push(state));
@@ -131,43 +131,24 @@ describe("application update state", () => {
     expect(f.controller.snapshot().errorStage).toBe("download");
     await f.ready(); expect(f.controller.snapshot().phase).toBe("downloaded");
   });
-  it("keeps downloaded update when dirty, then installs after saving", async () => {
+  it("installs with unsaved edits and blocks duplicate install requests", async () => {
     const f = fixture(); await f.ready(); f.setDirty(true);
-    await f.controller.install();
-    expect(f.controller.snapshot()).toMatchObject({ phase: "downloaded", projectDirty: true });
-    expect(f.runtime.prepareToInstall).not.toHaveBeenCalled();
-    f.setDirty(false); f.controller.refreshDirty(); await f.controller.install();
-    expect(f.updater.quitAndInstall).toHaveBeenCalledWith(false, true);
+    await f.controller.install(); await f.controller.install();
+    expect(f.controller.snapshot()).toMatchObject({ phase: "installing", projectDirty: true });
+    expect(f.updater.quitAndInstall).toHaveBeenCalledExactlyOnceWith(false, true);
   });
-  it("checks dirty state again after shutdown and blocks duplicate install requests", async () => {
-    const f = fixture(); await f.ready(); const pending = deferred<void>();
-    f.runtime.prepareToInstall = vi.fn(() => pending.promise);
-    const install = f.controller.install(); await f.controller.install();
-    expect(f.runtime.prepareToInstall).toHaveBeenCalledOnce();
-    f.setDirty(true); pending.resolve(); await install;
-    expect(f.controller.snapshot().phase).toBe("downloaded");
-    expect(f.updater.quitAndInstall).not.toHaveBeenCalled();
-  });
-  it("retains downloaded update after shutdown failure for an install retry", async () => {
-    const f = fixture(); await f.ready();
-    f.runtime.prepareToInstall = vi.fn().mockRejectedValueOnce(new Error("backend busy")).mockResolvedValue(undefined);
+  it("retains downloaded update after installer failure for an unsaved install retry", async () => {
+    const f = fixture(); await f.ready(); f.setDirty(true);
+    f.updater.quitAndInstall.mockImplementationOnce(() => { throw new Error("installer busy"); });
     await f.controller.install(); expect(f.controller.snapshot().errorStage).toBe("install");
-    expect(f.updater.quitAndInstall).not.toHaveBeenCalled();
-    await f.controller.install(); expect(f.updater.quitAndInstall).toHaveBeenCalledOnce();
+    await f.controller.install();
+    expect(f.controller.snapshot().phase).toBe("installing");
+    expect(f.updater.quitAndInstall).toHaveBeenCalledTimes(2);
   });
   it("reports asynchronous installer failure", async () => {
     const f = fixture(); await f.ready(); await f.controller.install();
     f.updater.emit("error", new Error("installer failed"));
     expect(f.controller.snapshot()).toMatchObject({ phase: "error", errorStage: "install" });
-  });
-  it("does not start the installer after an updater error during shutdown", async () => {
-    const f = fixture(); await f.ready(); const pending = deferred<void>();
-    f.runtime.prepareToInstall = () => pending.promise;
-    const install = f.controller.install();
-    f.updater.emit("error", new Error("installation unavailable"));
-    pending.resolve(); await install;
-    expect(f.controller.snapshot().errorStage).toBe("install");
-    expect(f.updater.quitAndInstall).not.toHaveBeenCalled();
   });
   it("does not duplicate listeners and returns independent state snapshots", async () => {
     const f = fixture(); f.controller.start();

@@ -50,27 +50,25 @@ export function AppUpdateDialog({ state, onClose, onCheck, onDownload, onCancel,
     else if (!state?.visible && node.open) { node.close(); if (returnFocus.current?.isConnected) returnFocus.current.focus(); }
   }, [state?.visible]);
   if (!state) return null;
-  const { phase, version, currentVersion, progress, projectDirty, error } = state;
+  const { phase, version, currentVersion, progress, error } = state;
   const busy = ['checking', 'downloading', 'installing'].includes(phase);
   const title = ({ available: 'An update is available', downloading: 'Download in progress', downloaded: 'Ready to install', upToDate: 'You’re up to date', error: 'Update interrupted', unsupported: 'Manual update available', installing: 'Restarting Bordeaux' })[phase] || 'Bordeaux';
-  const subtitle = phase === 'error' ? error : phase === 'downloaded' ? (projectDirty ? 'Save your project before restarting to install.' : 'Restart Bordeaux to finish installing.') : phase === 'unsupported' ? 'Download an installer from the official releases page.' : '';
+  const subtitle = phase === 'error' ? error : phase === 'unsupported' ? 'Download an installer from the official releases page.' : '';
   const notes = releaseNoteBlocks(state.releaseNotes);
   const percent = Number.isFinite(progress?.percent) ? Math.min(100, Math.max(0, progress.percent)) : null;
   const close = () => { if (phase !== 'installing') onClose?.(); };
   const action = phase === 'downloading' ? { label: 'Cancel download', onClick: onCancel }
-    : phase === 'downloaded' ? { label: 'Restart and install', onClick: onInstall, disabled: !!projectDirty }
+    : phase === 'downloaded' ? { label: 'Restart and install', onClick: onInstall }
     : phase === 'available' ? { label: 'Download update', onClick: onDownload }
     : phase === 'error' ? {
         label: state.errorStage === 'install' ? 'Retry install' : state.errorStage === 'download' ? 'Retry download' : 'Try again',
         onClick: state.errorStage === 'install' ? onInstall : state.errorStage === 'download' ? onDownload : onCheck,
-        disabled: state.errorStage === 'install' && !!projectDirty,
       }
     : phase === 'upToDate' || phase === 'unsupported' ? { label: 'Done', onClick: close }
     : !busy ? { label: 'Check for updates', onClick: onCheck } : null;
   return h('dialog', { ref: dialog, className: 'app-update-dialog', 'aria-labelledby': 'app-update-title', onCancel: (event) => { event.preventDefault(); close(); } },
     h('header', { className: 'app-update-header' },
       h('h2', { id: 'app-update-title' }, 'Software updates'),
-      h('span', { className: 'app-update-channel' }, state.channel === 'beta' ? 'Beta channel' : 'Stable channel'),
       h('button', { type: 'button', className: 'app-update-close', 'aria-label': 'Close updates', disabled: phase === 'installing', onClick: close }, '×')),
     h('div', { className: 'app-update-summary' },
       h('div', { className: 'app-update-status-row' },

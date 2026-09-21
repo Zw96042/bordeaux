@@ -68,9 +68,8 @@ app.whenReady().then(async () => {
       await click('dialog button', 'Retry download');
       assert.equal(await evaluate(() => window.__updateFixture.calls.filter(c => c === 'download').length), 2);
       await set({ phase: 'downloaded', projectDirty: true });
-      assert.equal(await evaluate(() => [...document.querySelectorAll('dialog button')].find(b => b.textContent === 'Restart and install').disabled), true);
+      assert.equal(await evaluate(() => [...document.querySelectorAll('dialog button')].find(b => b.textContent === 'Restart and install').disabled), false);
       await capture(`${platform}-${width}-dirty`);
-      await set({ projectDirty: false });
       assert.deepEqual(await rect(), initial, 'Phase changes must not move or resize the dialog');
       await capture(`${platform}-${width}-ready`);
       await evaluate(() => document.querySelector('.app-update-close').focus());
@@ -96,7 +95,7 @@ app.whenReady().then(async () => {
       await key('Return');
       assert.equal(await evaluate(() => document.querySelector('dialog').open), false);
       assert.equal(await evaluate(() => document.activeElement.id), 'update-trigger');
-      pass(`${platform} ${width}×${height}: safe notes, fixed layout, retry, progress, cancel, dirty guard, modal keyboard and focus`);
+      pass(`${platform} ${width}×${height}: safe notes, fixed layout, retry, progress, cancel, unsaved install, modal keyboard and focus`);
     }
     assert.deepEqual(errors, []);
     await fs.writeFile(path.join(output, 'result.json'), JSON.stringify({ passed: true, checks, errors }, null, 2));

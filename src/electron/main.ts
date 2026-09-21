@@ -1,4 +1,4 @@
-import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from "electron";
 import { autoUpdater as updateClient } from "electron-updater";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -67,14 +67,12 @@ let currentProjectFolder: string | null = null;
 function projectLocation() { return { folderPath: currentProjectFolder, projectPath: currentProjectPath }; }
 let projectTargetGeneration = 0;
 let dirty = false;
-let allowClose = false;
 let appUpdates: AppUpdateController | null = null;
 let updateCheckTimer: NodeJS.Timeout | null = null;
 let backgroundShutdownPromise: Promise<void> | null = null;
 let backgroundServicesReadyForExit = false;
 let finalQuitInProgress = false;
 
-let smokeCloseGuardTriggered = false;
 let linkedRobotProjectPath: string | null = null;
 let linkedLabviewProjectFile: string | null = null;
 let labviewInspectionInProgress = false;
@@ -157,7 +155,6 @@ function createAppUpdateController(): AppUpdateController {
     process.env.PORTABLE_EXECUTABLE_FILE !== undefined,
     process.env.APPIMAGE !== undefined,
   );
-  if (supported) nativeAutoUpdater.on("before-quit-for-update", () => { allowClose = !dirty; });
   const packaged = app.isPackaged;
   if (packaged && supported) {
     updateClient.setFeedURL({ provider: "custom", updateProvider: GitHubReleaseProvider });
@@ -170,11 +167,6 @@ function createAppUpdateController(): AppUpdateController {
     supported,
     currentVersion: applicationVersion,
     isProjectDirty: () => dirty,
-    prepareToInstall: () => {
-      if (dirty) throw new Error("The project changed while Bordeaux was preparing the update. Save it, then try again.");
-      // Native macOS verification may still fail. Keep close guards and services
-      // intact until the real quit reaches the existing will-quit cleanup.
-    },
     describeError: (error) => describeUpdateFailure(error instanceof Error ? error.message : String(error)),
     warn: (message, error) => console.warn(message, error),
   }, (state) => {
@@ -333,7 +325,6 @@ function diagnosticIssueCount(error: unknown): number {
 function createWindow() {
   activateProjectTarget(null);
   dirty = false;
-  allowClose = false;
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -374,39 +365,12 @@ function createWindow() {
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   window.webContents.on("will-attach-webview", (event) => event.preventDefault());
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  window.on("close", (event) => {
-    if (!allowClose && appUpdates?.snapshot().phase === "installing") { event.preventDefault(); return; }
-    if (allowClose || !dirty) return;
-    event.preventDefault();
-    if (smokeDirectory) {
-      smokeCloseGuardTriggered = true;
-      return;
-    }
-    void dialog.showMessageBox(window, {
-      type: "warning",
-      title: "Unsaved Bordeaux project",
-      message: "Discard unsaved changes?",
-      detail: "Save the project first if you want to keep your latest path and routine edits.",
-      buttons: ["Cancel", "Save Project…", "Discard Changes"],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true,
-    }).then(({ response }) => {
-      if (response === 1) {
-        sendCommand("save-project");
-      } else if (response === 2) {
-        allowClose = true;
-        window.close();
-      }
-    });
-  });
   window.on("closed", () => {
     if (mainWindow === window) mainWindow = null;
     rejectProposalReceipts("The Bordeaux editor closed before acknowledging the proposal.");
     agentSessions.clearSnapshot();
     activateProjectTarget(null);
     dirty = false;
-    allowClose = false;
   });
 
   void window.loadFile(path.join(__dirname, "../../dist-renderer/index.html"));
@@ -442,14 +406,15 @@ function createWindow() {
           await fs.promises.writeFile(process.env.BORDEAUX_SMOKE_CAPTURE_PATH, capture.toPNG());
         }
         await new Promise((resolve) => setTimeout(resolve, 50));
+        const closingUnsavedProject = dirty;
+        const closed = new Promise<void>(resolve => window.once("closed", resolve));
         window.close();
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await closed;
         const filesWritten = fs.existsSync(path.join(smokeDirectory, "project.bordeaux")) && fs.existsSync(path.join(smokeDirectory, "Smoke.bdx")) && fs.existsSync(path.join(smokeDirectory, "Paths")) && fs.existsSync(path.join(smokeDirectory, "Routines"));
         result.filesWritten = filesWritten;
-        result.closeGuard = smokeCloseGuardTriggered && !window.isDestroyed();
+        result.closedWithoutSavePrompt = closingUnsavedProject && window.isDestroyed();
         clearInterval(inputTimer);
         console.log(`BORDEAUX_SMOKE_RESULT ${JSON.stringify(result)}`);
-        allowClose = true;
         await stopBackgroundServices();
         backgroundServicesReadyForExit = true;
         app.exit(0);

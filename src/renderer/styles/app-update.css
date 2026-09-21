@@ -3,11 +3,10 @@
 .app-update-dialog::backdrop{background:#0006}
 .app-update-header{display:flex;align-items:center;gap:16px;padding:12px 20px 12px 28px;border-bottom:1px solid var(--line);flex:none}
 .app-update-header h2{margin:0;font-size:14px;line-height:1.4;font-weight:600}
-.app-update-channel{margin-left:auto;color:var(--txt-3);font-size:12px}
 .app-update-dialog button{min-height:40px;border:1px solid var(--line-2);border-radius:6px;background:var(--bg-2);color:var(--txt);padding:0 14px;font:inherit;cursor:pointer;transition:background-color .15s,border-color .15s}
 .app-update-dialog button:hover:not(:disabled){background:var(--bg-3);border-color:var(--line-3)}
 .app-update-dialog button:focus-visible,.app-update-notes:focus-visible{outline:2px solid var(--txt-2);outline-offset:-3px}
-.app-update-dialog .app-update-close{flex:none;width:40px;padding:0;border-color:transparent;background:transparent;font-size:22px;color:var(--txt-2)}
+.app-update-dialog .app-update-close{flex:none;width:40px;margin-left:auto;padding:0;border-color:transparent;background:transparent;font-size:22px;color:var(--txt-2)}
 .app-update-summary{height:104px;box-sizing:border-box;flex:none;padding:20px 28px 16px}
 .app-update-status-row{display:flex;align-items:baseline;justify-content:space-between;gap:16px}
 .app-update-status{margin:0;font-size:18px;line-height:1.4;font-weight:500;letter-spacing:-.2px}

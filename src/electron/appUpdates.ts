@@ -25,7 +25,6 @@ export interface UpdateRuntime {
   supported: boolean;
   currentVersion: string;
   isProjectDirty(): boolean;
-  prepareToInstall(): void | Promise<void>;
   warn(message: string, error?: unknown): void;
   describeError?(error: unknown): string;
 }
@@ -197,17 +196,9 @@ export class AppUpdateController {
 
   async install(): Promise<void> {
     if (!this.downloaded || this.installing || !this.updater) return;
-    if (this.runtime.isProjectDirty()) { this.publish({ phase: "downloaded", ...this.clearError(), visible: true }); return; }
     this.installing = true;
     this.publish({ phase: "installing", visible: true, ...this.clearError() });
     try {
-      await this.runtime.prepareToInstall();
-      if (!this.installing) return; // an updater error arrived during shutdown
-      if (this.runtime.isProjectDirty()) {
-        this.installing = false;
-        this.publish({ phase: "downloaded", visible: true });
-        return;
-      }
       this.updater.quitAndInstall(false, true);
     } catch (error) { this.installing = false; this.fail(error, "install"); }
   }
