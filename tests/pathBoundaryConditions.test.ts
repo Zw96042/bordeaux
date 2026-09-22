@@ -70,7 +70,7 @@ describe("path entry and exit conditions", () => {
     expect(summary).toContain("Initial robot facing");
     expect(summary).toContain("Entry speed");
     expect(summary).toContain("Exit speed");
-    expect(summary).toContain("Edit facing without changing the path.");
+    expect(summary).not.toContain("Place waypoint");
   });
   it.each(["tangent", "lookAt"] as const)("edits initial facing directly while preserving geometry in %s mode", (mode) => {
     const project = movingProject(); const path = project.paths[0]; path.headingMode = "tangent";

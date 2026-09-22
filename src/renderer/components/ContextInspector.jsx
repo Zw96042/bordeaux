@@ -9,9 +9,14 @@ import { UI } from "./ui";
 import { compareExactDecimals, robotParameterValueError, robotSchemaValueError } from "../../shared/robotCommands";
 
   const h = React.createElement;
-  const { Num, Toggle, Seg, Icon, Dropdown, ChoiceBrowser, constraintRangeSummary } = UI;
+  const { Num, DraftText, Toggle, Seg, Icon, Dropdown, ChoiceBrowser, constraintRangeSummary } = UI;
   const { FIELD_W, FIELD_H } = FIELD_DIMS;
 
+  // Anchor meaning lives in each option's tooltip instead of a hint under every anchor control.
+  const ANCHOR_OPTIONS = [
+    { v: 'param', label: 'Path %', title: 'Moves proportionally when the path changes' },
+    { v: 'dist', label: 'Distance', title: 'Keeps its distance from the start when the path changes' },
+  ];
   const HEAD_MODES = [{ v: 'manual', label: 'Manual' }, { v: 'tangent', label: 'Tangent' }, { v: 'targets', label: 'Targets' }];
 
   const handleLen = (w, key) => Math.hypot(w[key].x - w.x, w[key].y - w.y);
@@ -25,10 +30,10 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
     return h(React.Fragment, null,
       h('div', { className: 'cgroup-h' }, 'Translation'),
       h('div', { className: 'grid2' },
-        h(Num, { label: 'Max vel', value: c.maxVel, unit: 'm/s', min: 0.1, max: robot.maxSpeed, onChange: (v) => setC({ maxVel: v }) }),
-        h(Num, { label: 'Acceleration', value: c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxAccel: v, maxDecel: v }) })),
+        h(Num, { label: 'Max velocity', value: c.maxVel, unit: 'm/s', min: 0.1, max: robot.maxSpeed, onChange: (v) => setC({ maxVel: v }) }),
+        h(Num, { label: 'Max acceleration', value: c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxAccel: v, maxDecel: v }) })),
       c.maxDecel != null && c.maxDecel !== c.maxAccel && h('div', { className: 'seg-hint' }, 'Saved slowing limit: ' + UnitPrefs.format(c.maxDecel, 'm/s²', 2) + '. Editing acceleration sets both limits.'),
-      h(Num, { label: 'Corner accel', value: c.maxCentripetalAccel != null ? c.maxCentripetalAccel : c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxCentripetalAccel: v }) }),
+      h(Num, { label: 'Corner acceleration', value: c.maxCentripetalAccel != null ? c.maxCentripetalAccel : c.maxAccel, unit: 'm/s\u00b2', min: 0.1, onChange: (v) => setC({ maxCentripetalAccel: v }) }),
       h('button', { className: 'morebtn' + (moreLimits ? ' on' : ''), type: 'button', 'aria-expanded': moreLimits, onClick: () => setMoreLimits(!moreLimits) }, h('span', null, moreLimits ? 'Fewer limits' : 'Rotation limits'), h(Icon, { name: 'chevron', size: 13 })),
       rotation);
   }
@@ -395,7 +400,6 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
     const isTank = drive === 'tank';
     const n = wps.length;
     const headingMode = isTank ? 'tangent' : (doc.headingMode || 'targets');
-    const handlesEffective = true;
     const endpointJiggle = wps[n - 1] && wps[n - 1].jiggle;
     const firstHeadingMode = isTank ? 'tangent' : (wps[0]?.segmentHeadingMode || headingMode);
     const facingOffset = doc.driveBackward ? 180 : 0;
@@ -403,7 +407,7 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
       const start = index === 0, waypoint = wps[index], stopped = !!waypoint?.stop;
       const label = start ? 'Entry speed' : 'Exit speed';
       return h('div', { className: 'endpoint-speed' },
-        h('fieldset', { disabled: stopped, style: { border: 0, margin: 0, padding: 0, minWidth: 0 } },
+        h('fieldset', { disabled: stopped, className: 'plain-fieldset' },
           h(Num, { label, value: stopped ? 0 : (start ? doc.startVel : doc.goalVel) || 0, unit: 'm/s', min: 0, max: pathLimits.maxVel,
             onChange: (value) => { if (!stopped) actions.setDoc(start ? { startVel: value } : { goalVel: value }); } })),
         stopped && h('button', { type: 'button', className: 'morebtn', onClick: () => actions.select('wp', index) },
@@ -418,7 +422,7 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
       return h(React.Fragment, null,
         h(Num, { label: 'Initial robot facing', value: degrees + facingOffset, unit: '\u00b0', step: 1, precision: 1,
           onChange: (value) => actions.setWp(0, { theta: value - facingOffset, thetaOn: true }) }),
-        h('div', { className: 'seg-hint' }, 'Edit facing without changing the path.'));
+      );
     };
 
     React.useEffect(() => {
@@ -430,7 +434,7 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
       setJiggleError(false);
     }, [doc.id, endpointJiggle?.distanceM, endpointJiggle?.strokes, endpointJiggle?.startDeg, endpointJiggle?.stepDeg, endpointJiggle?.strokeTimeS]);
 
-    let icon = 'route', title = '', tag = null, body = null;
+    let icon = 'route', title = '', tag = null, body = null, headerAction = null;
 
     if (props.repairMode) {
       // These controls use authored values only. Failed or stale trajectories must
@@ -444,9 +448,9 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
         : target ? 'Rotation target' : marker ? marker.name || 'Command' : doc.name || 'Path';
       const remove = range ? () => actions.delRange(sel.idx) : target ? () => actions.delTarget(sel.idx)
         : marker ? () => actions.delMarker(sel.idx) : waypoint && n > 2 ? () => actions.delWp(sel.idx) : null;
-      const removeLabel = range ? 'Delete zone' : target ? 'Delete rotation target' : marker ? 'Delete marker' : 'Delete waypoint';
+      const removeLabel = range ? 'Delete zone' : target ? 'Delete rotation target' : marker ? 'Delete command' : 'Delete waypoint';
       body = h(React.Fragment, null,
-        h('p', { className: 'seg-hint', role: 'status' }, 'Planning failed. Edit the saved values or remove a feature below to try again. Select other features in the path outline.'),
+        h('p', { className: 'rt-callout error', role: 'status' }, 'Planning failed. Edit the saved values or remove a feature below to try again. Select other features in the path outline.'),
         waypoint && h('div', { className: 'grid2' },
           h(Num, { label: 'X', value: waypoint.x, unit: 'm', onChange: (x) => actions.setWp(sel.idx, { x }) }),
           h(Num, { label: 'Y', value: waypoint.y, unit: 'm', onChange: (y) => actions.setWp(sel.idx, { y }) })),
@@ -459,11 +463,10 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
     }
     else if (!sel.kind) {
       icon = 'route'; title = doc.name || 'Path';
+      // Path-level actions live in the header; waypoint placement belongs to the tool rail.
+      headerAction = h('button', { className: 'ctxinsp-act', type: 'button', disabled: !actions.canReversePath, 'aria-label': 'Swap start/end',
+        title: actions.canReversePath ? 'Swap start/end' : 'Waiting for the current path preview', onClick: () => actions.reversePath() }, h(Icon, { name: 'shuffle', size: 14 }));
       body = h(React.Fragment, null,
-        h('div', { className: 'qrow' },
-          h('button', { className: 'qbtn', type: 'button', disabled: !actions.canReversePath, title: actions.canReversePath ? 'Reverse waypoint order and traverse the route from the opposite end' : 'Waiting for the current path preview', onClick: () => actions.reversePath() }, h(Icon, { name: 'shuffle', size: 14 }), 'Swap start/end'),
-          h('button', { className: 'qbtn', type: 'button', onClick: () => { actions.select(null, -1); actions.setTool('waypoint'); } }, h(Icon, { name: 'plus', size: 14 }), 'Place waypoint')),
-
         h('div', { className: 'cgroup-h' }, 'Facing'),
         isTank
           ? h('div', { className: 'hint' }, h(Icon, { name: 'info', size: 14 }), 'Tangent only.')
@@ -483,7 +486,6 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
         h('div', { className: 'cgroup-h' }, 'Endpoints'),
         h('div', { className: 'grid2' },
           endpointSpeed(0), endpointSpeed(n - 1)),
-        h('div', { className: 'seg-hint' }, 'Use 0 to start or finish at rest.'),
         h(ConstraintsBody, {
           c: pathLimits,
           robot,
@@ -506,7 +508,7 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
       const interiorHeadingEditor = (headingHint) => h(React.Fragment, null,
         headingHint,
         h('div', { className: 'inrow first' },
-          h('span', { className: 'inrow-l' }, 'Pin heading here', h('small', null, 'otherwise it interpolates')),
+          h('span', { className: 'inrow-l' }, 'Pin heading here', h('small', null, 'Otherwise it interpolates')),
           h(Toggle, { on: !!w.thetaOn, ariaLabel: 'Pin heading at waypoint', onChange: (v) => actions.toggleTheta(i, v) })),
         w.thetaOn && h(Num, { label: 'Heading \u03b8', value: w.theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v }) }));
       icon = 'waypoint'; title = waypointLabel(i);
@@ -539,11 +541,11 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
               : interiorHeadingEditor(),
 
         h('div', { className: 'inrow' },
-          h('span', { className: 'inrow-l' }, isStart ? 'Stop at entry' : isEnd ? 'Stop at exit' : 'Stop here', h('small', null, isStart ? 'enter from rest' : 'decelerate to a full stop')),
+          h('span', { className: 'inrow-l' }, isStart ? 'Stop at entry' : isEnd ? 'Stop at exit' : 'Stop here', h('small', null, isStart ? 'Enter from rest' : 'Decelerate to a full stop')),
           h(Toggle, { on: !!w.stop, ariaLabel: isStart ? 'Stop at entry' : isEnd ? 'Stop at exit' : 'Stop at waypoint', onChange: (v) => actions.setStop(i, v) })),
         w.stop && h(Num, { label: 'Wait at waypoint', value: w.wait || 0, unit: 's', step: 0.1, precision: 1, min: 0, onChange: (v) => actions.setWait(i, v) }),
         !isStart && h('div', { className: 'inrow' },
-          h('span', { className: 'inrow-l' }, 'Turn in place', h('small', null, 'rotate without translating')),
+          h('span', { className: 'inrow-l' }, 'Turn in place', h('small', null, 'Rotate without translating')),
           h(Toggle, { on: !!w.turnInPlace, ariaLabel: 'Turn in place at waypoint', onChange: (v) => actions.setTurnInPlace(i, v) })),
         !isStart && w.turnInPlace && h(React.Fragment, null,
           h(Num, { label: 'Turn to heading', value: w.turnInPlace.headingDeg, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setTurnInPlaceMeta(i, { headingDeg: v }) }),
@@ -553,15 +555,13 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
         isAnchor && endpointSpeed(i),
         isAnchor && h('div', { className: 'seg-hint' }, 'Speed along the path; 0 means stopped.'),
 
-        // Tangent handles only appear when the selected planner consumes them.
-        handlesEffective && h(React.Fragment, null,
-          h('div', { className: !isStart && !isEnd ? 'grid2' : '' },
-            !isStart && h(Num, { label: 'Incoming tangent', value: handleLen(w, 'prevC'), unit: 'm', min: 0.1, onChange: (v) => actions.setHandleLen(i, 'prevC', v) }),
-            !isEnd && h(Num, { label: 'Outgoing tangent', value: handleLen(w, 'nextC'), unit: 'm', min: 0.1, onChange: (v) => actions.setHandleLen(i, 'nextC', v) }))),
+        h('div', { className: !isStart && !isEnd ? 'grid2' : '' },
+          !isStart && h(Num, { label: 'Incoming tangent', value: handleLen(w, 'prevC'), unit: 'm', min: 0.1, onChange: (v) => actions.setHandleLen(i, 'prevC', v) }),
+          !isEnd && h(Num, { label: 'Outgoing tangent', value: handleLen(w, 'nextC'), unit: 'm', min: 0.1, onChange: (v) => actions.setHandleLen(i, 'nextC', v) })),
 
         isEnd && !isTank && h(React.Fragment, null,
           h('div', { className: 'inrow' },
-            h('span', { className: 'inrow-l' }, 'Endpoint jiggle', h('small', null, 'rapid radial strokes')),
+            h('span', { className: 'inrow-l' }, 'Endpoint jiggle', h('small', null, 'Rapid radial strokes')),
             h(Toggle, { on: !!endpointJiggle, ariaLabel: 'Endpoint jiggle', onChange: (on) => {
               if (!on) { actions.setJiggle(null); setJiggleError(false); return; }
               setJiggleError(!actions.setJiggle({ ...JIGGLE_DEFAULTS }));
@@ -580,9 +580,9 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
           h('div', { className: 'seg-hint' }, 'Arbitrary-direction jiggle requires a swerve drivetrain.'),
           h('button', { className: 'qbtn', type: 'button', onClick: () => actions.setJiggle(null) }, h(Icon, { name: 'x', size: 14 }), 'Remove jiggle')),
 
-        (!isAnchor || n > 2) && h('div', { className: 'qrow', style: { marginTop: '14px' } },
-          !isAnchor && h('button', { className: 'qbtn', type: 'button', onClick: () => actions.duplicateWp(i) }, h(Icon, { name: 'copy', size: 14 }), 'Duplicate'),
-          n > 2 && h('button', { className: 'qbtn danger', type: 'button', onClick: () => actions.delWp(i) }, h(Icon, { name: 'trash', size: 14 }), 'Delete')));
+        // Every feature inspector ends with the same full-width destructive action.
+        !isAnchor && h('button', { className: 'qbtn wide', type: 'button', style: { marginTop: '14px' }, onClick: () => actions.duplicateWp(i) }, h(Icon, { name: 'copy', size: 14 }), 'Duplicate waypoint'),
+        n > 2 && h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delWp(i) }, h(Icon, { name: 'trash', size: 15 }), 'Delete waypoint'));
     }
 
     else if (sel.kind === 'seg' && wps[sel.idx] && wps[sel.idx + 1]) {
@@ -605,7 +605,7 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
         Stat3([
           { v: UnitPrefs.format(segLen, 'm', 2), k: 'Length' },
           { v: isFinite(minR) ? UnitPrefs.format(minR, 'm', 2) : '\u221e', k: 'Min radius', color: isFinite(minR) && minR < 0.7 ? 'var(--bad)' : null },
-          { v: dur.toFixed(2) + 's', k: 'Duration' },
+          { v: UnitPrefs.format(dur, 's', 2), k: 'Duration' },
         ]),
         h('div', { className: 'fieldlabel' }, 'Path type'),
         h(Seg, { value: st, options: PM.SEGTYPES.map((type) => ({ v: type.id, label: type.label, title: type.hint })), ariaLabel: 'Path type', onChange: (v) => actions.setSegMeta(i, { segType: v }) }),
@@ -648,11 +648,10 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
         targetHeadingMode !== 'targets' && h('div', { className: 'hint' }, h(Icon, { name: 'info', size: 14 }), 'Inactive on this segment \u2014 switch its heading mode to Targets.'),
         h(Num, { label: 'Target heading', value: t.deg, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setTarget(sel.idx, { deg: v }) }),
         h('div', { className: 'fieldlabel' }, 'Anchor position'),
-        h(Seg, { value: targetAnchor, ariaLabel: 'Anchor position', options: [{ v: 'param', label: 'Path %' }, { v: 'dist', label: 'Distance' }], onChange: (v) => actions.setTarget(sel.idx, { anchor: v }) }),
+        h(Seg, { value: targetAnchor, ariaLabel: 'Anchor position', options: ANCHOR_OPTIONS, onChange: (v) => actions.setTarget(sel.idx, { anchor: v }) }),
         targetAnchor === 'dist'
           ? h(Num, { label: 'Distance from start', value: targetDistance, unit: 'm', step: 0.1, precision: 2, min: 0, max: derived.sample.length || 0, onChange: (v) => actions.setTarget(sel.idx, { d: v }) })
           : h(Num, { label: 'Position along path', value: targetFraction * 100, unit: '%', step: 1, precision: 0, min: 0, max: 100, onChange: (v) => actions.setTarget(sel.idx, { f: v / 100 }) }),
-        h('div', { className: 'seg-hint' }, targetAnchor === 'dist' ? 'Keeps its distance from the start when the path changes.' : 'Moves proportionally when the path changes.'),
         h('div', { className: 'seg-hint' }, 'Drag the arrow to adjust facing. Shift-click to delete.'),
         h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delTarget(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete target'));
     }
@@ -696,11 +695,11 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
         || argumentParameters.some((parameter) => parameterValueError(invocationArguments[parameter.name], parameter))
       );
       const operation = robotProject && robotProject.operation;
-      icon = 'flag2'; title = m.name || 'Command marker';
+      icon = 'flag2'; title = m.name || 'Command';
       body = h(React.Fragment, null,
         h(LabviewProjectPanel, { robotProject }),
         h('label', { className: 'fieldlabel first', htmlFor: 'event-marker-name' }, 'Name'),
-        h('input', { id: 'event-marker-name', className: 'textinput', value: m.name, autoComplete: 'off', spellCheck: false, 'data-lpignore': 'true', 'data-1p-ignore': true, onChange: (e) => actions.setMarker(sel.idx, { name: e.target.value }) }),
+        h(DraftText, { id: 'event-marker-name', className: 'textinput', value: m.name, owner: doc.id + ':' + (m.id || sel.idx), autoComplete: 'off', spellCheck: false, 'data-lpignore': 'true', 'data-1p-ignore': true, onCommit: (name) => actions.setMarker(sel.idx, { name }) }),
 
         h('section', { className: 'cmd-command-editor', 'aria-label': 'Marker command' },
           h(ChoiceBrowser, {
@@ -770,23 +769,23 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
         ], onChange: (v) => actions.setMarker(sel.idx, { schedule: { ...schedule, trigger: v } }) }),
         h('div', { className: 'seg-hint' }, schedule.trigger === 'position' ? 'Measured position.' : 'Planned time.'),
         h('div', { className: 'inrow' },
-          h('span', { className: 'inrow-l' }, 'Repeat command', h('small', null, 'while the window is active')),
+          h('span', { className: 'inrow-l' }, 'Repeat command', h('small', null, 'While the window is active')),
           h(Toggle, { on: schedule.repeatEveryS != null, ariaLabel: 'Repeat event', onChange: (on) => actions.setMarker(sel.idx, { schedule: { ...schedule, repeatEveryS: on ? 0.1 : undefined } }) })),
         schedule.repeatEveryS != null && h(Num, { label: 'Repeat every', value: schedule.repeatEveryS, unit: 's', min: 0.001, step: 0.02, precision: 3, onChange: (v) => actions.setMarker(sel.idx, { schedule: { ...schedule, repeatEveryS: v } }) }),
         h('div', { className: 'inrow' },
-          h('span', { className: 'inrow-l' }, 'End time', h('small', null, 'expire or stop repeating')),
+          h('span', { className: 'inrow-l' }, 'End time', h('small', null, 'Expire or stop repeating')),
           h(Toggle, { on: schedule.endTimeS != null, ariaLabel: 'Limit event end time', onChange: (on) => actions.setMarker(sel.idx, { schedule: { ...schedule, endTimeS: on ? (derived.prof.totalTime || 0) : undefined } }) })),
         schedule.endTimeS != null && h(Num, { label: 'End path time', value: schedule.endTimeS, unit: 's', min: 0, max: derived.prof.totalTime || 0, step: 0.1, precision: 2, onChange: (v) => actions.setMarker(sel.idx, { schedule: { ...schedule, endTimeS: v } }) }),
         schedule.conditionId && h('div', { className: 'cmd-project-error' }, 'Legacy condition: ' + schedule.conditionId,
           h('button', { type: 'button', className: 'rt-openbtn', onClick: () => actions.setMarker(sel.idx, { schedule: { ...schedule, conditionId: undefined } }) }, 'Remove legacy condition')),
         h('div', { className: 'marker-position-group' },
           h('div', { className: 'fieldlabel' }, 'Anchor position'),
-          h(Seg, { value: markerAnchor, ariaLabel: 'Anchor position', options: [{ v: 'param', label: 'Path %' }, { v: 'dist', label: 'Distance' }], onChange: (v) => actions.setMarker(sel.idx, { anchor: v }) }),
+          h(Seg, { value: markerAnchor, ariaLabel: 'Anchor position', options: ANCHOR_OPTIONS, onChange: (v) => actions.setMarker(sel.idx, { anchor: v }) }),
           markerAnchor === 'dist'
             ? h(Num, { label: 'Distance from start', value: markerDistance, unit: 'm', step: 0.1, precision: 2, min: 0, max: derived.sample.length || 0, onChange: (v) => actions.setMarker(sel.idx, { d: v }) })
             : h(Num, { label: 'Position along path', value: markerFraction * 100, unit: '%', step: 1, precision: 0, min: 0, max: 100, onChange: (v) => actions.setMarker(sel.idx, { f: v / 100 }) }),
-          h('div', { className: 'seg-hint' }, markerAnchor === 'dist' ? 'Keeps its distance from the start when the path changes.' : 'Moves proportionally when the path changes.')),
-        h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delMarker(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete marker'));
+          ),
+        h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delMarker(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete command'));
     }
 
     else if (sel.kind === 'cr' && doc.ranges && doc.ranges[sel.idx]) {
@@ -796,14 +795,13 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
       const loF = Math.min(effR.f0, effR.f1), hiF = Math.max(effR.f0, effR.f1);
       const clampFraction = (value) => Math.max(0, Math.min(1, value / 100));
       const rangeAnchor = rg.anchor === 'dist' ? 'dist' : 'param';
-      const anchorOptions = [{ v: 'param', label: 'Path %' }, { v: 'dist', label: 'Distance' }];
       icon = 'gauge'; title = rg.name || 'Zone';
       tag = UnitPrefs.fromCanonical(loF * len, 'm').toFixed(1) + '\u2013' + UnitPrefs.format(hiF * len, 'm', 1);
       body = h(React.Fragment, null,
         h(RangeLimits, { range: rg, limits: pathLimits, onChange: (patch) => actions.setRange(sel.idx, patch) }),
         h('section', { className: 'range-anchor-editor', 'aria-label': 'Zone position' },
           h('div', { className: 'fieldlabel' }, 'Position'),
-          h(Seg, { value: rangeAnchor, ariaLabel: 'Position', options: anchorOptions, onChange: (v) => actions.setRangeAnchor(sel.idx, v) }),
+          h(Seg, { value: rangeAnchor, ariaLabel: 'Position', options: ANCHOR_OPTIONS, onChange: (v) => actions.setRangeAnchor(sel.idx, v) }),
           rangeAnchor === 'dist'
             ? h('div', { className: 'grid2' },
                 h(Num, { label: 'Start distance', value: loF * len, unit: 'm', min: 0, max: len, step: 0.1, precision: 2, onChange: (v) => actions.setRange(sel.idx, { d0: Math.min(v, hiF * len) }) }),
@@ -811,10 +809,10 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
             : h('div', { className: 'grid2' },
                   h(Num, { label: 'Start position', value: loF * 100, unit: '%', min: 0, max: 100, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { anchor: 'param', f0: Math.min(clampFraction(v), hiF), f1: hiF }) }),
                   h(Num, { label: 'End position', value: hiF * 100, unit: '%', min: 0, max: 100, step: 1, precision: 0, onChange: (v) => actions.setRange(sel.idx, { anchor: 'param', f0: loF, f1: Math.max(clampFraction(v), loF) }) })),
-          h('div', { className: 'seg-hint' }, rangeAnchor === 'dist' ? 'Keeps the same distances from the start as the path changes.' : 'Keeps the same percentages as the path changes.')),
+          ),
         h('label', { className: 'fieldlabel', htmlFor: 'constraint-range-label' }, 'Name'),
-        h('input', { id: 'constraint-range-label', className: 'textinput', value: rg.name || '', placeholder: 'Zone', autoComplete: 'off', spellCheck: false, 'data-lpignore': 'true', 'data-1p-ignore': true, onChange: (e) => actions.setRange(sel.idx, { name: e.target.value }) }),
-        h('div', { className: 'chint' }, 'Drag either end to resize. Overlapping zones use the lowest limit.'),
+        h(DraftText, { id: 'constraint-range-label', className: 'textinput', value: rg.name || '', owner: doc.id + ':' + sel.idx, placeholder: 'Zone', autoComplete: 'off', spellCheck: false, 'data-lpignore': 'true', 'data-1p-ignore': true, onCommit: (name) => actions.setRange(sel.idx, { name }) }),
+        h('div', { className: 'chint' }, 'Overlapping zones use the lowest limit.'),
         h('button', { className: 'delbtn', type: 'button', onClick: () => actions.delRange(sel.idx) }, h(Icon, { name: 'trash', size: 15 }), 'Delete zone'));
     } else {
       return null;
@@ -825,8 +823,10 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
         h('span', { className: 'ctxinsp-ic' }, h(Icon, { name: icon, size: 15 })),
         h('span', { className: 'ctxinsp-t', title }, title),
         tag && h('span', { className: 'ctxinsp-tag' }, tag),
+        headerAction,
         h('button', { className: 'ctxinsp-x', type: 'button', title: 'Hide inspector', 'aria-label': 'Hide inspector', onClick: onClose }, h(Icon, { name: 'x', size: 14 }))),
-      h('div', { className: 'ctxinsp-body', inert: props.pending ? '' : undefined }, body));
+      // Keyed by the selected item so an unfinished numeric or text draft never moves to another item.
+      h('div', { className: 'ctxinsp-body', key: doc.id + ':' + (sel.kind || 'path') + ':' + sel.idx, inert: props.pending ? '' : undefined }, body));
   }
 
 export { ContextInspector, CommandParameterEditor, commandArguments, parameterValueError, safeControlId };

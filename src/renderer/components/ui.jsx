@@ -66,8 +66,8 @@ import { UnitPrefs } from "../lib/unitPreferences";
     return h('svg', { width: size, height: size, viewBox: '0 0 24 24', 'aria-hidden': true, focusable: false, fill: fill ? 'currentColor' : 'none', stroke: fill ? 'none' : stroke, strokeWidth: sw, strokeLinecap: 'round', strokeLinejoin: 'round' }, h('path', { d: PATHS[name] || '' }));
   }
 
-  function IconBtn({ icon, active, onClick, title, danger, size = 18, fill }) {
-    return h('button', { className: 'iconbtn' + (active ? ' active' : '') + (danger ? ' danger' : ''), onClick, title, 'aria-label': title, 'aria-pressed': active == null ? undefined : active, type: 'button' }, h(Icon, { name: icon, size, fill }));
+  function IconBtn({ icon, active, onClick, title, label, danger, disabled, size = 18, fill }) {
+    return h('button', { className: 'iconbtn' + (active ? ' active' : '') + (danger ? ' danger' : ''), onClick, title, 'aria-label': label || title, 'aria-pressed': active == null ? undefined : active, disabled, type: 'button' }, h(Icon, { name: icon, size, fill }));
   }
 
   const MAX_RENDERED_PICKER_ITEMS = 80;
@@ -453,17 +453,10 @@ import { UnitPrefs } from "../lib/unitPreferences";
       label && h('span', { className: 'toggle-lbl' }, label));
   }
 
+  // The chosen option is raised on its own, so no shared indicator is needed.
   function Seg({ value, options, onChange, ariaLabel, className }) {
-    const count = Math.max(1, options.length);
-    const activeIndex = Math.max(0, options.findIndex((option) => option.v === value));
-    const style = {
-      '--seg-count': count,
-      '--seg-clip-left': (activeIndex / count * 100) + '%',
-      '--seg-clip-right': ((count - activeIndex - 1) / count * 100) + '%',
-    };
-    return h('div', { className: 'seg' + (className ? ' ' + className : ''), role: 'group', 'aria-label': ariaLabel, style },
-      h('span', { className: 'seg-indicator', 'aria-hidden': true }),
-      options.map(o => h('button', { key: o.v, type: 'button', disabled: Boolean(o.disabled), className: 'seg-i' + (value === o.v ? ' on' : ''), title: o.title, 'aria-label': o.ariaLabel, 'aria-pressed': value === o.v, onClick: () => onChange(o.v) }, o.label)));
+    return h('div', { className: 'seg' + (className ? ' ' + className : ''), role: 'group', 'aria-label': ariaLabel, style: { '--seg-count': Math.max(1, options.length) } },
+      options.map(o => h('button', { key: o.v, type: 'button', disabled: Boolean(o.disabled), className: 'seg-i' + (value === o.v ? ' on' : ''), title: o.title, 'aria-description': o.title, 'aria-label': o.ariaLabel, 'aria-pressed': value === o.v, onClick: () => onChange(o.v) }, o.label)));
   }
 
   function constraintRangeSummary(range, constraints, robot) {
@@ -538,4 +531,4 @@ import { UnitPrefs } from "../lib/unitPreferences";
             it.hint && h('span', { className: 'ctxmenu-k' }, it.hint))));
   }
 
-export const UI = { Icon, IconBtn, Dropdown, ChoiceBrowser, Num, Section, Toggle, Seg, ContextMenu, constraintRangeSummary };
+export const UI = { Icon, IconBtn, Dropdown, ChoiceBrowser, Num, DraftText, Section, Toggle, Seg, ContextMenu, constraintRangeSummary };

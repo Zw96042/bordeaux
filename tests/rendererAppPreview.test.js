@@ -64,7 +64,7 @@ describe("renderer app path preview lifecycle", () => {
         robot: project.robot,
         onClose: vi.fn(),
       }));
-      expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*Swap start\/end/);
+      expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Swap start\/end"/);
     } finally {
       pathLength.mockRestore();
     }
