@@ -375,7 +375,9 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate(() => document.querySelectorAll('.library-row input[type="checkbox"]').length), 0);
     check('native Shift and Command/Control pointer selection works directly on rows without a selection mode');
     await input('.library-search', 'Opening');
-    assert.match(await evaluate(() => document.querySelector('.library-selection').textContent), /2 paths selected.*hidden/);
+    assert.equal(await evaluate(() => document.querySelector('.library-selection').textContent), 'Includes hidden');
+    assert.equal(await evaluate(() => document.querySelector('.library-current-name').title), '2 paths selected, including hidden paths');
+    assert.equal(await evaluate(() => document.querySelector('.library-push > button').textContent.trim()), 'Push 2 paths');
     await click('.library-push > button');
     await wait(() => prepared.length === 1, 'captured scope');
     assert.deepEqual(prepared[0].scope, { kind: 'paths', pathIds: ['library-path-0', 'library-path-1'] });
@@ -955,7 +957,7 @@ app.whenReady().then(async () => {
     await click('.library-connection');
     await click('.robot-push-dialog button', 'Pair another robot');
     await wait(() => evaluate(() => document.querySelector('.robot-push-endpoint')), 'unpaired connection surface');
-    assert.equal(await evaluate(() => document.querySelector('.library-connection').textContent.trim()), 'Connect robot');
+    assert.equal(await evaluate(() => document.querySelector('.library-connection').textContent.trim()), 'Set up');
     assert.equal(await evaluate(() => { const button = document.querySelector('.library-connection'); return button.scrollWidth <= button.clientWidth; }), true);
     assert.equal(await evaluate(() => document.querySelectorAll('.robot-connection-diagnostics').length), 1);
     await wait(() => evaluate(() => document.querySelector('[aria-label="Diagnostics"]')?.checkVisibility()), 'unpaired diagnostics control');

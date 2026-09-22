@@ -32,7 +32,9 @@ describe('routine delivery capability', () => {
       preferenceKey: 'capability', mode: 'routines', project: { paths: [] }, routines: [{ id: 'r', name: 'Routine', nodes: [] }],
       activeRoutineId: 'r', controller: { busy: false, itemStatus: () => ({}) }, actions: {}, times: {},
     }));
-    expect(html.includes('Routine upload is unavailable with this connection')).toBe(!routinePush);
-    expect(html).toMatch(routinePush ? /<button type="button"><svg[^]*?Push routine<\/button>/ : /<button type="button" disabled="" title="Routine upload[^]*?Push routine<\/button>/);
+    // Unsupported routine push shows a quiet local-only label instead of a dead button.
+    expect(html.includes('>Local only<')).toBe(!routinePush);
+    expect(html.includes('Push routine')).toBe(routinePush);
+    if (routinePush) expect(html).toMatch(/<button type="button"><svg[^]*?Push routine<\/button>/);
   });
 });

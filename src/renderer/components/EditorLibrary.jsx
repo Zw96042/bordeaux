@@ -140,7 +140,7 @@ function EditorLibrary({ mode, prefs, update, project, routines, activePathId, a
   const pathsMode = mode === 'paths';
   const routinePushAvailable = !controller.fileTransfer && typeof window !== 'undefined' && window.bordeauxAPI?.robotDeliveryCapabilities?.routinePush === true;
   const pushUnavailable = !pathsMode && !routinePushAvailable;
-  const routinePushExplanation = 'Routine upload is unavailable with this connection. Routines stay saved locally.';
+  const routinePushExplanation = 'Routines stay on this computer. Push uploads paths only.';
   const items = pathsMode ? project.paths : routines;
   const activeId = pathsMode ? activePathId : activeRoutineId;
   const active = items.find((item) => item.id === activeId);
@@ -243,6 +243,7 @@ function EditorLibrary({ mode, prefs, update, project, routines, activePathId, a
   const menuItem = menu?.kind === 'folder' ? folders.find((item) => item.id === menu.id) : items.find((item) => item.id === menu?.id);
   const properties = project.paths.find((item) => item.id === propertiesId);
   const pushName = pathsMode ? project.paths.find((item) => item.id === selected[0])?.name : active?.name;
+  const multiple = pathsMode && selected.length > 1, hiddenSelected = multiple && selected.some((id) => !visible.some((item) => item.id === id));
   const menuButton = (label, onClick, props = {}) => h('button', { type: 'button', role: 'menuitem', onClick, ...props }, label);
   return h('div', { ref: root, className: 'editor-library', onKeyDown: (event) => {
     if (event.target.closest('dialog')) return;
@@ -258,22 +259,24 @@ function EditorLibrary({ mode, prefs, update, project, routines, activePathId, a
         h(React.Fragment, null, h('span', { title: saveState.error }, saveState.error), h('button', { type: 'button', onClick: onRetrySave }, saveState.retryExport ? 'Retry BDX save' : 'Retry save')))),
     h('div', { className: 'library-tools' },
       h('button', { type: 'button', onClick: () => create(pathsMode ? 'path' : 'routine', () => pathsMode ? actions.addPath(active?.folderId) : actions.addRoutine()) }, h(Icon, { name: 'plus', size: 13 }), pathsMode ? 'New path' : 'New routine'),
-      pathsMode && h('button', { type: 'button', title: 'New folder', 'aria-label': 'New folder', onClick: () => create('folder', actions.addFolder) }, h(Icon, { name: 'folder', size: 14 }))),
+      pathsMode && h('button', { type: 'button', className: 'library-new-folder', title: 'New folder', 'aria-label': 'New folder', onClick: () => create('folder', actions.addFolder) }, h(Icon, { name: 'folder', size: 14 }))),
     h('input', { ref: search, className: 'library-search', type: 'search', 'aria-label': pathsMode ? 'Search paths and folders' : 'Search routines', placeholder: 'Search', value: prefs.query, onChange: (event) => { update({ query: event.target.value, scroll: 0 }); setMenu(null); } }),
     h('div', { ref: scroll, className: 'library-scroll', onScroll: (event) => update({ scroll: event.currentTarget.scrollTop }) },
       blocked && h('div', { className: 'library-blocked', role: 'alert' }, h('strong', null, 'Cannot delete ' + blocked.name), h('p', null, 'Remove its steps from these routines first:'), blocked.routines.map((routine) => h('button', { key: routine.id, type: 'button', onClick: () => onRoutine(routine.id) }, 'Open ' + routine.name))),
       !visible.length ? h('div', { className: 'library-empty' }, query ? 'No matching names.' : pathsMode ? 'Create a path to get started.' : 'Create a routine to get started.') : pathsMode && !query ? [...folders.map(group), ...visible.filter((item) => !item.folderId).map(row)] : visible.map(row)),
     h('div', { className: 'library-push' },
       h('div', { className: 'library-selection', role: 'status' },
-        h('span', { className: 'library-current-name', title: pushName }, pathsMode && selected.length > 1 ? selected.length + ' paths selected' + (selected.some((id) => !visible.some((item) => item.id === id)) ? ', includes hidden' : '') : pushName),
-        pathsMode && selected.length > 1 && h('button', { type: 'button', onClick: () => update({ checked: [activeId], selectionActiveId: activeId }) }, 'Clear')),
-      h('button', { type: 'button', disabled: controller.busy || !active || controller.desktopAvailable === false || pushUnavailable, title: pushUnavailable ? routinePushExplanation : undefined, onClick: () => controller.requestPush(pathsMode ? { kind: 'paths', pathIds: selected } : { kind: 'routine', routineId: active.id }) }, h(Icon, { name: 'share', size: 13 }), pathsMode ? selected.length > 1 ? 'Push ' + selected.length + ' paths' : 'Push path' : 'Push routine'),
-      pushUnavailable && h('span', { className: 'library-selection-hint' }, routinePushExplanation),
-      pathsMode && h('span', { className: 'library-selection-hint' }, 'Shift: select range. ⌘ / Ctrl: select multiple.')),
+        // The Push button already carries the count, so a multiple selection only needs to flag hidden members.
+        h('span', { className: 'library-current-name', title: multiple ? selected.length + ' paths selected' + (hiddenSelected ? ', including hidden paths' : '') : pushName },
+          multiple ? (hiddenSelected ? 'Includes hidden' : selected.length + ' selected') : pushName),
+        multiple && h('button', { type: 'button', className: 'library-clear', 'aria-label': 'Clear selection', title: 'Clear selection', onClick: () => update({ checked: [activeId], selectionActiveId: activeId }) }, h(Icon, { name: 'x', size: 13 }))),
+      // Range and multiple selection shortcuts are listed in Keyboard shortcuts.
+      pushUnavailable ? h('span', { className: 'library-local', title: routinePushExplanation }, 'Local only')
+        : h('button', { type: 'button', disabled: controller.busy || !active || controller.desktopAvailable === false, onClick: () => controller.requestPush(pathsMode ? { kind: 'paths', pathIds: selected } : { kind: 'routine', routineId: active.id }) }, h(Icon, { name: 'share', size: 13 }), pathsMode ? selected.length > 1 ? 'Push ' + selected.length + ' paths' : 'Push path' : 'Push routine')),
     menu && menuItem && h(LibraryMenu, { key: menu.id, menu, close: closeMenu },
-      menu.kind !== 'folder' && menuButton(pathsMode ? 'Push path…' : 'Push routine…', () => {
+      menu.kind !== 'folder' && !pushUnavailable && menuButton(pathsMode ? 'Push path…' : 'Push routine…', () => {
         setMenu(null); controller.requestPush(pathsMode ? { kind: 'paths', pathIds: [menuItem.id] } : { kind: 'routine', routineId: menuItem.id });
-      }, { disabled: controller.busy || controller.desktopAvailable === false || pushUnavailable, title: pushUnavailable ? routinePushExplanation : undefined }),
+      }, { disabled: controller.busy || controller.desktopAvailable === false }),
       menu.kind === 'path' && menuButton('Export BDX…', () => { const pathId = menuItem.id; setMenu(null); actions.exportPath(pathId); }, { disabled: controller.desktopAvailable === false }),
       menu.kind !== 'folder' && h('hr'),
       menuButton('Rename', () => rename(menu.kind, menuItem)),
