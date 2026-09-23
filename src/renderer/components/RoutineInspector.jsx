@@ -10,9 +10,9 @@ import { LabviewProjectPanel } from "./LabviewProjectSources";
 // Autonomous Routine — step inspector (RIGHT rail) + run transport (bottom).
 // One inspector system, shared with the Plan page (.ctxinsp shell + form primitives).
   const h = React.createElement;
-  const { Icon, Dropdown, ChoiceBrowser, Seg } = UI;
+  const { Icon, Dropdown, ChoiceBrowser, DraftText, Seg } = UI;
   const A = AUTO;
-  const fmt = (t) => (t || 0).toFixed(2) + 's';
+  const fmt = (t) => UnitPrefs.format(t || 0, 's', 2);
 
   function FieldLabel(t, right) { return h('div', { className: 'fieldlabel' }, h('span', null, t), right || null); }
 
@@ -34,10 +34,10 @@ import { LabviewProjectPanel } from "./LabviewProjectSources";
     }
     const set = (patch) => acq.set(node.id, patch);
     const seg = run.segs.find((s) => s.nodeId === node.id);
-    let icon = 'dot', title = '', tag = null, accent = 'var(--accent)', body = null;
+    let icon = 'dot', title = '', accent = 'var(--accent)', body = null;
 
     if (node.type === 'path') {
-      icon = 'route'; title = 'Path'; tag = 'step';
+      icon = 'route'; title = 'Path';
       body = h(React.Fragment, null,
         h(Dropdown, { id: 'routine-bound-path', label: 'Path', value: node.ref, icon: 'route',
           items: paths.map((path) => ({ value: path.id, label: path.name })),
@@ -50,7 +50,7 @@ import { LabviewProjectPanel } from "./LabviewProjectSources";
         h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Remove from routine'));
 
     } else if (node.type === 'builtin') {
-      icon = 'pause'; title = 'Wait'; tag = 'built-in'; accent = '#cf962f';
+      icon = 'pause'; title = 'Wait'; accent = '#cf962f';
       const durationS = node.arguments && node.arguments.durationS;
       body = h(React.Fragment, null,
         h(CommandParameterEditor, { key: node.id, id: 'routine-wait-' + safeControlId(node.id), label: 'Wait duration in seconds',
@@ -60,27 +60,27 @@ import { LabviewProjectPanel } from "./LabviewProjectSources";
         h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete wait'));
 
     } else if (node.type === 'generatedTrajectory') {
-      icon = 'route'; title = deployment.label || 'Generated trajectory'; tag = 'runtime dynamic'; accent = '#cf962f';
+      icon = 'route'; title = deployment.label || 'Generated trajectory'; accent = '#cf962f';
       body = h(React.Fragment, null,
         h('div', { className: 'rt-callout' }, h(Icon, { name: 'info', size: 14 }), 'This segment is generated and validated on the robot at runtime. Bordeaux does not fabricate desktop geometry, duration, distance, or clearance for it.'),
         h('div', { className: 'seg-hint' }, 'Fallback: ' + (node.fallback && node.fallback.type === 'branch' ? 'validated static branch' : 'safe stop')),
         h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Remove generated trajectory'));
 
     } else if (node.type === 'decision') {
-      icon = 'branch'; title = 'Decision'; tag = 'branch'; accent = '#9aa3b0';
+      icon = 'branch'; title = 'Decision'; accent = '#9aa3b0';
       const out = acq.outcomes[node.id] || 'then';
       body = h(React.Fragment, null,
         h('div', { className: 'rt-callout' }, 'Legacy condition: ' + (node.cond || 'Unspecified') + '. Add output branches to a command to replace this decision. Existing routes are preserved.'),
         h('div', { className: 'grid2', style: { marginTop: '10px' } },
-          h('div', null, FieldLabel('If true'), h('input', { className: 'textinput', 'aria-label': 'True branch label', value: node.thenLabel, spellCheck: false, onChange: (e) => set({ thenLabel: e.target.value }) })),
-          h('div', null, FieldLabel('If false'), h('input', { className: 'textinput', 'aria-label': 'False branch label', value: node.elseLabel, spellCheck: false, onChange: (e) => set({ elseLabel: e.target.value }) }))),
+          h('div', null, FieldLabel('If true'), h(DraftText, { className: 'textinput', 'aria-label': 'True branch label', value: node.thenLabel, owner: node.id, spellCheck: false, onCommit: (thenLabel) => set({ thenLabel }) })),
+          h('div', null, FieldLabel('If false'), h(DraftText, { className: 'textinput', 'aria-label': 'False branch label', value: node.elseLabel, owner: node.id, spellCheck: false, onCommit: (elseLabel) => set({ elseLabel }) }))),
         FieldLabel('Preview branch'),
         h(Seg, { value: out, options: [{ v: 'then', label: node.thenLabel || 'true' }, { v: 'else', label: node.elseLabel || 'false' }], onChange: (v) => acq.setOutcome(node.id, v) }),
         h('div', { className: 'seg-hint' }, 'Choose a branch to preview. This saved decision uses the legacy condition model.'),
         h('button', { className: 'delbtn', type: 'button', onClick: () => acq.del(node.id) }, h(Icon, { name: 'trash', size: 15 }), 'Delete decision'));
 
     } else {
-      const C = A.CATS[node.cat]; icon = C.icon; accent = C.color; tag = C.label;
+      const C = A.CATS[node.cat]; icon = C.icon; accent = C.color;
       title = 'Command';
       const commands = robotProject && robotProject.catalog ? robotProject.catalog.commands || [] : [];
       const invocationId = node.invocation && node.invocation.commandId || '';
@@ -93,7 +93,6 @@ import { LabviewProjectPanel } from "./LabviewProjectSources";
       })) : saved;
       body = h(React.Fragment, null,
         h(LabviewProjectPanel, { robotProject }),
-        h('div', { className: 'seg-hint' }, 'Runs between the surrounding steps.'),
         robotProject && robotProject.catalog
           ? h(ChoiceBrowser, { id: 'routine-command', resetKey: node.id, label: 'Command', value: invocationId,
               items: [{ value: '', label: 'Choose a command', meta: 'No command selected' }, ...commands.map((command) => ({
@@ -128,9 +127,9 @@ import { LabviewProjectPanel } from "./LabviewProjectSources";
       h('div', { className: 'ctxinsp-hd' },
         h('span', { className: 'ctxinsp-ic', style: { background: 'color-mix(in srgb,' + accent + ' 16%, transparent)', color: accent } }, h(Icon, { name: icon, size: 15 })),
         h('span', { className: 'ctxinsp-t', title }, title),
-        tag && null,
         h('button', { className: 'ctxinsp-x', type: 'button', title: 'Close', 'aria-label': 'Close step inspector', onClick: () => acq.select(null) }, h(Icon, { name: 'x', size: 14 }))),
-      h('div', { className: 'ctxinsp-body' }, body));
+      // Keyed by step so an unfinished draft never moves to another step.
+      h('div', { className: 'ctxinsp-body', key: node.id }, body));
   }
 
   // ---- bottom transport: the same persistent timeline model used by Plan ----
@@ -158,7 +157,7 @@ import { LabviewProjectPanel } from "./LabviewProjectSources";
           h('button', { className: 'rt-tp-btn', type: 'button', title: 'Restart routine', 'aria-label': 'Restart routine', onClick: controls.reset }, h(Icon, { name: 'rewind', size: 14 })),
           h('button', { className: 'rt-tp-btn play', type: 'button', disabled: nSteps === 0, title: 'Play / pause routine', 'aria-label': playing ? 'Pause routine playback' : 'Play routine', onClick: controls.toggle }, h(Icon, { name: playing ? 'pause' : 'play', size: 15, fill: !playing }))),
         h('span', { className: 'rt-timeline-title' }, 'Routine'),
-        h('span', { className: 'rt-timeline-time' }, time.toFixed(2), h('small', null, ' / ' + run.total.toFixed(2) + 's')),
+        h('span', { className: 'rt-timeline-time' }, time.toFixed(2), h('small', null, ' / ' + fmt(run.total))),
         h('span', { className: 'rt-timeline-summary' }, nSteps + (nSteps === 1 ? ' preview step' : ' preview steps')),
         h('div', { className: 'rt-timeline-step' }, activeIdx >= 0 ? String(activeIdx + 1).padStart(2, '0') : '–', h('small', null, '/' + String(nSteps).padStart(2, '0')))),
       h('div', { className: 'rt-timeline-editor', style: { '--routine-progress': pct } },

@@ -23,7 +23,7 @@ export function LabviewProjectPanel({ robotProject }) {
       h('button', { className: 'qbtn', type: 'button', disabled: busy, onClick: robotProject?.link }, catalog ? 'Change project' : 'Choose LabVIEW project'),
       catalog && h('button', { className: 'qbtn', type: 'button', disabled: busy, onClick: robotProject?.refresh, title: windows ? 'Reload the project and inspect command inputs in LabVIEW' : 'Reload project sources and saved command inputs' }, 'Sync commands')),
     catalog?.conditions?.length > 0 && !catalog.authoritative && h('button', { className: 'labview-text-action', type: 'button', disabled: busy, onClick: robotProject?.build }, 'Build catalog for conditions'),
-    !windows && catalog && h('p', { className: 'labview-project-help' }, 'Using saved command inputs. Connectors update on Windows with LabVIEW.'),
+    !windows && catalog && h('p', { className: 'labview-project-help' }, 'Using saved inputs. Sync on Windows to update them.'),
     inspection?.reason && !robotProject?.error && h('p', { className: 'cmd-project-warning' }, inspection.reason),
     robotProject?.error && h('p', { className: 'cmd-project-error', role: 'alert' }, robotProject.error),
     robotProject?.notice && h('p', { className: 'cmd-project-notice', role: 'status' }, robotProject.notice),

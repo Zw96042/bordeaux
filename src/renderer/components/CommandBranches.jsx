@@ -34,31 +34,30 @@ export function CommandBranches({ node, command, set, acq }) {
       onChange: replace }),
     !branch && !outputs.length && h('p', { className: 'seg-hint' }, 'Sync a command with boolean, named, or numeric outputs to add branches.'),
     branch && h(React.Fragment, null,
-      h('p', { className: 'seg-hint' }, 'Preview only. Output branches can be saved locally; robot execution and routine export are not available yet.'),
       (!current || changed) && h('div', { className: 'cmd-project-error', role: 'status' },
         changed ? 'This output’s type changed. Rebuild its routes before using it.' : 'The saved output is missing from this command. Its routes are preserved.',
         changed && h('button', { type: 'button', className: 'rt-openbtn', onClick: () => replace(branch.output) }, 'Rebuild routes')),
-      h('p', { className: 'seg-hint' }, numeric
-        ? 'Checks run top to bottom. The first match wins; Otherwise handles the rest. Each route rejoins the next step.'
-        : 'Add steps beneath each route in the routine. Each route rejoins the next step.'),
-      branch.routes.map((route, index) => h('div', { key: route.id, className: 'command-branch-route' },
-        h('label', { className: 'fieldlabel', htmlFor: 'route-label-' + route.id }, `${index + 1}. ${AUTO.routeSummary(route)}`),
-        h('input', { id: 'route-label-' + route.id, className: 'textinput', 'aria-label': 'Branch name ' + (index + 1), value: route.label,
-          onChange: (event) => patchRoute(route.id, { label: event.target.value }) }),
-        numeric && route.operator !== 'otherwise' && h(React.Fragment, null,
-          h(Dropdown, { id: 'route-operator-' + route.id, label: 'Comparison ' + (index + 1), value: route.operator, items: operators, onChange: (operator) => patchRoute(route.id, { operator }) }),
-          h(CommandParameterEditor, { id: 'route-value-' + route.id, label: 'Value ' + (index + 1), schema: branch.schema,
-            value: route.value, parameter: current || {}, onChange: (value) => patchRoute(route.id, { value }) }),
-          h('div', { className: 'command-branch-actions' },
-            h('button', { type: 'button', className: 'rt-openbtn', disabled: index === 0, onClick: () => {
+      h('p', { className: 'seg-hint' }, (numeric ? 'First match wins, top to bottom. ' : '') + 'Routes rejoin at the next step. Preview only.'),
+      // Each route is one group: its condition and actions on the header row, then its name, comparison and value.
+      branch.routes.map((route, index) => h('div', { key: route.id, className: 'command-branch-route', role: 'group', 'aria-label': 'Route ' + (index + 1) },
+        h('div', { className: 'command-branch-head' }, h('strong', null, 'Route ' + (index + 1)), h('span', null, AUTO.routeSummary(route)),
+          numeric && route.operator !== 'otherwise' && h(React.Fragment, null,
+            h('button', { type: 'button', className: 'rt-tool', title: 'Check earlier', 'aria-label': 'Check route ' + (index + 1) + ' earlier', disabled: index === 0, onClick: () => {
               const routes = [...branch.routes];
               [routes[index - 1], routes[index]] = [routes[index], routes[index - 1]];
               set({ outputBranch: { ...branch, routes } });
-            } }, 'Check earlier'),
-            h('button', { type: 'button', className: 'rt-openbtn', disabled: branch.routes.length <= 2, onClick: () => {
+            } }, '↑'),
+            h('button', { type: 'button', className: 'rt-tool danger', title: 'Remove comparison', 'aria-label': 'Remove route ' + (index + 1), disabled: branch.routes.length <= 2, onClick: () => {
               if (route.nodes.length && !confirm('Remove this comparison and all of its branch steps?')) return;
               set({ outputBranch: { ...branch, routes: branch.routes.filter((item) => item.id !== route.id) } });
-            } }, 'Remove comparison'))))),
+            } }, h(UI.Icon, { name: 'trash', size: 13 })))),
+        h('label', { className: 'fieldlabel', htmlFor: 'route-label-' + route.id }, 'Name'),
+        h(UI.DraftText, { id: 'route-label-' + route.id, className: 'textinput', 'aria-label': 'Branch name ' + (index + 1), value: route.label,
+          owner: node.id + ':' + route.id, onCommit: (label) => patchRoute(route.id, { label }) }),
+        numeric && route.operator !== 'otherwise' && h('div', { className: 'grid2' },
+          h(Dropdown, { id: 'route-operator-' + route.id, label: 'Comparison', value: route.operator, items: operators, onChange: (operator) => patchRoute(route.id, { operator }) }),
+          h(CommandParameterEditor, { id: 'route-value-' + route.id, label: 'Value', schema: branch.schema,
+            value: route.value, parameter: current || {}, onChange: (value) => patchRoute(route.id, { value }) })))),
       numeric && h('button', { type: 'button', className: 'rt-openbtn', disabled: branch.routes.length >= 256, onClick: () => {
         const added = AUTO.newOutputBranch({ name: branch.output, schema: branch.schema }).routes[0];
         set({ outputBranch: { ...branch, routes: [...branch.routes.slice(0, -1), added, branch.routes.at(-1)] } });

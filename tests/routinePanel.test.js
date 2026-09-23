@@ -24,7 +24,7 @@ describe('routine path preview status', () => {
       expect(renderMetadata(project, routine, { status: 'pending', values: {} })('drive')).toBe('Preparing preview…');
       const trajectory = getPlanner('profiledSpline').generate({ path, robot: project.robot, samplesPerSegment: 14 });
       const ready = { status: 'ready', values: { [path.id]: { finalTrajectory: trajectory, sample: { length: trajectory.totalDistanceM } } } };
-      expect(renderMetadata(project, routine, ready)('drive')).toMatch(/^\d+\.\d{2}s/);
+      expect(renderMetadata(project, routine, ready)('drive')).toMatch(/^\d+\.\d{2} s, \d+\.\d{2} m$/);
     }
   });
 

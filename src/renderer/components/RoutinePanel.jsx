@@ -10,7 +10,7 @@ import { UI } from "./ui";
   const h = React.createElement;
   const { Icon } = UI;
   const A = AUTO;
-  const fmt = (t) => (t || 0).toFixed(2) + 's';
+  const fmt = (t) => UnitPrefs.format(t || 0, 's', 2);
   const plural = (count, singular) => count + ' ' + singular + (count === 1 ? '' : 's');
 
   // ---- drag-reorder controller (siblings only) ----
@@ -107,7 +107,7 @@ import { UI } from "./ui";
       icon = 'info'; color = '#d2655f'; kindCls = 'fn'; tag = 'Legacy — cannot deploy'; meta = deployment.legacy ? 'Replace or remove this legacy step before export' : 'This unsupported step can be removed but cannot deploy';
     } else if (node.type === 'path') {
       const doc = paths.find((path) => path.id === node.ref); icon = 'route'; color = 'var(--accent)'; kindCls = 'path';
-      if (seg) meta = fmt(seg.t1 - seg.t0) + ' ,  ' + UnitPrefs.format(seg.deriv.sample.length, 'm', 2);
+      if (seg) meta = fmt(seg.t1 - seg.t0) + ', ' + UnitPrefs.format(seg.deriv.sample.length, 'm', 2);
       else if (!doc) meta = 'Choose a path';
       else if (!previewIncluded) meta = 'Skipped in this preview';
       else if (run.planningStatus === 'error') meta = 'Preview unavailable';
@@ -140,8 +140,8 @@ import { UI } from "./ui";
         : h('span', { className: 'rt-step-ic', style: { color } }, h(Icon, { name: icon, size: 15 })),
       h('button', { className: 'rt-step-body', type: 'button', 'aria-pressed': sel, onClick: () => onSelect(sel ? null : node.id) },
         h('div', { className: 'rt-step-title' }, A.nodeTitle(node, paths, catalog)),
-        h('div', { className: 'rt-step-meta' }, isCollapsed ? routes.reduce((count, route) => count + A.branchCount(route.nodes), 0) + ' steps in ' + routes.length + ' branches' : meta),
-        tag && h('span', { className: 'rt-step-tag', style: { color } }, tag),
+        h('div', { className: 'rt-step-meta' }, isCollapsed ? plural(routes.reduce((count, route) => count + A.branchCount(route.nodes), 0), 'step') + ' in ' + (routes.length === 1 ? '1 branch' : routes.length + ' branches') : meta),
+        tag && h('span', { className: 'rt-step-tag' }, tag),
         active && h('span', { className: 'rt-step-live' }, node.type === 'path' || node.type === 'builtin' || node.cat === 'generate' ? 'Running' : 'Firing')),
       h('span', { className: 'rt-step-tools' },
         h('button', { className: 'rt-tool', type: 'button', disabled: siblingIndex <= 0, title: 'Move step up', 'aria-label': 'Move step up', onClick: () => acq.move(node.id, -1) }, '\u2191'),
@@ -178,7 +178,7 @@ import { UI } from "./ui";
     return h('div', { className: 'rt-empty' },
       h('span', { className: 'rt-empty-ic' }, h(Icon, { name: 'layers', size: 18 })),
       h('div', { className: 'rt-empty-t' }, 'Build the run order'),
-      h('p', null, 'Add paths and robot commands. Commands can branch on an output. Steps run from top to bottom.'),
+      h('p', null, 'Add paths and commands. Steps run top to bottom.'),
       h(AddStep, { variant: 'end', label: 'Add first step', waitAvailable, onPick: (t, c) => acq.addEnd(t, c) }));
   }
 
@@ -198,26 +198,8 @@ import { UI } from "./ui";
     const firedIds = new Set();
     run.steps.forEach((s) => { if (s.t1 <= time + 1e-6) firedIds.add(s.node.id); });
 
-    const totals = { steps: A.countSteps(routine), paths: 0, decisions: 0 };
-    A.walk(routine.nodes, (node) => {
-      if (node.type === 'path') totals.paths += 1;
-      else if (node.type === 'decision') totals.decisions += 1;
-    });
-    const status = run.planningStatus === 'error' ? 'error' : run.blocked ? 'planning' : 'ready';
-    const statusLabel = status === 'error' ? 'Needs attention' : status === 'planning' ? 'Planning paths' : (run.total > 0 ? fmt(run.total) : 'Ready');
-
+    // The routine workspace header names the routine; this panel is the flow itself.
     return h('div', { className: 'rt-panel' + (dnd.drag ? ' dragging' : '') },
-      !props.embedded && h('header', { className: 'rt-panel-head' },
-        h('div', { className: 'rt-panel-heading' },
-          h('div', null,
-            h('span', { className: 'rt-panel-kicker' }, 'Routine flow'),
-            h('strong', { className: 'rt-panel-title', title: routine.name }, routine.name)),
-          h('span', { className: 'rt-panel-status ' + status }, h('span', { className: 'rt-panel-status-dot' }), statusLabel)),
-        h('div', { className: 'rt-panel-summary' },
-          h('span', null, plural(totals.steps, 'step')),
-          h('span', null, plural(totals.paths, 'path')),
-          totals.decisions > 0 && h('span', null, plural(totals.decisions, 'decision'))),
-        h('p', null, 'Runs top to bottom. The highlighted branch is used for the preview.')),
       h('div', { className: 'rt-scroll' },
         routine.nodes.length === 0
           ? h(EmptyState, { acq, waitAvailable })

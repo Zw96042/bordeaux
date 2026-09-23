@@ -51,6 +51,6 @@ export function SharedWaypointPosition({ project, doc, index, onLink, onName }) 
     (waypoint.positionLink || members.length > 0) && h('div', { className: 'inrow' },
       h('span', { className: 'inrow-l', style: { minWidth: 0, overflowWrap: 'anywhere' }, title: members.map((item) => item.label).join('\n') },
         members.length ? 'Linked to ' + members.length + ' other ' + (members.length === 1 ? 'point' : 'points') : 'No other linked waypoints'),
-      h('button', { type: 'button', className: 'btn', onClick: () => onLink(index, null) }, 'Unlink')),
+      h('button', { type: 'button', className: 'choice-change', onClick: () => onLink(index, null) }, 'Unlink')),
     h('div', { className: 'seg-hint' }, members.length ? 'Position is shared. Facing and tangents stay independent.' : ''));
 }
