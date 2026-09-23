@@ -68,7 +68,7 @@ import { UI } from "./ui";
       h('span', { className: 'cbar-edit' }, 'Edit'));
   }
 
-  const behPill = (w) => w.stop ? { t: w.wait ? 'stop ' + (w.wait) + 's' : 'stop', c: 'r' } : w.corner ? { t: 'corner', c: 'n' } : null;
+  const behPill = (w) => w.stop ? { t: w.wait ? 'Stop ' + w.wait + ' s' : 'Stop', c: 'w' } : w.corner ? { t: 'Corner', c: 'n' } : null;
   const inspectItem = (actions, kind, index, event) => {
     event.preventDefault(); event.stopPropagation();
     actions.select(kind, index);
@@ -166,7 +166,7 @@ import { UI } from "./ui";
           doc.markers.length === 0 ? h('div', { className: 'featempty' }, 'Press M, then click the path') :
             doc.markers.map((m, i) => h('div', { key: i, className: 'featrow' + (sel.kind === 'em' && sel.idx === i ? ' sel' : '') },
               h('button', { className: 'featselect', type: 'button', 'aria-pressed': sel.kind === 'em' && sel.idx === i, onClick: (event) => { if (event.shiftKey) actions.delMarker(i); else actions.select('em', i); }, onDoubleClick: (e) => inspectItem(actions, 'em', i, e) }, h('span', { className: 'featdot n' }), h('span', { className: 'featnm', title: m.name }, m.name), h('span', { className: 'featmeta' }, m.anchor === 'dist' ? UnitPrefs.format(m.d != null ? m.d : PM.featureFraction(m, derived.sample) * derived.sample.length, 'm', 1) : (PM.featureFraction(m, derived.sample) * 100).toFixed(0) + '%')),
-              h('button', { className: 'featdel', 'aria-label': 'Delete event marker ' + m.name, title: 'Delete', onClick: () => actions.delMarker(i) }, h(Icon, { name: 'trash', size: 12 }))))),
+              h('button', { className: 'featdel', 'aria-label': 'Delete command ' + m.name, title: 'Delete', onClick: () => actions.delMarker(i) }, h(Icon, { name: 'trash', size: 12 }))))),
         h(Section, { icon: 'gauge', title: 'Zones', count: (doc.ranges || []).length, open: secOpen.cr !== false, onToggle: () => tog('cr') },
           (doc.ranges || []).length === 0 ? h('div', { className: 'featempty' }, 'Press C, then drag the path') :
             doc.ranges.map((rg, i) => { const effective = (derived.effRanges && derived.effRanges[i]) || rg; const summary = constraintRangeSummary(rg, doc.constraints, robot); const rangeLabel = summary ? summary.text : (rg.name || 'Zone'); const rangeMeta = rg.anchor === 'dist' ? UnitPrefs.fromCanonical(Math.min(effective.f0, effective.f1) * derived.sample.length, 'm').toFixed(1) + '\u2013' + UnitPrefs.format(Math.max(effective.f0, effective.f1) * derived.sample.length, 'm', 1) : rg.anchor === 'wp' && rg.t0 != null && rg.t1 != null ? 'S' + ((rg.w0 || 0) + 1) + ' ' + Math.round(rg.t0 * 100) + '% \u2013 S' + ((rg.w1 || 0) + 1) + ' ' + Math.round(rg.t1 * 100) + '%' : rg.anchor === 'wp' ? 'Waypoint ' + Math.min(rg.w0 || 0, rg.w1 || 0) + '\u2013' + Math.max(rg.w0 || 0, rg.w1 || 0) : (Math.min(effective.f0, effective.f1) * 100).toFixed(0) + '\u2013' + (Math.max(effective.f0, effective.f1) * 100).toFixed(0) + '%'; return h('div', { key: i, className: 'featrow' + (sel.kind === 'cr' && sel.idx === i ? ' sel' : '') },
@@ -221,7 +221,7 @@ import { UI } from "./ui";
         const timed = derived.markers && derived.markers[index];
         return {
           key: 'event-' + index,
-          label: marker.name || 'Event marker ' + (index + 1),
+          label: marker.name || 'Command ' + (index + 1),
           left: timed && timed.id === marker.id
             ? Math.max(0, Math.min(100, timed.timeS / total * 100))
             : percentAt(PM.featureFraction(marker, derived.sample)),
@@ -246,13 +246,13 @@ import { UI } from "./ui";
     }, [derived, doc, prof, pts, total]);
     const featureCount = timeline.markers.length + timeline.targets.length + timeline.ranges.length;
     const featureSummary = [
-      timeline.markers.length ? timeline.markers.length + (timeline.markers.length === 1 ? ' event' : ' events') : '',
+      timeline.markers.length ? timeline.markers.length + (timeline.markers.length === 1 ? ' command' : ' commands') : '',
       timeline.targets.length ? timeline.targets.length + (timeline.targets.length === 1 ? ' target' : ' targets') : '',
       timeline.ranges.length ? timeline.ranges.length + (timeline.ranges.length === 1 ? ' zone' : ' zones') : '',
     ].filter(Boolean).join(', ');
     const timelineTicks = [0, 0.25, 0.5, 0.75, 1].map((fraction) => ({
       fraction,
-      label: (total * fraction).toFixed(total < 10 ? 2 : 1) + 's',
+      label: (total * fraction).toFixed(total < 10 ? 2 : 1) + ' s',
     }));
 
     const GW = 1000, GH = 132, padL = 0, padR = 0, padT = 10, padB = 20;
@@ -338,7 +338,7 @@ import { UI } from "./ui";
             poly && h('path', { d: poly, fill: 'none', stroke: 'var(--accent)', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', vectorEffect: 'non-scaling-stroke' }),
             h('line', { x1: playX, x2: playX, y1: padT, y2: GH - padB, stroke: '#fff', strokeOpacity: 0.45, strokeWidth: 1, vectorEffect: 'non-scaling-stroke' }),
             h('circle', { cx: playX, cy: playY, r: 4, fill: '#fff', stroke: 'var(--accent)', strokeWidth: 2, vectorEffect: 'non-scaling-stroke' })),
-          h('div', { className: 'velgraph-time' }, h('span', null, '0s'), h('span', null, (total / 2).toFixed(1) + 's'), h('span', null, total.toFixed(1) + 's')))),
+          h('div', { className: 'velgraph-time' }, h('span', null, '0 s'), h('span', null, (total / 2).toFixed(1) + ' s'), h('span', null, total.toFixed(1) + ' s')))),
       h('div', { className: 'transport' + (graphOpen ? ' graph-open' : '') },
         h('div', { className: 'timeline-toolbar' },
           h('div', { className: 'transport-controls' },

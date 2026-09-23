@@ -1784,7 +1784,7 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
             renderLibrary('routines', null),
             h(RoutineWorkspace, {
               routine,
-              flow: h(RoutinePanelPlayback, { key: routine.id, embedded: true, collapsedIds: routineCollapsed[projectKey + ':' + routine.id] || [], onCollapsedIdsChange: (ids) => setRoutineCollapsed((current) => ({ ...current, [projectKey + ':' + routine.id]: ids })), store: routinePlaybackStore, routine, run, paths: project.paths, selId: routineSel, onSelect: setRoutineSel, acq, catalog: robotProjectState.catalog }),
+              flow: h(RoutinePanelPlayback, { key: routine.id, embedded: true, collapsedIds: routineCollapsed[projectKey + ':' + routine.id] || [], onCollapsedIdsChange: (ids) => setRoutineCollapsed((current) => ({ ...current, [projectKey + ':' + routine.id]: ids })), store: routinePlaybackStore, routine, run, paths: project.paths, selId: routineSel, onSelect: selectRoutineStep, acq, catalog: robotProjectState.catalog }),
               field: h(React.Fragment, null,
                 h(RoutineFieldPlayback, { store: routinePlaybackStore, run, selectedId: routineSel, doc, derived, sel: { kind: null, idx: -1 }, tool: 'select', view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: autoFieldActions }),
                 h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid })),
@@ -1855,7 +1855,7 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
   function toolHint(tool) {
     if (tool === 'waypoint') return 'Click the field to place the <b>next endpoint</b>';
     if (tool === 'rotation') return 'Click the path to set a <b>rotation target</b>';
-    if (tool === 'marker') return 'Click the path to place an <b>event marker</b>';
+    if (tool === 'marker') return 'Click the path to place a <b>command</b>';
     if (tool === 'range') return 'Drag along the path to add a <b>zone</b>, then set its limits';
     return '';
   }
