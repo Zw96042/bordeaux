@@ -124,8 +124,6 @@ import "../styles/settings.css";
     const footprintValid = containsOrigin && withinEnvelope && footprintCrosses.length > 0
       && footprintCrosses.every((value) => Math.sign(value) === winding);
 
-    // ft helpers (FRC teams often think in ft)
-    const m2ft = (m) => m * 3.28084;
     const planning = robot.planning || {};
     const fallbackRatio = 6.75, fallbackWheelDiameterM = 0.1016;
     const fallbackDriveModel = {
@@ -264,13 +262,13 @@ import "../styles/settings.css";
 
     return h('div', { className: 'robotpage' },
       h('div', { className: 'rp-wrap' },
-        h('div', { className: 'rp-title' }, 'Settings'),
+        h('h1', { className: 'rp-title' }, 'Settings'),
         h('section', { className: 'settings-general', 'aria-label': 'General settings' },
           h('div', { className: 'settings-row' },
             h('div', { className: 'settings-label' }, h('strong', null, 'Robot connection'),
               h('span', null, pushController.pairing || pushController.busy ? pushController.connectionLabel : 'Not connected')),
             h('button', { className: 'qbtn library-connection', type: 'button', onClick: pushController.openConnection },
-              pushController.busy ? 'Push progress' : pushController.pairing ? 'Manage connection' : 'Connect robot')),
+              pushController.busy ? 'Show progress' : pushController.pairing ? 'Edit' : 'Set up')),
           h('div', { className: 'settings-row' },
             h('strong', null, 'Display units'),
             h(UI.Seg, { ariaLabel: 'Display units', value: unitSystem, options: [{ v: 'metric', label: 'Metric' }, { v: 'imperial', label: 'Imperial' }], onChange: setUnitSystem })),
@@ -279,7 +277,6 @@ import "../styles/settings.css";
               h('span', null, 'Bordeaux ' + updateState.currentVersion + (updateState.phase === 'downloaded' ? ' · Ready to install' : updateState.phase === 'downloading' ? ' · Downloading update' : updateState.phase === 'available' ? ' · Update available' : ''))),
             h('button', { className: 'qbtn', type: 'button', onClick: onOpenUpdates }, ['available', 'downloading', 'downloaded', 'installing', 'error'].includes(updateState.phase) ? 'View update' : 'Check for updates'))),
         h('h2', { className: 'settings-robot-heading' }, 'Robot'),
-        h('div', { className: 'rp-sub' }, 'Project-wide dimensions and drivetrain limits.'),
         h('div', { className: 'rp-grid' },
           // ---- left column: controls ----
           h('div', { className: 'rp-col rp-controls' },
@@ -299,10 +296,10 @@ import "../styles/settings.css";
               h('div', { className: 'rp-sech' }, 'Drive dimensions'),
               h('div', { className: 'rp-two' },
                 h('div', { className: 'rp-field' },
-                  h('div', { className: 'rp-flabel' }, 'Width', h('small', null, m2ft(robot.w).toFixed(2) + ' ft')),
+                  h('div', { className: 'rp-flabel' }, 'Width'),
                   h(BigNum, { label: 'Robot width', value: robot.w, unit: 'm', min: 0.3, max: 1.3, onChange: (v) => resize('w', v) })),
                 h('div', { className: 'rp-field' },
-                  h('div', { className: 'rp-flabel' }, 'Length', h('small', null, m2ft(robot.l).toFixed(2) + ' ft')),
+                  h('div', { className: 'rp-flabel' }, 'Length'),
                   h(BigNum, { label: 'Robot length', value: robot.l, unit: 'm', min: 0.3, max: 1.3, onChange: (v) => resize('l', v) }))),
               h('div', { className: 'rp-field' },
                 h('div', { className: 'rp-flabel' }, 'Bumper shape'),
@@ -318,16 +315,17 @@ import "../styles/settings.css";
                 shape === 'round' && h('div', { className: 'rp-preset-params' },
                   h('div', { className: 'rp-flabel' }, 'Curve detail', h('small', null, roundPreset.vertices + ' vertices')),
                   h('input', { type: 'range', min: 8, max: 16, step: 1, value: roundPreset.vertices, 'aria-label': 'Round footprint curve detail', onChange: (event) => setRoundVertices(Number(event.target.value)) }),
-                  h('div', { className: 'rp-note' }, 'Width and length set the ellipse; detail controls how closely its collision polygon follows the curve.')),
+                  h('div', { className: 'rp-note' }, 'Detail sets how closely the collision outline follows the curve.')),
                 shape === 'trapezoid' && h('div', { className: 'rp-preset-params rp-two' },
                   h('div', { className: 'rp-field' }, h('div', { className: 'rp-flabel' }, 'Front width'),
                     h(BigNum, { label: 'Trapezoid front width', value: trapezoidPreset.frontWidthM, unit: 'm', min: 0.05, max: robot.w, onChange: (value) => setTrapezoidWidth('frontWidthM', value) })),
                   h('div', { className: 'rp-field' }, h('div', { className: 'rp-flabel' }, 'Rear width'),
                     h(BigNum, { label: 'Trapezoid rear width', value: trapezoidPreset.rearWidthM, unit: 'm', min: 0.05, max: robot.w, onChange: (value) => setTrapezoidWidth('rearWidthM', value) })))),
               h('div', { className: 'rp-field' },
-                h('div', { className: 'rp-flabel' }, 'Height', h('small', null, typeof robot.heightM === 'number' ? m2ft(robot.heightM).toFixed(2) + ' ft' : 'required for TRENCH checks')),
+                // The field already shows the selected unit; only an unset height needs a note.
+                h('div', { className: 'rp-flabel' }, 'Height', typeof robot.heightM === 'number' ? null : h('small', null, 'required for TRENCH checks')),
                 h(BigNum, { label: 'Robot height', value: robot.heightM, unit: 'm', min: 0.1, max: 2.5, onChange: (v) => setRobot({ heightM: v }) })),
-              h('div', { className: 'rp-note' }, h(Icon, { name: 'info', size: 14 }), 'Used for collision checks and field preview.')),
+              ),
 
             h('div', { className: 'rp-sec' },
               h('div', { className: 'rp-sech' }, 'Performance'),
@@ -335,15 +333,15 @@ import "../styles/settings.css";
                 onChange: (motorId) => { const preset = DRIVE_MOTORS.find((motor) => motor.value === motorId); setDriveModel({ motorId, ...(preset && preset.rpm ? { motorFreeRpm: preset.rpm, motorMaxTorqueNm: preset.torque } : {}) }); } }),
               h('div', { className: 'rp-two rp-drive-model' },
                 driveFields.map((field) => h('div', { className: 'rp-field', key: field.label }, h('div', { className: 'rp-flabel' }, field.label), h(BigNum, field)))),
-              !hardLimits && h('button', { className: 'rp-add-profile', type: 'button', onClick: () => setDriveModel({}) }, 'Use physical limits'),
+              !hardLimits && h('button', { className: 'qbtn rp-use-physical', type: 'button', onClick: () => setDriveModel({}) }, 'Use physical limits'),
               hardLimits && h('div', { className: 'rp-hard-limits' },
-                [['Top speed', hardLimits.maxSpeed, 'm/s', 2], ['Linear accel', hardLimits.maxAccel, 'm/s²', 2], ['Corner accel', hardLimits.maxCornerAccel, 'm/s²', 2], ['Angular speed', hardLimits.maxAngVel, '°/s', 0]].map(([label, value, unit, precision]) =>
+                [['Top speed', hardLimits.maxSpeed, 'm/s', 2], ['Max acceleration', hardLimits.maxAccel, 'm/s²', 2], ['Corner acceleration', hardLimits.maxCornerAccel, 'm/s²', 2], ['Angular speed', hardLimits.maxAngVel, '°/s', 0]].map(([label, value, unit, precision]) =>
                   h('div', { className: 'rp-drive-result', key: label }, h('span', null, label), h('strong', null, UnitPrefs.fromCanonical(value, unit).toFixed(precision), h('small', null, ' ' + UnitPrefs.label(unit)))))),
-              h('div', { className: 'rp-note' }, h(Icon, { name: 'info', size: 14 }), 'Robot limits. Path ranges only tighten them.'))),
+              h('div', { className: 'rp-note' }, h(Icon, { name: 'info', size: 14 }), 'Paths and zones can only tighten these limits.'))),
 
             mcpEnabled && h('div', { className: 'rp-sec rp-agent' },
               h('div', { className: 'rp-sech' }, 'Agent planning profile'),
-              h('div', { className: 'rp-note rp-agent-note' }, h(Icon, { name: 'info', size: 14 }), 'Used by MCP agents to plan physical heading, FUEL collection, and shooting poses. Agent changes still require your approval.'),
+              h('div', { className: 'rp-note rp-agent-note' }, h(Icon, { name: 'info', size: 14 }), 'Used by MCP agents for heading, collection and shooting plans. Their changes still need your approval.'),
               agentProposal && h('div', { className: 'rp-proposal', role: 'region', 'aria-label': 'Agent robot profile proposal' },
                 h('b', null, 'Agent robot profile proposal'),
                 h('span', null, agentProposal.intent),
@@ -353,7 +351,7 @@ import "../styles/settings.css";
                   h('button', { type: 'button', onClick: onRejectProposal }, 'Reject'),
                   h('button', { className: 'primary', type: 'button', onClick: onApplyProposal }, 'Apply robot info'))),
               intake
-                ? h(React.Fragment, null,
+                ? h('div', { className: 'rp-agent-group' },
                     h('div', { className: 'rp-field' },
                       h('div', { className: 'rp-flabel' }, 'Primary intake'),
                       h('input', { className: 'rp-text', value: intake.name || '', 'aria-label': 'Primary intake name', maxLength: 80, onChange: (e) => setIntake({ name: e.target.value }) })),
@@ -364,16 +362,16 @@ import "../styles/settings.css";
                     h('div', { className: 'rp-two' },
                       h('div', { className: 'rp-field' }, h('div', { className: 'rp-flabel' }, 'Capture width'), h(BigNum, { label: 'Intake capture width', value: intake.captureWidthM, unit: 'm', min: 0.05, max: 3, onChange: (v) => setIntake({ captureWidthM: v }) })),
                       h('div', { className: 'rp-field' }, h('div', { className: 'rp-flabel' }, 'Collect speed'), h(BigNum, { label: 'Maximum collection speed', value: intake.maxCollectSpeedMps, unit: 'm/s', min: 0.1, max: robot.maxSpeed, precision: 1, step: 0.1, onChange: (v) => setIntake({ maxCollectSpeedMps: v }) }))),
-                    h('button', { className: 'rp-add-profile', type: 'button', onClick: () => setPlanning({ intake: undefined }) }, 'Remove intake details'))
+                    h('button', { className: 'delbtn', type: 'button', onClick: () => setPlanning({ intake: undefined }) }, 'Remove intake details'))
                   : h('button', { className: 'rp-add-profile', type: 'button', onClick: () => setPlanning({ intake: { name: 'Front intake', centerM: { x: robot.l / 2, y: 0 }, directionDeg: 0, captureWidthM: Math.min(robot.w, 0.7), maxCollectSpeedMps: Math.min(robot.maxSpeed, 2) } }) }, 'Add intake details'),
               shooter
-                ? h(React.Fragment, null,
+                ? h('div', { className: 'rp-agent-group' },
                     h('div', { className: 'rp-two' },
                       h('div', { className: 'rp-field' }, h('div', { className: 'rp-flabel' }, 'Shooter direction'), h(BigNum, { label: 'Shooter direction', value: shooter.directionDeg, unit: '°', min: -180, max: 180, precision: 0, step: 1, onChange: (v) => setShooter({ directionDeg: v }) })),
                       h('div', { className: 'rp-field' }, h('div', { className: 'rp-flabel' }, 'Preferred range'), h(BigNum, { label: 'Preferred shooting range', value: shooter.preferredRangeM, unit: 'm', imperialUnit: 'm', min: 0.1, max: 20, onChange: (v) => setShooter({ preferredRangeM: v }) }))),
                     h('label', { className: 'rp-check' }, h('input', { type: 'checkbox', checked: shooter.requiresTargetFacing === true, onChange: (e) => setShooter({ requiresTargetFacing: e.target.checked }) }), 'Shooter direction must face the target'),
-                    typeof shooter.preferredRangeM === 'number' && h('button', { className: 'rp-add-profile', type: 'button', onClick: () => setPlanning({ shooter: { ...shooter, preferredRangeM: undefined } }) }, 'Clear preferred range'),
-                    h('button', { className: 'rp-add-profile', type: 'button', onClick: () => setPlanning({ shooter: undefined }) }, 'Remove shooter details'))
+                    typeof shooter.preferredRangeM === 'number' && h('button', { className: 'qbtn quiet', type: 'button', onClick: () => setPlanning({ shooter: { ...shooter, preferredRangeM: undefined } }) }, 'Clear preferred range'),
+                    h('button', { className: 'delbtn', type: 'button', onClick: () => setPlanning({ shooter: undefined }) }, 'Remove shooter details'))
                 : h('button', { className: 'rp-add-profile', type: 'button', onClick: () => setPlanning({ shooter: { directionDeg: 0, requiresTargetFacing: true } }) }, 'Add shooter details'),
               h('div', { className: 'rp-field' },
                 h('div', { className: 'rp-flabel' }, 'Planning notes'),
