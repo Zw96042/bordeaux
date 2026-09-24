@@ -159,6 +159,23 @@ await test('Connection diagnostics portal opens the real local diagnostic flow',
   assert(document.querySelector('[aria-label="Read-only beta diagnostic JSON"]').value === '{}', 'Diagnostic preview remains usable');
   await native({ capture: 'diagnostics' });
 });
+await test('Keyboard diagnostics return focus to the connection origin without reopening it', async () => {
+  document.querySelector('#connection-origin').focus();
+  await act(async () => native({ key: 'Enter' }));
+  assert(controller.open, 'Enter opens the robot connection');
+  for (let index = 0; index < 20 && document.activeElement?.getAttribute('aria-label') !== 'Diagnostics'; index++) await act(async () => native({ key: 'Tab' }));
+  assert(document.activeElement?.getAttribute('aria-label') === 'Diagnostics', 'Tab reaches Diagnostics');
+  await act(async () => native({ key: 'Enter' }));
+  assert(!controller.open && document.querySelector('.robot-diagnostics')?.open, 'Diagnostics replaces the connection dialog');
+  assert(document.activeElement?.getAttribute('aria-label') === 'Close diagnostic bundle', 'Focus starts inside diagnostics');
+  await act(async () => native({ key: 'Tab' }));
+  assert(document.querySelector('.robot-diagnostics').contains(document.activeElement), 'Tab stays inside diagnostics');
+  await act(async () => native({ key: 'Escape' }));
+  await act(async () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert(!document.querySelector('.robot-diagnostics'), 'Escape closes diagnostics');
+  assert(!controller.open, 'Closing diagnostics does not reopen the robot connection');
+  assert(document.activeElement?.id === 'connection-origin', 'Focus returns to the control that opened the connection, not body');
+});
 await test('Long filename and destination remain readable at supported sizes', async () => {
   await pointer('Push selection');
   const long = { ...preview, connection: { ...connection, endpoint: { ...endpoint, directory: endpoint.directory + '/' + 'practice-session-'.repeat(8) } }, files: [{ ...files[0], fileName: 'left-scoring-approach-'.repeat(8) + '.bdx' }, files[1]] };

@@ -9,7 +9,13 @@ function errorMessage(error) {
   return error && error.message ? error.message : String(error || "Bordeaux could not create the diagnostic preview.");
 }
 
-export function DiagnosticBundleDialog({ getProject, targetSelector = ".toolbar .tb-right", renderKey, onOpen }) {
+// Focus is lost when it falls to body or stays inside a dialog that is no longer open.
+const focusLost = () => {
+  const active = document.activeElement;
+  return !active || active === document.body || Boolean(active.closest("dialog:not([open])"));
+};
+
+export function DiagnosticBundleDialog({ getProject, targetSelector = ".toolbar .tb-right", renderKey, onOpen, onClose }) {
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState("idle");
   const [preview, setPreview] = useState(null);
@@ -32,6 +38,14 @@ export function DiagnosticBundleDialog({ getProject, targetSelector = ".toolbar 
 
   const desktopAvailable = Boolean(window.bordeauxAPI && typeof window.bordeauxAPI.previewBetaDiagnostic === "function");
   const busy = phase === "generating" || phase === "saving";
+  // React removes the dialog before effect cleanup runs, and removal does not
+  // restore focus. Close it while mounted, then return focus if it was lost.
+  const close = () => {
+    if (busy) return;
+    dialogRef.current?.close();
+    setOpen(false);
+    requestAnimationFrame(() => { if (focusLost()) onClose?.(); });
+  };
   const openDialog = () => {
     onOpen?.();
     setOpen(true);
@@ -72,28 +86,24 @@ export function DiagnosticBundleDialog({ getProject, targetSelector = ".toolbar 
   return h(React.Fragment, null,
     toolbarTarget ? createPortal(trigger, toolbarTarget) : null,
     open && h("dialog", { ref: dialogRef, className: "robot-push-dialog robot-diagnostics", "aria-labelledby": "beta-diagnostic-title",
-      onCancel: (event) => { event.preventDefault(); if (!busy) setOpen(false); },
+      onCancel: (event) => { event.preventDefault(); close(); },
       onClick: (event) => {
         if (event.target !== dialogRef.current || busy) return;
         const bounds = dialogRef.current.getBoundingClientRect();
-        if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) setOpen(false);
+        if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) close();
       } },
         h("header", null,
           h("div", null, h("h2", { id: "beta-diagnostic-title" }, "Diagnostic bundle")),
-          h("button", { ref: closeRef, className: "robot-push-close", type: "button", "aria-label": "Close diagnostic bundle", disabled: busy, onClick: () => setOpen(false) }, "×")),
-        h("p", { className: "robot-push-intro" }, "Preview and save a local support file. Nothing is sent automatically."),
+          h("button", { ref: closeRef, className: "robot-push-close", type: "button", "aria-label": "Close diagnostic bundle", disabled: busy, onClick: close }, "×")),
+        h("p", { className: "robot-push-intro" }, "A local support file with app, field, routine and robot details. Nothing is sent automatically."),
         error && h("div", { className: "robot-push-alert", role: "alert" }, error),
         !desktopAvailable && h("div", { className: "robot-push-section" },
-          h("h3", null, "Desktop app required"),
-          h("p", null, "Diagnostic bundles are available only in the Bordeaux desktop app, where the preview and save capability can remain local.")),
+          h("p", null, "Diagnostic bundles are available in the desktop app.")),
         desktopAvailable && phase === "idle" && h("div", { className: "robot-push-section" },
-          h("h3", null, "Review before saving"),
-          h("p", null, "Includes app, system, field, command, export, routine, and robot acknowledgement details. Review the redacted JSON before saving."),
           h("div", { className: "robot-push-actions" }, h("button", { className: "primary", type: "button", onClick: generatePreview }, "Generate preview"))),
         phase === "generating" && h("div", { className: "robot-push-status", role: "status" },
-          h("span", { className: "robot-push-spinner" }), h("strong", null, "Building the local diagnostic preview…")),
+          h("span", { className: "robot-push-spinner" }), h("strong", null, "Building preview…")),
         preview && ["preview", "saving", "saved", "cancelled"].includes(phase) && h("div", { className: "robot-push-section" },
-          h("h3", null, "Exact bundle preview"),
           h("textarea", {
             className: "robot-push-details",
             "aria-label": "Read-only beta diagnostic JSON",
@@ -103,13 +113,13 @@ export function DiagnosticBundleDialog({ getProject, targetSelector = ".toolbar 
             spellCheck: false,
             style: { display: "block", width: "100%", maxHeight: "360px", padding: "12px", resize: "vertical", overflow: "auto", whiteSpace: "pre", fontFamily: "var(--mono)", fontSize: "11px", lineHeight: 1.45, color: "var(--txt)" },
           }),
-          phase === "saving" && h("div", { className: "robot-push-status", role: "status" }, h("span", { className: "robot-push-spinner" }), h("strong", null, "Saving the reviewed local bundle…")),
-          phase === "saved" && h("div", { className: "robot-push-outcome active", role: "status" }, h("h3", null, "Diagnostic bundle saved"), h("p", null, "The reviewed bytes were written locally. Bordeaux did not transmit them.")),
-          phase === "cancelled" && h("div", { className: "robot-push-outcome", role: "status" }, h("h3", null, "Save cancelled"), h("p", null, "No diagnostic file was written. You can choose Save again for this same reviewed preview.")),
+          phase === "saving" && h("div", { className: "robot-push-status", role: "status" }, h("span", { className: "robot-push-spinner" }), h("strong", null, "Saving…")),
+          phase === "saved" && h("div", { className: "robot-push-outcome active", role: "status" }, h("h3", null, "Diagnostic bundle saved"), h("p", null, "Saved locally. Nothing was sent.")),
+          phase === "cancelled" && h("div", { className: "robot-push-outcome", role: "status" }, h("h3", null, "Not saved"), h("p", null, "Choose Save bundle to try again.")),
           phase !== "saving" && h("div", { className: "robot-push-actions" },
-            h("button", { type: "button", onClick: generatePreview }, "Regenerate preview"),
-            phase !== "saved" && h("button", { className: "primary", type: "button", onClick: savePreview }, "Save bundle"),
-            h("button", { type: "button", onClick: () => setOpen(false) }, "Close"))),
+            h("button", { type: "button", className: "quiet", onClick: generatePreview }, "Regenerate"),
+            h("button", { type: "button", onClick: close }, "Close"),
+            phase !== "saved" && h("button", { className: "primary", type: "button", onClick: savePreview }, "Save bundle"))),
       ),
   );
 }
