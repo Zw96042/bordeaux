@@ -21,7 +21,7 @@ const reject = async (request, message) => act(async () => request.reject(new Er
 async function native(request) { await new Promise((resolve) => { window.__pushUiRequest = request; window.__finishPushUiRequest = () => { window.__pushUiRequest = null; resolve(); }; }); }
 const button = (label) => [...document.querySelectorAll('button')].find((button) => button.textContent === label || button.getAttribute('aria-label') === label);
 async function pointer(label) { const rect = button(label).getBoundingClientRect(); await act(async () => native({ pointer: { x: Math.round(rect.x + rect.width/2), y: Math.round(rect.y + rect.height/2) } })); }
-function Harness() { controller = useRobotPushController(props); return <><button id="origin" onClick={() => controller.requestPush({ kind: 'paths', pathIds: ['A','B'] })}>Push selection</button><RobotPushDialog controller={controller} /><DiagnosticBundleDialog getProject={props.getProject} targetSelector=".robot-connection-diagnostics" onOpen={controller.close} renderKey={controller.open + ":" + controller.phase} /></>; }
+function Harness() { controller = useRobotPushController(props); return <><button id="origin" onClick={() => controller.requestPush({ kind: 'paths', pathIds: ['A','B'] })}>Push selection</button><button id="connection-origin" onClick={() => controller.openConnection()}>Manage connection</button><RobotPushDialog controller={controller} /><DiagnosticBundleDialog getProject={props.getProject} targetSelector=".robot-connection-diagnostics" onOpen={controller.close} onClose={() => controller.returnFocus()} renderKey={controller.open + ":" + controller.phase} /></>; }
 async function mount(saved = connection) {
   await act(async () => root.render(null));
   props = { getProject: () => ({ paths: files.map((f) => ({ id: f.pathId, name: f.name })), routines: [] }), projectKey: 'project-1', catalogKey: 'catalog-1' };
@@ -39,10 +39,10 @@ async function mount(saved = connection) {
 async function prepare() { await pointer('Push selection'); await resolve(mock.prepares.at(-1), preview); assert(controller.phase === 'review', 'Must review immutable files'); }
 async function test(name, run, saved) { try { await mount(saved); await run(); results.push({ name, ok: true }); } catch (error) { results.push({ name, ok: false, error: error.stack }); } }
 await test('Saved robot settings can be edited offline, saved by keyboard and restored without transport', async () => {
-  await action(() => controller.openConnection()); await pointer('Edit connection');
+  await action(() => controller.openConnection()); await pointer('Edit');
   await action(() => { controller.setHost('practice-robot.local'); controller.setPort('2222'); controller.setDirectory('/home/lvuser/practice'); });
   await native({ capture: 'offline-settings-edit' });
-  button('Save settings').focus(); await act(async () => native({ key: 'Enter' }));
+  button('Save').focus(); await act(async () => native({ key: 'Enter' }));
   assert(mock.saves.length === 1 && controller.phase === 'saving', 'Keyboard saves locally once');
   assert(!mock.probes.length && !mock.trusts.length && !mock.prepares.length && !mock.confirms.length, 'Saving never connects or uploads');
   const saved = { endpoint: mock.saves[0].args[0] };
@@ -56,11 +56,11 @@ await test('Saved robot settings can be edited offline, saved by keyboard and re
   await native({ capture: 'offline-settings-restored' });
 });
 await test('Offline save failure keeps edits and offers retry without connecting', async () => {
-  await action(() => controller.openConnection()); await pointer('Edit connection');
+  await action(() => controller.openConnection()); await pointer('Edit');
   await action(() => controller.setDirectory('/home/lvuser/practice'));
-  await pointer('Save settings'); await reject(mock.saves[0], 'Settings could not be saved. Disk is full.');
+  await pointer('Save'); await reject(mock.saves[0], 'Settings could not be saved. Disk is full.');
   assert(controller.editing && controller.directory === '/home/lvuser/practice', 'Failed save retains edits');
-  assert(!button('Save settings').disabled && !mock.probes.length, 'Retry available without connection');
+  assert(!button('Save').disabled && !mock.probes.length, 'Retry available without connection');
   await native({ capture: 'offline-settings-failure' });
 });
 await test('Pointer and keyboard connect, trust identity, review multiple files, upload and verify', async () => {
@@ -74,7 +74,7 @@ await test('Pointer and keyboard connect, trust identity, review multiple files,
   await pointer('Connect'); await resolve(mock.probes[0], connection);
   assert(controller.phase === 'identity', 'Identity review required');
   await native({ capture: 'identity' });
-  button('Trust SSH identity').focus(); await act(async () => native({ key: 'Enter' }));
+  button('Trust host key').focus(); await act(async () => native({ key: 'Enter' }));
   assert(mock.trusts.length === 1, 'Keyboard trusts exactly once');
   await native({ capture: 'trust-pending' });
   await resolve(mock.trusts[0], connection); await resolve(mock.prepares[0], preview);
@@ -87,7 +87,7 @@ await test('Pointer and keyboard connect, trust identity, review multiple files,
   await native({ capture: 'uploading' });
   await resolve(mock.confirms[0], { state: 'transferred', files, directory: endpoint.directory });
   await native({ capture: 'success' });
-  assert(document.querySelector('dialog').textContent.includes('does not activate'), 'File success must not imply execution');
+  assert(document.querySelector('dialog').textContent.includes('No routine was activated'), 'File success must not imply execution');
   await act(async () => native({ key: 'Escape' }));
   assert(!controller.open, 'Escape closes dialog');
   assert(document.activeElement.id === 'origin', 'Focus returns to initiating button');
@@ -95,7 +95,7 @@ await test('Pointer and keyboard connect, trust identity, review multiple files,
 await test('Trust failure keeps reviewed identity and retry available', async () => {
   await pointer('Push selection'); await action(() => controller.setHost(endpoint.host));
   await pointer('Connect'); await resolve(mock.probes[0], connection);
-  await pointer('Trust SSH identity'); await reject(mock.trusts[0], 'SSH identity changed. Reconnect and verify the host key.');
+  await pointer('Trust host key'); await reject(mock.trusts[0], 'SSH identity changed. Reconnect and verify the host key.');
   assert(controller.phase === 'identity', 'Failure retains identity review');
   assert(document.querySelector('dialog').textContent.includes(connection.hostKeyFingerprint), 'Fingerprint remains visible');
   await native({ capture: 'identity-failure' });
@@ -105,7 +105,7 @@ await test('Upload failure shows one error with a fresh review recovery', async 
   assert(controller.phase === 'failed', 'Failed verification cannot report success');
   assert(document.querySelectorAll('[role="alert"]').length === 1, 'One useful error');
   await native({ capture: 'failure' });
-  await pointer('Review and retry'); assert(mock.prepares.length === 2, 'Retry prepares again');
+  await pointer('Try again'); assert(mock.prepares.length === 2, 'Retry prepares again');
 });
 await test('Repeated pushes use the remembered robot without connection or identity screens', async () => {
   await prepare(); await pointer('Upload 2 paths');
@@ -116,7 +116,7 @@ await test('Repeated pushes use the remembered robot without connection or ident
   await native({ capture: 'repeat-review' });
 });
 await test('Editing the destination reuses the known robot identity and keeps the selected paths', async () => {
-  await prepare(); await pointer('Edit destination');
+  await prepare(); await pointer('Change');
   await action(() => controller.setDirectory('/home/lvuser/practice'));
   const changed = { ...connection, endpoint: { ...endpoint, directory: '/home/lvuser/practice' } };
   await pointer('Connect'); await resolve(mock.probes[0], changed);
@@ -126,6 +126,28 @@ await test('Editing the destination reuses the known robot identity and keeps th
   assert(controller.phase === 'review' && mock.prepares[1].args[1].join(',') === 'A,B', 'Selection retained');
   assert(document.querySelector('dialog').textContent.includes('/home/lvuser/practice'), 'Changed directory is reviewed');
   await native({ capture: 'changed-destination' });
+});
+await test('Held Enter from Push cannot confirm the review it opens', async () => {
+  document.querySelector('#origin').focus();
+  await act(async () => native({ key: 'Enter' }));
+  assert(mock.prepares.length === 1, 'Keyboard Push prepares once');
+  await act(async () => native({ key: 'Enter' }));
+  await resolve(mock.prepares[0], preview);
+  assert(controller.phase === 'review', 'Review is shown');
+  assert(document.activeElement?.textContent !== 'Upload 2 paths', 'Upload is not focused automatically');
+  await act(async () => native({ key: 'Enter' }));
+  assert(!mock.confirms.length, 'Repeated Enter never uploads');
+});
+await test('Diagnostics stay reachable after Edit and Back', async () => {
+  await action(() => controller.openConnection());
+  await pointer('Edit');
+  await act(async () => new Promise((resolve) => requestAnimationFrame(resolve)));
+  assert(button('Diagnostics')?.checkVisibility(), 'Diagnostics visible while editing');
+  await action(() => controller.setHost('other-robot.local'));
+  await pointer('Connect'); await resolve(mock.probes[0], { ...connection, endpoint: { ...endpoint, host: 'other-robot.local' }, hostKeyFingerprint: 'SHA256:' + 'b'.repeat(43) });
+  assert(controller.phase === 'identity' && button('Diagnostics')?.checkVisibility(), 'Diagnostics visible on identity review');
+  await pointer('Back');
+  assert(button('Diagnostics')?.checkVisibility(), 'Diagnostics visible after Back');
 });
 for (const key of ['projectKey','catalogKey','bookmarkKey']) await test('Discard stale preparation after ' + key + ' change', async () => {
   await pointer('Push selection');
@@ -144,7 +166,8 @@ await test('Source edits preserve reviewed snapshot while navigation preserves a
   assert(controller.phase === 'transferred', 'Confirmed files retain exact result across navigation');
 });
 await test('Review cancellation and unsupported routine never upload', async () => {
-  await prepare(); await pointer('Cancel'); assert(controller.phase === 'cancelled', 'Cancel ends review');
+  await prepare(); await pointer('Cancel'); assert(controller.phase === 'cancelled' && !controller.open, 'Cancel ends review and closes');
+  assert(document.activeElement.id === 'origin', 'Cancel returns focus to the push origin');
   await action(() => controller.requestPush({ kind: 'routine', routineId: 'R' }));
   assert(controller.phase === 'unsupported' && !mock.confirms.length, 'Routine cannot upload');
   await action(() => controller.requestPush({ kind: 'project' }));

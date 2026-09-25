@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_ROBOT_PATH_DIRECTORY } from '../../shared/robotFileDelivery';
+import { focusIfAvailable } from '../lib/focusReturn';
 
 const message = (error) => (error?.message || String(error || 'File transfer failed'))
   .replace(/^Error invoking remote method '[^']+':\s*/, '').replace(/^(?:RobotTransportError|Error):\s*/, '');
@@ -53,19 +54,20 @@ export function useRobotFilePushController({ getProject, projectKey, catalogKey,
     if (state.current.phase === 'uploading' || state.current.phase === 'saving') return;
     generation.current += 1;
     void discard(state.current.preview).catch(() => undefined);
-    update({ preview: null, result: null, phase: 'idle', error: 'The project or catalog changed. Select the paths and review again.' });
+    update({ preview: null, result: null, phase: 'idle', error: 'The project changed. Choose Push again to review the current paths.' });
   }, [projectKey, catalogKey, bookmarkKey]);
   const show = () => { if (!state.current.open) origin.current = document.activeElement; update({ open: true }); };
-  const close = () => { update({ open: false }); requestAnimationFrame(() => { if (origin.current?.isConnected) origin.current.focus(); }); };
+  const returnFocus = () => focusIfAvailable(origin.current);
+  const close = () => { update({ open: false }); requestAnimationFrame(returnFocus); };
   const requestPush = async (scope) => {
     show();
     if (working(state.current.phase) && state.current.phase !== 'loading') return;
     if (scope?.kind !== 'paths') {
       intent.current = null;
       void discard(state.current.preview).catch(() => undefined);
-      update({ error: 'SFTP uploads path files. Routine delivery and full-project replacement are not supported.', phase: 'unsupported', preview: null, result: null }); return;
+      update({ error: 'Only paths can be pushed. Routines stay on this computer.', phase: 'unsupported', preview: null, result: null }); return;
     }
-    if (!scope.pathIds?.length) { update({ error: 'Select at least one path to upload.', phase: 'failed' }); return; }
+    if (!scope.pathIds?.length) { intent.current = null; update({ error: 'Select at least one path to push.', phase: 'failed', preview: null }); return; }
     const previous = state.current.preview;
     intent.current = { project: structuredClone(source.current()), pathIds: [...scope.pathIds], projectKey };
     const request = generation.current;
@@ -133,10 +135,15 @@ export function useRobotFilePushController({ getProject, projectKey, catalogKey,
     try {
       const answer = await api.cancelRobotFiles(preview.operationId);
       if (state.current.preview?.operationId !== preview.operationId) return;
-      if (answer.canceled && !uploading) { intent.current = null; update({ preview: null, phase: 'cancelled' }); }
+      // Canceling a review is a way out, not a destination: close and return focus.
+      if (answer.canceled && !uploading) { intent.current = null; update({ preview: null, phase: 'cancelled', open: false }); requestAnimationFrame(returnFocus); }
       else if (!answer.canceled) update({ error: 'Transfer can no longer be canceled. Wait for its verified result.', ...(!uploading ? { phase: 'review' } : {}) });
       // Keep the upload locked until its confirmation promise settles.
-    } catch (error) { update({ error: message(error), ...(!uploading ? { phase: 'review' } : {}) }); }
+    } catch (error) {
+      // A late failure for an operation that navigation or a new review already replaced changes nothing.
+      if (state.current.preview?.operationId !== preview.operationId) return;
+      update({ error: message(error), ...(!uploading ? { phase: 'review' } : {}) });
+    }
   };
   const chooseAnotherRobot = async () => {
     if (working(state.current.phase)) return;
@@ -156,12 +163,12 @@ export function useRobotFilePushController({ getProject, projectKey, catalogKey,
     catch (error) { if (request === generation.current) update({ phase: previous.phase, error: message(error) }); }
   };
   return { ...view, fileTransfer: true, host, setHost, port, setPort, directory, setDirectory,
-    busy: working(view.phase), desktopAvailable: true, deliveryAvailable: true,
+    busy: working(view.phase), canRetry: Boolean(intent.current), desktopAvailable: true, deliveryAvailable: true,
     pairing: view.settings,
-    connectionLabel: working(view.phase) ? 'Robot, Working' : view.settings ? 'Saved robot settings' : 'Robot settings',
+    connectionLabel: working(view.phase) ? 'Working…' : view.settings ? view.settings.endpoint.host + (view.connection ? ' · verified' : ' · not verified') : 'Not set up',
     itemStatus: (kind, id) => kind === 'path' && working(view.phase) && intent.current?.projectKey === projectKey && intent.current.pathIds.includes(id)
       ? { label: view.phase === 'uploading' ? 'Uploading' : 'Preparing', detail: 'Selected for SFTP upload.', tone: 'pending' }
       : { label: 'Local', detail: 'Saved locally. Push uploads selected path files over SFTP.', tone: 'muted' },
-    openConnection: show, close, requestPush, probeRobot, saveSettings, confirmPairing, confirmPush, cancel, chooseAnotherRobot, connectionHome,
+    openConnection: show, close, returnFocus, requestPush, probeRobot, saveSettings, confirmPairing, confirmPush, cancel, chooseAnotherRobot, connectionHome,
     retry: () => intent.current && requestPush({ kind: 'paths', pathIds: intent.current.pathIds }) };
 }
