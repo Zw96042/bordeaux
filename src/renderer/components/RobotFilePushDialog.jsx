@@ -1,8 +1,26 @@
 import * as React from 'react';
+import { UI } from './ui';
 
 const h = React.createElement;
-const button = (label, onClick, props = {}) => h('button', { type: 'button', onClick, ...props }, label);
-const detail = (label, value) => h('div', { key: label }, h('dt', null, label), h('dd', null, value));
+const button = (label, onClick, props = {}) => h('button', { type: 'button', className: 'qbtn', onClick, ...props }, label);
+const plural = (count) => count + (count === 1 ? ' path' : ' paths');
+const kilobytes = (bytes) => (bytes < 1024 ? bytes + ' B' : (bytes / 1024).toFixed(bytes < 10240 ? 1 : 0) + ' KB');
+// Port 22 is the robot default, so the address only carries a port when it differs.
+const address = (endpoint) => endpoint.host + (Number(endpoint.port) === 22 ? '' : ':' + endpoint.port);
+
+function Destination({ endpoint, onChange, disabled, status }) {
+  return h('div', { className: 'rfp-dest' },
+    h('div', { className: 'rfp-dest-text' },
+      h('strong', null, address(endpoint), status && h('span', { className: 'rfp-dest-status' + (status === 'Verified' ? ' good' : '') }, status)),
+      h('span', null, endpoint.directory)),
+    onChange && button('Change', onChange, { className: 'qbtn quiet', disabled }));
+}
+
+function Files({ files }) {
+  return h('ul', { className: 'rfp-files', 'aria-label': 'Files to upload' }, files.map((file) => h('li', { key: file.pathId },
+    h('span', { className: 'rfp-file-name' }, file.name),
+    h('span', { className: 'rfp-file-meta', title: file.size.toLocaleString() + ' bytes' }, file.fileName + ' · ' + kilobytes(file.size)))));
+}
 
 export function RobotFilePushDialog({ controller: c }) {
   const dialog = React.useRef(null);
@@ -10,41 +28,86 @@ export function RobotFilePushDialog({ controller: c }) {
     if (c.open && !dialog.current.open) dialog.current.showModal();
     else if (!c.open && dialog.current.open) dialog.current.close();
   }, [c.open]);
-  const identity = c.probe && ['identity', 'trusting'].includes(c.phase);
-  const review = c.phase === 'review' && c.preview;
-  const outcome = ['transferred', 'failed', 'cancelled', 'unsupported'].includes(c.phase);
   const endpoint = c.preview?.connection.endpoint || c.settings?.endpoint;
+  const identity = c.probe && ['identity', 'trusting'].includes(c.phase);
+  const files = ['review', 'uploading', 'failed'].includes(c.phase) && c.preview ? c.preview.files : null;
+  const setup = !identity && (c.editing || !c.settings) && ['idle', 'probing', 'saving', 'cancelled'].includes(c.phase);
+  const summary = !identity && !setup && c.settings && ['idle', 'probing', 'cancelled'].includes(c.phase);
+  const working = ['loading', 'preparing'].includes(c.phase) || (c.phase === 'uploading' && !files);
   const invalidEndpoint = c.busy || !c.host.trim() || !c.directory.trim() || !/^\d+$/.test(c.port) || Number(c.port) < 1 || Number(c.port) > 65535;
-  const title = identity ? 'Verify this robot' : review ? 'Push selected paths' : c.phase === 'transferred' ? 'Paths uploaded' : 'Robot files';
-  return h('dialog', { ref: dialog, className: 'robot-push-dialog robot-manager', style: { overflowWrap: 'anywhere' }, 'aria-labelledby': 'robot-file-title', onCancel: (event) => { event.preventDefault(); c.close(); } },
-    h('header', null, h('h2', { id: 'robot-file-title' }, title), button('×', c.close, { className: 'robot-push-close', 'aria-label': 'Close robot files' })),
-    c.error && h('p', { className: 'robot-push-alert', role: 'alert' }, c.error),
-    (c.editing || !c.settings) && !identity && ['idle', 'probing', 'saving'].includes(c.phase) && h('section', { className: 'robot-push-section' },
-      h('p', null, 'Save the robot address and destination folder locally. Connect when you are ready to verify the robot.'),
-      h('div', { className: 'robot-push-endpoint' },
-        h('label', null, 'Robot host', h('input', { value: c.host, autoComplete: 'off', placeholder: 'roborio-2468-frc.local', disabled: c.busy, onChange: (e) => c.setHost(e.target.value) })),
-        h('label', null, 'Port', h('input', { value: c.port, inputMode: 'numeric', disabled: c.busy, onChange: (e) => c.setPort(e.target.value) }))),
-      h('div', { className: 'robot-push-endpoint' }, h('label', null, 'Destination directory', h('input', { value: c.directory, disabled: c.busy, onChange: (e) => c.setDirectory(e.target.value) }))),
-      h('div', { className: 'robot-push-actions' }, button(c.phase === 'saving' ? 'Saving…' : 'Save settings', c.saveSettings, { className: 'primary', disabled: invalidEndpoint }), button(c.phase === 'probing' ? 'Connecting…' : 'Connect', c.probeRobot, { disabled: invalidEndpoint }))),
-    identity && h('section', { className: 'robot-push-section', 'aria-busy': c.busy },
-      h('p', null, 'Check this SSH host key against the robot you intend to trust.'),
-      h('dl', { className: 'robot-push-details compact' }, detail('Address', c.probe.endpoint.host + ':' + c.probe.endpoint.port), detail('SSH host key', c.probe.hostKeyFingerprint), detail('Directory', c.probe.endpoint.directory)),
-      h('div', { className: 'robot-push-actions' }, button('Back', c.chooseAnotherRobot, { disabled: c.busy }), button(c.busy ? 'Trusting…' : 'Trust SSH identity', c.confirmPairing, { className: 'primary', disabled: c.busy }))),
-    c.settings && !c.editing && ['idle', 'probing'].includes(c.phase) && h('section', { className: 'robot-push-section' },
-      h('dl', { className: 'robot-push-details compact' }, detail('Address', endpoint.host + ':' + endpoint.port), detail('Directory', endpoint.directory)),
-      h('p', null, c.connection ? 'Settings saved. Select paths in the library and choose Push.' : 'Settings saved locally. Connect and verify the SSH identity before pushing paths.'),
-      h('div', { className: 'robot-push-actions' }, button('Edit connection', c.chooseAnotherRobot, { disabled: c.busy }), !c.connection && button(c.phase === 'probing' ? 'Connecting…' : 'Connect', c.probeRobot, { disabled: c.busy }))),
-    review && h('section', { className: 'robot-push-section' },
-      h('dl', { className: 'robot-push-details compact' }, detail('Send to', endpoint.host + ':' + endpoint.port), detail('Directory', endpoint.directory)),
-      h('ul', { className: 'robot-retention-list' }, c.preview.files.map((file) => h('li', { key: file.pathId }, h('div', { style: { minWidth: 0 } }, h('strong', null, file.name), h('p', null, file.fileName + ' · ' + file.size.toLocaleString() + ' bytes'))))),
-      h('p', null, 'Only these files will be replaced. Other paths stay in the folder. Uploading does not start the robot.'),
-      h('div', { className: 'robot-push-actions' }, button('Edit destination', c.chooseAnotherRobot), button('Cancel', c.cancel), button('Upload ' + c.preview.files.length + (c.preview.files.length === 1 ? ' path' : ' paths'), c.confirmPush, { className: 'primary', disabled: c.busy }))),
-    ['loading', 'preparing', 'uploading'].includes(c.phase) && h('section', { className: 'robot-push-status', role: 'status' },
-      h('strong', null, c.phase === 'uploading' ? 'Uploading and verifying files…' : c.phase === 'loading' ? 'Loading saved connection…' : 'Preparing selected path files…'),
-      c.phase === 'uploading' && button('Cancel upload', c.cancel)),
-    outcome && h('section', { className: 'robot-push-section' },
-      c.phase === 'transferred' ? h('div', { role: 'status' }, h('p', null, c.result.files.length + ' path files uploaded and verified in ' + c.result.directory + '.'), h('p', null, 'The robot is remembered for your next push. This does not activate a routine.'))
-        : c.phase === 'cancelled' ? h('p', null, 'Upload canceled before sending.') : null,
-      h('div', { className: 'robot-push-actions' }, c.phase === 'failed' && button('Edit destination', c.chooseAnotherRobot), c.phase === 'failed' && button('Review and retry', c.retry), button('Done', c.close, { className: 'primary' }))),
-    !review && !c.busy && h('div', { className: 'robot-connection-diagnostics' }));
+  const title = identity ? 'Verify robot' : setup || summary ? 'Robot connection' : 'Push to robot';
+  const alert = c.error && h('p', { key: 'alert', className: 'rfp-alert', role: 'alert' }, c.error);
+
+  // Each view supplies its body and actions. The footer, and with it the diagnostics portal
+  // target, is mounted once so view changes never strand the diagnostics trigger.
+  let view = 'fallback', body = null, actions = [], diagnostics = true;
+  if (setup) {
+    view = 'setup';
+    body = [alert, h('div', { key: 'fields', className: 'rfp-fields' },
+      h('label', null, 'Host', h('input', { value: c.host, autoFocus: true, autoComplete: 'off', spellCheck: false, placeholder: 'roborio-2468-frc.local', disabled: c.busy, onChange: (e) => c.setHost(e.target.value) })),
+      h('label', { className: 'rfp-port' }, 'Port', h('input', { value: c.port, inputMode: 'numeric', disabled: c.busy, onChange: (e) => c.setPort(e.target.value) })),
+      h('label', { className: 'rfp-wide' }, 'Folder on robot', h('input', { value: c.directory, spellCheck: false, disabled: c.busy, onChange: (e) => c.setDirectory(e.target.value) })))];
+    actions = [
+      button(c.phase === 'saving' ? 'Saving…' : 'Save', c.saveSettings, { key: 'save', title: 'Save without connecting', disabled: invalidEndpoint }),
+      button(c.phase === 'probing' ? 'Connecting…' : 'Connect', c.probeRobot, { key: 'connect', className: 'qbtn primary', disabled: invalidEndpoint }),
+    ];
+  } else if (summary) {
+    view = 'summary';
+    body = [alert, h(Destination, { key: 'dest', endpoint, status: c.connection ? 'Verified' : 'Not verified' }),
+      c.connection && h('p', { key: 'note', className: 'rfp-note' }, 'Select paths in the library, then choose Push.')];
+    actions = [
+      button('Edit', c.chooseAnotherRobot, { key: 'edit', disabled: c.busy }),
+      c.connection
+        ? button('Done', c.close, { key: 'done', className: 'qbtn primary' })
+        : button(c.phase === 'probing' ? 'Connecting…' : 'Connect', c.probeRobot, { key: 'connect', className: 'qbtn primary', disabled: c.busy }),
+    ];
+  } else if (identity) {
+    view = 'identity';
+    body = [alert,
+      h('p', { key: 'intro' }, h('strong', null, address(c.probe.endpoint)), ' presented this SSH host key. Trust it only if it matches your robot.'),
+      h('code', { key: 'key', className: 'rfp-key' }, c.probe.hostKeyFingerprint)];
+    actions = [
+      button('Back', c.chooseAnotherRobot, { key: 'back', disabled: c.busy }),
+      button(c.phase === 'trusting' ? 'Trusting…' : 'Trust host key', c.confirmPairing, { key: 'trust', className: 'qbtn primary', disabled: c.busy }),
+    ];
+  } else if (working) {
+    view = 'working'; diagnostics = false;
+    body = [h('span', { key: 'spin', className: 'robot-push-spinner' }), c.phase === 'loading' ? 'Loading robot connection…' : c.phase === 'uploading' ? 'Uploading…' : 'Preparing files…'];
+  } else if (files) {
+    const failed = c.phase === 'failed';
+    view = failed ? 'files-failed' : 'files'; diagnostics = failed;
+    body = [failed && alert,
+      h(Destination, { key: 'dest', endpoint, onChange: c.chooseAnotherRobot, disabled: c.busy }),
+      h(Files, { key: 'files', files }),
+      !failed && alert,
+      !failed && h('p', { key: 'note', className: 'rfp-note' }, 'Replaces only these files. Uploading does not run anything.')];
+    // Upload is never focused automatically: a held Enter from Push or Trust must not confirm a review.
+    actions = failed
+      ? [button('Close', c.close, { key: 'close', className: c.canRetry ? 'qbtn' : 'qbtn primary' }), c.canRetry && button('Try again', c.retry, { key: 'retry', className: 'qbtn primary' })]
+      : [button(c.phase === 'uploading' ? 'Cancel upload' : 'Cancel', c.cancel, { key: 'cancel', autoFocus: true }),
+        h('button', { key: 'upload', type: 'button', className: 'qbtn primary', disabled: c.busy, onClick: c.confirmPush },
+          c.phase === 'uploading' && h('span', { className: 'robot-push-spinner', 'aria-hidden': true }),
+          c.phase === 'uploading' ? 'Uploading…' : 'Upload ' + plural(files.length))];
+  } else if (c.phase === 'transferred' && c.result) {
+    view = 'done'; diagnostics = false;
+    body = [h('span', { key: 'check', className: 'rfp-check' }, h(UI.Icon, { name: 'check', size: 14, sw: 2.2 })),
+      h('div', { key: 'text' }, h('strong', null, plural(c.result.files.length) + ' uploaded'), h('p', null, 'Verified in ' + c.result.directory + '. No routine was activated.'))];
+    actions = [button('Done', c.close, { key: 'done', className: 'qbtn primary', autoFocus: true })];
+  } else {
+    // Failures without a reviewed file list, unsupported requests, and any unexpected state.
+    const failed = c.phase === 'failed';
+    body = [alert || h('p', { key: 'idle' }, 'Nothing to push right now.')];
+    actions = [
+      failed && button('Edit connection', c.chooseAnotherRobot, { key: 'edit' }),
+      button('Close', c.close, { key: 'close', className: failed && c.canRetry ? 'qbtn' : 'qbtn primary' }),
+      failed && c.canRetry && button('Try again', c.retry, { key: 'retry', className: 'qbtn primary' }),
+    ];
+  }
+
+  return h('dialog', { ref: dialog, className: 'robot-push-dialog robot-manager rfp', 'aria-labelledby': 'robot-file-title', 'aria-busy': c.busy, onCancel: (event) => { event.preventDefault(); c.close(); } },
+    h('header', null, h('h2', { id: 'robot-file-title' }, title), h('button', { type: 'button', className: 'robot-push-close', 'aria-label': 'Close robot files', onClick: c.close }, '×')),
+    h('div', { key: view, className: 'rfp-body rfp-view-' + view, role: view === 'working' || view === 'done' ? 'status' : undefined }, body),
+    h('footer', { className: 'rfp-footer' },
+      h('div', { className: 'robot-connection-diagnostics', hidden: !diagnostics }),
+      h('div', { className: 'rfp-actions' }, actions)));
 }
