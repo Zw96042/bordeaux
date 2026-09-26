@@ -19,6 +19,8 @@ export interface AppUpdaterLike {
   checkForUpdates(): Promise<unknown>;
   downloadUpdate(token?: CancellationToken): Promise<unknown>;
   quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void;
+  /** electron-updater ignores further installs while set, even after a failed installer launch. */
+  quitAndInstallCalled?: boolean;
 }
 export interface UpdateRuntime {
   packaged: boolean;
@@ -56,6 +58,43 @@ export function usesGitHubAppUpdates(
 
 export function appUpdateChannel(version: string): AppUpdateChannel {
   return /^\d+\.\d+\.\d+$/.test(version) ? "latest" : "beta";
+}
+
+/**
+ * Decides what a quit means while an update installs. The native installer waits for this
+ * process to exit, but on Windows a failed installer launch is reported asynchronously, either
+ * before electron-updater's queued handoff quit runs or after that quit has started.
+ */
+export class UpdateQuitCoordinator {
+  private quitStarted = false;
+  private aborted = false;
+  private failedBeforeHandoff = false;
+  private suppressNextQuit = false;
+
+  /** A new installation attempt supersedes any earlier failure. */
+  installing(): void { this.failedBeforeHandoff = false; this.suppressNextQuit = false; }
+  installFailed(): void {
+    if (this.quitStarted) this.aborted = true;
+    else this.failedBeforeHandoff = true;
+  }
+  get quitInProgress(): boolean { return this.quitStarted; }
+  /** Called on before-quit-for-update; false when it belongs to an installation that already failed. */
+  handoff(): boolean {
+    if (!this.failedBeforeHandoff) return true;
+    this.failedBeforeHandoff = false;
+    this.suppressNextQuit = true;
+    return false;
+  }
+  /** Called on before-quit: proceed, ignore a failed installation's queued quit, or resume an abandoned one. */
+  beforeQuit(): "proceed" | "ignore" | "resume" {
+    if (this.suppressNextQuit) { this.suppressNextQuit = false; return "ignore"; }
+    if (this.aborted) return "resume";
+    this.quitStarted = true;
+    return "proceed";
+  }
+  /** True when a started quit belongs to a failed installation and must not finish. */
+  get abandoned(): boolean { return this.aborted; }
+  resumed(): void { this.aborted = false; this.quitStarted = false; }
 }
 
 export class AppUpdateController {
@@ -144,7 +183,12 @@ export class AppUpdateController {
     });
     updater.on("error", (error) => {
       if (this.downloadToken?.cancelled) return;
-      if (this.installing) { this.installing = false; this.fail(error, "install"); }
+      if (this.installing) {
+        this.installing = false;
+        // Let a retry start a new installer; electron-updater only clears this when install() returns false.
+        if (typeof updater.quitAndInstallCalled === "boolean") updater.quitAndInstallCalled = false;
+        this.fail(error, "install");
+      }
       else if (this.downloadToken) this.fail(error, "download");
       else if (this.checkPromise || this.state.phase === "checking") this.fail(error, "check");
     });

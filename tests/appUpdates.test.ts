@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CancellationToken } from "builder-util-runtime";
 import type { AppUpdateState } from "../src/shared/appUpdates";
-import { appUpdateChannel, AppUpdateController, supportsAppUpdates, usesGitHubAppUpdates, updateReleaseNotes, type UpdateRuntime } from "../src/electron/appUpdates";
+import { appUpdateChannel, AppUpdateController, supportsAppUpdates, UpdateQuitCoordinator, usesGitHubAppUpdates, updateReleaseNotes, type UpdateRuntime } from "../src/electron/appUpdates";
 
 function deferred<T = unknown>() {
   let resolve!: (value: T) => void;
@@ -169,6 +169,18 @@ describe("application update state", () => {
     f.controller.setVisible(false);
     expect(f.controller.snapshot()).toMatchObject({ phase: "error", visible: false });
   });
+  it("lets a retry start a new installer after an asynchronous installer failure", async () => {
+    const f = fixture(); await f.ready();
+    f.updater.quitAndInstall.mockImplementation(() => { (f.updater as unknown as { quitAndInstallCalled: boolean }).quitAndInstallCalled = true; });
+    (f.updater as unknown as { quitAndInstallCalled: boolean }).quitAndInstallCalled = false;
+    await f.controller.install();
+    f.updater.emit("error", Object.assign(new Error("spawn EPERM"), { code: "EPERM" }));
+    expect(f.controller.snapshot()).toMatchObject({ phase: "error", errorStage: "install" });
+    expect((f.updater as unknown as { quitAndInstallCalled: boolean }).quitAndInstallCalled).toBe(false);
+    await f.controller.install();
+    expect(f.updater.quitAndInstall).toHaveBeenCalledTimes(2);
+    expect(f.controller.snapshot().phase).toBe("installing");
+  });
   it("unlocks manual recovery when native restart stalls without issuing another install", async () => {
     vi.useFakeTimers();
     const f = fixture(); await f.ready(); await f.controller.install();
@@ -204,4 +216,41 @@ describe("application update state", () => {
     expect(f.controller.snapshot().releaseNotes).toBe("");
   });
 
+});
+
+describe("update quit coordination", () => {
+  it("lets a successful handoff quit", () => {
+    const q = new UpdateQuitCoordinator(); q.installing();
+    expect(q.handoff()).toBe(true);
+    expect(q.beforeQuit()).toBe("proceed");
+    expect(q.abandoned).toBe(false);
+  });
+  it("ignores the queued quit of an installation that failed before its handoff", () => {
+    const q = new UpdateQuitCoordinator(); q.installing(); q.installFailed();
+    expect(q.handoff()).toBe(false);
+    expect(q.beforeQuit()).toBe("ignore");
+    expect(q.beforeQuit()).toBe("proceed"); // a later user quit is unaffected
+  });
+  it("abandons a quit that was already under way when the installation failed", () => {
+    const q = new UpdateQuitCoordinator(); q.installing();
+    expect(q.handoff()).toBe(true); expect(q.beforeQuit()).toBe("proceed");
+    q.installFailed();
+    expect(q.abandoned).toBe(true);
+    expect(q.beforeQuit()).toBe("resume");
+    q.resumed();
+    expect(q.abandoned).toBe(false);
+    expect(q.beforeQuit()).toBe("proceed");
+  });
+  it("lets a retry supersede an earlier failure that never reached its handoff", () => {
+    const q = new UpdateQuitCoordinator(); q.installing(); q.installFailed();
+    q.installing();
+    expect(q.handoff()).toBe(true);
+    expect(q.beforeQuit()).toBe("proceed");
+  });
+  it("leaves ordinary quits alone after a macOS failure that never started quitting", () => {
+    const q = new UpdateQuitCoordinator(); q.installing();
+    expect(q.handoff()).toBe(true); q.installFailed(); // handoff happened, quit had not started
+    expect(q.quitInProgress).toBe(false);
+    expect(q.beforeQuit()).toBe("proceed");
+  });
 });
