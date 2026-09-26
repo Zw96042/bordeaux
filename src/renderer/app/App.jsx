@@ -562,12 +562,12 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
           && !pendingInput && !hasProjectInputDraft() && !editStore.getSnapshot() && result && result.saved) updateDirty(false);
       });
       if (immediate === true) {
-        void persist().catch((error) => { if (revision === autosaveRevision.current) setSaveState({ status: 'error', error: error.message || String(error) }); });
+        void persist().catch((error) => { if (revision === autosaveRevision.current) setSaveState({ status: 'error', error: operationErrorMessage(error) }); });
         return;
       }
       autosaveTimer.current = window.setTimeout(() => {
         autosaveTimer.current = 0;
-        void persist().catch((error) => { if (revision === autosaveRevision.current) setSaveState({ status: 'error', error: error.message || String(error) }); });
+        void persist().catch((error) => { if (revision === autosaveRevision.current) setSaveState({ status: 'error', error: operationErrorMessage(error) }); });
       }, 900);
     }, [editStore, enqueuePersistence, materializeProject, updateDirty]);
 
@@ -1642,7 +1642,7 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
         } catch (error) {
           // A queued autosave must not hide the explicit save failure or its retry action.
           invalidateScheduledAutosave();
-          setSaveState({ status: 'error', error: error.message || String(error), retrySave: true, retrySaveAs: saveAs === true });
+          setSaveState({ status: 'error', error: operationErrorMessage(error), retrySave: true, retrySaveAs: saveAs === true });
         }
       });
     }, [editStore, enqueuePersistence, flushProjectDraft, invalidateScheduledAutosave, materializeProject, updateDirty]);
