@@ -25,7 +25,7 @@ async function click(selector, text) {
 }
 async function key(keyCode, modifiers = []) { win.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers }); if (keyCode === 'Return') win.webContents.sendInputEvent({ type: 'char', keyCode: String.fromCharCode(13) }); win.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers }); await delay(70); }
 async function set(patch) { await evaluate(patch => window.__updateFixture.set(patch), patch); await delay(70); }
-const rect = () => evaluate(() => { const b = document.querySelector('dialog').getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height }; });
+const rect = () => evaluate(() => { const b = document.querySelector('dialog.app-update-dialog').getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height }; });
 async function capture(name) { await fs.writeFile(path.join(output, name + '.png'), (await win.webContents.capturePage()).toPNG()); }
 function pass(name) { checks.push(name); console.log('PASS ' + name); }
 app.whenReady().then(async () => {
@@ -38,37 +38,57 @@ app.whenReady().then(async () => {
       win.setContentSize(width, height);
       await evaluate(platform => { window.bordeauxAPI.platform = platform; window.__updateFixture.calls.length = 0; }, platform);
       await set({ phase: 'idle', visible: false, currentVersion: '0.2.0-beta.10', version: null, releaseNotes: '', projectDirty: false });
+      // The toolbar chip reports background updates without opening the panel.
+      const chip = () => evaluate(() => document.querySelector('.update-chip')?.textContent ?? null);
+      assert.equal(await chip(), null);
+      await set({ phase: 'available', version: '0.2.0-beta.11', releaseNotes: '- Faster pushes' });
+      assert.equal(await chip(), 'Update available');
+      assert.equal(await evaluate(() => document.querySelector('dialog.app-update-dialog').open), false);
+      await click('.update-chip');
+      await waitFor(() => evaluate(() => document.querySelector('dialog.app-update-dialog').open), 'chip opens the update panel');
+      await key('Escape');
+      await waitFor(() => evaluate(() => !document.querySelector('dialog.app-update-dialog').open && document.activeElement.classList.contains('update-chip')), 'Escape returns focus to the chip');
+      await set({ phase: 'downloading', progress: { percent: 43.4, transferred: 45 * 1048576, total: 100 * 1048576, bytesPerSecond: 0 } });
+      assert.equal(await chip(), 'Downloading 43%');
+      await capture(`${platform}-${width}-chip-downloading`);
+      await set({ phase: 'downloaded', progress: null });
+      assert.equal(await chip(), 'Restart to update');
+      await capture(`${platform}-${width}-chip-ready`);
+      await click('.update-chip');
+      await waitFor(() => evaluate(() => window.__updateFixture.calls.join() === 'install'), 'Restart to update installs in one click');
+      await set({ phase: 'idle', visible: false, version: null, releaseNotes: '', progress: null });
+      await evaluate(() => { window.__updateFixture.calls.length = 0; });
       await click('#update-trigger');
       const initial = await rect();
-      await click('dialog button', 'Check for updates');
+      await click('dialog.app-update-dialog button', 'Check for updates');
       assert.ok(await evaluate(() => document.querySelector('progress')?.getAttribute('aria-label') === 'Checking for updates'));
       await capture(`${platform}-${width}-checking`);
       await set({ phase: 'error', error: 'The update request was denied. Try another network or open releases.', errorStage: 'check' });
-      await click('dialog button', 'Copy details');
+      await click('dialog.app-update-dialog button', 'Copy details');
       assert.ok(await evaluate(() => window.__updateFixture.calls.includes('copy')));
       await capture(`${platform}-${width}-error`);
-      await click('dialog button', 'Try again');
+      await click('dialog.app-update-dialog button', 'Try again');
       assert.equal(await evaluate(() => window.__updateFixture.calls.filter(c => c === 'check').length), 2);
       await set({ phase: 'available', version: '0.2.0-beta.11', releaseNotes: '# Improvements\n- More consistent trajectory playback\n- Clearer project saving\n## Fixes\n' + '- Long release notes stay inside this panel.\n'.repeat(30) + '<img src=x onerror=alert(1)>\n[External](https://bad.example)' });
       assert.equal(await evaluate(() => document.querySelectorAll('.app-update-notes img,.app-update-notes a').length), 0);
       assert.ok(await evaluate(() => { const n = document.querySelector('.app-update-notes'); return n.scrollHeight > n.clientHeight; }));
       await capture(`${platform}-${width}-available`);
-      await click('dialog button', 'Download update');
+      await click('dialog.app-update-dialog button', 'Download update');
       await set({ progress: { percent: 43, transferred: 45 * 1048576, total: 100 * 1048576, bytesPerSecond: 2 * 1048576 } });
       assert.equal(await evaluate(() => document.querySelector('progress').value), 43);
       await capture(`${platform}-${width}-download`);
       await key('Escape');
-      assert.equal(await evaluate(() => document.querySelector('dialog').open), false);
+      assert.equal(await evaluate(() => document.querySelector('dialog.app-update-dialog').open), false);
       assert.equal(await evaluate(() => document.activeElement.id), 'update-trigger');
       assert.ok(await evaluate(() => !window.__updateFixture.calls.includes('cancel')));
       await click('#update-trigger');
-      await click('dialog button', 'Cancel download');
+      await click('dialog.app-update-dialog button', 'Cancel download');
       assert.ok(await evaluate(() => window.__updateFixture.calls.includes('cancel')));
       await set({ phase: 'error', errorStage: 'download', error: 'The connection was interrupted. Try the download again.' });
-      await click('dialog button', 'Retry download');
+      await click('dialog.app-update-dialog button', 'Retry download');
       assert.equal(await evaluate(() => window.__updateFixture.calls.filter(c => c === 'download').length), 2);
       await set({ phase: 'downloaded', projectDirty: true });
-      assert.equal(await evaluate(() => [...document.querySelectorAll('dialog button')].find(b => b.textContent === 'Restart and install').disabled), false);
+      assert.equal(await evaluate(() => [...document.querySelectorAll('dialog.app-update-dialog button')].find(b => b.textContent === 'Restart and install').disabled), false);
       await capture(`${platform}-${width}-dirty`);
       assert.deepEqual(await rect(), initial, 'Phase changes must not move or resize the dialog');
       await capture(`${platform}-${width}-ready`);
@@ -78,16 +98,16 @@ app.whenReady().then(async () => {
       await key('Return');
       assert.ok(await evaluate(() => window.__updateFixture.calls.includes('install')));
       await key('Escape');
-      assert.equal(await evaluate(() => document.querySelector('dialog').open), true, 'Installation must keep the editor blocked until quit or failure');
+      assert.equal(await evaluate(() => document.querySelector('dialog.app-update-dialog').open), true, 'Installation must keep the editor blocked until quit or failure');
       await set({ phase: 'installing', installStalled: true });
       assert.equal(await evaluate(() => document.querySelector('progress')), null);
-      assert.equal(await evaluate(() => [...document.querySelectorAll('dialog button')].some(b => b.textContent === 'Retry install')), false);
+      assert.equal(await evaluate(() => [...document.querySelectorAll('dialog.app-update-dialog button')].some(b => b.textContent === 'Retry install')), false);
       await capture(`${platform}-${width}-restart-stalled`);
       await key('Escape');
-      assert.equal(await evaluate(() => document.querySelector('dialog').open), false, 'Stalled restart must release the editor');
+      assert.equal(await evaluate(() => document.querySelector('dialog.app-update-dialog').open), false, 'Stalled restart must release the editor');
       await click('#update-trigger');
-      await click('dialog button', 'Close');
-      assert.equal(await evaluate(() => document.querySelector('dialog').open), false);
+      await click('dialog.app-update-dialog button', 'Close');
+      assert.equal(await evaluate(() => document.querySelector('dialog.app-update-dialog').open), false);
       await click('#update-trigger');
       await set({ installStalled: false });
       await set({ phase: 'upToDate', version: null, currentVersion: '0.2.0-beta.11', releaseNotes, projectDirty: false });
@@ -104,9 +124,9 @@ app.whenReady().then(async () => {
       await key('Tab', ['shift']);
       assert.equal(await evaluate(() => document.activeElement.textContent), 'Done');
       await key('Return');
-      assert.equal(await evaluate(() => document.querySelector('dialog').open), false);
+      assert.equal(await evaluate(() => document.querySelector('dialog.app-update-dialog').open), false);
       assert.equal(await evaluate(() => document.activeElement.id), 'update-trigger');
-      pass(`${platform} ${width}×${height}: safe notes, fixed layout, retry, progress, cancel, unsaved install, modal keyboard and focus`);
+      pass(`${platform} ${width}×${height}: toolbar chip, safe notes, fixed layout, retry, progress, cancel, unsaved install, modal keyboard and focus`);
     }
     assert.deepEqual(errors, []);
     await fs.writeFile(path.join(output, 'result.json'), JSON.stringify({ passed: true, checks, errors }, null, 2));

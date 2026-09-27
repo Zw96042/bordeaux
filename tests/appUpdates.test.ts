@@ -80,11 +80,11 @@ describe("application update state", () => {
     const f = fixture(); f.updater.checkForUpdates.mockResolvedValue(null);
     await f.controller.check(true); expect(f.controller.snapshot().phase).toBe("unsupported");
   });
-  it("shows release notes once per version and never auto downloads", () => {
+  it("offers updates without opening the panel and never auto downloads", () => {
     const f = fixture(); f.offer();
-    expect(f.controller.snapshot()).toMatchObject({ phase: "available", visible: true, releaseNotes: "Better paths" });
-    f.controller.setVisible(false); f.offer();
-    expect(f.controller.snapshot().visible).toBe(false);
+    expect(f.controller.snapshot()).toMatchObject({ phase: "available", visible: false, releaseNotes: "Better paths" });
+    f.controller.setVisible(true); f.offer();
+    expect(f.controller.snapshot().visible).toBe(true);
     expect(f.updater.downloadUpdate).not.toHaveBeenCalled();
     expect(updateReleaseNotes({version:"1",releaseNotes:[{version:"1",note:"A &amp; B"}]})).toBe("A & B");
   });

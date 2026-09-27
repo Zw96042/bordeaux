@@ -105,7 +105,6 @@ export class AppUpdateController {
   private downloaded = false;
   private installing = false;
   private installWatchdog: ReturnType<typeof setTimeout> | null = null;
-  private offeredVersions = new Set<string>();
   private state: AppUpdateState;
 
   constructor(
@@ -160,10 +159,9 @@ export class AppUpdateController {
     updater.allowDowngrade = false;
     updater.on("update-available", (info) => {
       if (this.downloadPromise || this.downloaded || this.installing) return;
-      const firstOffer = !this.offeredVersions.has(info.version);
-      this.offeredVersions.add(info.version);
+      // Background offers surface in the toolbar; only an open panel stays open.
       this.publish({ ...this.clearError(), phase: "available", version: info.version,
-        releaseNotes: updateReleaseNotes(info), progress: null, visible: this.state.visible || firstOffer });
+        releaseNotes: updateReleaseNotes(info), progress: null });
     });
     updater.on("update-not-available", (info) => {
       if (this.state.phase === "checking") this.publish({

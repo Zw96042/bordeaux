@@ -2,6 +2,7 @@ import * as React from 'react';
 import { createRoot } from 'react-dom/client';
 import { AppUpdateDialog } from '../src/renderer/components/AppUpdateDialog';
 import { useAppUpdates } from '../src/renderer/components/useAppUpdates';
+import { Panels } from '../src/renderer/components/Panels';
 import '../src/renderer/styles/app.css';
 const h = React.createElement;
 let state = { phase: 'idle', currentVersion: '0.2.0-beta.10', version: null, channel: 'beta', visible: false, projectDirty: false, releaseNotes: '', progress: null, error: null, errorStage: null };
@@ -21,9 +22,11 @@ window.bordeauxAPI = {
 };
 function Harness() {
   const { state, actions } = useAppUpdates();
-  return h('main', { style: { height: '100vh', padding: 48, background: 'var(--bg-0)' } },
+  return h(React.Fragment, null,
+    h(Panels.Toolbar, { page: 'robot', editorPage: 'plan', setPage: () => {}, updateState: state, onOpenUpdates: () => window.bordeauxAPI.setAppUpdatesVisible(true), onInstallUpdate: actions.onInstall }),
+    h('main', { style: { height: 'calc(100vh - 56px)', padding: 48, background: 'var(--bg-0)' } },
     h('h1', { style: { fontSize: 20 } }, 'Bordeaux'), h('p', null, 'Editor workspace'),
     h('button', { id: 'update-trigger', className: 'qbtn', onClick: () => window.bordeauxAPI.setAppUpdatesVisible(true) }, 'Software updates'),
-    h(AppUpdateDialog, { state, ...actions }));
+    h(AppUpdateDialog, { state, ...actions })));
 }
 createRoot(document.getElementById('root')).render(h(Harness));

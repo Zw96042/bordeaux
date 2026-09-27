@@ -1772,9 +1772,13 @@ import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
         onRetryOpen: () => projectOpenError?.kind === 'folder' ? openProjectFolder() : openProject(projectOpenError?.recentIndex, projectOpenError?.legacyFile),
         onDismissOpenError: () => setProjectOpenError(null),
         onOpen: openProject, onOpenFolder: openProjectFolder, onSave: saveProject, onUndo: undo, onRedo: redo,
-        optimizationOpen, toggleOptimization, optimizationApplied: Boolean(accepted) }),
+        canUndo: history.canUndo(scopes), canRedo: history.canRedo(scopes),
+        optimizationOpen, toggleOptimization, optimizationApplied: Boolean(accepted),
+        updateState: appUpdates.state, onOpenUpdates: () => window.bordeauxAPI?.setAppUpdatesVisible(true), onInstallUpdate: appUpdates.actions.onInstall }),
       h(RobotPushDialog, { controller: pushController, onExportBdx }),
-      h(DiagnosticBundleDialog, { getProject: materializeProject, targetSelector: '.robot-connection-diagnostics', onOpen: pushController.close, renderKey: pushController.open + ':' + pushController.phase }),
+      h(DiagnosticBundleDialog, { getProject: materializeProject, targetSelector: '.robot-connection-diagnostics', onOpen: pushController.close, renderKey: pushController.open + ':' + pushController.phase,
+        // Its trigger lives in the closed connection dialog; return to what opened that dialog instead.
+        onClose: () => pushController.returnFocus() || focusIfAvailable(document.querySelector('.library-connection')) || focusIfAvailable(document.querySelector('.library-push > button')) }),
       page === 'robot'
         ? h('main', { className: 'page-main' }, h(RobotPage, { robot, setRobot, unitSystem, setUnitSystem, pushController, mcpEnabled, updateState: appUpdates.state,
           onOpenUpdates: () => ['available', 'downloading', 'downloaded', 'installing', 'error'].includes(appUpdates.state?.phase)

@@ -26,17 +26,34 @@ import { UI } from "./ui";
           h('button', { className: page === 'robot' ? 'on' : '', type: 'button', 'aria-current': page === 'robot' ? 'page' : undefined, onClick: () => setPage('robot') }, h(Icon, { name: 'gear', size: 15 }), 'Settings')),
         h(ProjectMenu, { projectName: props.projectName, projectLocation: props.projectLocation, saveState: props.saveState, openError: props.projectOpenError, onRetryOpen: props.onRetryOpen, onDismissOpenError: props.onDismissOpenError, onOpen: props.onOpen, onSave: props.onSave })),
 
+      // Mode-specific actions sit left of the persistent ones, so Keyboard shortcuts stays anchored at the right.
       h('div', { className: 'tb-right' },
-        h(KeyboardHelp),
-        plan && h(React.Fragment, null,
-          h('div', { className: 'tbdiv' }),
-          h('button', { type: 'button', className: 'qbtn optimizer-toggle', 'aria-expanded': optimizationOpen, onClick: toggleOptimization }, optimizationApplied ? 'Optimized' : 'Optimize')),
+        plan && h('button', { type: 'button', className: 'qbtn optimizer-toggle', 'aria-expanded': optimizationOpen, onClick: toggleOptimization }, optimizationApplied ? 'Optimized' : 'Optimize'),
         (plan || page === 'auto') && h(React.Fragment, null,
-          h(IconBtn, { icon: 'undo', onClick: onUndo, title: 'Undo  (\u2318Z)' }),
-          h(IconBtn, { icon: 'redo', onClick: onRedo, title: 'Redo  (\u21e7\u2318Z)' })),
-        (plan || page === 'auto') && h(React.Fragment, null,
-          h('button', { className: 'alliance field-flip', type: 'button', 'aria-pressed': alliance === 'red', onClick: () => setAlliance(alliance === 'blue' ? 'red' : 'blue'), title: 'Flip the field 180° without changing the path', 'aria-label': 'Flip field 180 degrees' },
-            h(Icon, { name: 'flip', size: 14 }), h('span', null, 'Flip')))));
+          h(IconBtn, { icon: 'undo', onClick: onUndo, disabled: !props.canUndo, label: 'Undo', title: 'Undo (' + shortcutLabel('Z') + ')' }),
+          h(IconBtn, { icon: 'redo', onClick: onRedo, disabled: !props.canRedo, label: 'Redo', title: 'Redo (' + shortcutLabel('Z', { shift: true }) + ')' }),
+          h('button', { className: 'field-flip', type: 'button', 'aria-pressed': alliance === 'red', onClick: () => setAlliance(alliance === 'blue' ? 'red' : 'blue'), title: 'Flip the field 180° without changing the path', 'aria-label': 'Flip field 180 degrees' },
+            h(Icon, { name: 'flip', size: 14 }), h('span', null, 'Flip')),
+          h('div', { className: 'tbdiv' })),
+        h(UpdateChip, { state: props.updateState, onOpen: props.onOpenUpdates, onInstall: props.onInstallUpdate }),
+        h(KeyboardHelp)));
+  }
+
+  // Update status lives quietly in the toolbar instead of interrupting work with a dialog.
+  // A ready update restarts in one click; every other state opens the update panel.
+  function UpdateChip({ state, onOpen, onInstall }) {
+    const phase = state?.phase;
+    const percent = Number.isFinite(state?.progress?.percent) ? Math.round(state.progress.percent) : null;
+    const label = phase === 'available' ? 'Update available'
+      : phase === 'downloading' ? 'Downloading' + (percent == null ? '…' : ' ' + percent + '%')
+      : phase === 'downloaded' ? 'Restart to update'
+      : phase === 'installing' ? 'Restarting…'
+      : phase === 'error' && state.version ? 'Update failed' : null;
+    if (!label) return null;
+    const ready = phase === 'downloaded';
+    return h('button', { type: 'button', className: 'update-chip ' + phase, onClick: ready ? onInstall : onOpen,
+      title: ready ? 'Restart Bordeaux and install ' + state.version : 'Bordeaux ' + (state.version || 'update') },
+      h('span', { className: 'update-chip-dot', 'aria-hidden': true }), label);
   }
 
   const TOOLS = [

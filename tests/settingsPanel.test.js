@@ -15,9 +15,21 @@ describe('settings workspace', () => {
   });
 
   it.each([
-    [{ pairing: null, busy: false, connectionLabel: 'Connect robot' }, 'Connect robot'],
-    [{ pairing: { teamNumber: 2468 }, busy: false, connectionLabel: 'Team 2468' }, 'Manage connection'],
-    [{ pairing: { teamNumber: 2468 }, busy: true, connectionLabel: 'Awaiting robot' }, 'Push progress'],
+    [null, null], [{ phase: 'upToDate', version: null }, null], [{ phase: 'checking', version: null }, null],
+    [{ phase: 'available', version: '0.3.0' }, 'Update available'],
+    [{ phase: 'downloading', version: '0.3.0', progress: { percent: 41.6 } }, 'Downloading 42%'],
+    [{ phase: 'downloaded', version: '0.3.0' }, 'Restart to update'],
+    [{ phase: 'error', version: '0.3.0', errorStage: 'download' }, 'Update failed'],
+  ])('shows update status quietly in the toolbar: %j', (updateState, label) => {
+    const markup = renderToStaticMarkup(React.createElement(Panels.Toolbar, { page: 'plan', editorPage: 'plan', updateState }));
+    expect(markup.includes('update-chip')).toBe(Boolean(label));
+    if (label) expect(markup).toContain('</span>' + label + '</button>');
+  });
+
+  it.each([
+    [{ pairing: null, busy: false, connectionLabel: 'Connect robot' }, 'Set up'],
+    [{ pairing: { teamNumber: 2468 }, busy: false, connectionLabel: 'Team 2468' }, 'Edit'],
+    [{ pairing: { teamNumber: 2468 }, busy: true, connectionLabel: 'Awaiting robot' }, 'Show progress'],
   ])('keeps connection and units available with the robot configuration', (pushController, label) => {
     const markup = renderToStaticMarkup(React.createElement(RobotPage, {
       robot: createDemoProject().robot, unitSystem: 'imperial', pushController,
