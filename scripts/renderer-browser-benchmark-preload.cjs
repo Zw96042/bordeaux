@@ -102,7 +102,7 @@ contextBridge.exposeInMainWorld("bordeauxAPI", {
     if (!accepted) state.proposalStatuses.push({ id, status: "stale" });
   },
   getActiveAgentProposal: async () => null,
-  getMcpStatus: async () => ({ enabled: false }),
+  getMcpStatus: async () => ({ enabled: true, generation: 1 }),
   onMcpStatus: () => unsubscribe,
   onAgentProposal: (listener) => {
     agentProposalListener = listener;

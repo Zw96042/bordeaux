@@ -2,10 +2,11 @@ import { minimumRobotFieldClearance, observeRobotFieldPortalSequence } from "../
 import { robotFootprintAt, robotFootprintRadius } from "../agent/robotFootprint";
 import { PM } from "../math/pm";
 import { clone } from "../project/defaults";
-import { effectivePathConstraints, robotHardLimits } from "../robotLimits";
-import type { ControlPoint, PathDoc, PlannerInput, PlannerOptimizationDiagnostics, PlannerResult } from "../types";
+import { physicalPlannerInput } from "../robotLimits";
+import type { ControlPoint, PathDoc, PlannerInput, PlannerOptimizationDiagnostics, PlannerResult, TrajectorySample } from "../types";
 import { optimizeFixedGeometryFinal } from "./fixedGeometryFinal";
 import { fixedPathSamples, getPlanner } from "./index";
+import { DEFAULT_SAMPLES_PER_SEGMENT } from "./limits";
 import { validateOptimizedTrajectory } from "./trajectoryValidation";
 
 const DEFAULT_CORRIDOR_M = 0.15;
@@ -22,6 +23,12 @@ export interface CorridorGateBounds {
   bounds: { xMin: number; xMax: number; yMin: number; yMax: number };
 }
 
+/** Search counters that change without changing the retained incumbent. */
+export type CorridorSearchStatistics = Required<Pick<
+  PlannerOptimizationDiagnostics,
+  "solveTimeMs" | "evaluations" | "validatedCandidates" | "rejectedCandidates" | "rejectionReasons"
+>>;
+
 export interface CorridorFinalOptions {
   corridorM?: number;
   minimumClearanceM?: number;
@@ -30,8 +37,16 @@ export interface CorridorFinalOptions {
   budgetMs?: number;
   maximumEvaluations?: number;
   isCancelled?: () => boolean;
-  /** Emits validated incumbents; completion never implicitly applies them. */
+  /**
+   * Emits the initial and each materially improved validated incumbent, with
+   * search counters as of that checkpoint. Completion never applies them.
+   */
   onProgress?: (result: PlannerResult) => void;
+  /**
+   * Emits current counters after each evaluation that did not publish a new
+   * incumbent, so consumers can refresh retained metadata without a route.
+   */
+  onStatistics?: (statistics: CorridorSearchStatistics) => void;
 }
 
 interface Handle {
@@ -95,23 +110,33 @@ function routeDeviation(reference: readonly GeometryPoint[], candidate: readonly
   );
 }
 
-function distanceToRoute(point: ControlPoint, reference: readonly GeometryPoint[]): number {
-  let nearest = Number.POSITIVE_INFINITY;
-  for (let index = 1; index < reference.length; index += 1) {
-    nearest = Math.min(nearest, pointSegmentDistance(point, reference[index - 1], reference[index]));
+/** Returns any reference edge within limitM of point, scanning every edge from startEdge, or -1. */
+function edgeWithin(point: ControlPoint, reference: readonly ControlPoint[], limitM: number, startEdge: number): number {
+  const edges = reference.length - 1;
+  for (let offset = 0; offset < edges; offset += 1) {
+    const edge = (startEdge + offset) % edges;
+    if (pointSegmentDistance(point, reference[edge], reference[edge + 1]) <= limitM) return edge;
   }
-  return nearest;
+  return -1;
 }
 
-function sweptFootprintInsideCorridor(
-  input: PlannerInput,
-  samples: PlannerResult["samples"],
-  reference: readonly GeometryPoint[],
+export function sweptFootprintInsideCorridor(
+  robot: PlannerInput["robot"],
+  samples: readonly TrajectorySample[],
+  reference: readonly ControlPoint[],
   corridorM: number,
 ): boolean {
-  const boundaryM = robotFootprintRadius(input.robot) + corridorM;
-  return samples.every((sample) => robotFootprintAt(input.robot, sample)
-    .every((vertex) => distanceToRoute(vertex, reference) <= boundaryM + EPSILON));
+  // Nonfinite reference points yield NaN edge distances, which the exact
+  // minimum always rejected; an early-return scan could otherwise skip them.
+  const finite = reference.every((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+  const limitM = robotFootprintRadius(robot) + corridorM + EPSILON;
+  // Adjacent vertices usually share a nearby edge; the scan still wraps, so
+  // self-crossing routes accept exactly what an exhaustive minimum accepts.
+  let edge = 0;
+  return samples.every((sample) => finite && robotFootprintAt(robot, sample).every((vertex) => {
+    edge = edgeWithin(vertex, reference, limitM, edge);
+    return edge >= 0;
+  }));
 }
 
 function passesGates(samples: PlannerResult["samples"], gates: readonly CorridorGateBounds[]): boolean {
@@ -140,7 +165,7 @@ export function validateCorridorCandidate(
   baseline: PlannerResult = optimizeFixedGeometryFinal(input),
 ): boolean {
   const corridorM = Math.max(MIN_CORRIDOR_M, Math.min(MAX_CORRIDOR_M, options.corridorM ?? DEFAULT_CORRIDOR_M));
-  const resolution = Math.max(128, (input.samplesPerSegment ?? 56) * 2);
+  const resolution = Math.max(128, (input.samplesPerSegment ?? DEFAULT_SAMPLES_PER_SEGMENT) * 2);
   const reference = PM.sample(input.path.waypoints, resolution).pts as GeometryPoint[];
   const candidate = PM.sample((result.optimizedPath ?? input.path).waypoints, resolution).pts as GeometryPoint[];
   const deviationM = routeDeviation(reference, candidate);
@@ -151,7 +176,7 @@ export function validateCorridorCandidate(
     && topology.visits.length === authoredTopology.visits.length
     && topology.visits.every((visit, index) => visit.id === authoredTopology.visits[index].id)
     && passesGates(result.samples, options.gates ?? [])
-    && sweptFootprintInsideCorridor(input, result.samples, reference, corridorM)
+    && sweptFootprintInsideCorridor(input.robot, result.samples, reference, corridorM)
     && minimumRobotFieldClearance(input.robot, result.samples) >= Math.max(0, options.minimumClearanceM ?? 0) - EPSILON;
 }
 
@@ -297,12 +322,10 @@ export function optimizeCorridorFinal(input: PlannerInput, requested: CorridorFi
     return earlyResult("Corridor optimization keeps paths with jiggle actions on their authored geometry.");
   }
 
-  const samplesPerSegment = input.samplesPerSegment ?? 56;
+  const samplesPerSegment = input.samplesPerSegment ?? DEFAULT_SAMPLES_PER_SEGMENT;
   const reference = PM.sample(authored.waypoints, Math.max(128, samplesPerSegment * 2)).pts as GeometryPoint[];
   const handles = movableHandles(authored);
   if (handles.length === 0) return earlyResult("The path has no movable Bezier handles.");
-  const hardLimits = robotHardLimits(input.robot);
-  const physicalRobot = hardLimits ? { ...input.robot, maxSpeed: hardLimits.maxSpeedMps } : input.robot;
 
   const baselineClearanceM = minimumRobotFieldClearance(input.robot, baseline.samples);
   let best: Evaluation = {
@@ -311,9 +334,18 @@ export function optimizeCorridorFinal(input: PlannerInput, requested: CorridorFi
     maxDeviationM: 0,
     minimumClearanceM: baselineClearanceM,
   };
+  const materiallyImproved = () => best.path !== authored
+    && baseline.totalTimeS - best.result.totalTimeS >= Math.max(MIN_GAIN_S, baseline.totalTimeS * MIN_GAIN_FRACTION);
+  const statistics = (): CorridorSearchStatistics => ({
+    solveTimeMs: performance.now() - startedAt,
+    evaluations,
+    validatedCandidates,
+    rejectedCandidates,
+    rejectionReasons: [...rejectionReasons].map(([reason, count]) => ({ reason, count })),
+  });
   const snapshot = (): PlannerResult => {
     const gainS = baseline.totalTimeS - best.result.totalTimeS;
-    const improved = best.path !== authored && gainS >= Math.max(MIN_GAIN_S, baseline.totalTimeS * MIN_GAIN_FRACTION);
+    const improved = materiallyImproved();
     const retained = improved ? best.result : baseline;
     return {
       ...retained,
@@ -321,16 +353,12 @@ export function optimizeCorridorFinal(input: PlannerInput, requested: CorridorFi
       optimization: corridorDiagnostics(retained, diagnosticsOptions, {
         status: improved ? "feasible" : "equivalent",
         termination,
-        solveTimeMs: performance.now() - startedAt,
+        ...statistics(),
         totalTimeS: retained.totalTimeS,
         baselineTimeS: baseline.totalTimeS,
         gainS: improved ? gainS : 0,
         fallback: false,
         fallbackReason: improved ? undefined : `No material improvement was found inside the ${corridorM.toFixed(2)} m corridor.`,
-        evaluations,
-        validatedCandidates,
-        rejectedCandidates,
-        rejectionReasons: [...rejectionReasons].map(([reason, count]) => ({ reason, count })),
         maxDeviationM: improved ? best.maxDeviationM : 0,
         minimumClearanceM: improved ? best.minimumClearanceM : baselineClearanceM,
       }),
@@ -343,7 +371,17 @@ export function optimizeCorridorFinal(input: PlannerInput, requested: CorridorFi
     rejectionReasons.set(key, (rejectionReasons.get(key) ?? 0) + 1);
     return null;
   };
-  requested.onProgress?.(snapshot());
+  // Consumers project each incumbent into a full preview, so rejected or
+  // non-material candidates do not republish the unchanged trajectory.
+  let publishedPath: PathDoc | undefined;
+  const publishIncumbent = () => {
+    const path = materiallyImproved() ? best.path : authored;
+    if (path === publishedPath) return false;
+    publishedPath = path;
+    requested.onProgress?.(snapshot());
+    return true;
+  };
+  publishIncumbent();
   const evaluate = (path: PathDoc): Evaluation | null => {
     if (!canEvaluate()) return null;
     const evaluationStartedAt = performance.now();
@@ -359,9 +397,8 @@ export function optimizeCorridorFinal(input: PlannerInput, requested: CorridorFi
           ?? result.diagnostics.find((issue) => issue.severity === "error")?.message
           ?? "Candidate generation failed").slice(0, 240));
       }
-      const physicalPath = { ...path, constraints: effectivePathConstraints(path.constraints, physicalRobot) };
       const validation = validateOptimizedTrajectory(
-        { ...input, path: physicalPath, robot: physicalRobot },
+        physicalPlannerInput({ ...input, path }),
         fixedPathSamples(result),
         { angularKinematics: "sample" },
       );
@@ -371,7 +408,7 @@ export function optimizeCorridorFinal(input: PlannerInput, requested: CorridorFi
         || topology.visits.length !== baselineTopology.visits.length
         || topology.visits.some((visit, index) => visit.id !== baselineTopology.visits[index].id)) return reject("Changed the authored portal sequence");
       if (!passesGates(result.samples, requested.gates ?? [])) return reject("Missed a required gate");
-      if (!sweptFootprintInsideCorridor(input, result.samples, reference, corridorM)) return reject("Robot footprint leaves the corridor");
+      if (!sweptFootprintInsideCorridor(input.robot, result.samples, reference, corridorM)) return reject("Robot footprint leaves the corridor");
       const clearanceM = minimumRobotFieldClearance(input.robot, result.samples);
       if (clearanceM < minimumClearanceM - EPSILON) return reject("Insufficient field clearance");
       validatedCandidates += 1;
@@ -382,7 +419,7 @@ export function optimizeCorridorFinal(input: PlannerInput, requested: CorridorFi
       return reject((error instanceof Error ? error.message : "Candidate evaluation failed").slice(0, 240));
     } finally {
       longestEvaluationMs = Math.max(longestEvaluationMs, performance.now() - evaluationStartedAt);
-      requested.onProgress?.(snapshot());
+      if (!publishIncumbent()) requested.onStatistics?.(statistics());
     }
   };
 

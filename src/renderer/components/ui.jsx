@@ -2,7 +2,7 @@ import * as React from "react";
 import "../styles/inspector-refresh.css";
 import { createPortal } from "react-dom";
 import { PointerDrag } from "../hooks/usePointerDrag";
-import { parseFiniteDraftNumber } from "../lib/numericDraft";
+import { committedDraftValue } from "../lib/numericDraft";
 import { PM } from "../lib/pathMath";
 import { UnitPrefs } from "../lib/unitPreferences";
 
@@ -337,14 +337,8 @@ import { UnitPrefs } from "../lib/unitPreferences";
       setError('');
     }, [unitSystem]);
     const commitEdit = (raw) => {
-      const parsed = parseFiniteDraftNumber(raw);
-      if (parsed == null) { setError('Enter a finite number.'); return false; }
-      // An untouched display value must not round-trip through unit conversion:
-      // floating-point drift can invalidate planning and move keyboard focus.
-      let next = typeof value === 'number' && parsed === UnitPrefs.fromCanonical(value, unit, imperialUnit)
-        ? value : UnitPrefs.toCanonical(parsed, unit, imperialUnit);
-      if (min != null) next = Math.max(min, next);
-      if (max != null) next = Math.min(max, next);
+      const next = committedDraftValue(raw, value, displayValue, (parsed) => UnitPrefs.toCanonical(parsed, unit, imperialUnit), { min, max });
+      if (next == null) { setError('Enter a finite number.'); return false; }
       setError('');
       if (!Object.is(next, value)) onChange(next);
       return true;

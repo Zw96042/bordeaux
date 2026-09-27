@@ -1,6 +1,4 @@
-import { getPlanner } from "../planners";
-import { authoredPath, getAcceptedTrajectory } from "../planners/acceptedTrajectory";
-import { isOptimizationOutdated } from "../planners/acceptedTrajectoryIdentity";
+import { selectPathTrajectory } from "../planners/acceptedTrajectory";
 import { clone } from "../project/defaults";
 import { activeRoutine } from "../project/routines";
 import type {
@@ -29,11 +27,7 @@ export function buildBdxExportWithPlannerResults(project: BordeauxProject): Buil
 
   const plannerResults: PlannerResult[] = [];
   const paths: BdxPath[] = exportablePaths(project).map((path) => {
-    const accepted = getAcceptedTrajectory(path, project.robot, project.field);
-    if (path.optimization?.accepted && !accepted && !isOptimizationOutdated(path, project.robot, project.field)) {
-      throw new Error(`${path.name}: The applied optimization is invalid. Choose Use normal or optimize and apply again before exporting.`);
-    }
-    const result = accepted ?? getPlanner("profiledSpline").generate({ path: authoredPath(path), robot: project.robot });
+    const result = selectPathTrajectory(path, project.robot, project.field);
     if (result.samples.length < 2) {
       throw new Error(`Path "${path.name}" generated fewer than two samples`);
     }
@@ -98,6 +92,6 @@ function assertFiniteValue(value: unknown, valuePath: string): void {
   inspect(value, valuePath);
 }
 
-function assertFinitePlannerResult(pathName: string, result: ReturnType<ReturnType<typeof getPlanner>["generate"]>): void {
+function assertFinitePlannerResult(pathName: string, result: PlannerResult): void {
   assertFiniteValue(result, `Path "${pathName}" planner output`);
 }

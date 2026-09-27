@@ -6,7 +6,7 @@ import { CorridorCorpus } from "../src/electron/benchmark/corridor";
 import { observeRobotFieldPortalSequence } from "../src/shared/agent/fieldClearance";
 import { REBUILT_2026_FIELD, officialToAppPoint } from "../src/shared/field/rebuilt2026";
 import { robotFootprintRadius } from "../src/shared/agent/robotFootprint";
-import { optimizeCorridorFinal, validateCorridorCandidate } from "../src/shared/planners/corridorFinal";
+import { optimizeCorridorFinal, validateCorridorCandidate, type CorridorSearchStatistics } from "../src/shared/planners/corridorFinal";
 import { optimizeFixedGeometryFinal } from "../src/shared/planners/fixedGeometryFinal";
 import { decodeProjectFile } from "../src/shared/project/fileFormat";
 import type { PlannerResult, TrajectorySample } from "../src/shared/types";
@@ -149,6 +149,88 @@ describe("corridor final optimization", () => {
       clock.mockRestore();
     }
   });
+
+  it("publishes only the initial and materially improved incumbents over a full search", () => withWorkBudget(() => {
+    const path = project.paths.find((candidate) => candidate.id === corpus.cases[1].pathId)!;
+    const input = { path, robot: project.robot, samplesPerSegment: 56 };
+    const progress: PlannerResult[] = [];
+    const statistics: CorridorSearchStatistics[] = [];
+    const result = optimizeCorridorFinal(input, {
+      onProgress: (incumbent) => progress.push(incumbent),
+      onStatistics: (counters) => statistics.push(counters),
+    });
+    const counters = result.optimization!;
+
+    expect(counters).toMatchObject({ status: "feasible", termination: "work-budget", evaluations: 24 });
+    expect(counters.validatedCandidates! + counters.rejectedCandidates!).toBe(24);
+    // Each evaluation reports once: a new incumbent or counters alone.
+    expect(progress.length - 1 + statistics.length).toBe(24);
+    statistics.forEach((entry, index) => {
+      expect(Object.keys(entry).sort()).toEqual(
+        ["evaluations", "rejectedCandidates", "rejectionReasons", "solveTimeMs", "validatedCandidates"],
+      );
+      expect(entry.validatedCandidates + entry.rejectedCandidates).toBe(entry.evaluations);
+      if (index > 0) expect(entry.evaluations).toBeGreaterThan(statistics[index - 1].evaluations);
+    });
+    // The last improvement precedes the last evaluation, so only statistics carry the final counts.
+    expect(progress.at(-1)!.optimization!.evaluations).toBeLessThan(24);
+    expect(statistics.at(-1)).toMatchObject({
+      evaluations: counters.evaluations,
+      validatedCandidates: counters.validatedCandidates,
+      rejectedCandidates: counters.rejectedCandidates,
+      rejectionReasons: counters.rejectionReasons,
+    });
+    expect(progress[0].optimizedPath).toBeUndefined();
+    expect(progress.length).toBeGreaterThan(1);
+    // Every publication is a different, strictly faster validated trajectory.
+    expect(progress.length).toBeLessThanOrEqual(1 + counters.validatedCandidates!);
+    progress.slice(1).forEach((incumbent, index) => {
+      expect(incumbent.optimizedPath).toBeDefined();
+      expect(incumbent.samples).not.toBe(progress[index].samples);
+      expect(incumbent.totalTimeS).toBeLessThan(progress[index].totalTimeS);
+      expect(validateCorridorCandidate(input, incumbent)).toBe(true);
+    });
+    expect(result.samples).toEqual(progress.at(-1)!.samples);
+    expect(result.optimizedPath).toEqual(progress.at(-1)!.optimizedPath);
+    // Checkpoint counters never run ahead of the completed search.
+    expect(progress.at(-1)!.optimization!.evaluations).toBeLessThanOrEqual(counters.evaluations!);
+  }), 30_000);
+
+  it("reports counters checked after the last improvement when the search is cancelled", () => withWorkBudget(() => {
+    const path = project.paths.find((candidate) => candidate.id === corpus.cases[1].pathId)!;
+    let improved: PlannerResult | undefined;
+    let latest: CorridorSearchStatistics | undefined;
+    let cancel = false;
+    const cancelled = optimizeCorridorFinal({ path, robot: project.robot, samplesPerSegment: 56 }, {
+      isCancelled: () => cancel,
+      onProgress: (incumbent) => { if (incumbent.optimizedPath) improved = incumbent; },
+      onStatistics: (counters) => {
+        latest = counters;
+        cancel = Boolean(improved) && counters.evaluations >= improved!.optimization!.evaluations! + 2;
+      },
+    });
+
+    expect(cancelled.optimization).toMatchObject({ termination: "cancelled", evaluations: latest!.evaluations });
+    expect(cancelled.optimization!.evaluations).toBeGreaterThan(improved!.optimization!.evaluations!);
+    expect(cancelled.optimization).toMatchObject({
+      validatedCandidates: latest!.validatedCandidates,
+      rejectedCandidates: latest!.rejectedCandidates,
+      rejectionReasons: latest!.rejectionReasons,
+    });
+    expect(cancelled.samples).toEqual(improved!.samples);
+  }), 15_000);
+
+  it("propagates a progress consumer failure instead of counting it as a rejected candidate", () => withWorkBudget(() => {
+    const path = project.paths.find((candidate) => candidate.id === corpus.cases[1].pathId)!;
+    let published = 0;
+    expect(() => optimizeCorridorFinal({ path, robot: project.robot, samplesPerSegment: 56 }, {
+      onProgress: (incumbent) => {
+        published += 1;
+        if (incumbent.optimizedPath) throw new Error("preview projection failed");
+      },
+    })).toThrow("preview projection failed");
+    expect(published).toBe(2);
+  }), 15_000);
 
   it("never worsens the validated result as deterministic work increases", () => {
     const fixture = corpus.cases[1];

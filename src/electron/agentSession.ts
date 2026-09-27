@@ -293,6 +293,7 @@ export class AgentSessionService {
   private activeAnalyses = 0;
   private previewGeneration = 0;
   private committedPreviewId: string | null = null;
+  private access = { enabled: false, generation: 0 };
 
   constructor(
     private readonly sendProposal: (proposal: AgentProposal, requireReceipt: boolean) => void | Promise<void>,
@@ -352,6 +353,29 @@ export class AgentSessionService {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Starts a new MCP access period. Earlier snapshots, planning and previews
+   * are discarded, so requests report the editor as unavailable until it
+   * publishes for this period.
+   */
+  resetAccess(enabled: boolean): { enabled: boolean; generation: number } {
+    this.clearSnapshot();
+    this.access = { enabled, generation: this.access.generation + 1 };
+    return this.accessStatus();
+  }
+
+  accessStatus(): { enabled: boolean; generation: number } {
+    return { ...this.access };
+  }
+
+  /** Editor snapshots count only while access is on and only for the current period. */
+  publishEditorSnapshot(value: unknown): "published" | "ignored" | "invalid" {
+    if (!value || typeof value !== "object") return "invalid";
+    const { accessGeneration, ...snapshot } = value as AgentSessionSnapshot & { accessGeneration?: unknown };
+    if (!this.access.enabled || accessGeneration !== this.access.generation) return "ignored";
+    return this.tryPublishSnapshot(snapshot) ? "published" : "invalid";
   }
 
   updateProposalStatus(proposalId: string, status: "applied" | "rejected" | "stale", appliedRevision?: number): void {

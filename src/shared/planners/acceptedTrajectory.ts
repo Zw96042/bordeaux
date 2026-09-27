@@ -1,12 +1,18 @@
 import { ACTIVE_FIELD_REFERENCE } from "../field/rebuilt2026";
 import { clone } from "../project/defaults";
-import { effectivePathConstraints, robotHardLimits } from "../robotLimits";
+import { physicalPlannerInput } from "../robotLimits";
 import type { FieldReference, PathDoc, PlannerResult, RobotConfig } from "../types";
 import { validateCorridorCandidate } from "./corridorFinal";
 import { invariantFailure, validateFinal } from "./fixedGeometryFinal";
 import { getPlanner } from "./index";
 import { DEFAULT_SAMPLES_PER_SEGMENT } from "./limits";
-import { acceptedTrajectoryShapeError, authoredPath, optimizationInputKey, optimizationIntentKey } from "./acceptedTrajectoryIdentity";
+import {
+  acceptedTrajectoryShapeError,
+  authoredPath,
+  isOptimizationOutdated,
+  optimizationInputKey,
+  optimizationIntentKey,
+} from "./acceptedTrajectoryIdentity";
 
 export { acceptedTrajectoryShapeError, authoredPath, optimizationInputKey } from "./acceptedTrajectoryIdentity";
 type AcceptedTrajectory = NonNullable<NonNullable<PathDoc["optimization"]>["accepted"]>;
@@ -31,8 +37,7 @@ function markersMatch(path: PathDoc, result: PlannerResult): boolean {
 
 function stationaryActionsMatch(path: PathDoc, robot: RobotConfig, result: PlannerResult): boolean {
   const actions = result.stationaryActions ?? [];
-  const physicalRobot = { ...robot, maxSpeed: robotHardLimits(robot)?.maxSpeedMps ?? robot.maxSpeed };
-  const limits = effectivePathConstraints(path.constraints, physicalRobot);
+  const limits = physicalPlannerInput({ path, robot }).path.constraints;
   for (const action of actions) {
     const waypoint = path.waypoints[action.waypointIndex];
     if (!waypoint || action.kind === "jiggle") return false;
@@ -76,6 +81,16 @@ export function getAcceptedTrajectory(path: PathDoc, robot: RobotConfig, field: 
     // Invalid current-input artifacts require explicit review at the export boundary.
     return null;
   }
+}
+
+/** The trajectory export and analysis drive: the applied optimization for current inputs, otherwise normal planning. */
+export function selectPathTrajectory(path: PathDoc, robot: RobotConfig, field: FieldReference = ACTIVE_FIELD_REFERENCE): PlannerResult {
+  const accepted = getAcceptedTrajectory(path, robot, field);
+  if (accepted) return accepted;
+  if (path.optimization?.accepted && !isOptimizationOutdated(path, robot, field)) {
+    throw new Error(`${path.name}: The applied optimization is invalid. Choose Use normal or optimize and apply again before exporting.`);
+  }
+  return getPlanner("profiledSpline").generate({ path: authoredPath(path), robot });
 }
 
 export function createAcceptedTrajectory(

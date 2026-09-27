@@ -738,7 +738,7 @@ import { headingTransitionWindows, headingTransitionGoals, smoothHeadingTransiti
       for (let i = 0; i < wpFrac.length - 1; i++) { if (check.f >= wpFrac[i] - 1e-4) seg = i; }
       check.seg = Math.max(0, Math.min(doc.waypoints.length - 2, seg));
     });
-    return { sample: smp, prof, totalDistance: smp.length + (prof.actionDistance || 0), anchors, metrics: mtr, checks, wpFrac, wpIdx, mode, effRanges, headingMode, rev: !!doc.driveBackward, playback: null, markers: [], planner: 'profiledSpline' };
+    return { sample: smp, prof, totalDistance: smp.length + (prof.actionDistance || 0), anchors, metrics: mtr, checks, wpFrac, wpIdx, mode, effRanges, headingMode, rev: !!doc.driveBackward, markers: [], planner: 'profiledSpline' };
   }
 
   function jigglePositions(anchor, baseRad, options, bounds = { w: 17.548, h: 8.052 }) {

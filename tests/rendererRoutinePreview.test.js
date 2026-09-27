@@ -1,47 +1,149 @@
-import { describe, expect, it, vi } from "vitest";
-import { processRoutinePreviewJob } from "../src/renderer/assets/path-preview-worker";
-import { RoutinePreview } from "../src/renderer/assets/routine-preview";
-import { PathPreview } from "../src/renderer/assets/path-preview";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTO } from "../src/renderer/lib/routineModel";
-import { buildWaypoints, createDemoProject } from "../src/shared/project/defaults";
-import { getPlanner } from "../src/shared/planners";
-import { validateProject } from "../src/shared/validation";
-import { loadRendererExport } from "./helpers/loadRendererExport";
+import { createDemoProject } from "../src/shared/project/defaults";
 
-function routinePreview() {
-  return loadRendererExport(new URL("../src/renderer/assets/routine-preview.js", import.meta.url), "RoutinePreview", {
-    context: {
-      AUTO: { walk(nodes, visit) { nodes.forEach(visit); } },
-      directPreviewWork: () => 250,
-    },
-  });
+const hooks = vi.hoisted(() => ({ values: [], cursor: 0, effects: [] }));
+const planning = vi.hoisted(() => ({ request: null }));
+vi.mock("react", async (original) => ({
+  ...await original(),
+  useState(initial) {
+    const index = hooks.cursor++;
+    if (!(index in hooks.values)) hooks.values[index] = typeof initial === "function" ? initial() : initial;
+    return [hooks.values[index], (value) => { hooks.values[index] = typeof value === "function" ? value(hooks.values[index]) : value; }];
+  },
+  useRef(initial) {
+    const index = hooks.cursor++;
+    if (!(index in hooks.values)) hooks.values[index] = { current: initial };
+    return hooks.values[index];
+  },
+  useMemo(factory, dependencies) {
+    const index = hooks.cursor++;
+    const previous = hooks.values[index];
+    if (!previous || dependencies.some((value, item) => value !== previous.dependencies[item])) hooks.values[index] = { value: factory(), dependencies };
+    return hooks.values[index].value;
+  },
+  useEffect(effect, dependencies) {
+    const index = hooks.cursor++;
+    const previous = hooks.values[index];
+    if (previous && dependencies.every((value, item) => value === previous.dependencies[item])) return;
+    hooks.values[index] = { dependencies, cleanup: previous?.cleanup };
+    hooks.effects.push(() => {
+      previous?.cleanup?.();
+      hooks.values[index].cleanup = effect();
+    });
+  },
+}));
+vi.mock("../src/renderer/assets/final-planning", () => ({
+  FinalPlanning: { create: () => ({ request: (...args) => planning.request(...args) }) },
+}));
+import { useRoutinePlanning } from "../src/renderer/hooks/useRoutinePlanning";
+
+function render(...args) {
+  hooks.cursor = 0;
+  const plans = useRoutinePlanning(...args);
+  hooks.effects.splice(0).forEach((run) => run());
+  return plans;
 }
 
-function uniquePathFixture(pathCount = 100) {
-  const project = createDemoProject();
-  const waypoints = buildWaypoints(Array.from({ length: 100 }, (_, index) => ({ x: 1 + index * 0.1, y: 4 })));
-  project.paths = Array.from({ length: pathCount }, (_, index) => ({
-    ...structuredClone(project.paths[0]),
-    id: `path_${index}`,
-    name: `Path ${index}`,
-    headingMode: "tangent",
-    targets: [],
-    ranges: [],
-    waypoints: structuredClone(waypoints),
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+beforeEach(() => {
+  hooks.values = [];
+  hooks.effects = [];
+  planning.request = vi.fn(({ path }) => ({
+    promise: Promise.resolve({ status: "success", value: { pathId: path.id, prof: { totalTime: 2 }, finalTrajectory: { samples: [] } } }),
+    cancel: vi.fn(),
   }));
-  project.editor = { ...project.editor, activePathId: project.paths[0].id };
-  const routine = project.routines[0];
-  routine.nodes = project.paths.map((path, index) => ({ id: `node_${index}`, type: "path", ref: path.id }));
-  return { project, routine };
+});
+
+function routineFor(path) {
+  return { id: "routine", name: "Routine", nodes: [{ id: "drive", type: "path", ref: path.id }] };
 }
 
-describe("routine preview worker", () => {
-  it("sends only paths referenced by the active routine", () => {
-    const referenced = { id: "path_a" };
-    const unrelated = { id: "path_b", payload: "large" };
-    const routine = { nodes: [{ id: "decision", type: "decision", then: [{ id: "node_a", type: "path", ref: referenced.id }], else: [{ id: "node_b", type: "path", ref: unrelated.id }] }] };
+describe("routine planning", () => {
+  it("plans every referenced path across branches once", () => {
+    const [a, b, c, unused] = ["A", "B", "C", "D"].map((id) => ({ id }));
+    const routine = { nodes: [
+      { id: "decision", type: "decision", then: [{ id: "a", type: "path", ref: "A" }], else: [{ id: "b", type: "path", ref: "B" }, { id: "a-again", type: "path", ref: "A" }] },
+      { id: "command", type: "function", cat: "command", outputBranch: { routes: [{ id: "route", nodes: [{ id: "c", type: "path", ref: "C" }] }] } },
+      { id: "deleted", type: "path", ref: "missing" },
+    ] };
 
-    expect(routinePreview().referencedPaths(routine, [unrelated, referenced], { decision: "then" })).toEqual([referenced]);
+    const paths = AUTO.planningPaths(routine, [unused, c, b, a]);
+    expect(paths).toHaveLength(3);
+    expect(paths[0]).toBe(a);
+    expect(paths[1]).toBe(b);
+    expect(paths[2]).toBe(c);
+  });
+
+  it("keeps ready plans when a Wait edit leaves referenced paths unchanged", async () => {
+    const project = createDemoProject();
+    const path = project.paths[0];
+    const routine = { id: "routine", name: "Routine", nodes: [
+      { id: "drive", type: "path", ref: path.id },
+      { id: "wait", type: "builtin", builtinId: "bordeaux.wait", arguments: { durationS: 1 } },
+    ] };
+
+    render(true, routine, project.paths, project.robot, project.field, "profiledSpline");
+    await settle();
+    expect(render(true, routine, project.paths, project.robot, project.field, "profiledSpline")).toMatchObject({ status: "ready", values: { [path.id]: { pathId: path.id } } });
+    expect(planning.request).toHaveBeenCalledOnce();
+
+    const edited = AUTO.update(routine, "wait", { arguments: { durationS: 2.5 } });
+    expect(render(true, edited, project.paths, project.robot, project.field, "profiledSpline")).toMatchObject({ status: "ready" });
+    await settle();
+    expect(planning.request).toHaveBeenCalledOnce();
+
+    const renamed = [{ ...path, name: "Renamed" }, ...project.paths.slice(1)];
+    expect(render(true, edited, renamed, project.robot, project.field, "profiledSpline")).toMatchObject({ status: "pending" });
+    await settle();
+    expect(render(true, edited, renamed, project.robot, project.field, "profiledSpline")).toMatchObject({ status: "ready" });
+    expect(planning.request).toHaveBeenCalledTimes(2);
+    expect(planning.request).toHaveBeenLastCalledWith(expect.objectContaining({ path: renamed[0], field: project.field }), { deadline: "common" });
+  });
+
+  it("replans for a new field and treats the prior field's plans as stale", async () => {
+    const project = createDemoProject();
+    const routine = routineFor(project.paths[0]);
+    render(true, routine, project.paths, project.robot, project.field, "profiledSpline");
+    await settle();
+
+    const field = { ...project.field, revision: project.field.revision + "-next" };
+    expect(render(true, routine, project.paths, project.robot, field, "profiledSpline")).toMatchObject({ status: "pending", values: {} });
+    await settle();
+    expect(render(true, routine, project.paths, project.robot, field, "profiledSpline")).toMatchObject({ status: "ready" });
+    expect(planning.request).toHaveBeenLastCalledWith(expect.objectContaining({ field }), { deadline: "common" });
+  });
+
+  it.each([
+    ["an unvalidated current optimization", true, { status: "success", value: { prof: { totalTime: 2 }, finalTrajectory: {} } }, "The selected optimization could not be validated. Review this path."],
+    ["a timeout", false, { status: "timeout", fallbackReason: "Final planning exceeded the common deadline (5000 ms)." }, "Final planning exceeded the common deadline (5000 ms)."],
+    ["a worker failure", false, { status: "failure", error: { message: "worker crashed" } }, "worker crashed"],
+    ["malformed output", false, { status: "success", value: { prof: { totalTime: 2 } } }, "Could not prepare this trajectory."],
+  ])("blocks the routine on %s", async (_label, applied, result, message) => {
+    const project = createDemoProject();
+    const base = project.paths[0];
+    const { optimizationInputKey } = await import("../src/shared/planners/acceptedTrajectoryIdentity");
+    const path = applied
+      ? { ...base, optimization: { corridorM: 0.15, accepted: { version: 1, inputKey: optimizationInputKey(base, project.robot, project.field), samplesPerSegment: 56, result: {} } } }
+      : base;
+    const paths = [path, ...project.paths.slice(1)];
+    planning.request = vi.fn(() => ({ promise: Promise.resolve(result), cancel: vi.fn() }));
+
+    render(true, routineFor(path), paths, project.robot, project.field, "profiledSpline");
+    await settle();
+
+    expect(render(true, routineFor(path), paths, project.robot, project.field, "profiledSpline")).toMatchObject({ status: "error", error: `${path.name}: ${message}` });
+  });
+
+  it("uses normal planning for an applied optimization made for older inputs", async () => {
+    const project = createDemoProject();
+    const path = { ...project.paths[0], optimization: { corridorM: 0.15, accepted: { version: 1, inputKey: "older inputs", samplesPerSegment: 56, result: {} } } };
+    const paths = [path, ...project.paths.slice(1)];
+    render(true, routineFor(path), paths, project.robot, project.field, "profiledSpline");
+    await settle();
+
+    expect(render(true, routineFor(path), paths, project.robot, project.field, "profiledSpline")).toMatchObject({ status: "ready", values: { [path.id]: { pathId: path.id } } });
   });
 
   it.each(["authored-first", "generated-first"])("keeps same-ID generated previews separate from authored paths (%s)", (order) => {
@@ -54,240 +156,9 @@ describe("routine preview worker", () => {
     const generateNode = { id: "generated", type: "function", cat: "generate", funcRef: "GeneratePath", preview: generated };
     const routine = { id: "routine", name: "Collision", nodes: order === "authored-first" ? [pathNode, generateNode] : [generateNode, pathNode] };
 
-    const paths = routinePreview().referencedPaths(routine, project.paths, {});
-    const run = AUTO.buildRun(routine, paths, project.robot, {}, project.plannerId);
+    const run = AUTO.buildRun(routine, project.paths, project.robot, {}, project.plannerId);
 
-    expect(paths).toEqual([authored]);
     expect(run.segs.find((segment) => segment.nodeId === pathNode.id)?.doc).toBe(authored);
     expect(run.segs.find((segment) => segment.nodeId === generateNode.id)?.doc).toBe(generated);
-  });
-
-  it("counts unique path and routine assembly work before direct fallback", () => {
-    const path = { id: "path_a" };
-    const routine = { nodes: Array.from({ length: 100 }, (_, index) => ({ id: `node_${index}`, type: "path", ref: path.id })) };
-
-    expect(routinePreview().directRoutineWork(routine, [path])).toBe(1 + 100 * 16 + 250);
-  });
-
-  it("rejects a huge repeated routine even when it references one cheap path", () => {
-    const path = { id: "path_a" };
-    const routine = { nodes: Array.from({ length: 100_000 }, (_, index) => ({ id: `node_${index}`, type: "path", ref: path.id })) };
-
-    expect(routinePreview().directRoutineWork(routine, [path])).toBeGreaterThan(100_000);
-  });
-
-  it("rejects aggregate unique-path work before routine derivation", () => {
-    const { project, routine } = uniquePathFixture();
-    expect(validateProject(project).ok).toBe(true);
-    expect(Buffer.byteLength(JSON.stringify(project))).toBeGreaterThan(1024 * 1024);
-    const admission = RoutinePreview.workerRoutineAdmission(routine, project.paths, project.robot, {});
-    expect(admission).toMatchObject({
-      allowed: false,
-      estimate: { work: 1_110_500, outputSamples: 554_500, renderedSamples: 554_500, outputSteps: 100 },
-      error: { name: "RangeError" },
-    });
-
-    const buildRun = vi.fn();
-    expect(processRoutinePreviewJob({ id: 19, routine, paths: project.paths }, buildRun)).toMatchObject({
-      id: 19,
-      error: { name: "RangeError", message: expect.stringMatching(/too large to preview safely/) },
-    });
-    expect(buildRun).not.toHaveBeenCalled();
-  });
-
-  it("admits ordinary repeated paths but bounds per-occurrence rendering", () => {
-    const { project } = uniquePathFixture(1);
-    const repeated = (count) => ({ nodes: Array.from({ length: count }, (_, index) => ({ id: `node_${index}`, type: "path", ref: project.paths[0].id })) });
-
-    expect(RoutinePreview.workerRoutineAdmission(repeated(20), project.paths, project.robot)).toMatchObject({
-      allowed: true,
-      estimate: { outputSamples: 5_545, renderedSamples: 110_900, outputSteps: 20 },
-      error: null,
-    });
-    expect(RoutinePreview.workerRoutineAdmission(repeated(22), project.paths, project.robot)).toMatchObject({
-      allowed: false,
-      estimate: { outputSamples: 5_545, renderedSamples: 121_990, outputSteps: 22 },
-      error: { name: "RangeError" },
-    });
-  });
-
-  it("bounds stationary planner samples before worker allocation", () => {
-    const project = createDemoProject();
-    const routine = project.routines[0];
-    routine.nodes = [{ id: "path_node", type: "path", ref: project.paths[0].id }];
-    project.paths[0].waypoints.at(-1).stop = true;
-    project.paths[0].waypoints.at(-1).wait = 2_400;
-    expect(validateProject(project).ok).toBe(true);
-
-    expect(RoutinePreview.workerRoutineAdmission(routine, project.paths, project.robot)).toMatchObject({
-      allowed: false,
-      estimate: { outputSamples: 240_057 },
-      error: { name: "RangeError" },
-    });
-
-    project.paths[0].waypoints.at(-1).wait = 30;
-    const admitted = RoutinePreview.workerRoutineAdmission(routine, project.paths, project.robot);
-    expect(admitted.allowed).toBe(true);
-    expect(PathPreview.directWorkIsSafe(admitted.estimate.work)).toBe(false);
-  });
-
-  it("admits a small translation-priority path only to the worker", () => {
-    const project = createDemoProject();
-    const path = project.paths[0];
-    path.headingMode = "manual";
-    path.waypoints[0].theta = 0;
-    path.waypoints[1].theta = 180;
-    path.ranges = [{
-      anchor: "param", f0: 0, f1: 1,
-      maxVel: path.constraints.maxVel, maxAccel: path.constraints.maxAccel, maxDecel: path.constraints.maxDecel,
-      maxAngVel: 180, maxAngAccel: 360, rotationPriority: "translation",
-    }];
-    const routine = project.routines[0];
-    routine.nodes = [{ id: "path_node", type: "path", ref: path.id }];
-    expect(validateProject(project).ok).toBe(true);
-
-    const admission = RoutinePreview.workerRoutineAdmission(routine, project.paths, project.robot);
-    const result = getPlanner("profiledSpline").generate({
-      path,
-      robot: project.robot,
-      samplesPerSegment: 56,
-    });
-    expect(admission.allowed).toBe(true);
-    expect(admission.estimate.outputSamples).toBe(22_457);
-    expect(result.samples.length).toBeLessThanOrEqual(admission.estimate.outputSamples);
-    expect(RoutinePreview.directRoutineWork(routine, project.paths)).toBe(Infinity);
-    expect(PathPreview.directWorkIsSafe(RoutinePreview.directRoutineWork(routine, project.paths))).toBe(false);
-  });
-
-  it("rejects cumulative translation-priority heading work before derivation", () => {
-    const project = createDemoProject();
-    const path = project.paths[0];
-    path.headingMode = "manual";
-    path.waypoints = buildWaypoints(Array.from({ length: 900 }, (_, index) => ({
-      x: 1 + index * 0.0001,
-      y: 4,
-      theta: index * 170,
-      thetaOn: true,
-      segType: "line",
-      stop: index === 899,
-    })));
-    path.ranges = [{
-      anchor: "param", f0: 0, f1: 1,
-      maxVel: path.constraints.maxVel, maxAccel: path.constraints.maxAccel, maxDecel: path.constraints.maxDecel,
-      maxAngVel: 180, maxAngAccel: 360, rotationPriority: "translation",
-    }];
-    const routine = project.routines[0];
-    routine.nodes = [{ id: "path_node", type: "path", ref: path.id }];
-    expect(validateProject(project).ok).toBe(true);
-
-    const admission = RoutinePreview.workerRoutineAdmission(routine, project.paths, project.robot);
-    expect(admission).toMatchObject({
-      allowed: false,
-      estimate: { outputSamples: expect.any(Number) },
-      error: { name: "RangeError" },
-    });
-    expect(admission.estimate.outputSamples).toBe(Infinity);
-  });
-
-  it("rejects malformed embedded previews without throwing during render admission", () => {
-    const project = createDemoProject();
-    const routine = project.routines[0];
-    routine.nodes = [{ id: "generate", type: "function", cat: "generate", funcRef: "GeneratePath", preview: {} }];
-    expect(validateProject(project).ok).toBe(true);
-
-    expect(() => RoutinePreview.workerRoutineAdmission(routine, project.paths, project.robot)).not.toThrow();
-    expect(RoutinePreview.workerRoutineAdmission(routine, project.paths, project.robot)).toMatchObject({
-      allowed: false,
-      estimate: null,
-      error: { name: "RangeError", message: expect.stringMatching(/cannot be derived safely/) },
-    });
-  });
-
-  it("admits bounded turns and jiggles while accounting for their samples", () => {
-    const project = createDemoProject();
-    const routine = project.routines[0];
-    routine.nodes = [{ id: "path_node", type: "path", ref: project.paths[0].id }];
-    const endpoint = project.paths[0].waypoints.at(-1);
-    project.robot.maxSpeed = 0.5;
-    project.paths[0].constraints = {
-      ...project.paths[0].constraints,
-      maxVel: 0.5,
-      maxAccel: 0.5,
-      maxDecel: 0.5,
-      maxAngVel: 90,
-      maxAngAccel: 180,
-      maxAngDecel: 180,
-      maxAngJerk: 360,
-    };
-    endpoint.stop = true;
-    endpoint.turnInPlace = { headingDeg: 180, direction: "shortest" };
-    endpoint.jiggle = { distanceM: 0.25, strokes: 4, startDeg: 0, stepDeg: 90, strokeTimeS: 0.08 };
-    expect(validateProject(project).ok).toBe(true);
-
-    const admission = RoutinePreview.workerRoutineAdmission(routine, project.paths, project.robot);
-    const result = getPlanner("profiledSpline").generate({
-      path: project.paths[0],
-      robot: project.robot,
-      samplesPerSegment: 56,
-    });
-    expect(admission.allowed).toBe(true);
-    expect(admission.estimate.outputSamples).toBeGreaterThan(57);
-    expect(admission.estimate.outputSamples).toBeLessThan(5_000);
-    expect(result.samples.length).toBeLessThanOrEqual(admission.estimate.outputSamples);
-  });
-
-  it("rejects stationary actions outside the coarse safety floors", () => {
-    const build = () => {
-      const project = createDemoProject();
-      const routine = project.routines[0];
-      routine.nodes = [{ id: "path_node", type: "path", ref: project.paths[0].id }];
-      const endpoint = project.paths[0].waypoints.at(-1);
-      endpoint.stop = true;
-      endpoint.turnInPlace = { headingDeg: 359, direction: "clockwise" };
-      return { project, routine };
-    };
-    const lowDeceleration = build();
-    lowDeceleration.project.paths[0].constraints.maxAngDecel = 0.0008;
-    const lowJerk = build();
-    lowJerk.project.paths[0].constraints.maxAngJerk = 0.000005;
-    const lowPhysicalLimits = build();
-    lowPhysicalLimits.project.robot.driveModel = {
-      motorId: "slow",
-      motorFreeRpm: 1,
-      motorMaxTorqueNm: 1,
-      motorCount: 4,
-      gearRatio: 10,
-      wheelDiameterM: 0.1,
-      massKg: 50,
-      moiKgM2: 10,
-      wheelbaseM: 0.5,
-      trackwidthM: 0.5,
-      wheelFrictionCoefficient: 1,
-    };
-
-    [lowDeceleration, lowJerk, lowPhysicalLimits].forEach(({ project, routine }) => {
-      expect(validateProject(project).ok).toBe(true);
-      expect(RoutinePreview.workerRoutineAdmission(routine, project.paths, project.robot)).toMatchObject({
-        allowed: false,
-        estimate: { outputSamples: Infinity },
-        error: { name: "RangeError", message: expect.stringMatching(/too large to preview safely/) },
-      });
-    });
-  });
-
-  it("returns a routine run without changing worker response contracts", () => {
-    const buildRun = () => ({ steps: [{ node: { id: "path" }, t0: 0, t1: 2 }], segs: [], total: 2 });
-
-    expect(processRoutinePreviewJob({ id: 17 }, buildRun)).toMatchObject({
-      id: 17,
-      value: { total: 2 },
-      durationMs: expect.any(Number),
-    });
-  });
-
-  it("serializes worker failures", () => {
-    const result = processRoutinePreviewJob({ id: 18 }, () => { throw new Error("bad routine"); });
-
-    expect(result).toMatchObject({ id: 18, error: { name: "Error", message: "bad routine" } });
   });
 });

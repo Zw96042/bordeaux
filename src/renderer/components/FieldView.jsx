@@ -37,6 +37,20 @@ import { UI } from "./ui";
   const footprintPoints = (robot, scale) => localFootprint(robot).map((point) => `${point.x * SX * scale},${-point.y * SY * scale}`).join(' ');
   const forwardExtent = (robot) => Math.max(...localFootprint(robot).map((point) => point.x)) * SX;
 
+  // Routine segment points are immutable planner output in field-image units,
+  // independent of zoom and playback, so their SVG geometry is built once.
+  const routeGeometry = new WeakMap();
+  function routineRouteGeometry(pts) {
+    let geometry = routeGeometry.get(pts);
+    if (geometry) return geometry;
+    const toImage = (p) => ({ x: X0 + p.x * SX, y: Y1 - p.y * SY });
+    let d = '';
+    pts.forEach((p, k) => { const q = toImage(p); d += (k ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); });
+    geometry = { d, start: toImage(pts[0]), end: toImage(pts[pts.length - 1]), mid: toImage(pts[Math.floor(pts.length / 2)]) };
+    routeGeometry.set(pts, geometry);
+    return geometry;
+  }
+
   function FieldView(props) {
     const { doc, derived, editStore, insertionPreview, proposalPreviews, sel, tool, view, setView, alliance, showGrid, robot, drive, accent, metric, playTime, actions, routine, routinePose } = props;
     const interactionReady = props.interactionReady !== false;
@@ -921,9 +935,7 @@ import { UI } from "./ui";
 
     // ---------- ROBOT (dynamic) ----------
     const robotEl = useMemo(() => {
-      const playback = derived.playback;
-      const posePoints = playback ? playback.pts : pts;
-      const pose = posePoints.length > 1 ? PM.poseAtTime(playTime, posePoints, playback ? playback.prof : derived.prof, playback ? playback.anchors : derived.anchors, derived.mode, playback ? playback.rev : derived.rev)
+      const pose = pts.length > 1 ? PM.poseAtTime(playTime, pts, derived.prof, derived.anchors, derived.mode, derived.rev)
         : (doc.waypoints[0] ? { x: doc.waypoints[0].x, y: doc.waypoints[0].y, heading: ((doc.waypoints[0].theta || 0) + (derived.rev ? 180 : 0)) * Math.PI / 180, speed: 0 } : null);
       if (!pose) return null;
       const c = W2P(pose);
@@ -956,15 +968,13 @@ import { UI } from "./ui";
       order.forEach((ri) => {
         const rp = routine[ri]; if (!rp.pts || rp.pts.length < 2) return;
         const S = STYLE[rp.state] || STYLE.pending;
-        let d = '';
-        rp.pts.forEach((p, k) => { const q = W2P(p); d += (k ? ' L ' : 'M ') + q.x.toFixed(1) + ' ' + q.y.toFixed(1); });
+        const { d, start: a, end: b, mid } = routineRouteGeometry(rp.pts);
         // glow / casing under emphasized paths
         if (S.glow) els.push(h('path', { key: 'rg' + ri, d, fill: 'none', stroke: S.col, strokeOpacity: 0.22, strokeWidth: P(S.w + 9), strokeLinecap: 'round', strokeLinejoin: 'round', style: { pointerEvents: 'none' } }));
         if (rp.state === 'active' || rp.state === 'focus') els.push(h('path', { key: 'rc' + ri, d, fill: 'none', stroke: '#05060a', strokeOpacity: 0.7, strokeWidth: P(S.w + 2.5), strokeLinecap: 'round', strokeLinejoin: 'round', style: { pointerEvents: 'none' } }));
         els.push(h('path', { key: 'rp' + ri, className: S.gen ? 'acq-genpath' : undefined, d, fill: 'none', stroke: S.col, strokeOpacity: S.op, strokeWidth: P(S.w), strokeLinecap: 'round', strokeLinejoin: 'round', strokeDasharray: S.dash || undefined, style: { pointerEvents: 'none' } }));
         els.push(h('path', { key: 'rh' + ri, d, fill: 'none', stroke: 'transparent', strokeWidth: P(16), strokeLinecap: 'round', 'data-role': 'rpath', 'data-idx': rp.nodeId, style: { cursor: 'pointer' } }));
         // endpoint nodes
-        const a = W2P(rp.pts[0]), b = W2P(rp.pts[rp.pts.length - 1]);
         const endCol = S.gen ? S.col : null;
         [[a, '#4bbf86'], [b, '#d2655f']].forEach(([c, dc], di) => {
           els.push(h('rect', { key: 'rn' + ri + di, x: c.x - P(4.5), y: c.y - P(4.5), width: P(9), height: P(9), rx: S.gen ? P(4.5) : P(1.5), fill: '#14161a', stroke: rp.state === 'pending' || rp.state === 'dim' ? '#5b636e' : (endCol || dc), strokeWidth: P(1.8), style: { pointerEvents: 'none' } }));
@@ -976,7 +986,6 @@ import { UI } from "./ui";
             h('path', { d: `M ${P(1.5)} ${-P(4.5)} L ${-P(3)} ${P(0.8)} L ${P(0.2)} ${P(0.8)} L ${-P(1.5)} ${P(4.5)} L ${P(3)} ${-P(0.8)} L ${P(0.2)} ${-P(0.8)} Z`, fill: S.col })));
         }
         // mid label
-        const mid = W2P(rp.pts[Math.floor(rp.pts.length / 2)]);
         const dim = rp.state === 'dim' || rp.state === 'pending';
         const lblCol = (rp.state === 'active' || rp.state === 'focus') ? accent : S.gen ? S.col : '#8b94a2';
         const txt = (S.gen ? '\u26a1 ' : (rp.idxLabel ? rp.idxLabel + '  ' : '')) + (rp.label || '');

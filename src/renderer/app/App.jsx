@@ -5,11 +5,13 @@ import * as React from "react";
 import { flushSync } from "react-dom";
 import { FinalPlanning } from "../assets/final-planning";
 import { PathEdit } from "../assets/path-edit";
-import { RoutinePreview } from "../assets/routine-preview";
 import { PathPreview } from "../assets/path-preview";
 import { PathOptimization } from "../assets/path-optimization";
 import { OptimizationPanel } from "../components/OptimizationPanel";
-import { authoredPath, optimizationInputKey, isOptimizationOutdated } from "../../shared/planners/acceptedTrajectoryIdentity";
+import { authoredPath, optimizationInputKey } from "../../shared/planners/acceptedTrajectoryIdentity";
+import { durationResult, optimizationOutdated, selectedTrajectoryOutcome } from "../lib/finalPlanningResult";
+import { editablePath } from "../lib/editablePath";
+import { createAgentSessionSync } from "../lib/agentSessionSync";
 import { ContextInspector } from "../components/ContextInspector";
 import { FIELD_DIMS, FieldView } from "../components/FieldView";
 import { Panels } from "../components/Panels";
@@ -47,6 +49,7 @@ import { blankPath, buildWaypoints as buildWps, clampWorldPoint as clampWorld, c
 import { blankRoutine, freshProject, routineState, uniqueItemName, withRoutineState } from "../lib/editorProject";
 import { alignWaypointHandles, duplicateWaypoint, moveWaypointTo, removeWaypoint, remapWaypointRanges, reorderWaypoint, setWaypointFacing, reversePath as reversePathDraft } from "../lib/pathEditing";
 import { createPlaybackStore } from "../lib/playbackStore";
+import { useRoutinePlanning } from "../hooks/useRoutinePlanning";
 
   const { useState, useRef, useEffect, useMemo, useCallback, useSyncExternalStore } = React;
   const h = React.createElement;
@@ -65,21 +68,6 @@ import { createPlaybackStore } from "../lib/playbackStore";
     duplicate.name = name;
     duplicate.markers = duplicate.markers.map((marker) => ({ ...marker, id: markerId() }));
     return duplicate;
-  }
-
-  const EMPTY_ROUTINE_RUN = Object.freeze({ steps: Object.freeze([]), segs: Object.freeze([]), total: 0 });
-  function routinePreviewResult(snapshot, request, active, admissionError = null) {
-    const current = !admissionError && snapshot.status === 'ready' && snapshot.key === request
-      && snapshot.path === request && snapshot.value ? snapshot.value : null;
-    const error = admissionError || (snapshot.status === 'error' && snapshot.errorKey === request
-      && snapshot.errorPath === request ? snapshot.error : null);
-    return { run: current || EMPTY_ROUTINE_RUN, pending: active && !current && !error, error };
-  }
-
-  function requestRoutinePreview(previewer, request, admission, active = true) {
-    if (!active || !admission.allowed) { previewer.cancel(); return false; }
-    previewer.request({ key: request, path: request, ...request, quality: 'final' });
-    return true;
   }
 
   function currentPathLength(derivation) {
@@ -115,13 +103,6 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const value = snapshot.status === 'ready' && snapshot.key === request && snapshot.path === request.doc ? snapshot.value : null;
     const failed = snapshot.errorKey === request && snapshot.errorPath === request.doc;
     return { ...request, derived: value || null, error: failed ? snapshot.error : null, pending: !value && !failed };
-  }
-
-  function pathPreviewResult(snapshot, request) {
-    const value = snapshot.status === 'ready' && snapshot.key === request
-      && snapshot.path === request.doc && snapshot.value?.planner === request.plannerId ? snapshot.value : null;
-    const failed = snapshot.status === 'error' && snapshot.errorKey === request && snapshot.errorPath === request.doc;
-    return { value, error: failed ? snapshot.error : null, pending: !value && !failed };
   }
 
   const ACCENT = '#3f6fd0';
@@ -176,9 +157,20 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const playback = usePlayback(store);
     return h(RoutinePanel, { ...props, time: playback.time, running: playback.playing || playback.time > 0.001 });
   }
+  /** Keeps the previous overlay while every segment's display state is unchanged. */
+  function stableRoutineOverlay(previous, next) {
+    const same = previous && previous.length === next.length && next.every((segment, index) => {
+      const before = previous[index];
+      return before.nodeId === segment.nodeId && before.pts === segment.pts && before.state === segment.state
+        && before.kind === segment.kind && before.label === segment.label && before.idxLabel === segment.idxLabel;
+    });
+    return same ? previous : next;
+  }
   function RoutineFieldPlayback({ store, run, selectedId, robot, ...props }) {
     const playback = usePlayback(store), running = playback.playing || playback.time > 0.001;
-    const overlay = useMemo(() => AUTO.fieldOverlay(run, { time: playback.time, running, selectedId }), [run, playback.time, running, selectedId]);
+    // Playback moves the robot every frame; route layers change only with step state.
+    const overlayRef = useRef(null);
+    const overlay = overlayRef.current = stableRoutineOverlay(overlayRef.current, AUTO.fieldOverlay(run, { time: playback.time, running, selectedId }));
     const pose = AUTO.poseAt(run, playback.time, robot);
     return h(FieldView, { ...props, robot, playTime: 0, routine: overlay, routinePose: pose });
   }
@@ -188,7 +180,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
   }
 
   /** Keeps the last valid interactive result visible while final planning runs independently. */
-  function useFinalPlanning(doc, robot, plannerId, enabled = true) {
+  function useFinalPlanning(doc, robot, field, plannerId, enabled = true) {
     const previewer = useMemo(() => PathPreview.create(), []);
     const planner = useMemo(() => FinalPlanning.create(), []);
     const [initial] = useState(() => ({ path: doc, value: null, error: null }));
@@ -227,7 +219,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
       const interactiveResult = interactive.value;
       lastValid.current = { path: doc, value: interactiveResult };
       const request = planner.request(
-        { key: doc.id, path: doc, robot, plannerId },
+        { key: doc.id, path: doc, robot, field, plannerId },
         { interactiveResult, deadline: 'common' },
       );
       setSnapshot({ status: 'pending', key: doc.id, path: doc, value: interactiveResult, error: null, errorPath: null, durationMs: 0 });
@@ -248,7 +240,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         });
       });
       return () => { active = false; request.cancel(); };
-    }, [planner, doc, robot, plannerId, interactive, enabled]);
+    }, [planner, doc, robot, field, plannerId, interactive, enabled]);
 
     const current = snapshot.path === doc && snapshot.value
       ? { path: doc, value: snapshot.value }
@@ -310,55 +302,6 @@ import { createPlaybackStore } from "../lib/playbackStore";
     return notice;
   }
 
-  function useRoutinePlanning(enabled, paths, robot, plannerId) {
-    const planner = useMemo(() => FinalPlanning.create(), []);
-    const [planningState, setPlanningState] = useState(() => ({
-      paths, robot, plannerId, status: 'idle', values: {}, error: '',
-    }));
-    useEffect(() => {
-      if (!enabled) return undefined;
-      let active = true;
-      let currentRequest = null;
-      setPlanningState({ paths, robot, plannerId, status: 'pending', values: {}, error: '' });
-      void (async () => {
-        for (const path of paths) {
-          if (!active) return;
-          currentRequest = planner.request(
-            { key: path.id, path, robot, plannerId },
-            { deadline: 'common' },
-          );
-          const result = await currentRequest.promise;
-          if (!active) return;
-          if (result.status !== 'success' || !result.value?.finalTrajectory || (path.optimization?.accepted && !isOptimizationOutdated(path, robot) && !result.value.acceptedTrajectory)) {
-            setPlanningState((current) => ({
-              ...current,
-              status: 'error',
-              error: path.optimization?.accepted && !isOptimizationOutdated(path, robot) && !result.value?.acceptedTrajectory
-                ? `${path.name}: the selected optimization could not be validated. Review this path.`
-                : result.fallbackReason || result.error?.message || `Could not plan ${path.name}.`,
-            }));
-            return;
-          }
-          setPlanningState((current) => ({
-            ...current,
-            values: { ...current.values, [path.id]: result.value },
-          }));
-        }
-        if (active) setPlanningState((current) => ({ ...current, status: 'ready' }));
-      })();
-      return () => {
-        active = false;
-        if (currentRequest) currentRequest.cancel();
-      };
-    }, [enabled, planner, paths, robot, plannerId]);
-    return enabled
-      && planningState.paths === paths
-      && planningState.robot === robot
-      && planningState.plannerId === plannerId
-      ? planningState
-      : { status: enabled ? 'pending' : 'idle', values: {}, error: '' };
-  }
-
   function App({ initialProject = null, initialAgentProposal = null } = {}) {
     const [project, setProject] = useState(() => initialProject || freshProject());
     const appUpdates = useAppUpdates();
@@ -408,8 +351,6 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const [mcpEnabled, setMcpEnabled] = useState(false);
     const [agentSessionId] = useState(() => 'session_' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)));
     const [agentEditResolutionRevision, setAgentEditResolutionRevision] = useState(0);
-    const agentRevision = useRef(-1);
-    const agentPublishedContext = useRef(null);
     const agentProposalRef = useRef(agentProposal); agentProposalRef.current = agentProposal;
     const agentProposalContext = useRef(null);
     const [robotProjectState, setRobotProjectState] = useState({ status: 'unlinked', operation: null, catalog: null, integration: null, error: '', notice: '', bookmarkId: null, recentProjects: [] });
@@ -456,16 +397,6 @@ import { createPlaybackStore } from "../lib/playbackStore";
         if (active) setRobotProjectState((current) => ({ ...current, error: error && error.message ? error.message : String(error) }));
       });
       return () => { active = false; };
-    }, []);
-
-    useEffect(() => {
-      if (!window.bordeauxAPI || typeof window.bordeauxAPI.getMcpStatus !== 'function') return;
-      let active = true;
-      window.bordeauxAPI.getMcpStatus().then((status) => { if (active) setMcpEnabled(Boolean(status && status.enabled)); }).catch(() => undefined);
-      const unsubscribe = typeof window.bordeauxAPI.onMcpStatus === 'function'
-        ? window.bordeauxAPI.onMcpStatus((status) => { if (active) setMcpEnabled(Boolean(status && status.enabled)); })
-        : null;
-      return () => { active = false; if (unsubscribe) unsubscribe(); };
     }, []);
 
     const applyRobotProjectConnection = useCallback((result) => {
@@ -633,6 +564,14 @@ import { createPlaybackStore } from "../lib/playbackStore";
       const before = base.paths.find((path) => path.id === draft.id);
       return PathLinks.sync(materialized, draft.id, before);
     }, [editStore]);
+    const agentSync = useMemo(() => createAgentSessionSync({
+      sessionId: agentSessionId,
+      send: (snapshot) => window.bordeauxAPI?.publishAgentSession?.(snapshot),
+      capture: () => ({ project: projectRef.current, materialized: materializeProject(), activePathId: docRef.current?.id, editRevision: editStore.getRevision() }),
+      onPublish: (revision) => { if (agentProposalRef.current?.baseRevision !== revision) markAgentProposalStale(); },
+      onAccessChange: (enabled) => { setMcpEnabled(enabled); markAgentProposalStale(); },
+      events: typeof window === 'undefined' ? null : window,
+    }), [agentSessionId, editStore, markAgentProposalStale, materializeProject]);
     const pushController = useRobotPushController({ getProject: materializeProject, projectKey, catalogKey: robotProjectState.catalog?.catalogHash, bookmarkKey: robotProjectState.bookmarkId });
     const enqueuePersistence = useCallback((operation) => {
       const pending = persistenceTail.current.catch(() => undefined).then(operation);
@@ -718,37 +657,15 @@ import { createPlaybackStore } from "../lib/playbackStore";
         && current.baseRobotCatalogFingerprint !== robotCatalogFingerprint.current) markAgentProposalStale();
     }, [robotProjectState.operation, robotProjectState.catalog && robotProjectState.catalog.semanticFingerprint, markAgentProposalStale]);
     useEffect(() => {
-      if (!window.bordeauxAPI || typeof window.bordeauxAPI.publishAgentSession !== 'function') return;
-      let published = false;
-      const publish = () => {
-        if (published) return;
-        published = true;
-        const sourceProject = projectRef.current;
-        const activePathId = docRef.current && docRef.current.id;
-        const editRevision = editStore.getRevision();
-        agentRevision.current += 1;
-        const revision = agentRevision.current;
-        agentPublishedContext.current = { revision, project: sourceProject, activePathId, editRevision };
-        window.bordeauxAPI.publishAgentSession({
-          sessionId: agentSessionId,
-          revision,
-          project: clone(materializeProject()),
-          activePathId,
-          allianceView: 'blue',
-          fieldPack: { id: '2026-rebuilt', revision: '2026-manual-tu19-welded-4' },
-        });
-        setAgentProposal((current) => {
-          if (!current || current.status !== 'ready' || current.baseRevision === revision) return current;
-          window.bordeauxAPI.updateAgentProposalStatus(current.id, 'stale');
-          const stale = { ...current, status: 'stale' };
-          agentProposalRef.current = stale;
-          return stale;
-        });
-      };
-      const timer = window.setTimeout(publish, 150);
-      window.addEventListener('pointerup', publish, { once: true });
-      return () => { window.clearTimeout(timer); window.removeEventListener('pointerup', publish); };
-    }, [project, activeIdx, agentSessionId, agentEditResolutionRevision, doc.id, materializeProject]);
+      const api = window.bordeauxAPI;
+      if (!api || typeof api.getMcpStatus !== 'function') return undefined;
+      let active = true;
+      const receive = (status) => { if (active) agentSync.setAccess(status); };
+      api.getMcpStatus().then(receive).catch(() => undefined);
+      const unsubscribe = typeof api.onMcpStatus === 'function' ? api.onMcpStatus(receive) : null;
+      return () => { active = false; if (unsubscribe) unsubscribe(); };
+    }, [agentSync]);
+    useEffect(() => agentSync.schedule(), [project, activeIdx, agentEditResolutionRevision, doc.id, agentSync]);
     useEffect(() => {
       if (!window.bordeauxAPI || typeof window.bordeauxAPI.onAgentProposal !== 'function') return;
       let active = true;
@@ -759,7 +676,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         const proposalKey = proposal.id + ':' + proposal.status;
         if (proposalKey === lastProposalKey) return;
         lastProposalKey = proposalKey;
-        const publishedContext = agentPublishedContext.current;
+        const publishedContext = agentSync.published();
         const currentActivePathId = docRef.current && docRef.current.id;
         const stale = !agentProposalMatchesPublishedContext(proposal, agentSessionId, publishedContext, {
           project: projectRef.current,
@@ -776,7 +693,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         agentProposalRef.current = received;
         if (stale && proposal.status === 'ready' && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(proposal.id, 'stale');
         if (window.bordeauxAPI.acknowledgeAgentProposal) {
-          const receiptRevision = publishedContext ? publishedContext.revision : agentRevision.current >= 0 ? agentRevision.current : proposal.baseRevision;
+          const receiptRevision = publishedContext ? publishedContext.revision : agentSync.revision() >= 0 ? agentSync.revision() : proposal.baseRevision;
           const receiptActivePathId = publishedContext ? publishedContext.activePathId : currentActivePathId || proposal.baseActivePathId;
           window.bordeauxAPI.acknowledgeAgentProposal(proposal.id, agentSessionId, receiptRevision, receiptActivePathId, !stale);
         }
@@ -794,7 +711,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         }).catch(() => undefined);
       }
       return () => { active = false; unsubscribe(); };
-    }, [agentSessionId, editStore]);
+    }, [agentSessionId, agentSync, editStore]);
     useEffect(() => {
       const onPointerDown = () => { keyboardNavigation.current = false; };
       window.addEventListener('pointerdown', onPointerDown, true);
@@ -817,9 +734,11 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const planningPath = useMemo(() => ({ ...doc }), [doc.id, optimizationKey, doc.optimization?.accepted]);
     const normalPath = useMemo(() => authoredPath(doc), [doc.id, optimizationKey]);
     const planningRobot = useMemo(() => robot, [optimizationKey]);
-    const selectedPlanning = useFinalPlanning(planningPath, planningRobot, plannerId);
-    const currentOptimization = Boolean(doc.optimization?.accepted && !isOptimizationOutdated(doc, robot, project.field));
-    const normalPlanning = useFinalPlanning(normalPath, planningRobot, plannerId, optimizationOpen && currentOptimization);
+    const planningField = useMemo(() => project.field, [optimizationKey]);
+    const selectedPlanning = useFinalPlanning(planningPath, planningRobot, planningField, plannerId);
+    const outdatedOptimization = optimizationOutdated(doc, optimizationKey);
+    const currentOptimization = Boolean(doc.optimization?.accepted) && !outdatedOptimization;
+    const normalPlanning = useFinalPlanning(normalPath, planningRobot, planningField, plannerId, optimizationOpen && currentOptimization);
     const normal = currentOptimization ? normalPlanning : selectedPlanning;
     const selectedReady = selectedPlanning.path === planningPath && !selectedPlanning.pending && Boolean(selectedPlanning.value?.finalTrajectory);
     const justApplied = appliedPreview.current?.artifact === doc.optimization?.accepted && appliedPreview.current?.key === optimizationKey
@@ -854,28 +773,25 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const reverseDistance = currentPathLength(derivation);
     useEffect(() => { if (!derivationCurrent) playbackStore.pause(); }, [derivationCurrent, playbackStore]);
 
-    const durationInputs = useMemo(() => project.paths.map((path) => ({
-      id: path.id, path, robot, plannerId,
-      key: JSON.stringify([optimizationInputKey(path, robot, project.field), robot.planning, plannerId, path.optimization?.accepted]),
-      outdatedOptimization: isOptimizationOutdated(path, robot, project.field),
-    })), [project.paths, robot, plannerId, project.field]);
+    // The editor keeps provisional previews visible; only a ready, current result is its selected trajectory.
+    const selectedOutcome = useMemo(() => selectedPlanning.error ? { status: 'error', message: selectedPlanning.error.message }
+      : selectedReady ? selectedTrajectoryOutcome(selectedPlanning.value, doc, outdatedOptimization) : { status: 'pending' },
+    [selectedPlanning.error, selectedReady, selectedPlanning.value, doc, outdatedOptimization]);
     useEffect(() => {
-      const error = selectedPlanning.error || (currentOptimization && selectedReady && !accepted ? new Error('The selected optimization could not be validated. Review this path.') : null);
-      libraryDurations.update(durationInputs, error
-        ? { id: doc.id, status: 'error', message: error.message }
-        : selectedReady
-          ? { id: doc.id, status: 'ready', seconds: selectedPlanning.value.prof.totalTime }
-          : { id: doc.id, status: 'pending' });
-    }, [libraryDurations, durationInputs, doc.id, selectedReady, selectedPlanning.value, selectedPlanning.error, currentOptimization, accepted]);
+      libraryDurations.update(
+        { paths: project.paths, robot, field: project.field, plannerId, currentPath: doc, currentKey: optimizationKey },
+        { id: doc.id, ...durationResult(selectedOutcome) },
+      );
+    }, [libraryDurations, project.paths, robot, project.field, plannerId, doc, optimizationKey, selectedOutcome]);
 
     const writeDoc = useCallback((nd) => {
       setPlanningInputRevision((revision) => revision + 1);
       setProject((pr) => replaceEditedPath(pr, nd));
     }, []);
-    const beginHistory = useCallback(() => { hist.current.past.push(clone(docRef.current)); if (hist.current.past.length > 80) hist.current.past.shift(); hist.current.future = []; projectHist.current.future = []; force((x) => x + 1); }, []);
+    const beginHistory = useCallback(() => { hist.current.past.push(editablePath(docRef.current)); if (hist.current.past.length > 80) hist.current.past.shift(); hist.current.future = []; projectHist.current.future = []; force((x) => x + 1); }, []);
     const beginEdit = useCallback(() => {
       if (editStore.getSnapshot()) return;
-      editStore.begin(clone(docRef.current));
+      editStore.begin(editablePath(docRef.current));
     }, [editStore]);
     const finishEdit = useCallback(() => {
       const next = editStore.finish();
@@ -889,7 +805,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
     const commit = useCallback((fn) => {
       cancelEdit();
       beginHistory();
-      writeDoc(fn(clone(docRef.current)));
+      writeDoc(fn(editablePath(docRef.current)));
     }, [beginHistory, cancelEdit, writeDoc]);
     useEffect(() => {
       const draft = editStore.getSnapshot();
@@ -897,8 +813,8 @@ import { createPlaybackStore } from "../lib/playbackStore";
     }, [doc && doc.id, editStore, cancelEdit]);
     const mutate = useCallback((fn) => {
       const draft = editStore.getSnapshot();
-      if (!draft) { writeDoc(fn(clone(docRef.current))); return; }
-      editStore.update(fn(clone(draft)));
+      if (!draft) { writeDoc(fn(editablePath(docRef.current))); return; }
+      editStore.update(fn(editablePath(draft)));
     }, [editStore, writeDoc]);
 
     const waypointSnapshot = (current) => ({
@@ -918,7 +834,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         if (previous.waypointSnapshot) {
           H.future.push({ waypointSnapshot: waypointSnapshot(project) });
           setProject((current) => restoreWaypointSnapshot(current, previous.waypointSnapshot)); setPlanningInputRevision((value) => value + 1);
-        } else { H.future.push(clone(docRef.current)); writeDoc(previous); }
+        } else { H.future.push(editablePath(docRef.current)); writeDoc(previous); }
         force((x) => x + 1); return;
       }
       const R = routineHist.current;
@@ -940,7 +856,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         if (next.waypointSnapshot) {
           H.past.push({ waypointSnapshot: waypointSnapshot(project) });
           setProject((current) => restoreWaypointSnapshot(current, next.waypointSnapshot)); setPlanningInputRevision((value) => value + 1);
-        } else { H.past.push(clone(docRef.current)); writeDoc(next); }
+        } else { H.past.push(editablePath(docRef.current)); writeDoc(next); }
         force((x) => x + 1); return;
       }
       const R = routineHist.current;
@@ -970,7 +886,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
     }), [mutate]);
     const prepareWaypointInsertion = useCallback((rawPoint, segmentHint, onPath, selectedVisit) => {
       const p = clampWorld(rawPoint);
-      const candidate = clone(docRef.current);
+      const candidate = editablePath(docRef.current);
       const wps = candidate.waypoints, oldCount = wps.length;
       const pts = derived.sample.pts || [];
       const f = selectedVisit && Number.isFinite(selectedVisit.f)
@@ -1041,7 +957,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
     }, [commit, plannerId, prepareWaypointInsertion]);
     const appendWaypoint = useCallback((rawPoint) => {
       const point = clampWorld(rawPoint);
-      const candidate = clone(docRef.current);
+      const candidate = editablePath(docRef.current);
       const wps = candidate.waypoints, oldCount = wps.length;
       const end = wps[oldCount - 1], before = wps[oldCount - 2] || end;
       const dx = point.x - end.x, dy = point.y - end.y, distance = Math.hypot(dx, dy);
@@ -1396,7 +1312,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
       pathLinks = pathLinks.filter((link) => link.toPathId !== toPathId);
       const paths = pr.paths.slice(), source = paths.find((path) => path.id === fromPathId), targetIndex = paths.findIndex((path) => path.id === toPathId);
       if (!source || targetIndex < 0) return;
-      const target = clone(paths[targetIndex]), end = source.waypoints[source.waypoints.length - 1];
+      const target = editablePath(paths[targetIndex]), end = source.waypoints[source.waypoints.length - 1];
       target.waypoints[0] = PathLinks.copyPose(target.waypoints[0], end); paths[targetIndex] = target;
       const next = { ...pr, paths, pathLinks: [...pathLinks, { id: pathLinkId(), fromPathId, toPathId }] };
       commitWaypointProject(pr, PathLinks.sync(next, target.id, pr.paths[targetIndex]));
@@ -1495,7 +1411,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
     }, [agentProposal]);
     const applyAgentProposal = useCallback(() => {
       const proposalContext = agentProposalContext.current;
-      const publishedContext = agentPublishedContext.current;
+      const publishedContext = agentSync.published();
       const currentActivePathId = docRef.current && docRef.current.id;
       const contextMatches = agentProposalMatchesPublishedContext(agentProposal, agentSessionId, publishedContext, {
         project: projectRef.current,
@@ -1527,28 +1443,17 @@ import { createPlaybackStore } from "../lib/playbackStore";
       }
       projectHist.current.past.push(before); if (projectHist.current.past.length > 80) projectHist.current.past.shift(); projectHist.current.future = [];
       setProject(nextProject); if (agentProposal.operation !== 'configureRobot') resetForPath(nextIndex); updateDirty(true);
-      if (window.bordeauxAPI && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(agentProposal.id, 'applied', agentRevision.current + 1);
-      const applied = { ...agentProposal, status: 'applied', appliedRevision: agentRevision.current + 1 };
+      const appliedRevision = agentSync.revision() + 1;
+      if (window.bordeauxAPI && window.bordeauxAPI.updateAgentProposalStatus) window.bordeauxAPI.updateAgentProposalStatus(agentProposal.id, 'applied', appliedRevision);
+      const applied = { ...agentProposal, status: 'applied', appliedRevision };
       agentProposalRef.current = applied;
       setAgentProposal(applied);
-    }, [agentProposal, agentCandidate, agentProposalCanApplyCandidate, project, activeIdx, agentSessionId, editStore, robotProjectState.operation, updateDirty]);
+    }, [agentProposal, agentCandidate, agentProposalCanApplyCandidate, project, activeIdx, agentSessionId, agentSync, editStore, robotProjectState.operation, updateDirty]);
 
     const total = derived.prof.totalTime || 0;
     useEffect(() => playbackStore.setTotal(total), [playbackStore, total]);
 
-    const routinePlanningPaths = useMemo(() => {
-      const referenced = new Map();
-      AUTO.walk(routine.nodes, (node) => {
-        if (node.type === 'path') {
-          const path = project.paths.find((candidate) => candidate.id === node.ref);
-          if (path) referenced.set(path.id, path);
-        } else if (node.type === 'function' && node.cat === 'generate' && node.preview) {
-          referenced.set(node.preview.id, node.preview);
-        }
-      });
-      return [...referenced.values()];
-    }, [routine, project.paths]);
-    const routinePlans = useRoutinePlanning(page === 'auto', routinePlanningPaths, robot, plannerId);
+    const routinePlans = useRoutinePlanning(page === 'auto', routine, project.paths, robot, project.field, plannerId);
     const lastRun = useRef({ steps: [], total: 0 });
     const run = useMemo(() => {
       if (page !== 'auto') return lastRun.current;
@@ -1875,7 +1780,7 @@ import { createPlaybackStore } from "../lib/playbackStore";
         detail: planningNotice.message + (planningNotice.kind === 'interactive' ? ' Edit the limits or undo the last change to try again.' : ''),
         action: planningNotice.kind === 'interactive' ? { label: 'Edit limits', onClick: () => { openInspector(); if (sel.kind !== 'cr') select(null, -1); } }
           : !optimizationOpen ? { label: 'Optimize', onClick: () => setOptimizationOpen(true) } : undefined },
-      !optimizationOpen && currentOptimization && selectedReady && !accepted && { id: 'optimization', error: true, label: 'Optimization unavailable', detail: 'The saved optimization could not be validated. Review it before using this path.',
+      !optimizationOpen && selectedOutcome.unvalidated && { id: 'optimization', error: true, label: 'Optimization unavailable', detail: 'The saved optimization could not be validated. Review it before using this path.',
         action: { label: 'Optimize', onClick: () => setOptimizationOpen(true) } },
     ].filter(Boolean);
 
@@ -2002,4 +1907,4 @@ function replaceEditedPath(project, edited) {
   return PathLinks.sync({ ...project, paths }, edited.id, before);
 }
 
-export { App, AppErrorBoundary, replaceEditedPath, agentProposalMatchesPublishedContext, agentProposalPreviewResult, canApplyAgentProposalCandidate, currentPathLength, duplicatePathForLibrary, pathPreviewResult, requestRoutinePreview, requestWaypointPreview, routinePreviewResult, selectedAgentProposalPreview, waypointPreviewResult };
+export { App, AppErrorBoundary, replaceEditedPath, agentProposalMatchesPublishedContext, agentProposalPreviewResult, canApplyAgentProposalCandidate, currentPathLength, duplicatePathForLibrary, requestWaypointPreview, selectedAgentProposalPreview, stableRoutineOverlay, waypointPreviewResult };

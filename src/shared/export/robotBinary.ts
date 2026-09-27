@@ -82,21 +82,15 @@ export function buildRobotBinary(project: BordeauxProject, selection: BinarySele
     if (marker.invocation && !commands.has(marker.invocation.commandId)) commands.set(marker.invocation.commandId, resolveCommand(bindings.catalog, marker.invocation.commandId, marker.name));
     if (marker.invocation && !bindings.parameterTypes[marker.invocation.commandId]) throw new Error(`Command ${marker.invocation.commandId} has no saved NI parameter type evidence. Inspect the linked LabVIEW project before exporting BDX.`);
   }
-  // Materialize only actual inspected defaults; missing required values remain errors.
+  // Empty wire condition IDs mean unconditional; generic authoring validation uses absence.
   selected.markers = selected.markers.map((marker) => {
-    // Empty wire condition IDs mean unconditional; generic authoring validation uses absence.
-    if (marker.schedule?.conditionId === "") {
-      const { conditionId: _conditionId, ...schedule } = marker.schedule;
-      marker = { ...marker, schedule };
-    }
-    if (!marker.invocation) return marker;
-    const { command } = commands.get(marker.invocation.commandId)!;
-    const defaults = Object.fromEntries(command.parameters.filter((parameter) => parameter.role === "argument" && parameter.defaultValue !== undefined).map((parameter) => [parameter.name, parameter.defaultValue!]));
-    return { ...marker, invocation: { ...marker.invocation, arguments: { ...defaults, ...marker.invocation.arguments } } };
+    if (marker.schedule?.conditionId !== "") return marker;
+    const { conditionId: _conditionId, ...schedule } = marker.schedule;
+    return { ...marker, schedule };
   });
   const planningRoutine = { id: "binary-path-only", name: "Path only", nodes: [] };
   const scoped = { ...project, paths: [selected], routines: [planningRoutine], activeRoutineId: planningRoutine.id, pathFolders: undefined, editor: undefined, strategy: undefined, pathLinks: [] };
-  const built = buildRobotTrajectory(scoped, bindings.catalog), document = built.document;
+  const built = buildRobotTrajectory(scoped, bindings.catalog, { materializeArgumentDefaults: true }), document = built.document;
   document.routine = null;
   const path = document.paths[0];
   if (path.followSections.some((section) => section.mode !== "time")) throw new Error(`Path ${path.name}: position-follow sections are not supported by ${DYNAMIC_WRAPPER_PROTOCOL}`);

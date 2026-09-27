@@ -14,3 +14,7 @@ npm-debug.log*
 
 # Local UI verification evidence
 .ui-artifacts/
+
+# Task-local agent work and archived scratch artifacts
+/.scratch/
+/work/

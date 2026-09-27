@@ -36,8 +36,14 @@ Useful overrides:
 npm run benchmark:renderer:browser -- --baseline <ref> --candidate <ref>
 npm run benchmark:renderer:browser -- --trials 6 --latency-samples 48 --stress-ms 3000
 npm run benchmark:renderer:browser -- --correctness-only
+npm run benchmark:renderer:browser -- --comparison-only
 npm run benchmark:renderer:browser -- --output .benchmark-results/custom.json
 ```
+
+`--comparison-only` is diagnostic. It skips the candidate correctness child and
+records `correctness: null`; only the measured worker-transport check still
+runs. Its reports are not acceptance evidence, and the planner beta verdict
+rejects them.
 
 Keep the machine otherwise idle. Compare results from the same machine and
 display stack; Electron, Chrome, Node, revisions, raw trials, and protocol are
@@ -48,3 +54,15 @@ Each Electron child has a two-minute watchdog by default. Override it with
 `--variant-timeout-ms` when deliberately running a slower fixture.
 Full comparisons require an even `--trials` count so both variants occupy each
 position in the measured pair equally often.
+
+## Planner beta verdict
+
+`npm run benchmark:planner-beta` combines this report with
+`.benchmark-results/planners.json` into an experimental verdict. It rejects a
+planner report with another schema version or failed or missing producer gates.
+It also rejects a renderer report whose candidate correctness checks are missing
+or failed, or that lacks a real worker bundle. The gate is still diagnostic:
+no in-repo script produces the planner report, and the verdict does not check
+that both reports come from the same revision or that the comparisons cover the
+pinned corpus. An `accept` verdict does not support competitive claims on its
+own.

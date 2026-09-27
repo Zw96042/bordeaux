@@ -6,10 +6,8 @@ import { validateProjectRobotInvocations } from "../src/shared/robotCommands";
 import * as robotCommands from "../src/shared/robotCommands";
 import { buildRobotTrajectory } from "../src/shared/export/robotTrajectory";
 import type { RobotCommandCatalog, RoutineCommandOutputBranch, RoutineFunctionNode } from "../src/shared/types";
-// @ts-expect-error Renderer preview remains JavaScript.
-import { RoutinePreview } from "../src/renderer/assets/routine-preview";
-// @ts-expect-error Renderer playback remains JavaScript.
-import { buildRoutineRun } from "../src/renderer/lib/routineRun";
+// @ts-expect-error Routine authoring remains a JavaScript module.
+import { AUTO } from "../src/renderer/lib/routineModel";
 // @ts-expect-error Renderer library remains JavaScript.
 import { referencingRoutines } from "../src/renderer/components/EditorLibrary";
 // @ts-expect-error Renderer deployment tracking remains JavaScript.
@@ -121,11 +119,10 @@ describe("command output branch persistence and boundaries", () => {
   it("previews the selected route after the command and defaults to the first route", () => {
     const { project } = fixture();
     const routine = project.routines[0];
-    const derivePath = () => ({ sample: { pts: [{ x: 0, y: 0 }, { x: 1, y: 0 }], length: 1 }, prof: { totalTime: 2 } });
-    expect(buildRoutineRun(routine, project.paths, project.robot, {}, project.plannerId, derivePath).steps.map((step: { node: { id: string } }) => step.node.id)).toEqual(["acquire", "score"]);
-    expect(buildRoutineRun(routine, project.paths, project.robot, { acquire: "missed" }, project.plannerId, derivePath).steps.map((step: { node: { id: string } }) => step.node.id)).toEqual(["acquire", "retry"]);
-    expect(RoutinePreview.referencedPaths(routine, project.paths, { acquire: "missed" })).toEqual([project.paths[1]]);
-    expect(RoutinePreview.referencedPaths(routine, project.paths, { acquire: "stale-route" })).toEqual([project.paths[0]]);
+    const stepIds = (outcomes: Record<string, string>) => AUTO.buildRun(routine, project.paths, project.robot, outcomes, project.plannerId).steps.map((step: { node: { id: string } }) => step.node.id);
+    expect(stepIds({})).toEqual(["acquire", "score"]);
+    expect(stepIds({ acquire: "missed" })).toEqual(["acquire", "retry"]);
+    expect(stepIds({ acquire: "stale-route" })).toEqual(["acquire", "score"]);
   });
 
   it("protects every branch path from deletion and invalidates comparisons when any path changes", () => {

@@ -1,3 +1,10 @@
+import { PLANNER_BENCHMARK_SCHEMA_VERSION } from "./plannerReport";
+import { median, percentile, rounded } from "./stats";
+
+// Experimental and diagnostic. No in-repo script produces the planner report this
+// consumes, and nothing binds the planner and renderer evidence to one revision or
+// requires the comparisons to cover the pinned corpus. An accepted verdict is not
+// sufficient evidence for competitive claims on its own.
 const THRESHOLDS = Object.freeze({
   medianDeficitPercent: 2,
   p95DeficitPercent: 5,
@@ -25,25 +32,7 @@ function finite(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function rounded(value: number): number {
-  return Number(value.toFixed(6));
-}
-
-function percentile(values: readonly number[], fraction: number): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((left, right) => left - right);
-  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * fraction) - 1))];
-}
-
-function median(values: readonly number[]): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
-}
-
-function rawInteractiveSamples(renderer: JsonRecord, tier: "common" | "stress"): number[] {
-  const candidate = record(record(renderer.variants)?.candidate);
+function rawInteractiveSamples(candidate: JsonRecord | null, tier: "common" | "stress"): number[] {
   const planning = record(candidate?.interactivePlanning);
   const evidence = record(planning?.[tier]);
   return Array.isArray(evidence?.rawSamples)
@@ -69,7 +58,27 @@ export function buildPlannerBetaVerdict(
 ) {
   const planner = record(plannerValue) ?? {};
   const renderer = record(rendererValue) ?? {};
+  const rendererCandidate = record(record(renderer.variants)?.candidate);
   const blockers: string[] = [];
+
+  if (planner.schemaVersion !== PLANNER_BENCHMARK_SCHEMA_VERSION) blockers.push("planner:schema-mismatch");
+  const plannerGates = record(planner.gates);
+  const plannerFailures = Array.isArray(plannerGates?.failures)
+    ? plannerGates.failures.filter((failure): failure is string => typeof failure === "string")
+    : [];
+  if (plannerGates === null) blockers.push("planner:producer-gates-missing");
+  else if (plannerGates.passed !== true) blockers.push("planner:producer-gates-failed");
+
+  // The renderer benchmark records every candidate check as a boolean and throws
+  // before writing a report when one fails; --comparison-only records null instead.
+  const rendererChecks = record(rendererCandidate?.correctness);
+  const rendererFailedChecks = Object.entries(rendererChecks ?? {})
+    .filter(([, passed]) => passed !== true)
+    .map(([name]) => name);
+  if (rendererCandidate?.workerBundle !== true) rendererFailedChecks.push("realWorkerBundle");
+  if (rendererChecks === null || Object.keys(rendererChecks).length === 0) blockers.push("renderer:correctness-missing");
+  if (rendererFailedChecks.length > 0) blockers.push("renderer:correctness-failed");
+  const producersPassed = blockers.length === 0;
 
   const disqualified = records(planner.disqualified);
   const rawInvalid = records(planner.rawRuns).filter((run) => run.outcome === "failed"
@@ -102,8 +111,8 @@ export function buildPlannerBetaVerdict(
     if (winRate! <= THRESHOLDS.minimumWinRateExclusive) blockers.push("quality:win-rate");
   }
 
-  const commonInteractiveSamples = rawInteractiveSamples(renderer, "common");
-  const stressInteractiveSamples = rawInteractiveSamples(renderer, "stress");
+  const commonInteractiveSamples = rawInteractiveSamples(rendererCandidate, "common");
+  const stressInteractiveSamples = rawInteractiveSamples(rendererCandidate, "stress");
   const commonP95Ms = percentile(commonInteractiveSamples, 0.95);
   const stressP95Ms = percentile(stressInteractiveSamples, 0.95);
   if (commonP95Ms === null) blockers.push("interactive:common-evidence-missing");
@@ -136,9 +145,8 @@ export function buildPlannerBetaVerdict(
     && hardMaxMs <= THRESHOLDS.finalHardMaxMs;
 
   const uniqueBlockers = [...new Set(blockers)];
-  const passed = validityPassed && qualityPassed && interactivePassed && finalPassed;
+  const passed = producersPassed && validityPassed && qualityPassed && interactivePassed && finalPassed;
   const tools = record(planner.tools) ?? {};
-  const rendererCandidate = record(record(renderer.variants)?.candidate);
   const rendererTrials = records(rendererCandidate?.rawTrials);
   const rendererRuntime = record(renderer.runtime) ?? record(rendererTrials[0]?.runtime) ?? {};
 
@@ -149,6 +157,7 @@ export function buildPlannerBetaVerdict(
     competitiveClaimsAllowed: passed,
     thresholds: THRESHOLDS,
     gates: {
+      producers: { passed: producersPassed, plannerFailures, rendererFailedChecks },
       validity: { passed: validityPassed, invalidOutputs },
       quality: {
         passed: qualityPassed,

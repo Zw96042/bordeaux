@@ -1,4 +1,5 @@
 import { indexIntervalPolicies } from "../planners/intervalPolicies";
+import { DEFAULT_SAMPLES_PER_SEGMENT } from "../planners/limits";
 import type { ConstraintRange, ControlPoint, DriveType, PathConstraints, PathDoc, RobotConfig, TurnInPlace } from "../types";
 import type { GeometryPoint } from "./geometry";
 import type { HeadingAnchor } from "./headingAnchors";
@@ -308,7 +309,7 @@ function analyze(pts: readonly Pick<GeometryPoint, "s" | "curv">[], _prof: Veloc
 
 // ---- one-call derivation: everything the field + panels need for a path ----
 function derivePath(doc: PathDoc, robot: RobotConfig | null, perSeg?: number, options?: { skipStationaryActions?: boolean }) {
-  perSeg = perSeg || 56;
+  perSeg = perSeg || DEFAULT_SAMPLES_PER_SEGMENT;
   const smp = sample(doc.waypoints, perSeg, true);
   const nWp = doc.waypoints.length;
   const originalLast = Math.max(0, smp.pts.length - 1);

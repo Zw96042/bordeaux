@@ -1,5 +1,5 @@
 import type { PlannerInput, PlannerOptimizationDiagnostics, PlannerResult } from "../types";
-import { effectivePathConstraints, robotHardLimits } from "../robotLimits";
+import { physicalPlannerInput } from "../robotLimits";
 import { fixedPathSamples, getPlanner } from "./index";
 import { DEFAULT_SAMPLES_PER_SEGMENT } from "./limits";
 import { insertOptimizationBoundaries } from "./optimizationConstraints";
@@ -52,11 +52,8 @@ export function invariantFailure(input: PlannerInput, interactive: PlannerResult
   }
   const samplesPerSegment = (input.samplesPerSegment ?? DEFAULT_SAMPLES_PER_SEGMENT)
     * (2 ** (candidate.optimization?.refinementPasses ?? 0));
-  const hardLimits = robotHardLimits(input.robot);
-  const robot = hardLimits ? { ...input.robot, maxSpeed: hardLimits.maxSpeedMps } : input.robot;
-  const constraints = effectivePathConstraints(input.path.constraints, robot);
-  const path = constraints === input.path.constraints ? input.path : { ...input.path, constraints };
-  const physicalInput = { ...input, path, robot, samplesPerSegment };
+  const physicalInput = physicalPlannerInput({ ...input, samplesPerSegment });
+  const { path, robot } = physicalInput;
   const referenceSeed = profiledSplineOptimizationSeed(physicalInput);
   const fixedGeometryReference = {
     ...referenceSeed,
@@ -184,10 +181,7 @@ export function validateFinal(input: PlannerInput, result: PlannerResult): Final
     const timedSamples = fixedPathSamples(movingResult);
     const samplesPerSegment = (input.samplesPerSegment ?? DEFAULT_SAMPLES_PER_SEGMENT)
       * (2 ** (result.optimization?.refinementPasses ?? 0));
-    const hardLimits = robotHardLimits(input.robot);
-    const robot = hardLimits ? { ...input.robot, maxSpeed: hardLimits.maxSpeedMps } : input.robot;
-    const path = { ...input.path, constraints: effectivePathConstraints(input.path.constraints, robot) };
-    const physicalInput = { ...input, path, robot };
+    const physicalInput = physicalPlannerInput(input);
     const samples = buildDenseValidationSamples(physicalInput, timedSamples, samplesPerSegment);
     const validation = validateOptimizedTrajectory(physicalInput, samples, { angularKinematics: "sample" });
     return {

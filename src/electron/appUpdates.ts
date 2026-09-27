@@ -94,8 +94,7 @@ export class AppUpdateController {
     if (!visible && this.installing && !this.state.installStalled) return;
     this.publish({ visible });
   }
-  refreshDirty(): void { this.publish(); }
-  refresh(): void { this.refreshDirty(); }
+  refresh(): void { this.publish(); }
   private clearError(): Pick<AppUpdateState, "error" | "errorDetails" | "errorStage"> {
     return { error: null, errorDetails: null, errorStage: null };
   }

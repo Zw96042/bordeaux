@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, beforeAll } from "vitest";
+import { analyzePath } from "../src/shared/agent/pathAnalysis";
 import { buildBdxExport } from "../src/shared/export/bdx";
+import { buildRobotBinary } from "../src/shared/export/robotBinary";
 import { acceptedTrajectoryShapeError, authoredPath, createAcceptedTrajectory, getAcceptedTrajectory, optimizationInputKey } from "../src/shared/planners/acceptedTrajectory";
 import { optimizeCorridorFinal } from "../src/shared/planners/corridorFinal";
 import { isOptimizationOutdated } from "../src/shared/planners/acceptedTrajectoryIdentity";
@@ -8,6 +10,7 @@ import { getPlanner } from "../src/shared/planners";
 import { decodeProjectFile, encodeProjectFile } from "../src/shared/project/fileFormat";
 import { validateProject } from "../src/shared/validation";
 import type { BordeauxProject, PlannerResult, PathDoc } from "../src/shared/types";
+import { binaryWriterFixture } from "./fixtures/binaryWriterFixture";
 
 const project = decodeProjectFile(readFileSync("benchmarks/planner-corpus/v1/corpus.bordeaux.json", "utf8")).project;
 let path: PathDoc;
@@ -135,5 +138,65 @@ describe("explicit accepted optimization", () => {
       mutate(tampered.optimization!.accepted!.result);
       expect(getAcceptedTrajectory(tampered, project.robot)).toBeNull();
     }
+  });
+});
+
+describe("applied optimization across export targets and agent analysis", () => {
+  const fixture = binaryWriterFixture();
+  let applied: BordeauxProject;
+  let accepted: PlannerResult;
+  let normal: PlannerResult;
+
+  beforeAll(() => {
+    fixture.bindings.catalog.commands[0].parameters.find((parameter) => parameter.name === "enabled")!.defaultValue = true;
+    const event = structuredClone(fixture.path.markers[0]);
+    delete event.invocation!.arguments.enabled;
+    const authored = structuredClone(project.paths.find((candidate) => candidate.name.toLowerCase().includes("slalom"))!);
+    authored.markers = [{ ...event, f: 0.4 }];
+    const output = optimizeCorridorFinal({ path: authored, robot: project.robot });
+    const optimized = { ...authored, optimization: { corridorM: 0.15, accepted: createAcceptedTrajectory(authored, project.robot, output) } };
+    applied = {
+      ...structuredClone(project), paths: [optimized], pathLinks: [],
+      routines: [{ id: "path-only", name: "Path only", nodes: [] }], activeRoutineId: "path-only", editor: { activePathId: optimized.id },
+    };
+    accepted = getAcceptedTrajectory(optimized, applied.robot, applied.field)!;
+    normal = getPlanner("profiledSpline").generate({ path: authored, robot: applied.robot });
+  }, 15_000);
+
+  it("keeps the applied timing in the BDX document and binary when a marker relies on an inspected default", () => {
+    expect(accepted.totalTimeS).toBeLessThan(normal.totalTimeS - 0.01);
+    expect(buildBdxExport(applied).paths[0].samples).toEqual(accepted.samples);
+
+    const binary = buildRobotBinary(applied, { kind: "path", id: applied.paths[0].id }, fixture.bindings).document.paths[0];
+    expect(binary.planner).toBe(accepted.planner);
+    expect(binary.totalTimeS).toBe(accepted.totalTimeS);
+    let cursor = 0;
+    for (const source of accepted.samples) {
+      while (cursor < binary.samples.length && binary.samples[cursor].t !== source.t) cursor += 1;
+      expect(binary.samples[cursor]).toEqual({ ...source, i: cursor });
+      cursor += 1;
+    }
+    expect(binary.events).toHaveLength(1);
+    expect(binary.events[0].timeS).toBe(accepted.markers[0].timeS);
+    expect(binary.events[0].arguments).toEqual({ ...applied.paths[0].markers[0].invocation!.arguments, enabled: true });
+    expect(applied.paths[0].markers[0].invocation!.arguments).not.toHaveProperty("enabled");
+  });
+
+  it("analyzes the applied trajectory rather than the legacy project planner setting", () => {
+    const analysis = analyzePath({ ...applied, plannerId: "optimizedTrajectory" }, applied.paths[0].id);
+    expect(analysis.planner).toBe(accepted.planner);
+    expect(analysis.totalTimeS).toBe(accepted.totalTimeS);
+    expect(analysis.sampleCount).toBe(accepted.samples.length);
+
+    const legacy = { ...applied, plannerId: "optimizedTrajectory" as const, paths: applied.paths.map(authoredPath) };
+    expect(analyzePath(legacy, legacy.paths[0].id).totalTimeS).toBe(buildBdxExport(legacy).paths[0].totalTimeS);
+  });
+
+  it("reports an invalid applied optimization for current inputs instead of analyzing normal planning", () => {
+    const tampered = structuredClone(applied);
+    tampered.paths[0].optimization!.accepted!.result.markers[0].command = "tampered";
+    const analysis = analyzePath(tampered, tampered.paths[0].id);
+    expect(analysis.totalTimeS).toBeNull();
+    expect(analysis.findings.find((finding) => finding.id === "planner:generation-failed")?.message).toMatch(/applied optimization is invalid/i);
   });
 });

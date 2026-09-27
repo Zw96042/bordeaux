@@ -3,7 +3,7 @@ import { DEFAULT_SAMPLES_PER_SEGMENT } from "../planners/limits";
 import { robotInvocationErrors, validateProjectRobotInvocations } from "../robotCommands";
 import { activeRoutine } from "../project/routines";
 import { orderedWaypointSampleIndices } from "../planners/waypointSamples";
-import type { BordeauxProject, CommandInvocation, FollowMode, RobotCommandCatalog, PathDoc, RoutineFallbackNode, RoutineNode, TrajectorySample } from "../types";
+import type { BordeauxProject, CommandInvocation, FollowMode, Marker, RobotCommandCatalog, PathDoc, RoutineFallbackNode, RoutineNode, TrajectorySample } from "../types";
 
 const MAX_SAMPLE_COUNT = 100_000;
 const MAX_EVENT_COUNT = 2_000;
@@ -227,6 +227,20 @@ function assertRoutineNodeCount(routine: RobotTrajectoryRoutine | null): void {
   }
 }
 
+// Only actual inspected defaults are filled in; missing required values remain validation errors.
+function withArgumentDefaults(project: BordeauxProject, catalog: RobotCommandCatalog): BordeauxProject {
+  const commands = new Map(catalog.commands.map((command) => [command.id, command]));
+  const markerWithDefaults = (marker: Marker): Marker => {
+    const command = marker.invocation && commands.get(marker.invocation.commandId);
+    if (!marker.invocation || !command) return marker;
+    const defaults = Object.fromEntries(command.parameters
+      .filter((parameter) => parameter.role === "argument" && parameter.defaultValue !== undefined)
+      .map((parameter) => [parameter.name, parameter.defaultValue!]));
+    return { ...marker, invocation: { ...marker.invocation, arguments: { ...defaults, ...marker.invocation.arguments } } };
+  };
+  return { ...project, paths: project.paths.map((path) => ({ ...path, markers: path.markers.map(markerWithDefaults) })) };
+}
+
 function projectForStaticPlanning(project: BordeauxProject): BordeauxProject {
   const staticNodes = (nodes: RoutineNode[]): RoutineNode[] => nodes.flatMap((node) => {
     if (node.type === "generatedTrajectory") return node.fallback.type === "branch" ? staticNodes(node.fallback.nodes) : [];
@@ -237,10 +251,17 @@ function projectForStaticPlanning(project: BordeauxProject): BordeauxProject {
 }
 
 /** Compile the shared model; executable binding trust belongs to the calling export boundary. */
-export function buildRobotTrajectory(project: BordeauxProject, catalog: RobotCommandCatalog, options: { requireGeneratedBindings?: boolean } = {}): BuiltRobotTrajectory {
-  const invocationIssues = validateProjectRobotInvocations(project, catalog, options.requireGeneratedBindings ? robotInvocationErrors : undefined);
+export function buildRobotTrajectory(
+  project: BordeauxProject,
+  catalog: RobotCommandCatalog,
+  options: { requireGeneratedBindings?: boolean; materializeArgumentDefaults?: boolean } = {},
+): BuiltRobotTrajectory {
+  // Defaults change only validated and emitted invocations. Planning keeps the authored
+  // markers, which are part of an applied optimization's input identity.
+  const compiled = options.materializeArgumentDefaults ? withArgumentDefaults(project, catalog) : project;
+  const invocationIssues = validateProjectRobotInvocations(compiled, catalog, options.requireGeneratedBindings ? robotInvocationErrors : undefined);
   if (invocationIssues.length > 0) throw new Error(invocationIssues.map((item) => `${item.path}: ${item.message}`).join("\n"));
-  const sourcePaths = project.paths.filter((path) => path.exportable !== false);
+  const sourcePaths = compiled.paths.filter((path) => path.exportable !== false);
   if (sourcePaths.length === 0) throw new Error("Robot trajectory export requires at least one exportable path");
   if (sourcePaths.length > MAX_PATH_COUNT) {
     throw new Error(`Robot trajectory export exceeds ${MAX_PATH_COUNT} paths`);
@@ -294,11 +315,12 @@ export function buildRobotTrajectory(project: BordeauxProject, catalog: RobotCom
   native.paths.forEach((path, pathIndex) => {
     sampleCount += path.samples.length;
     if (sampleCount > MAX_SAMPLE_COUNT) throw new Error(`Robot trajectory export exceeds ${MAX_SAMPLE_COUNT} samples`);
-    const sourceMarkers = new Map(sourcePaths[pathIndex].markers.map((marker) => [marker.id, marker]));
-    const events = path.markers.flatMap((marker) => {
-      if (!marker.invocation) return [];
-      const source = sourceMarkers.get(marker.id);
-      if (source?.schedule?.endTimeS !== undefined && source.schedule.endTimeS < marker.timeS) {
+    // Planner markers keep authored order; applied optimizations are validated marker-by-marker.
+    const sourceMarkers = sourcePaths[pathIndex].markers;
+    const events = path.markers.flatMap((marker, markerIndex) => {
+      const { invocation, schedule } = sourceMarkers[markerIndex];
+      if (!invocation) return [];
+      if (schedule?.endTimeS !== undefined && schedule.endTimeS < marker.timeS) {
         throw new Error(`Event ${marker.name} ends before it starts`);
       }
       return [{
@@ -306,13 +328,13 @@ export function buildRobotTrajectory(project: BordeauxProject, catalog: RobotCom
         name: marker.name,
         timeS: marker.timeS,
         fraction: marker.fraction,
-        commandId: marker.invocation.commandId,
-        arguments: marker.invocation.arguments,
-        cancelOnPathEnd: marker.invocation.cancelOnPathEnd === true,
-        trigger: source?.schedule?.trigger ?? "time",
-        ...(source?.schedule?.repeatEveryS === undefined ? {} : { repeatEveryS: source.schedule.repeatEveryS }),
-        ...(source?.schedule?.endTimeS === undefined ? {} : { endTimeS: source.schedule.endTimeS }),
-        ...(source?.schedule?.conditionId ? { conditionId: source.schedule.conditionId } : {}),
+        commandId: invocation.commandId,
+        arguments: invocation.arguments,
+        cancelOnPathEnd: invocation.cancelOnPathEnd === true,
+        trigger: schedule?.trigger ?? "time",
+        ...(schedule?.repeatEveryS === undefined ? {} : { repeatEveryS: schedule.repeatEveryS }),
+        ...(schedule?.endTimeS === undefined ? {} : { endTimeS: schedule.endTimeS }),
+        ...(schedule?.conditionId ? { conditionId: schedule.conditionId } : {}),
       }];
     }).sort((left, right) => left.timeS - right.timeS || (options.requireGeneratedBindings ? left.eventId.localeCompare(right.eventId) : 0));
     paths.push({

@@ -76,11 +76,12 @@ describe("folder projects", () => {
   });
   it("recovers a partial mirror write and accepts the next different edit", async () => {
     const directory = await folder(); const project = createDemoProject();
+    project.paths.push(blankPath("Second"));
     await autosaveProjectFolder(directory, project, null);
-    project.paths[0].name = "First edit";
+    project.paths[0].name = "First edit"; project.paths[1].constraints.maxVel = 0.5;
     const rename = fs.rename.bind(fs); let fail = true;
     vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-      if (String(to).endsWith(".routine") && fail) { fail = false; throw new Error("disk interrupted"); }
+      if (String(to).endsWith("Second.path") && fail) { fail = false; throw new Error("disk interrupted"); }
       return rename(from, to);
     });
     await expect(autosaveProjectFolder(directory, project, null)).rejects.toThrow("disk interrupted");

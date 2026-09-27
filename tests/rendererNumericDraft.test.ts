@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadRendererExport } from "./helpers/loadRendererExport";
-import { parseFiniteDraftNumber } from "../src/renderer/lib/numericDraft";
+import { committedDraftValue, parseFiniteDraftNumber } from "../src/renderer/lib/numericDraft";
 
 type ElementNode = { type: unknown; props: Record<string, unknown>; children: unknown[] };
 
@@ -10,7 +10,7 @@ function inputIn(node: unknown): ElementNode | undefined {
   return element.type === "input" ? element : element.children?.map(inputIn).find(Boolean);
 }
 
-function numericDraftHarness(kind: "Num" | "BigNum") {
+function numericDraftHarness(kind: "Num" | "BigNum", overrides: Record<string, unknown> = {}) {
   const element = (type: unknown, props: Record<string, unknown>, ...children: unknown[]): ElementNode => ({ type, props: props ?? {}, children });
   const states: unknown[] = [];
   const refs: Array<{ current: unknown }> = [];
@@ -50,7 +50,7 @@ function numericDraftHarness(kind: "Num" | "BigNum") {
   };
   const context = {
     React,
-    parseFiniteDraftNumber,
+    committedDraftValue,
     PM: {},
     PointerDrag: { useController: () => ({ start: () => undefined }) },
     UnitPrefs,
@@ -70,7 +70,7 @@ function numericDraftHarness(kind: "Num" | "BigNum") {
         { context, replacements: [["export { RobotPage };", "window.RobotPageControls = { BigNum };"]] },
       ).BigNum;
   const onChange = vi.fn();
-  const props = { label: "Value", value: 1, unit: "m", imperialUnit: "in", onChange };
+  const props = { label: "Value", value: 1, unit: "m", imperialUnit: "in", onChange, ...overrides };
   const render = () => {
     let tree: ElementNode;
     for (let pass = 0; pass < 2; pass += 1) {
@@ -103,7 +103,7 @@ function numInput(projectDraft?: boolean): ElementNode {
     { context: {
       React,
       createPortal: () => null,
-      parseFiniteDraftNumber,
+      committedDraftValue,
       PM: {},
       PointerDrag: { useController: () => ({ start: () => undefined }) },
       UnitPrefs: { current: () => "metric", fromCanonical: (value: unknown) => value, toCanonical: (value: unknown) => value, label: () => "" },
@@ -111,6 +111,46 @@ function numInput(projectDraft?: boolean): ElementNode {
   );
   const tree = UI.Num({ label: "Value", value: 1, onChange: () => undefined, ...(projectDraft === undefined ? {} : { projectDraft }) });
   return inputIn(tree)!;
+}
+
+function robotPageFieldProps(label: string, setRobot: (patch: Record<string, unknown>) => void): Record<string, unknown> {
+  const element = (type: unknown, props: Record<string, unknown>, ...children: unknown[]): ElementNode => ({ type, props: props ?? {}, children });
+  const React = {
+    Fragment: Symbol("Fragment"),
+    createElement: element,
+    useEffect: () => undefined,
+    useId: () => "robot-page",
+    useRef: (current: unknown) => ({ current }),
+    useState: (initial: unknown) => [initial, () => undefined],
+  };
+  const { RobotPage } = loadRendererExport<{ RobotPage: (props: Record<string, unknown>) => ElementNode }>(
+    new URL("../src/renderer/components/RobotPage.jsx", import.meta.url),
+    "RobotPageControls",
+    {
+      context: {
+        React,
+        committedDraftValue,
+        PM: { robotHardLimits: () => null },
+        PointerDrag: { useController: () => ({ start: () => undefined }) },
+        UnitPrefs: { current: () => "metric", fromCanonical: (value: number) => value, toCanonical: (value: number) => value, label: () => "", format: () => "" },
+        UI: {},
+      },
+      replacements: [["export { RobotPage };", "window.RobotPageControls = { RobotPage };"]],
+    },
+  );
+  const tree = RobotPage({
+    robot: { drive: "swerve", w: 0.8, l: 0.8, maxSpeed: 4.5 },
+    setRobot,
+    unitSystem: "metric",
+    pushController: { pairing: null, busy: false },
+  });
+  const field = (node: unknown): ElementNode | undefined => {
+    if (Array.isArray(node)) return node.map(field).find(Boolean);
+    if (!node || typeof node !== "object") return undefined;
+    const element = node as ElementNode;
+    return element.props?.label === label ? element : element.children?.map(field).find(Boolean);
+  };
+  return field(tree)!.props;
 }
 
 function commandNumberInput(onChange: (value: number) => void, overrides = {}): ElementNode {
@@ -189,8 +229,60 @@ describe("renderer numeric drafts", () => {
     expect(input.props["aria-describedby"]).toContain("numeric-draft-error");
   });
 
-  it("cancels a number with Escape without losing focus or committing on subsequent blur", () => {
-    const harness = numericDraftHarness("Num");
+  it.each(["Num", "BigNum"] as const)("keeps the exact stored value when an untouched imperial %s blurs", (kind) => {
+    const harness = numericDraftHarness(kind, { value: 0.007 });
+    harness.setUnitSystem("imperial");
+    let input = harness.render();
+    (input.props.onFocus as Function)({ target: { select: vi.fn() } });
+    input = harness.render();
+    expect(input.props.value).toBe("0.07");
+    (input.props.onBlur as Function)({ target: { value: input.props.value } });
+    expect(harness.onChange).not.toHaveBeenCalled();
+
+    input = harness.render();
+    (input.props.onChange as Function)({ target: { value: "4" } });
+    input = harness.render();
+    (input.props.onBlur as Function)({ target: { value: "4" } });
+    expect(harness.onChange).toHaveBeenCalledExactlyOnceWith(0.4);
+  });
+
+  it("does not enable the physical drive model when an untouched Settings field blurs", () => {
+    const setRobot = vi.fn();
+    const harness = numericDraftHarness("BigNum", robotPageFieldProps("Drive reduction", setRobot));
+    let input = harness.render();
+    (input.props.onFocus as Function)({ target: { select: vi.fn() } });
+    input = harness.render();
+    (input.props.onBlur as Function)({ target: { value: input.props.value } });
+    expect(setRobot).not.toHaveBeenCalled();
+
+    input = harness.render();
+    (input.props.onChange as Function)({ target: { value: "7" } });
+    input = harness.render();
+    (input.props.onBlur as Function)({ target: { value: "7" } });
+    expect(setRobot).toHaveBeenCalledOnce();
+    expect(setRobot.mock.calls[0][0].driveModel).toMatchObject({ gearRatio: 7 });
+  });
+
+  it("leaves an unset optional Settings value unset when an empty draft blurs or submits", () => {
+    const harness = numericDraftHarness("BigNum", { value: undefined });
+    let input = harness.render();
+    (input.props.onFocus as Function)({ target: { select: vi.fn() } });
+    input = harness.render();
+    expect(input.props.value).toBe("");
+    (input.props.onBlur as Function)({ target: { value: "" } });
+    input = harness.render();
+    expect(input.props["aria-invalid"]).toBe(false);
+
+    const blur = vi.fn();
+    (input.props.onKeyDown as Function)({ key: "Enter", preventDefault() {}, currentTarget: { value: "", blur } });
+    input = harness.render();
+    expect(blur).toHaveBeenCalledOnce();
+    expect(input.props["aria-invalid"]).toBe(false);
+    expect(harness.onChange).not.toHaveBeenCalled();
+  });
+
+  it.each(["Num", "BigNum"] as const)("cancels %s with Escape without losing focus or committing on subsequent blur", (kind) => {
+    const harness = numericDraftHarness(kind);
     let input = harness.render();
     (input.props.onChange as Function)({ target: { value: "5" } });
     input = harness.render();

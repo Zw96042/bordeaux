@@ -1,3 +1,7 @@
+import { median, percentile, rounded } from "./stats";
+
+export const PLANNER_BENCHMARK_SCHEMA_VERSION = "bordeaux-planner-benchmark/1.0" as const;
+
 export type PlannerName = "Bordeaux" | "PathPlanner" | "Choreo";
 
 export type PlannerBenchmarkRun = {
@@ -35,23 +39,6 @@ export type PlannerBenchmarkManifest = {
   hardware: Record<string, unknown>;
   tools: Record<string, unknown>;
 };
-
-function percentile(values: readonly number[], fraction: number): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((first, second) => first - second);
-  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * fraction) - 1))];
-}
-
-function median(values: readonly number[]): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((first, second) => first - second);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
-}
-
-function rounded(value: number): number {
-  return Number(value.toFixed(6));
-}
 
 export function buildPlannerBenchmarkReport(
   manifest: PlannerBenchmarkManifest,
@@ -147,7 +134,7 @@ export function buildPlannerBenchmarkReport(
   const latencyPassed = !uniqueFailures.some((failure) => failure.endsWith("latency-p95"));
 
   return {
-    schemaVersion: "bordeaux-planner-benchmark/1.0" as const,
+    schemaVersion: PLANNER_BENCHMARK_SCHEMA_VERSION,
     ...manifest,
     planners,
     comparisons,

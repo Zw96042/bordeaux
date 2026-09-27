@@ -259,9 +259,10 @@ describe("renderer application", () => {
     expect(field).not.toContain("FIELD_W - p.x");
     expect(field).not.toContain("FIELD_H - p.y");
     expect(field.match(/\bflip\b/g)).toHaveLength(2);
+    const agentSync = fs.readFileSync(new URL("../src/renderer/lib/agentSessionSync.js", import.meta.url), "utf8");
     expect(app).not.toContain("const flip = alliance === 'red' ? -1 : 1");
-    expect(app).toContain("allianceView: 'blue'");
-    expect(app).not.toContain("allianceView: alliance");
+    expect(agentSync).toContain("allianceView: 'blue'");
+    expect(app + agentSync).not.toContain("allianceView: alliance");
   });
 
   it("keeps dormant Chap assets out of the application shell", () => {
