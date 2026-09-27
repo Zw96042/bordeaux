@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from "electron";
+import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from "electron";
 import { autoUpdater as updateClient } from "electron-updater";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -26,7 +26,7 @@ import { describeUpdateFailure, OFFICIAL_RELEASES_URL } from "./updateFailure";
 import { GitHubReleaseProvider } from "./githubReleaseProvider";
 import { readRecentProjectFiles, rememberRecentProject, writeRecentProjectFiles } from "./recentProjectFiles";
 import { AgentBridgeClient, AgentBridgeServer } from "./agentBridge";
-import { appUpdateChannel, AppUpdateController, usesGitHubAppUpdates } from "./appUpdates";
+import { appUpdateChannel, AppUpdateController, UpdateQuitCoordinator, usesGitHubAppUpdates } from "./appUpdates";
 import {
   DiagnosticBundleCapability,
   buildDiagnosticBundle,
@@ -75,6 +75,14 @@ let updateCheckTimer: NodeJS.Timeout | null = null;
 let backgroundShutdownPromise: Promise<void> | null = null;
 let backgroundServicesReadyForExit = false;
 let finalQuitInProgress = false;
+// Quit cleanup is bounded: an aborted robot transfer or agent socket that never settles must
+// not keep Bordeaux alive. Native installers (ShipIt on macOS, NSIS on Windows) wait for this
+// process to exit, so an update handoff also guarantees exit shortly after it begins.
+const QUIT_CLEANUP_LIMIT_MS = 8_000;
+const UPDATE_EXIT_GRACE_MS = 15_000;
+let updateExitTimer: NodeJS.Timeout | null = null;
+const updateQuit = new UpdateQuitCoordinator();
+let bridgeEnabledAtShutdown = false;
 
 let linkedRobotProjectPath: string | null = null;
 let linkedLabviewProjectFile: string | null = null;
@@ -142,6 +150,7 @@ function stopBackgroundServices(): Promise<void> {
   rejectProposalReceipts("Bordeaux is shutting down.");
   if (backgroundShutdownPromise) return backgroundShutdownPromise;
   const bridge = agentBridge;
+  bridgeEnabledAtShutdown = bridge?.enabled === true;
   agentBridge = null;
   backgroundShutdownPromise = Promise.all([robotFileDelivery.stop(), bridge?.stop()]).then(() => undefined);
   return backgroundShutdownPromise;
@@ -169,9 +178,28 @@ function createAppUpdateController(): AppUpdateController {
     describeError: (error) => describeUpdateFailure(error instanceof Error ? error.message : String(error)),
     warn: (message, error) => console.warn(message, error),
   }, (state) => {
+    // A native installation failure leaves Bordeaux running: cancel the forced exit and,
+    // because Electron closes every window before the macOS handoff, bring the editor back.
+    if (state.phase === "installing") updateQuit.installing();
+    if (state.phase === "error" && state.errorStage === "install") {
+      if (updateExitTimer) clearTimeout(updateExitTimer);
+      updateExitTimer = null;
+      updateQuit.installFailed();
+      if (!updateQuit.quitInProgress && (!mainWindow || mainWindow.isDestroyed())) createWindow();
+    }
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("appUpdates:state", state);
   });
 }
+
+// Emitted by Electron on macOS and by electron-updater on Windows and Linux once the
+// installer handoff has started.
+nativeAutoUpdater.on("before-quit-for-update", () => {
+  if (!updateQuit.handoff() || updateExitTimer) return;
+  updateExitTimer = setTimeout(() => {
+    console.warn("Bordeaux did not finish quitting for the update; exiting so the installer can continue.");
+    app.exit(0);
+  }, UPDATE_EXIT_GRACE_MS);
+});
 
 function activateProjectTarget(filePath: string | null): void {
   currentProjectPath = filePath;
@@ -1017,18 +1045,48 @@ if (ownsDesktopInstance) app.whenReady().then(async () => {
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 
-app.on("before-quit", () => {
+// Undo an abandoned update quit: restart what cleanup stopped and reopen the editor.
+function resumeAfterFailedUpdateQuit(): void {
+  updateQuit.resumed();
+  finalQuitInProgress = false;
+  backgroundServicesReadyForExit = false;
+  if (backgroundShutdownPromise) {
+    backgroundShutdownPromise = null;
+    agentBridge = new AgentBridgeServer(app.getPath("userData"), agentSessions);
+    const bridge = agentBridge;
+    // A cleanup that timed out may still hold its service; startup then reports the failure.
+    if (bridgeEnabledAtShutdown) void bridge.start().catch((error) => console.warn("Could not re-enable Bordeaux MCP access:", error)).finally(() => { agentSessions.resetAccess(bridge.enabled); buildMenu(); });
+    else agentSessions.resetAccess(false);
+  }
+  buildMenu();
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+}
+
+app.on("before-quit", (event) => {
+  const decision = updateQuit.beforeQuit();
+  if (decision !== "proceed") {
+    event.preventDefault();
+    if (decision === "resume") resumeAfterFailedUpdateQuit();
+    return;
+  }
   if (updateCheckTimer) clearTimeout(updateCheckTimer);
   updateCheckTimer = null;
 });
 app.on("will-quit", (event) => {
+  if (updateQuit.abandoned) { event.preventDefault(); resumeAfterFailedUpdateQuit(); return; }
   if (backgroundServicesReadyForExit) return;
   event.preventDefault();
   if (finalQuitInProgress) return;
   finalQuitInProgress = true;
-  void stopBackgroundServices().catch((error) => {
+  let limit: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<void>((resolve) => {
+    limit = setTimeout(() => { console.warn("Bordeaux background services did not stop in time; quitting anyway."); resolve(); }, QUIT_CLEANUP_LIMIT_MS);
+  });
+  void Promise.race([stopBackgroundServices(), timedOut]).catch((error) => {
     console.warn("Could not stop Bordeaux background services cleanly:", error);
   }).finally(() => {
+    clearTimeout(limit);
+    if (updateQuit.abandoned) { resumeAfterFailedUpdateQuit(); return; }
     backgroundServicesReadyForExit = true;
     // Electron resets its quitting flag after the canceled will-quit event.
     // A microtask can run before that reset, so resume on the next event-loop turn.
