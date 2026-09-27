@@ -1,4 +1,4 @@
-import type { PathConstraints, RobotConfig } from "./types";
+import type { PathConstraints, PlannerInput, RobotConfig } from "./types";
 
 const GRAVITY_MPS2 = 9.80665;
 const RADIANS_TO_DEGREES = 180 / Math.PI;
@@ -83,4 +83,12 @@ export function effectivePathConstraints(constraints: PathConstraints, robot: Ro
     maxAngAccel: Math.min(constraints.maxAngAccel, limits.maxAngAccel),
     maxAngDecel: Math.min(constraints.maxAngDecel || constraints.maxAngAccel, limits.maxAngDecel!),
   };
+}
+
+/** Plans at the drivetrain's free speed and the stricter of authored and hard limits; returns `input` without a drive model. */
+export function physicalPlannerInput(input: PlannerInput): PlannerInput {
+  const limits = robotHardLimits(input.robot);
+  if (!limits) return input;
+  const robot = { ...input.robot, maxSpeed: limits.maxSpeedMps };
+  return { ...input, robot, path: { ...input.path, constraints: effectivePathConstraints(input.path.constraints, robot) } };
 }

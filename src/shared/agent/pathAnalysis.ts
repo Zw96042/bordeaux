@@ -1,7 +1,6 @@
 import { REBUILT_2026_FIELD, REBUILT_2026_FIELD_WIDTH_M, officialToAppPoint } from "../field/rebuilt2026";
 import { FIELD_H } from "../math/fieldBounds";
-import { getPlanner } from "../planners";
-import { optimizeCorridorFinal } from "../planners/corridorFinal";
+import { selectPathTrajectory } from "../planners/acceptedTrajectory";
 import { clone } from "../project/defaults";
 import { effectivePathConstraints } from "../robotLimits";
 import type { BordeauxProject, PathDoc, TrajectorySample, ValidationIssue } from "../types";
@@ -419,13 +418,11 @@ export function analyzePath(project: BordeauxProject, pathId: string, options: A
   const pathIndex = project.paths.findIndex((candidate) => candidate.id === pathId);
   if (pathIndex < 0) throw new Error(`Path ${pathId} does not exist in the current project.`);
   const path = clone(project.paths[pathIndex]);
-  const plannerId = project.plannerId;
   const structural = validateProject(project).issues.filter((item) => item.path.startsWith(`$.paths[${pathIndex}]`));
   let generated;
   try {
-    generated = plannerId === "optimizedTrajectory"
-      ? optimizeCorridorFinal({ path, robot: project.robot })
-      : getPlanner("profiledSpline").generate({ path, robot: project.robot });
+    // Analyze what playback and export drive; the legacy project plannerId never selects a trajectory.
+    generated = selectPathTrajectory(path, project.robot, project.field);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const structureFindings: PathAnalysisFinding[] = structural.map((item, index) => ({
@@ -439,7 +436,7 @@ export function analyzePath(project: BordeauxProject, pathId: string, options: A
       pathId: path.id,
       pathName: path.name,
       authoredPath: path,
-      planner: plannerId,
+      planner: "profiledSpline",
       totalTimeS: null,
       totalDistanceM: null,
       sampleCount: 0,

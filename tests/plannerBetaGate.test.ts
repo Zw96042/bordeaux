@@ -1,26 +1,50 @@
 import { describe, expect, it } from "vitest";
 import { buildPlannerBetaVerdict } from "../src/electron/benchmark/plannerBetaGate";
+import { buildPlannerBenchmarkReport, type PlannerBenchmarkRun } from "../src/electron/benchmark/plannerReport";
 
-function plannerReport(overrides: Record<string, unknown> = {}) {
+function run(overrides: Partial<PlannerBenchmarkRun>): PlannerBenchmarkRun {
   return {
-    schemaVersion: "bordeaux-planner-benchmark/1.0",
-    generatedAt: "2026-08-15T00:00:00.000Z",
-    protocol: { repetitions: 2, warmups: 0 },
-    inputs: { corpus: "sha256:corpus" },
-    executedArtifacts: { sha256: "sha256:artifacts", files: [] },
-    hardware: { cpu: { model: "test cpu" }, platform: "linux" },
-    tools: { Bordeaux: { version: "test" }, PathPlanner: { version: "test" }, Choreo: { version: "test" } },
-    disqualified: [],
-    comparisons: [
-      { benchmarkClass: "fixed-geometry", fixtureId: "a", planner: "PathPlanner", bordeauxTrajectoryTimeS: 1, plannerTrajectoryTimeS: 1.1, deltaPercent: 10 },
-      { benchmarkClass: "fixed-geometry", fixtureId: "b", planner: "PathPlanner", bordeauxTrajectoryTimeS: 1, plannerTrajectoryTimeS: 0.99, deltaPercent: -1 },
-      { benchmarkClass: "corridor", fixtureId: "c", planner: "Choreo", bordeauxTrajectoryTimeS: 1, plannerTrajectoryTimeS: 1.2, deltaPercent: 20 },
-    ],
-    rawRuns: [
-      { planner: "Bordeaux", benchmarkClass: "fixed-geometry", fixtureId: "a", iteration: 1, outcome: "generated", latencyMs: 180, validation: { valid: true, rankingEligible: true } },
-      { planner: "Bordeaux", benchmarkClass: "fixed-geometry", fixtureId: "b", iteration: 1, outcome: "generated", latencyMs: 220, validation: { valid: true, rankingEligible: true } },
-      { planner: "Bordeaux", benchmarkClass: "corridor", fixtureId: "c", iteration: 1, outcome: "generated", latencyMs: 2_400, validation: { valid: true, rankingEligible: true } },
-    ],
+    planner: "Bordeaux",
+    toolVersion: "test",
+    benchmarkClass: "fixed-geometry",
+    fixtureId: "a",
+    deterministicSeed: 7,
+    iteration: 1,
+    outcome: "generated",
+    latencyMs: 10,
+    inputSha256: "sha256:input",
+    normalizedSha256: "sha256:stable",
+    trajectoryTimeS: 1,
+    validation: { valid: true, rankingEligible: true, issues: [] },
+    raw: {
+      input: null, output: "{}", stdout: "", stderr: "",
+      invocation: { executable: "test", arguments: [], workingDirectory: "/tmp" },
+    },
+    ...overrides,
+  };
+}
+
+const plannerManifest = {
+  generatedAt: "2026-08-15T00:00:00.000Z",
+  protocol: { repetitions: 1, warmups: 0, latencyGateMs: 15_000 },
+  inputs: { corpus: "sha256:corpus" },
+  executedArtifacts: { sha256: "sha256:artifacts", files: [] },
+  hardware: { cpu: { model: "test cpu" }, platform: "linux" },
+  tools: { Bordeaux: { version: "test" }, PathPlanner: { version: "test" }, Choreo: { version: "test" } },
+};
+
+const plannerRuns = [
+  run({ fixtureId: "a", latencyMs: 180 }),
+  run({ fixtureId: "b", latencyMs: 220 }),
+  run({ benchmarkClass: "corridor", fixtureId: "c", latencyMs: 2_400 }),
+  run({ planner: "PathPlanner", fixtureId: "a", latencyMs: 40, trajectoryTimeS: 1.1 }),
+  run({ planner: "PathPlanner", fixtureId: "b", latencyMs: 40, trajectoryTimeS: 0.99 }),
+  run({ planner: "Choreo", benchmarkClass: "corridor", fixtureId: "c", latencyMs: 900, trajectoryTimeS: 1.2 }),
+];
+
+function plannerReport(overrides: Record<string, unknown> = {}, runs = plannerRuns) {
+  return {
+    ...buildPlannerBenchmarkReport(plannerManifest, runs),
     finalPlanningEvidence: {
       rawRuns: [
         { deadlineTier: "hard", budgetMs: 30_000, fixtureId: "c", outcome: "generated", latencyMs: 3_100, validation: { valid: true } },
@@ -30,22 +54,38 @@ function plannerReport(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// Check names emitted by scripts/renderer-browser-benchmark-electron.cjs.
+const rendererCorrectnessChecks = [
+  "applicationWorkerTransport", "nativeImagePaintProof", "restoreConflictStaysDirty", "staleProposalBlockedDuringDrag",
+  "proposalUsableAfterCancel", "releaseUsesTerminalCoordinates", "releaseStable", "saveIncludesDraft", "closeGuardDirty",
+  "undoCancelsDrag", "cancelAutosaveRestored", "commandSurvivesDrag", "commandUndoRestores", "cancelPreservesRedo",
+  "pathSwitchCommitsDrag", "openDuringDragKeepsFile", "saveOpenKeepsFile", "renameSurvivesDrag", "moveSurvivesDrag",
+  "linkSurvivesDrag",
+];
+
+function rendererCandidate(overrides: Record<string, unknown> = {}) {
+  return {
+    workerBundle: true,
+    correctness: Object.fromEntries(rendererCorrectnessChecks.map((name) => [name, true])),
+    interactivePlanning: {
+      common: { fixture: "3-waypoint profiled spline", correctPaintMs: { p50: 18, p95: 22 }, rawSamples: [18, 22] },
+      stress: { fixture: "100-waypoint profiled spline", correctPaintMs: { p50: 74, p95: 84 }, rawSamples: [74, 84] },
+    },
+    rawTrials: [{ label: "candidate-1" }],
+    ...overrides,
+  };
+}
+
 function rendererReport(overrides: Record<string, unknown> = {}) {
   return {
     generatedAt: "2026-08-15T00:00:00.000Z",
     revisions: { upstream: "base", candidate: "head" },
-    protocol: { fixture: "synthetic Bordeaux common and stress paths" },
     runtime: { electron: "test", chrome: "test", node: "test" },
-    variants: {
-      candidate: {
-        correctness: { applicationWorkerTransport: true },
-        interactivePlanning: {
-          common: { correctPaintMs: { p95: 22 }, rawSamples: [18, 22] },
-          stress: { correctPaintMs: { p95: 84 }, rawSamples: [74, 84] },
-        },
-        rawTrials: [{ label: "candidate-1" }],
-      },
+    protocol: {
+      fixture: "Bordeaux-authored synthetic 3-waypoint common and 100-waypoint stress profiled splines",
+      execution: { correctness: "candidate-only child before warmups; excluded from timing" },
     },
+    variants: { candidate: rendererCandidate() },
     ...overrides,
   };
 }
@@ -60,6 +100,7 @@ describe("planner beta gate", () => {
       verdict: "accept",
       competitiveClaimsAllowed: true,
       gates: {
+        producers: { passed: true, plannerFailures: [], rendererFailedChecks: [] },
         validity: { passed: true, invalidOutputs: 0 },
         quality: { passed: true, comparisons: 3, wins: 2, medianDeficitPercent: 0, p95DeficitPercent: 1.010101 },
         interactivePlanning: { passed: true, commonP95Ms: 22, stressP95Ms: 84 },
@@ -72,6 +113,70 @@ describe("planner beta gate", () => {
       adapters: { PathPlanner: { version: "test" }, Choreo: { version: "test" } },
       raw: { plannerRuns: expect.any(Array), rendererTrials: [{ label: "candidate-1" }] },
     });
+  });
+
+  it("rejects renderer evidence whose correctness checks were skipped", () => {
+    const comparisonOnly = buildPlannerBetaVerdict(plannerReport(), rendererReport({
+      protocol: { execution: { correctness: "skipped by --comparison-only; measured candidate worker transport remains required" } },
+      variants: { candidate: rendererCandidate({ correctness: null }) },
+    }));
+    const withoutCorrectness = buildPlannerBetaVerdict(plannerReport(), rendererReport({
+      variants: { candidate: rendererCandidate({ correctness: undefined }) },
+    }));
+    const emptyCorrectness = buildPlannerBetaVerdict(plannerReport(), rendererReport({
+      variants: { candidate: rendererCandidate({ correctness: {} }) },
+    }));
+
+    for (const verdict of [comparisonOnly, withoutCorrectness, emptyCorrectness]) {
+      expect(verdict.verdict).toBe("reject");
+      expect(verdict.competitiveClaimsAllowed).toBe(false);
+      expect(verdict.gates.interactivePlanning.passed).toBe(true);
+      expect(verdict.gates.producers.passed).toBe(false);
+      expect(verdict.blockers).toEqual(["renderer:correctness-missing"]);
+    }
+  });
+
+  it("rejects renderer evidence with a failed check or no real worker bundle", () => {
+    const failedCheck = buildPlannerBetaVerdict(plannerReport(), rendererReport({
+      variants: { candidate: rendererCandidate({
+        correctness: { ...rendererCandidate().correctness, undoCancelsDrag: false },
+      }) },
+    }));
+    const withoutWorkerBundle = buildPlannerBetaVerdict(plannerReport(), rendererReport({
+      variants: { candidate: rendererCandidate({ workerBundle: false }) },
+    }));
+
+    expect(failedCheck.verdict).toBe("reject");
+    expect(failedCheck.gates.producers).toMatchObject({ passed: false, rendererFailedChecks: ["undoCancelsDrag"] });
+    expect(failedCheck.blockers).toEqual(["renderer:correctness-failed"]);
+    expect(withoutWorkerBundle.verdict).toBe("reject");
+    expect(withoutWorkerBundle.gates.producers).toMatchObject({ passed: false, rendererFailedChecks: ["realWorkerBundle"] });
+    expect(withoutWorkerBundle.blockers).toEqual(["renderer:correctness-failed"]);
+  });
+
+  it("rejects planner reports whose producer gates failed or are absent", () => {
+    const drifted = buildPlannerBetaVerdict(plannerReport({}, [
+      ...plannerRuns,
+      run({ fixtureId: "a", iteration: 2, latencyMs: 190, normalizedSha256: "sha256:drifted" }),
+    ]), rendererReport());
+    const withoutGates = buildPlannerBetaVerdict(plannerReport({ gates: undefined }), rendererReport());
+
+    expect(drifted.verdict).toBe("reject");
+    expect(drifted.gates.validity.passed).toBe(true);
+    expect(drifted.gates.producers).toMatchObject({ passed: false, plannerFailures: ["Bordeaux:a:normalized-output-drift"] });
+    expect(drifted.blockers).toEqual(["planner:producer-gates-failed"]);
+    expect(withoutGates.verdict).toBe("reject");
+    expect(withoutGates.blockers).toEqual(["planner:producer-gates-missing"]);
+  });
+
+  it("rejects planner reports from another schema version", () => {
+    const olderSchema = buildPlannerBetaVerdict(plannerReport({ schemaVersion: "bordeaux-planner-benchmark/0.9" }), rendererReport());
+    const withoutSchema = buildPlannerBetaVerdict(plannerReport({ schemaVersion: undefined }), rendererReport());
+
+    for (const verdict of [olderSchema, withoutSchema]) {
+      expect(verdict.verdict).toBe("reject");
+      expect(verdict.blockers).toEqual(["planner:schema-mismatch"]);
+    }
   });
 
   it("rejects any invalid output before competitive quality is considered", () => {

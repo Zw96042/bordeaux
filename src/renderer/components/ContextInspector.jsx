@@ -6,6 +6,7 @@ import { PM } from "../lib/pathMath";
 import { UnitPrefs } from "../lib/unitPreferences";
 import { FIELD_DIMS } from "./FieldView";
 import { UI } from "./ui";
+import { compareExactDecimals, robotParameterValueError, robotSchemaValueError } from "../../shared/robotCommands";
 
   const h = React.createElement;
   const { Num, Toggle, Seg, Icon, Dropdown, ChoiceBrowser, constraintRangeSummary } = UI;
@@ -99,119 +100,29 @@ import { UI } from "./ui";
     return { I8: [-128, 127], U8: [0, 255], I16: [-32768, 32767], U16: [0, 65535], I32: [-2147483648, 2147483647], U32: [0, 4294967295] }[valueType] || null;
   }
 
-  function exactIntegerStringError(value, valueType) {
-    if (typeof value !== 'string' || !/^[+-]?\d+$/.test(value)) return 'must be a whole number written as digits.';
-    if (value.length > 1024) return 'cannot exceed 1024 characters.';
-    const parsed = BigInt(value);
-    if (valueType === 'I64' && (parsed < -9223372036854775808n || parsed > 9223372036854775807n)) return 'must fit the signed 64-bit range.';
-    if (valueType === 'U64' && (parsed < 0n || parsed > 18446744073709551615n)) return 'must fit the unsigned 64-bit range.';
-    return '';
+  // Shared validation accepts any finite number; the SGL encoder also needs it to fit float32.
+  function sglOverflowPath(value, schema, location) {
+    if (value == null) return null;
+    if (schema.kind === 'number') return schema.valueType === 'SGL' && !Number.isFinite(Math.fround(value)) ? location : null;
+    if (schema.kind === 'optional') return sglOverflowPath(value, schema.element, location);
+    if (schema.kind === 'array') return value.map((item, index) => sglOverflowPath(item, schema.element, location + '[' + index + ']')).find(Boolean) || null;
+    if (schema.kind === 'map') return Object.entries(value).map(([key, item]) => sglOverflowPath(item, schema.value, location + '.' + key)).find(Boolean) || null;
+    if (schema.kind === 'object') return (schema.fields || []).map((field) => sglOverflowPath(value[field.name], field.schema, location + '.' + field.name)).find(Boolean) || null;
+    return null;
   }
 
-  function exactDecimalStringError(value) {
-    if (typeof value !== 'string' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value)) return 'must be a decimal number written as text.';
-    if (value.length > 1024) return 'cannot exceed 1024 characters.';
-    const exponent = /[eE]([+-]?\d+)$/.exec(value);
-    if (exponent && Math.abs(Number(exponent[1])) > 10000) return 'exponent cannot exceed 10000 in magnitude.';
-    return '';
-  }
-
-  function schemaValueError(value, schema, path, depth) {
-    const location = path || 'Value';
-    const level = depth || 0;
-    if (!schema) return location + ' has no discovered schema.';
-    if (level > 24) return location + ' exceeds the supported nesting depth.';
-    if (value === undefined) return location + ' is required.';
-    if (schema.kind === 'opaque') return '';
-    if (schema.kind === 'optional') return value === null ? '' : schemaValueError(value, schema.element, location, level + 1);
-    if (schema.kind === 'boolean') return typeof value === 'boolean' ? '' : location + ' must be true or false.';
-    if (schema.kind === 'integer') {
-      if (!Number.isSafeInteger(value)) return location + ' must be a safe whole number.';
-      const range = robotIntegerRange(schema.valueType);
-      return !range || (value >= range[0] && value <= range[1]) ? '' : location + ' is outside the range for ' + schema.valueType + '.';
-    }
-    if (schema.kind === 'integerString') {
-      const error = exactIntegerStringError(value, schema.valueType);
-      return error ? location + ' ' + error : '';
-    }
-    if (schema.kind === 'decimalString') {
-      const error = exactDecimalStringError(value);
-      return error ? location + ' ' + error : '';
-    }
-    if (schema.kind === 'number') return typeof value !== 'number' || !Number.isFinite(value) ? location + ' must be a finite number.' : schema.valueType === 'SGL' && !Number.isFinite(Math.fround(value)) ? location + ' must fit the SGL range.' : '';
-    if (schema.kind === 'string') return typeof value === 'string' ? '' : location + ' must be text.';
-    if (schema.kind === 'enum') return typeof value === 'string' && (schema.enumValues || []).includes(value) ? '' : location + ' must be one of the discovered enum values.';
-    if (schema.kind === 'array') {
-      if (!Array.isArray(value)) return location + ' must be a JSON array.';
-      if (value.length > 1024) return location + ' cannot contain more than 1024 items.';
-      for (let index = 0; index < value.length; index++) {
-        const error = schemaValueError(value[index], schema.element, location + '[' + index + ']', level + 1);
-        if (error) return error;
-      }
-      return '';
-    }
-    if (schema.kind === 'map') {
-      if (!value || typeof value !== 'object' || Array.isArray(value)) return location + ' must be a JSON object with string keys.';
-      if (Object.keys(value).length > 256) return location + ' cannot contain more than 256 entries.';
-      for (const [key, item] of Object.entries(value)) {
-        const error = schemaValueError(item, schema.value, location + '.' + key, level + 1);
-        if (error) return error;
-      }
-      return '';
-    }
-    if (schema.kind === 'object') {
-      if (!value || typeof value !== 'object' || Array.isArray(value)) return location + ' must be a JSON object.';
-      const fields = schema.fields || [];
-      const names = new Set(fields.map((field) => field.name));
-      const extra = Object.keys(value).find((key) => !names.has(key));
-      if (extra) return location + '.' + extra + ' is not part of the discovered type.';
-      for (const field of fields) {
-        const error = schemaValueError(value[field.name], field.schema, location + '.' + field.name, level + 1);
-        if (error) return error;
-      }
-      return '';
-    }
-    return location + ' uses an unsupported parameter schema.';
+  function schemaValueError(value, schema, location) {
+    const error = robotSchemaValueError(value, schema, location);
+    if (error) return error + '.';
+    const overflow = sglOverflowPath(value, schema, location);
+    return overflow ? overflow + ' must fit the SGL range.' : '';
   }
 
   function parameterValueError(value, parameter) {
-    const schemaError = schemaValueError(value, parameter.schema, parameter.label || parameter.name, 0);
+    const schemaError = schemaValueError(value, parameter.schema, parameter.label || parameter.name);
     if (schemaError) return schemaError;
-    if (parameter.min == null && parameter.max == null) return '';
-    if (parameter.schema.kind === 'integerString') {
-      const comparable = BigInt(value);
-      if (parameter.min != null && comparable < BigInt(parameter.min)) return (parameter.label || parameter.name) + ' must be at least ' + parameter.min + '.';
-      if (parameter.max != null && comparable > BigInt(parameter.max)) return (parameter.label || parameter.name) + ' must be at most ' + parameter.max + '.';
-      return '';
-    }
-    if (parameter.schema.kind === 'decimalString') {
-      if (parameter.min != null && compareExactDecimals(value, String(parameter.min)) < 0) return (parameter.label || parameter.name) + ' must be at least ' + parameter.min + '.';
-      if (parameter.max != null && compareExactDecimals(value, String(parameter.max)) > 0) return (parameter.label || parameter.name) + ' must be at most ' + parameter.max + '.';
-      return '';
-    }
-    const comparable = typeof value === 'number' ? value : Number(value);
-    if (parameter.min != null && comparable < parameter.min) return (parameter.label || parameter.name) + ' must be at least ' + parameter.min + '.';
-    if (parameter.max != null && comparable > parameter.max) return (parameter.label || parameter.name) + ' must be at most ' + parameter.max + '.';
-    return '';
-  }
-
-  function compareExactDecimals(left, right) {
-    const parse = (value) => {
-      const match = /^([+-])?(?:(\d+)(?:\.(\d*))?|\.(\d+))(?:[eE]([+-]?\d+))?$/.exec(value);
-      const fraction = match[3] || match[4] || '';
-      const digits = ((match[2] || '0') + fraction).replace(/^0+/, '') || '0';
-      return { sign: digits === '0' ? 0 : match[1] === '-' ? -1 : 1, digits, exponent: Number(match[5] || 0) - fraction.length };
-    };
-    const a = parse(left), b = parse(right);
-    if (a.sign !== b.sign) return a.sign < b.sign ? -1 : 1;
-    if (a.sign === 0) return 0;
-    const aPower = a.digits.length + a.exponent, bPower = b.digits.length + b.exponent;
-    let magnitude = aPower === bPower ? 0 : aPower < bPower ? -1 : 1;
-    if (!magnitude) for (let i = 0; i < Math.max(a.digits.length, b.digits.length); i++) {
-      const aDigit = a.digits[i] || '0', bDigit = b.digits[i] || '0';
-      if (aDigit !== bDigit) { magnitude = aDigit < bDigit ? -1 : 1; break; }
-    }
-    return a.sign < 0 ? -magnitude : magnitude;
+    const limitError = robotParameterValueError(value, parameter);
+    return limitError ? limitError + '.' : '';
   }
 
   function parameterMetadata(parameter, valueType) {
@@ -275,8 +186,7 @@ import { UI } from "./ui";
     const [error, setError] = React.useState('');
     React.useEffect(() => { setDraft(formatted); setError(''); }, [formatted, id]);
     const validate = (next, commit) => {
-      const exactError = exactIntegerStringError(next.trim(), valueType);
-      let message = exactError ? 'Value ' + exactError : '';
+      let message = schemaValueError(next.trim(), { kind: 'integerString', valueType }, 'Value');
       if (!message && parameter && parameter.min != null && BigInt(next.trim()) < BigInt(parameter.min)) message = 'Enter a value of at least ' + parameter.min + '.';
       if (!message && parameter && parameter.max != null && BigInt(next.trim()) > BigInt(parameter.max)) message = 'Enter a value of at most ' + parameter.max + '.';
       setError(message);
@@ -317,8 +227,7 @@ import { UI } from "./ui";
     React.useEffect(() => { setDraft(formatted); setError(''); }, [formatted, id]);
     const validate = (next, commit) => {
       const value = next.trim();
-      const exactError = exactDecimalStringError(value);
-      let message = exactError ? 'Value ' + exactError : '';
+      let message = schemaValueError(value, { kind: 'decimalString', valueType }, 'Value');
       if (!message && parameter && parameter.min != null && compareExactDecimals(value, String(parameter.min)) < 0) message = 'Enter a value of at least ' + parameter.min + '.';
       if (!message && parameter && parameter.max != null && compareExactDecimals(value, String(parameter.max)) > 0) message = 'Enter a value of at most ' + parameter.max + '.';
       setError(message);
@@ -360,7 +269,7 @@ import { UI } from "./ui";
     const validate = (next, commit) => {
       try {
         const parsed = JSON.parse(next);
-        const schemaError = schemaValueError(parsed, schema, 'Value', 0);
+        const schemaError = schemaValueError(parsed, schema, 'Value');
         if (schemaError) {
           setError(schemaError);
           return false;

@@ -9,7 +9,7 @@ import { addJerkDiagnostics } from "./jerkDiagnostics";
 import { addAngularLimitDiagnostics } from "./angularConstraints";
 import { applyStationaryActions } from "./stationaryActions";
 import { applyRotationPriority, headingTransitionIntervalMask } from "./rotationPriority";
-import { effectivePathConstraints, robotHardLimits } from "../robotLimits";
+import { physicalPlannerInput } from "../robotLimits";
 import { validateOptimizedTrajectory } from "./trajectoryValidation";
 import { DEFAULT_SAMPLES_PER_SEGMENT } from "./limits";
 
@@ -115,12 +115,9 @@ export function getPlanner(id: TrajectoryPlannerId): TrajectoryPlanner {
       const maxAngDecel = input.path.constraints.maxAngDecel;
       if (maxAngDecel !== undefined && !Number.isFinite(maxAngDecel)) throw new Error("maxAngDecel must be a finite number");
       if (maxAngDecel !== undefined && maxAngDecel <= 0) throw new Error("maxAngDecel must be greater than zero");
-      const hardLimits = robotHardLimits(input.robot);
-      const robot = hardLimits ? { ...input.robot, maxSpeed: hardLimits.maxSpeedMps } : input.robot;
       const canonicalPath = withoutLegacyTimingPriority(input.path);
-      const constraints = effectivePathConstraints(canonicalPath.constraints, robot);
-      const path = constraints === canonicalPath.constraints ? canonicalPath : { ...canonicalPath, constraints };
-      const physicalInput = path === input.path && robot === input.robot ? input : { ...input, path, robot };
+      const physicalInput = physicalPlannerInput(canonicalPath === input.path ? input : { ...input, path: canonicalPath });
+      const { path, robot } = physicalInput;
       const hasStationaryPause = path.waypoints.some((waypoint) => waypoint.turnInPlace || (waypoint.wait ?? 0) > 0);
       const planningInput = hasStationaryPause
         ? {

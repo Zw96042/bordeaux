@@ -443,6 +443,27 @@ app.whenReady().then(async () => {
     await waitForPaintQuiet(100);
   }
 
+  const benchmarkFixture = JSON.parse(Buffer.from(process.env.BORDEAUX_BENCHMARK_PROJECT, "base64").toString("utf8"));
+  // Agent access is on in the preload, so every reload publishes the initial
+  // unsaved project before the restore is released. Only a snapshot of the
+  // restored, unedited 100-waypoint fixture is a valid proposal base.
+  const matchesRestoredFixture = (session) => {
+    const primary = session?.project?.paths?.[0];
+    const expected = benchmarkFixture.paths[0];
+    const waypoint = primary?.waypoints?.[50];
+    return session?.project?.name === benchmarkFixture.name
+      && session.activePathId === primaryPath.id
+      && primary?.id === primaryPath.id
+      && primary.waypoints?.length === expected.waypoints.length
+      && Boolean(waypoint)
+      && Math.hypot(waypoint.x - expected.waypoints[50].x, waypoint.y - expected.waypoints[50].y) <= 1e-6;
+  };
+  const waitForRestoredFixtureSession = (description) => waitFor(async () => {
+    const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
+    const latest = state.publishedSessions.at(-1);
+    return latest && matchesRestoredFixture(latest) ? latest : null;
+  }, 3000, description);
+
   const readProbe = () => window.webContents.executeJavaScript("window.__rendererBenchmark.read()");
   const center = async () => {
     const point = await readProbe();
@@ -507,12 +528,8 @@ app.whenReady().then(async () => {
     releaseMouse(restoreTarget);
 
     await loadFixture();
-    const workerFixture = JSON.parse(Buffer.from(process.env.BORDEAUX_BENCHMARK_PROJECT, "base64").toString("utf8"));
-    const publishedSession = await waitFor(async () => {
-      const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
-      return state.publishedSessions.at(-1) || null;
-    }, 3000, "the renderer agent session to publish");
-    const proposalPath = structuredClone(workerFixture.paths[1]);
+    const publishedSession = await waitForRestoredFixtureSession("the restored fixture's agent session to publish");
+    const proposalPath = structuredClone(benchmarkFixture.paths[1]);
     proposalPath.id = "browser_benchmark_agent_path";
     const proposal = {
       id: "browser_benchmark_agent_proposal",
@@ -622,11 +639,7 @@ app.whenReady().then(async () => {
     const undoCancelsDrag = matchesTarget(afterUndoRelease, undoOrigin, { x: undoOrigin.localX, y: undoOrigin.localY });
 
     await loadFixture();
-    const cancelPublishedSession = await waitFor(async () => {
-      const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
-      return state.publishedSessions.at(-1) || null;
-    }, 3000, "the pre-cancel agent session to publish");
-    const cancelPublishedSessionCount = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState().publishedSessions.length");
+    const cancelPublishedSession = await waitForRestoredFixtureSession("the restored fixture's pre-cancel agent session to publish");
     const cancelOrigin = await center();
     const cancelTarget = { x: cancelOrigin.x + 44, y: cancelOrigin.y - 20 };
     const originalProject = JSON.parse(Buffer.from(process.env.BORDEAUX_BENCHMARK_PROJECT, "base64").toString("utf8"));
@@ -635,11 +648,13 @@ app.whenReady().then(async () => {
     const cancelTargetLocal = await localAt(cancelTarget);
     moveMouse(cancelTarget);
     await waitForCorrect(cancelTarget, cancelTargetLocal);
-    await waitFor(async () => {
+    const draftAutosavedState = await waitFor(async () => {
       const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
       const waypoint = state.autosavedProjects.at(-1)?.paths[0]?.waypoints[50];
-      return waypoint && Math.hypot(waypoint.x - originalCancelWaypoint.x, waypoint.y - originalCancelWaypoint.y) > 0.02;
+      return waypoint && Math.hypot(waypoint.x - originalCancelWaypoint.x, waypoint.y - originalCancelWaypoint.y) > 0.02 ? state : null;
     }, 4000, "the active draft to be autosaved");
+    const preCancelSessionCount = draftAutosavedState.publishedSessions.length;
+    const preCancelRevision = Math.max(cancelPublishedSession.revision, draftAutosavedState.publishedSessions.at(-1)?.revision ?? -1);
     window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Z", modifiers: ["control"] });
     window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Z", modifiers: ["control"] });
     await waitForCorrect(cancelOrigin, { x: cancelOrigin.localX, y: cancelOrigin.localY });
@@ -655,7 +670,10 @@ app.whenReady().then(async () => {
     const cancelRepublishedSession = await waitFor(async () => {
       const state = await window.webContents.executeJavaScript("window.bordeauxAPI.__benchmarkState()");
       const latest = state.publishedSessions.at(-1);
-      return state.publishedSessions.length > cancelPublishedSessionCount && latest.revision > cancelPublishedSession.revision ? latest : null;
+      // A snapshot published during the drag carries the draft waypoint, so
+      // only a newer rolled-back fixture snapshot proves the cancel republished.
+      return state.publishedSessions.length > preCancelSessionCount && latest.revision > preCancelRevision
+        && matchesRestoredFixture(latest) ? latest : null;
     }, 3000, "the agent session to republish after canceling the drag");
     const postCancelProposal = {
       ...proposal,

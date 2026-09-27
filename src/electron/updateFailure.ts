@@ -1,5 +1,3 @@
-import type { MessageBoxOptions, MessageBoxReturnValue } from "electron";
-
 export const OFFICIAL_RELEASES_URL = "https://github.com/Zw96042/bordeaux/releases";
 
 export function describeUpdateFailure(message: string): string {
@@ -16,22 +14,4 @@ export function describeUpdateFailure(message: string): string {
       : networkFailure
         ? "Check your internet connection and try Check for Updates again. You can also download an installer from the official Bordeaux releases page."
         : "Try Check for Updates again, or download an installer from the official Bordeaux releases page.";
-}
-
-export async function presentUpdateFailure(message: string, actions: {
-  show(options: MessageBoxOptions): Promise<Pick<MessageBoxReturnValue, "response">>;
-  copy(text: string): void;
-  open(url: string): Promise<void>;
-}): Promise<void> {
-  const explanation = describeUpdateFailure(message);
-  for (;;) {
-    const { response } = await actions.show({
-      type: "error", title: "Bordeaux update failed", message: "Bordeaux could not complete the update.",
-      detail: explanation + "\n\nUse Copy details to share the complete error when asking for help.",
-      buttons: ["Close", "Open releases", "Copy details"], defaultId: 0, cancelId: 0, noLink: true,
-    });
-    if (response === 2) { actions.copy(message); continue; }
-    if (response === 1) await actions.open(OFFICIAL_RELEASES_URL);
-    return;
-  }
 }

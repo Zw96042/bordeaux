@@ -261,6 +261,108 @@ describe("final planning execution", () => {
     expect(onProgress).toHaveBeenCalledTimes(1);
   });
 
+  function searchIncumbent(evaluations: number) {
+    const optimization = {
+      status: "feasible", totalTimeS: 3.2, gainS: 0.5, evaluations,
+      validatedCandidates: 9, rejectedCandidates: evaluations - 9,
+      rejectionReasons: [{ reason: "Outside the authored corridor", count: evaluations - 9 }],
+    };
+    return {
+      prof: { t: [0, 1.6, 3.2] },
+      finalTrajectory: { totalTimeS: 3.2, samples: [{ t: 0 }, { t: 3.2 }], optimization },
+      finalOptimization: optimization,
+    };
+  }
+
+  it.each([
+    ["timeout", "time-budget"],
+    ["canceled", "cancelled"],
+    ["failure", undefined],
+  ] as const)("refreshes the retained incumbent's counters from statistics after %s", async (outcome, termination) => {
+    vi.useFakeTimers();
+    const worker = new FakeWorker();
+    const finalPlanning = finalPlanningModule().create({ workerFactory: () => worker });
+    const onProgress = vi.fn();
+    const request = finalPlanning.request(
+      { path: {}, robot: {}, plannerId: "profiledSpline", optimize: true },
+      { onProgress },
+    );
+    const id = worker.jobs[0].id;
+    const incumbent = searchIncumbent(21);
+    const authored = structuredClone(incumbent);
+    worker.resolve({ id, type: "progress", value: incumbent });
+    const reasons = [{ reason: "Outside the authored corridor", count: 14 }, { reason: "Missed a required gate", count: 1 }];
+    worker.resolve({ id, type: "statistics", statistics: { evaluations: 23, validatedCandidates: 9, rejectedCandidates: 14 } });
+    worker.resolve({
+      id, type: "statistics",
+      // Keys outside the counters cannot alter the validated route or its result.
+      statistics: { solveTimeMs: 812, evaluations: 24, validatedCandidates: 9, rejectedCandidates: 15, rejectionReasons: reasons, status: "optimal", totalTimeS: 0.1, samples: [] },
+    });
+    worker.resolve({ id: id - 1, type: "statistics", statistics: { evaluations: 99 } });
+    expect(onProgress).toHaveBeenCalledTimes(1);
+    expect(worker.terminated).toBe(false);
+
+    if (outcome === "timeout") await vi.advanceTimersByTimeAsync(6_000);
+    else if (outcome === "failure") worker.fail("worker interrupted");
+    else request.cancel();
+
+    const result = await request.promise;
+    const retained = result.incumbent as ReturnType<typeof searchIncumbent>;
+    expect(result.status).toBe(outcome);
+    expect(retained.finalOptimization).toEqual({
+      ...authored.finalOptimization,
+      solveTimeMs: 812, evaluations: 24, rejectedCandidates: 15, rejectionReasons: reasons,
+      ...(termination ? { termination } : {}),
+    });
+    expect(retained.finalTrajectory.optimization).toBe(retained.finalOptimization);
+    expect(retained.finalTrajectory.totalTimeS).toBe(3.2);
+    // Trajectory data is shared, and the published incumbent is not mutated.
+    expect(retained.finalTrajectory.samples).toBe(incumbent.finalTrajectory.samples);
+    expect(retained.prof).toBe(incumbent.prof);
+    expect(incumbent).toEqual(authored);
+  });
+
+  it("keeps a newer incumbent's own counters and the final result's exact counters on success", async () => {
+    const worker = new FakeWorker();
+    const finalPlanning = finalPlanningModule().create({ workerFactory: () => worker });
+    const request = finalPlanning.request(
+      { path: {}, robot: {}, plannerId: "profiledSpline", optimize: true },
+      {},
+    );
+    const id = worker.jobs[0].id;
+    worker.resolve({ id, type: "progress", value: searchIncumbent(10) });
+    worker.resolve({ id, type: "statistics", statistics: { evaluations: 12, rejectedCandidates: 3 } });
+    const improved = searchIncumbent(13);
+    worker.resolve({ id, type: "progress", value: improved });
+    const final = { ...searchIncumbent(24), finalOptimization: { ...searchIncumbent(24).finalOptimization, termination: "work-budget" } };
+    worker.resolve({ id, value: final, durationMs: 40 });
+
+    const result = await request.promise;
+    expect(result).toMatchObject({ status: "success", durationMs: 40 });
+    expect(result.value).toBe(final);
+    expect(result.incumbent).toBe(improved);
+  });
+
+  it.each([
+    [{ id: 1, type: "statistics" }, "invalid statistics"],
+    [{ id: 1, type: "statistics", statistics: 24 }, "invalid statistics"],
+    [{ id: 1, type: "progress", statistics: { evaluations: 24 } }, "invalid progress"],
+  ])("fails the run for a malformed search message %#", async (message, error) => {
+    const worker = new FakeWorker();
+    const finalPlanning = finalPlanningModule().create({ workerFactory: () => worker });
+    const request = finalPlanning.request(
+      { path: {}, robot: {}, plannerId: "profiledSpline", optimize: true },
+      { interactiveResult: { source: "interactive" } },
+    );
+    worker.resolve({ ...message, id: worker.jobs[0].id });
+
+    await expect(request.promise).resolves.toMatchObject({
+      status: "failure",
+      error: { message: `The final-planning worker returned ${error}` },
+    });
+    expect(worker.terminated).toBe(true);
+  });
+
   it("ignores stale progress and final messages without settling the current run", async () => {
     const worker = new FakeWorker();
     const finalPlanning = finalPlanningModule().create({ workerFactory: () => worker });

@@ -1,5 +1,5 @@
 import { ACTIVE_FIELD_REFERENCE } from "../field/rebuilt2026";
-import { normalizeProject } from "../project/normalize";
+import { TRANSIENT_EDITOR_KEYS, normalizeProject } from "../project/normalize";
 import type { FieldReference, PathDoc, RobotConfig } from "../types";
 import { MAX_TRAJECTORY_SAMPLES } from "./limits";
 
@@ -22,7 +22,7 @@ export function authoredPath(path: PathDoc): PathDoc {
 function physicalPath(path: PathDoc) {
   const normalized = normalizeProject({ paths: [authoredPath(path)] }) as { paths: PathDoc[] };
   const { id: _id, name: _name, folderId: _folder, exportable: _exportable, ...physical } = normalized.paths[0];
-  for (const key of ["_selAfter", "_selT", "_selM", "_selR"]) delete (physical as Record<string, unknown>)[key];
+  for (const key of TRANSIENT_EDITOR_KEYS) delete (physical as Record<string, unknown>)[key];
   return physical;
 }
 

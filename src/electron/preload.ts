@@ -8,6 +8,10 @@ import type { RobotEndpoint, RobotPairing, RobotProbe, RobotRuntimeStatus } from
 import type { RobotPushPreview, RobotPushProgress, RobotPushResult } from "./robotPush";
 import type { RobotRetentionOperationResult, RobotRetentionPreview, RobotRetentionProgress } from "./robotRetention";
 
+type McpStatus = { enabled: boolean; generation: number };
+/** Main accepts a snapshot only for the MCP access generation it was published in. */
+type AgentSessionPublication = AgentSessionSnapshot & { accessGeneration: number };
+
 const bordeauxAPI = {
   platform: process.platform,
   getAppUpdateState: (): Promise<AppUpdateState> => ipcRenderer.invoke("appUpdates:state"),
@@ -83,13 +87,13 @@ const bordeauxAPI = {
     return () => ipcRenderer.removeListener("robot:retentionState", listener);
   },
   setDirty: (dirty: boolean) => ipcRenderer.send("project:setDirty", dirty),
-  publishAgentSession: (snapshot: AgentSessionSnapshot) => ipcRenderer.send("agent:publishSession", snapshot),
+  publishAgentSession: (snapshot: AgentSessionPublication) => ipcRenderer.send("agent:publishSession", snapshot),
   updateAgentProposalStatus: (proposalId: string, status: "applied" | "rejected" | "stale", revision?: number) => ipcRenderer.send("agent:proposalStatus", proposalId, status, revision),
   acknowledgeAgentProposal: (proposalId: string, sessionId: string, revision: number, activePathId: string, accepted = true) => ipcRenderer.send("agent:proposalReceipt", proposalId, sessionId, revision, activePathId, accepted),
   getActiveAgentProposal: (): Promise<AgentProposal | null> => ipcRenderer.invoke("agent:getActiveProposal"),
-  getMcpStatus: (): Promise<{ enabled: boolean }> => ipcRenderer.invoke("agent:getMcpStatus"),
-  onMcpStatus: (handler: (status: { enabled: boolean }) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, status: { enabled: boolean }) => handler(status);
+  getMcpStatus: (): Promise<McpStatus> => ipcRenderer.invoke("agent:getMcpStatus"),
+  onMcpStatus: (handler: (status: McpStatus) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, status: McpStatus) => handler(status);
     ipcRenderer.on("agent:mcpStatus", listener);
     return () => ipcRenderer.removeListener("agent:mcpStatus", listener);
   },

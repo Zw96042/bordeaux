@@ -1,6 +1,24 @@
   const FINAL_SAMPLES_PER_SEGMENT = 56;
   const DEFAULT_DEADLINES_MS = Object.freeze({ common: 5000, stress: 15000, hard: 30000 });
   const WORKER_RESPONSE_GRACE_MS = 1000;
+  // Statistics may only refresh counters; route, timing, and status stay the incumbent's.
+  const STATISTICS_KEYS = ['solveTimeMs', 'evaluations', 'validatedCandidates', 'rejectedCandidates', 'rejectionReasons'];
+
+  /** Refreshes retained search metadata while sharing the incumbent's trajectory arrays. */
+  function withSearchStatistics(value, statistics, termination) {
+    const optimization = value?.finalTrajectory?.optimization;
+    if (!optimization || (!statistics && !termination)) return value;
+    const current = { ...optimization };
+    STATISTICS_KEYS.forEach((key) => {
+      if (statistics && Object.prototype.hasOwnProperty.call(statistics, key)) current[key] = statistics[key];
+    });
+    if (!optimization.termination && termination) current.termination = termination;
+    return {
+      ...value,
+      finalTrajectory: { ...value.finalTrajectory, optimization: current },
+      finalOptimization: current,
+    };
+  }
 
   /** Runs deliberate final-planning work independently from interactive preview. */
   function create(options) {
@@ -26,19 +44,20 @@
         let timer = 0;
         let worker = null;
         let incumbent;
+        let statistics = null;
         let resolveResult;
         const promise = new Promise((resolve) => { resolveResult = resolve; });
         const unchanged = input.optimize === true
           ? 'The selected trajectory was not changed.'
           : 'Continuing with the last interactive result.';
-        const finish = (result) => {
+        const finish = (result, termination) => {
           if (settled) return;
           settled = true;
           if (timer) clearTimeout(timer);
           if (worker) worker.terminate();
           resolveResult({
             ...result,
-            ...(incumbent ? { incumbent } : {}),
+            ...(incumbent ? { incumbent: withSearchStatistics(incumbent, statistics, termination) } : {}),
             ...(result.fallback ? { fallbackProvisional: true } : {}),
           });
         };
@@ -65,7 +84,17 @@
                 return;
               }
               incumbent = result.value;
+              statistics = null;
               requestConfig.onProgress?.(result.value);
+              return;
+            }
+            // Counters for the retained incumbent; applied only when this run settles.
+            if (result.type === 'statistics') {
+              if (!result.statistics || typeof result.statistics !== 'object') {
+                fail('The final-planning worker returned invalid statistics');
+                return;
+              }
+              statistics = result.statistics;
               return;
             }
             if (result.error) {
@@ -90,7 +119,7 @@
             deadlineMs,
             fallback: requestConfig.interactiveResult,
             fallbackReason: `Final planning exceeded the ${deadline} deadline (${deadlineMs} ms); ${unchanged.charAt(0).toLowerCase() + unchanged.slice(1)}`,
-          }), deadlineMs + WORKER_RESPONSE_GRACE_MS);
+          }, 'time-budget'), deadlineMs + WORKER_RESPONSE_GRACE_MS);
           worker.postMessage({
             id,
             ...input,
@@ -109,7 +138,7 @@
               status: 'canceled',
               fallback: requestConfig.interactiveResult,
               fallbackReason: `Final planning was canceled; ${unchanged.charAt(0).toLowerCase() + unchanged.slice(1)}`,
-            });
+            }, 'cancelled');
           },
         };
       },

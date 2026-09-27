@@ -1,6 +1,9 @@
 import { alignedWaypointHandles } from "./waypointHandles";
 import { createMarkerId, createPathId, createPathLinkId, createRoutineId } from "./ids";
 
+/** Editor selection state that is never saved and never affects planning identity. */
+export const TRANSIENT_EDITOR_KEYS: ReadonlySet<string> = new Set(["_selAfter", "_selT", "_selM", "_selR"]);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

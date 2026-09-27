@@ -1,7 +1,7 @@
 import type { BordeauxProject } from "../types";
 import { ACTIVE_FIELD_REFERENCE } from "../field/rebuilt2026";
 import { validateProject } from "../validation";
-import { normalizeProject } from "./normalize";
+import { TRANSIENT_EDITOR_KEYS, normalizeProject } from "./normalize";
 
 const CURRENT_PROJECT_SCHEMA_VERSION = "1.0" as const;
 
@@ -9,8 +9,6 @@ export interface DecodedProjectFile {
   project: BordeauxProject;
   migrated: boolean;
 }
-
-const TRANSIENT_EDITOR_KEYS = new Set(["_selAfter", "_selT", "_selM", "_selR"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -148,9 +146,13 @@ function stripEditorState(value: unknown): unknown {
   );
 }
 
+/** The normalized, validated project that `encodeProjectFile` would write. */
+export function prepareProjectFile(value: unknown): BordeauxProject {
+  const decoded = decodeProjectValue(stripEditorState(value));
+  return { ...decoded.project, schemaVersion: CURRENT_PROJECT_SCHEMA_VERSION };
+}
+
 export function encodeProjectFile(value: unknown): { project: BordeauxProject; contents: string } {
-  const clean = stripEditorState(value);
-  const decoded = decodeProjectValue(clean);
-  const project = { ...decoded.project, schemaVersion: CURRENT_PROJECT_SCHEMA_VERSION };
+  const project = prepareProjectFile(value);
   return { project, contents: `${JSON.stringify(project, null, 2)}\n` };
 }

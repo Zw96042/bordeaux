@@ -193,12 +193,9 @@ import { UI } from "./ui";
   }
 
   function Transport({ derived, doc, metric, setMetric, playTime, playing, togglePlayback, seek, restart, graphOpen, setGraphOpen }) {
-    const playback = derived.playback;
-    const prof = playback ? playback.prof : derived.prof;
-    const pts = playback ? playback.pts : derived.sample.pts;
-    const M = playback ? playback.metrics : derived.metrics;
-    const anchors = playback ? playback.anchors : derived.anchors;
-    const rev = playback ? playback.rev : derived.rev;
+    const prof = derived.prof;
+    const pts = derived.sample.pts;
+    const M = derived.metrics;
     const total = prof.totalTime || 0.001;
     const pct = Math.max(0, Math.min(1, playTime / total));
     const scrubStep = Math.min(0.02, total);
@@ -219,13 +216,16 @@ import { UI } from "./ui";
         return prof.t[low - 1] + (prof.t[low] - prof.t[low - 1]) * part;
       };
       const percentAt = (fraction) => Math.max(0, Math.min(100, timeAtFraction(fraction) / total * 100));
-      const markers = ((doc && doc.markers) || []).map((marker, index) => ({
-        key: 'event-' + index,
-        label: marker.name || 'Event marker ' + (index + 1),
-        left: derived.markers && derived.markers[index]
-          ? Math.max(0, Math.min(100, derived.markers[index].timeS / total * 100))
-          : percentAt(PM.featureFraction(marker, derived.sample)),
-      }));
+      const markers = ((doc && doc.markers) || []).map((marker, index) => {
+        const timed = derived.markers && derived.markers[index];
+        return {
+          key: 'event-' + index,
+          label: marker.name || 'Event marker ' + (index + 1),
+          left: timed && timed.id === marker.id
+            ? Math.max(0, Math.min(100, timed.timeS / total * 100))
+            : percentAt(PM.featureFraction(marker, derived.sample)),
+        };
+      });
       const targets = ((doc && doc.targets) || []).map((target, index) => ({
         key: 'target-' + index,
         label: 'Rotation target ' + (index + 1) + ', ' + Number(target.deg || 0).toFixed(0) + '°',

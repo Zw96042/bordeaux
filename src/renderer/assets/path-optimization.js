@@ -27,19 +27,18 @@ function create({ getProject, planner = FinalPlanning.create() }) {
     const key = optimizationInputKey(path, project.robot, project.field);
     const job = { id, key, request: null };
     active = job;
-    put(id, { key, status: 'searching', startedAt: Date.now(), progress: null, value: null, error: '' });
+    put(id, { key, status: 'searching', startedAt: Date.now(), value: null, error: '' });
+    // Final planning keeps the latest incumbent for timeout/cancel results;
+    // nothing renders intermediate progress, so it never enters this store.
     job.request = planner.request(
       { path, robot: project.robot, field: project.field, optimize: true, plannerId: 'profiledSpline' },
-      { deadline, onProgress(value) {
-        if (active !== job || !matches(id, key)) return;
-        put(id, { ...snapshot.paths[id], progress: value });
-      } },
+      { deadline },
     );
     const result = await job.request.promise;
     if (active !== job) return;
     active = null;
     if (!matches(id, key)) {
-      put(id, { ...snapshot.paths[id], status: 'stale', value: null, progress: null });
+      put(id, { ...snapshot.paths[id], status: 'stale', value: null });
       return;
     }
     put(id, {

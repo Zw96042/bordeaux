@@ -153,6 +153,20 @@ import { createRoutineNodeId } from "../../shared/project/ids";
   function findNode(routine, id) { let hit = null; walk(routine.nodes, (n) => { if (n.id === id) hit = n; }); return hit; }
   function countSteps(routine) { let n = 0; walk(routine.nodes, () => n++); return n; }
 
+  // Every path document the routine can follow in any branch, once each.
+  function planningPaths(routine, paths) {
+    const referenced = new Map();
+    walk(routine.nodes, (node) => {
+      if (node.type === 'path') {
+        const path = paths.find((candidate) => candidate.id === node.ref);
+        if (path) referenced.set(path.id, path);
+      } else if (node.type === 'function' && node.cat === 'generate' && node.preview) {
+        referenced.set(node.preview.id, node.preview);
+      }
+    });
+    return [...referenced.values()];
+  }
+
   // ---- derive a path-bearing node into a field trajectory ----
   function derivePathNode(node, pathsById, robot, plannerId, plannedPaths, derivedPaths, derivePath = PM.derivePath) {
     let doc = null;
@@ -337,7 +351,7 @@ import { createRoutineNodeId } from "../../shared/project/ids";
   }
 
 export const AUTO = { branches, selectedBranch, branchOutputs, newOutputBranch, routeSummary, CATS, AUTHORABLE_STEPS, authoritativeConditions, conditionPickerItems, hasWaitBuiltIn, authorableSteps, nodeDeploymentState, nodeTitle, newNode, walk, findNode, countSteps, branchCount,
-    buildRun, poseAt, stepAt, fieldOverlay,
+    planningPaths, buildRun, poseAt, stepAt, fieldOverlay,
     update, remove, insertAfter, prepend, appendBranch, append, move, siblingNodes, canReorderRelative, reorderRelative };
 
   // ---- immutable-ish routine edits (operate on a deep clone) ----
