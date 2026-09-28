@@ -53,7 +53,7 @@ export function AppUpdateDialog({ state, onClose, onCheck, onDownload, onCancel,
   const { phase, version, currentVersion, progress, error } = state;
   const stalled = phase === 'installing' && state.installStalled;
   const busy = !stalled && ['checking', 'downloading', 'installing'].includes(phase);
-  const title = stalled ? 'Restart is taking longer than expected' : ({ available: 'An update is available', downloading: 'Download in progress', downloaded: 'Ready to install', upToDate: 'You’re up to date', error: 'Update interrupted', unsupported: 'Manual update available', installing: 'Restarting Bordeaux' })[phase] || 'Bordeaux';
+  const title = stalled ? 'Restart is taking longer than expected' : ({ available: 'Update available', downloading: 'Download in progress', downloaded: 'Ready to install', upToDate: 'You’re up to date', error: 'Update interrupted', unsupported: 'Manual update available', installing: 'Restarting Bordeaux', checking: 'Checking for updates' })[phase] || 'Software updates';
   const subtitle = stalled ? 'You can close this panel. If Bordeaux does not restart, save your work and install the update from All releases.' : phase === 'error' ? error : phase === 'unsupported' ? 'Download an installer from the official releases page.' : '';
   const notes = releaseNoteBlocks(state.releaseNotes);
   const percent = Number.isFinite(progress?.percent) ? Math.min(100, Math.max(0, progress.percent)) : null;
@@ -68,19 +68,17 @@ export function AppUpdateDialog({ state, onClose, onCheck, onDownload, onCancel,
     : phase === 'upToDate' || phase === 'unsupported' ? { label: 'Done', onClick: close }
     : !busy ? { label: 'Check for updates', onClick: onCheck } : null;
   return h('dialog', { ref: dialog, className: 'app-update-dialog', 'aria-labelledby': 'app-update-title', onCancel: (event) => { event.preventDefault(); close(); } },
+    // The status is the title; the versions and any explanation sit directly beneath it.
     h('header', { className: 'app-update-header' },
-      h('h2', { id: 'app-update-title' }, 'Software updates'),
+      h('h2', { id: 'app-update-title', 'aria-live': phase === 'error' ? undefined : 'polite' }, title),
       h('button', { type: 'button', className: 'app-update-close', 'aria-label': 'Close updates', disabled: phase === 'installing' && !stalled, onClick: close }, '×')),
     h('div', { className: 'app-update-summary' },
-      h('div', { className: 'app-update-status-row' },
-        h('p', { className: 'app-update-status', role: phase === 'error' ? undefined : 'status' }, title),
-        h('span', { className: 'app-update-versions' }, `Installed ${currentVersion || '—'}`)),
+      h('p', { className: 'app-update-versions' }, `Installed ${currentVersion || '—'}`, version && version !== currentVersion ? ` → ${version}` : ''),
       !busy && subtitle && h('p', { className: 'app-update-description', role: phase === 'error' ? 'alert' : undefined }, subtitle),
       busy && h('div', { className: 'app-update-transfer', 'aria-busy': true },
         h('progress', { max: 100, value: phase === 'downloading' && percent != null ? percent : undefined, 'aria-label': phase === 'downloading' ? 'Update download' : phase === 'checking' ? 'Checking for updates' : 'Installing update' }),
         phase === 'downloading' && h('div', { className: 'app-update-transfer-values' }, h('span', null, `${updateBytes(progress?.transferred)} of ${updateBytes(progress?.total)}`), h('span', null, percent == null ? '' : `${Math.round(percent)}%`), h('span', null, progress?.bytesPerSecond > 0 ? `${updateBytes(progress.bytesPerSecond)}/s` : '')))),
     h('section', { className: 'app-update-notes', 'aria-label': 'Release notes', tabIndex: 0 },
-      h('div', { className: 'app-update-notes-heading' }, h('h3', null, 'Release notes'), h('span', null, version || currentVersion)),
       notes.length ? noteContent(notes) : phase !== 'checking' && h('p', { className: 'app-update-empty' }, 'No release notes available.')),
     h('footer', { className: 'app-update-footer' },
       h('div', { className: 'app-update-secondary' }, h('button', { type: 'button', onClick: onOpenReleases }, 'All releases'),
