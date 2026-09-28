@@ -3,8 +3,10 @@ import path from "node:path";
 
 // Includes command-output routes and shared keyboard, focus, and numeric-draft recovery.
 // Offline connection editing and accessible planning/update recovery add under 1 KiB.
-// Keep the additional allowance bounded; worker and CSS budgets are unchanged.
-const APPLICATION_JAVASCRIPT_BUDGET_BYTES = 523 * 1024;
+// Scoped chronological Undo with conflict checks, draft transactions, and planning
+// timeout recovery add about 6 KiB over the previous 533,500-byte build; 528 KiB
+// bounds that with less headroom than before. Worker and CSS budgets are unchanged.
+const APPLICATION_JAVASCRIPT_BUDGET_BYTES = 528 * 1024;
 // Accepted-artifact validation and resumable search stay in the worker, off the UI thread.
 const WORKER_JAVASCRIPT_BUDGET_BYTES = 176 * 1024;
 const CSS_BUDGET_BYTES = 140 * 1024;
