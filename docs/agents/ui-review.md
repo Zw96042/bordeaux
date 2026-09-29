@@ -10,7 +10,8 @@ For renderer changes, review the affected workflow in the built app before calli
 - Give each action one predictable meaning. Plain selection must not delete objects. Shift-click explicitly deletes authored field and outline features; library Shift selection remains a range gesture. Create spatial features through deliberate placement on the field.
 - Keep ordinary successful background work quiet. Separate loading, failure, and ready states; errors get one explanation and a usable recovery action.
 - Show units consistently wherever the same quantity appears. Convert at the display/input boundary, preserving canonical stored values.
-- Reuse the existing menu, dialog, row, and field patterns. Check their actual token definitions and keyboard behavior before introducing another variant.
+- Reuse the existing menu, dialog, row, and field patterns. Check their actual token definitions and keyboard behavior before introducing another variant. Buttons come in three tiers defined once in `app.css`: secondary (`.qbtn`), `.primary` for the single commit on a surface (rightmost in dialogs), and `.quiet`/`.delbtn` for low-emphasis and destructive actions. Accent marks the current object, keyboard focus, or that primary commit; hover stays neutral.
+- Components imported by `App.jsx` load their stylesheets before `app.css`, while some harnesses load them after. Keep shared rules in `app.css` so both orders render the same.
 - Preserve the robot boundary: local Save, explicit scoped Push, immutable revision review, and verified acceptance remain distinct.
 
 ## Verification for a UI change
@@ -24,19 +25,19 @@ For renderer changes, review the affected workflow in the built app before calli
 
 Existing local harnesses:
 
-- `node scripts/verify-interface-ui.mjs`: shared dropdown search/custom values, keyboard navigation, numeric cancellation, command draft ownership, viewport bounds, and reduced motion.
+- `node scripts/verify-interface-ui.mjs`: shared dropdown search/custom values, keyboard navigation, numeric cancellation, one-change label scrubs including focused fields with Tab, Save, repeated focused scrubs, and cancellation, Enter during a captured scrub deferring to release (one change) or Escape (no change), text and command draft ownership, viewport bounds, and reduced motion. It fails early if the window loses native focus (a lost focus blurs drafts and withholds focus events); rerun it in the foreground rather than treating that as a product result.
 - `node scripts/verify-interface-workflows.mjs`: constraint-bar press stability, toolbar shortcut isolation, exact robot numeric cancellation, routine focus return, and timeline keyboard focus. Run foreground workflow harnesses sequentially so another Electron window cannot steal native focus.
 - `node scripts/verify-command-branches-ui.mjs`: command output selection, Boolean/named/numeric routes, nested steps, typed comparison editing, missing outputs, and save/reload using a mocked NI catalog.
 
 - `node scripts/verify-labview-project-ui.mjs`: visible project selection and command sync, Windows/Mac status, recent project rows, searchable source evidence, and keyboard access with mocked project callbacks.
 - `node scripts/verify-project-folder-ui.mjs`: folder selection/cancel, New, Save and BDX failure/retry, autosave error retention, keyboard navigation, and explicit legacy file command using mocked filesystem dialogs.
-- `node scripts/verify-library-ui.mjs`: paths, routines, settings, and mocked push integration.
+- `node scripts/verify-library-ui.mjs`: paths, routines, settings, surface-scoped Undo, undoable path and folder deletion that keeps later library work, linked restoration blocked by newer neighbor edits, divider geometry and Push/Retry reachability at the minimum height including a valid 5000-character name through save/reload (library rows clamp to two lines and the push footer to one, with the full name kept) with a bounded, wheel-scrollable inspector title, topmost close button, reachable Swap start/end and tool-rail Place waypoint, and pointer close with keyboard reopen, Undo of an applied robot profile proposal that keeps later Settings notes typed with real keyboard input through Redo, save, and reload (including a verified Backspace fallback when select-all does not select the fixture text), and mocked push integration.
 - `node scripts/verify-robot-push-ui.mjs`: legacy mocked activation controller transitions.
-- `node scripts/verify-robot-file-push-ui.mjs`: direct SFTP connection, SSH identity, immutable file review, upload/readback success and failure using mocked transport.
+- `node scripts/verify-robot-file-push-ui.mjs`: direct SFTP connection, SSH identity, immutable file review, upload/readback success and failure, and diagnostics focus return using mocked transport.
 - `node scripts/verify-optimizer-ui.mjs`: optimizer comparison, exact apply/save/reload timing, units, keyboard reorder, and current-normal routine fallback.
-- `node scripts/verify-planning-recovery-ui.mjs`: usable failure details and limit editing, blocked stale geometry/playback, combined acceleration, folder titles, and autosave focus.
+- `node scripts/verify-planning-recovery-ui.mjs`: usable failure details and limit editing, final-planning timeout with Try again, blocked stale geometry/playback, combined acceleration, folder titles, and autosave focus.
 - `node scripts/verify-update-quit.mjs`: production window/quit cleanup with unsaved edits and a controlled installer handoff; no native installation.
-- `node scripts/verify-range-limits-ui.mjs`: zone add/remove, exact metric/imperial values, save/reload, keyboard focus, and open/closed layouts at both supported sizes.
+- `node scripts/verify-range-limits-ui.mjs`: zone add/remove, exact metric/imperial values, save/reload, keyboard focus, field Shift-delete of commands and zones with a focused name draft, and open/closed layouts at both supported sizes.
 - `node scripts/verify-app-updates-ui.mjs`: update notes, fixed panel dimensions, progress, cancellation, retry, installation with unsaved edits, stalled-restart recovery, keyboard access, and focus return with mocked updater states. Mac/Windows fixtures do not verify native installers.
 
 Use isolated fixtures and mock robot transports for UI checks. Report a failing check as failing. Do not weaken assertions to get a green result; distinguish an obsolete expectation from a product regression using code and rendered behavior.
