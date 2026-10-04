@@ -614,64 +614,20 @@ details[open]>summary::after{transform:translateY(3px) rotate(-135deg)}
 .ctxmenu-k{margin-left:auto;color:var(--txt-3);font-size:11px}
 
 .sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
-/* Compact path library: one drawer surface, with tone and rules instead of nested cards. */
-.pathlib-scrim{position:fixed;inset:50px 0 0;z-index:69;border:0;border-radius:0;background:rgb(0 0 0 / .38);cursor:default}
-.pathlib-panel{--pathlib-rule:1px;position:fixed;z-index:70;isolation:isolate;left:0;top:50px;bottom:0;width:296px;display:flex;flex-direction:column;background:var(--bg-1);border-right:var(--pathlib-rule) solid rgb(255 255 255 / .1);box-shadow:18px 0 42px rgb(0 0 0 / .32);color:var(--txt)}
-.pathlib-panel:focus{outline:none!important}
-.pathlib-head{height:46px;display:flex;align-items:center;padding:0 8px 0 12px;border-bottom:var(--pathlib-rule) solid var(--line)}
-.pathlib-head>div{min-width:0;display:flex;align-items:center;gap:7px}.pathlib-head>div>svg{color:var(--txt-3)}
-.pathlib-head strong{font-size:12.5px;font-weight:650}.pathlib-head>div>span{min-width:16px;text-align:center;font:9.5px var(--mono);color:var(--txt-3)}
-.pathlib-head>button{margin-left:auto;width:32px;height:32px;display:grid;place-items:center;color:var(--txt-3)}
-.pathlib-create{display:grid;grid-template-columns:repeat(3,1fr);padding:0 8px;border-bottom:var(--pathlib-rule) solid var(--line)}
-.pathlib-create button{height:36px;display:flex;align-items:center;justify-content:center;gap:6px;background:transparent;color:var(--txt-2);font-size:11px;font-weight:600;transition:background-color .14s ease,color .14s ease}
-.pathlib-create button+button{border-left:var(--pathlib-rule) solid var(--line)}.pathlib-create button.primary{color:var(--accent)}
-.routinelib-create{grid-template-columns:1fr}.routinelib-create button{grid-column:1/-1}
-.pathlib-searchwrap{position:relative;height:40px;border-bottom:var(--pathlib-rule) solid var(--line);transition:background-color .14s ease,box-shadow .14s ease}.pathlib-searchwrap>svg{position:absolute;z-index:1;left:13px;top:50%;transform:translateY(-50%);color:var(--txt-3);pointer-events:none}
-.pathlib-searchwrap:focus-within{background:var(--bg-2);box-shadow:inset 2px 0 var(--accent)}
-.pathlib-search{width:100%;height:40px;padding:0 28px 0 36px;border:0;border-radius:0;background:transparent;color:var(--txt);font-size:13px;outline:0}
-.pathlib-scroll{min-height:0;flex:1;overflow:auto;padding:3px 0 12px;scrollbar-width:thin}
-.pathlib-group{margin:0}.pathlib-folderwrap{position:relative;border-bottom:var(--pathlib-rule) solid var(--line)}
-.pathlib-folder{height:32px;display:flex;align-items:center;padding:0 4px;color:var(--txt-2)}
-.pathlib-foldertoggle{min-width:0;flex:1;height:32px;display:grid;grid-template-columns:14px minmax(0,1fr) auto;align-items:center;gap:5px;padding:0 6px;text-align:left;font-size:10px;font-weight:650;text-transform:uppercase;letter-spacing:.48px}
-.pathlib-folder>.pathlib-more{flex-basis:32px;width:32px;height:32px}
-.pathlib-foldertoggle svg{transition:transform .14s ease}.pathlib-foldertoggle[aria-expanded="false"] svg{transform:rotate(-90deg)}
-.pathlib-foldertoggle small{min-width:18px;text-align:center;font:9px var(--mono);color:var(--txt-3)}
-.pathlib-item{position:relative;border-bottom:var(--pathlib-rule) solid rgb(255 255 255 / .035)}.pathlib-path{min-height:36px;display:flex;align-items:stretch;transition:background-color .14s ease,box-shadow .14s ease}
-.pathlib-path.on{background:color-mix(in srgb,var(--accent-soft) 76%,transparent);box-shadow:inset 2px 0 var(--accent)}
-.pathlib-pick{min-width:0;flex:1;display:grid;grid-template-columns:16px minmax(0,1fr) auto;align-items:center;gap:6px;padding:0 4px 0 14px;text-align:left;color:var(--txt-2)}
-.pathlib-pick>svg{color:var(--txt-3)}.pathlib-path.on .pathlib-pick{color:var(--txt)}.pathlib-path.on .pathlib-pick>svg{color:var(--accent)}
-.pathlib-copy{min-width:0;display:flex;flex-direction:column;gap:1px}.pathlib-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;font-weight:550}
-.pathlib-foldername{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--txt-3);font-size:9px}.pathlib-time{font:9px var(--mono);color:var(--txt-3);font-variant-numeric:tabular-nums}
-.pathlib-more{flex:0 0 36px;width:36px;height:36px;align-self:center;color:var(--txt-3);font-size:15px;letter-spacing:1px;transition:background-color .14s ease,color .14s ease}
-.pathlib-more[aria-expanded="true"]{background:rgb(255 255 255 / .055);color:var(--txt)}
-.pathlib-actionmenu{margin:0;padding:5px 10px 7px 12px;border-top:var(--pathlib-rule) solid var(--line);background:color-mix(in srgb,var(--bg-2) 72%,var(--bg-1));box-shadow:inset 2px 0 color-mix(in srgb,var(--accent) 62%,transparent)}
-.pathlib-actionrow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:2px}
-.pathlib-actionrow>button{min-width:0;height:30px;display:flex;align-items:center;justify-content:center;gap:5px;padding:0 4px;border-radius:4px;color:var(--txt-2);font-size:10.5px;font-weight:550;white-space:nowrap;transition:background-color .14s ease,color .14s ease}
-.pathlib-actionmenu svg{color:var(--txt-3)}.pathlib-actionrow>button.danger{color:#d98b87}.pathlib-actionrow>button.danger svg{color:#c97975}.pathlib-actionrow>button:disabled{opacity:.38;cursor:not-allowed}
-.pathlib-move{width:100%;min-height:30px;display:grid;grid-template-columns:16px auto minmax(0,1fr);align-items:center;gap:6px;padding:2px 4px 0;color:var(--txt-3);font-size:10.5px;text-align:left}
-.pathlib-move select{min-width:0;height:27px;padding:0 18px 0 5px;border:0;border-radius:0;background-color:transparent;color:var(--txt-2);font-size:13px;box-shadow:inset 0 -1px rgb(255 255 255 / .1);outline:0}
-.pathlib-move select:focus-visible{box-shadow:inset 0 -1px var(--txt),0 1px var(--txt)}
-.pathlib-linknote{min-height:28px;display:flex;align-items:center;gap:6px;padding:2px 4px;color:var(--txt-3);font-size:10.5px}.pathlib-linknote svg{color:var(--accent)}.pathlib-linknote button{margin-left:auto;color:var(--txt-2);font-weight:600}
-.pathlib-empty{padding:7px 28px;color:var(--txt-3);font-size:10.5px}.pathlib-emptysearch{min-height:130px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;text-align:center}.pathlib-emptysearch strong{color:var(--txt-2);font-size:11.5px}.pathlib-emptysearch span{max-width:170px;line-height:1.4}
-.pathlib-editrow{margin:0;padding:6px 8px 6px 22px;border-top:var(--pathlib-rule) solid var(--line);border-bottom:var(--pathlib-rule) solid var(--line);background:var(--bg-2);box-shadow:inset 2px 0 var(--accent)}
-.pathlib-rename{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:4px}.pathlib-rename input{min-width:0;height:32px;padding:0 7px;border:var(--pathlib-rule) solid rgb(255 255 255 / .14);border-radius:3px;background:var(--bg-1);color:var(--txt);font-size:13px;outline:0}
-.pathlib-rename input:focus-visible{outline:0;border-color:rgb(255 255 255 / .24);box-shadow:0 0 0 1px rgb(255 255 255 / .08)}.pathlib-rename button{height:32px;padding:0 7px;color:var(--txt-2);font-size:10px;font-weight:600}.pathlib-rename button[type="submit"]{color:var(--accent)}
-.pathlib-error{display:block;grid-column:1/-1;margin-top:1px;color:#e89a96;font-size:10px}
-@media (hover:hover) and (pointer:fine){.pathlib-head>button:hover,.pathlib-more:hover,.pathlib-foldertoggle:hover,.pathlib-path:not(.on):hover,.pathlib-actionrow>button:hover,.pathlib-rename button:hover,.pathlib-create button:hover{background:rgb(255 255 255 / .045);color:var(--txt)}.pathlib-create button.primary:hover{color:color-mix(in srgb,var(--accent) 82%,white)}}
-@media only screen and (min-device-pixel-ratio:2),only screen and (min-resolution:192dpi){.pathlib-panel{--pathlib-rule:.5px}}
-@media (max-width:700px){.pathlib-panel{width:min(296px,calc(100% - 48px))}}
-
-/* Robot command discovery and typed marker parameters. */
-.cmd-project{display:flex;flex-direction:column;gap:9px;margin:0 0 10px;padding:11px;border:1px solid rgb(255 255 255 / .09);border-radius:9px;background:rgb(255 255 255 / .018);isolation:isolate}
-.cmd-project-head{display:grid;grid-template-columns:30px minmax(0,1fr);align-items:center;gap:9px;min-width:0}.cmd-project-icon{width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:7px;background:var(--accent-soft);color:var(--accent);pointer-events:none}.cmd-project-copy{min-width:0;display:flex;flex-direction:column;gap:2px}.cmd-project-copy strong,.cmd-project-copy span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cmd-project-copy strong{white-space:normal;overflow-wrap:anywhere;color:var(--txt);font-size:11.5px;font-weight:600}.cmd-project-copy span{color:var(--txt-3);font-size:9.5px}
-.cmd-project-state{display:flex;align-items:center;gap:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--txt-3);font-size:9.5px;font-weight:550}.cmd-project-state i{width:6px;height:6px;flex:0 0 6px;border-radius:50%;background:var(--warn)}.cmd-project-state.ready{color:color-mix(in srgb,var(--accent) 72%,white)}.cmd-project-state.ready i{background:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 12%,transparent)}
-.cmd-project-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:8px;border-top:1px solid rgb(255 255 255 / .07)}.cmd-project-summary{min-width:0;display:flex;flex-direction:column;gap:2px}.cmd-project-count{color:var(--txt-3);font:9px var(--mono);font-variant-numeric:tabular-nums}.cmd-project-actions{display:flex;align-items:center;gap:3px}.cmd-iconbtn{width:40px;height:40px;display:flex;align-items:center;justify-content:center;border-radius:7px;color:var(--txt-3);transition:color .14s ease-out,background-color .14s ease-out}.cmd-iconbtn:disabled{cursor:not-allowed;opacity:.38;transform:none}.cmd-primary-action{width:100%;min-height:40px;padding:0 12px;border-radius:7px;background:color-mix(in srgb,var(--accent) 16%,var(--bg-2));color:color-mix(in srgb,var(--accent) 72%,white);font-size:11px;font-weight:600;transition:background-color .14s ease-out,color .14s ease-out}.cmd-primary-action:disabled{cursor:not-allowed;opacity:.45;transform:none}.cmd-cancel-action{align-self:flex-start;color:var(--txt-3);font-size:10px;text-decoration:underline;text-underline-offset:3px}
-.cmd-project-switcher{padding-top:8px;border-top:1px solid rgb(255 255 255 / .07)}.cmd-project-warning{color:#d8bd88;font-size:10px;line-height:1.4}
-.labview-inspection,.labview-sources{color:var(--txt-2);font-size:11px;line-height:1.45;min-width:0}
-.labview-sources{margin:10px 0}
-.labview-sources summary,.labview-source-warnings summary{padding:7px 0;cursor:pointer;font-weight:550;overflow-wrap:anywhere}
-.labview-sources summary:focus-visible,.labview-source-warnings summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.labview-sources .fieldlabel{display:block}.labview-sources .textinput{display:block;margin-top:5px}
+/* ============ LabVIEW project and robot commands ============ */
+.labview-project-panel{display:flex;flex-direction:column;gap:6px;min-width:0;margin:0 0 16px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.labview-project-panel p{margin:0}
+.labview-project-heading{color:var(--txt-3);font-size:11.5px;font-weight:550}
+.labview-project-name{font-size:13px;font-weight:600;line-height:1.35;overflow-wrap:anywhere}
+.labview-project-status{color:var(--txt-2);font-size:12px;line-height:1.4}
+.labview-project-help{color:var(--txt-3);font-size:11.5px;line-height:1.45}
+.labview-project-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
+.labview-project-actions .qbtn{flex:1}
+.labview-text-action{align-self:flex-start}
+.labview-sources{min-width:0;color:var(--txt-2);font-size:12px;line-height:1.45}
+.labview-source-content{display:flex;flex-direction:column;gap:8px;padding-top:6px}
+.labview-source-content>.fieldlabel{display:block;margin:0}
+.labview-sources .textinput{display:block;margin-top:6px}
 .labview-source-list{max-height:260px;overflow:auto;scrollbar-width:thin}
 .labview-source-row{display:flex;flex-direction:column;gap:3px;padding:8px 0;border-bottom:1px solid rgb(255 255 255 / .07);overflow-wrap:anywhere}
 .labview-source-row strong{font-size:11px;font-weight:550}.labview-source-meta{font-size:10px;color:var(--txt-3);overflow-wrap:anywhere}
