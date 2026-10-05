@@ -805,49 +805,46 @@ details[open]>summary::after{transform:translateY(3px) rotate(-135deg)}
 @media (hover:hover){.optimizer-choice:not(:disabled):not([aria-pressed=true]):hover,.optimizer-search-actions button:not(:disabled):hover{background:var(--bg-3)}.optimizer-reset:hover{background:var(--bg-3);color:var(--txt)}.optimizer-batch button:hover{color:var(--txt)}}
 
 /* Passive field feedback occupies one row; longer explanations are opt-in. */
-.field-status{position:relative;display:flex;align-items:center;width:max-content;max-width:100%;min-width:0;border:1px solid var(--line);border-radius:7px;background:var(--hud-surface);color:var(--txt-2);pointer-events:auto;font-size:12px;line-height:1.4}
+.field-status{position:relative;display:flex;align-items:center;width:max-content;max-width:100%;min-width:0;border:1px solid var(--line-2);border-radius:var(--r);background:var(--hud-surface);box-shadow:var(--elevation);color:var(--txt-2);font-size:12px;line-height:1.4;pointer-events:auto}
+.field-status.error{border-color:rgba(210,101,95,.45)}
 .field-status details{min-width:0}
-.field-status summary{display:flex;align-items:center;gap:8px;min-width:0;min-height:32px;padding:6px 10px;cursor:pointer;list-style:none}
-.field-status summary::-webkit-details-marker{display:none}
+.field-status summary{min-width:0;min-height:32px;padding:6px 10px}
+.field-status summary::after{content:none}
 .field-status summary>svg{flex-shrink:0}
-.field-status-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.field-status-disclosure{margin-left:auto;color:var(--txt-3);white-space:nowrap}
-.field-status button{font:inherit;color:var(--txt);cursor:pointer;background:none;border:0;padding:5px 8px;border-radius:4px}
-.field-status button:hover{background:var(--hover)}
-.field-status-action{flex-shrink:0;margin-right:4px}
+.field-status summary>svg:last-child{color:var(--txt-3);transition:transform .14s}
+.field-status details[open] summary>svg:last-child{transform:rotate(180deg)}
 .field-status.error summary>svg:first-child{color:var(--bad)}
-.field-status-details{position:absolute;left:0;top:calc(100% + 6px);width:100%;min-width:0;max-height:min(240px,40vh);overflow:auto;overscroll-behavior:contain;border:1px solid var(--line);border-radius:7px;padding:4px 12px;background:var(--hud-surface);box-shadow:var(--polish-elevation)}
+.field-status-label{min-width:0;overflow:hidden;color:var(--txt);text-overflow:ellipsis;white-space:nowrap}
+.field-status-disclosure{margin-left:auto;padding-left:4px;color:var(--txt-3);white-space:nowrap}
+.field-status button{padding:4px 10px;border-radius:var(--r-s);color:var(--txt);font:inherit}
+.field-status .field-status-action{flex-shrink:0;margin-right:5px;border:1px solid var(--line-3);background:var(--bg-3);font-weight:550}
+.field-status-details{position:absolute;left:0;top:calc(100% + 6px);width:100%;min-width:0;max-height:min(240px,40vh);overflow:auto;overscroll-behavior:contain;padding:4px 12px;border:1px solid var(--line-2);border-radius:var(--r);background:var(--hud-surface);box-shadow:var(--elevation)}
 .field-status-item{padding:9px 0;overflow-wrap:anywhere}
 .field-status-item+.field-status-item{border-top:1px solid var(--line)}
-.field-status-item strong{font-size:inherit;font-weight:600;color:var(--txt)}
+.field-status-item strong{color:var(--txt);font-size:inherit;font-weight:600}
 .field-status-item p{margin:4px 0;font-size:inherit}
-.field-status summary:focus-visible,.field-status button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.endpoint-speed{min-width:0}
-.endpoint-speed .numrow{min-width:0}
-
-.linkable-name{display:flex;flex-direction:column;gap:5px;margin-bottom:10px;font-size:12px;color:var(--txt-2)}
+.field-status-item button{margin-left:-10px;color:var(--accent);font-weight:550}
+@media (hover:hover){.field-status button:hover{background:var(--bg-4)}}
 
 /* Editing controls stay fixed under the pointer, including during graph expansion. */
-.stage-plan .viewctl{bottom:110px;transform:none}
-.stage-plan .viewctl.graph-open{bottom:264px;transform:none}
-@container (max-width:420px){.stage-plan .viewctl{bottom:110px}.stage-plan .viewctl.graph-open{bottom:264px}}
+.stage-plan .viewctl{bottom:110px}
 .app ul,.app ol{list-style:none;padding-left:0}
-.app .featdot,.app .rt-brdot{display:none}
-
-.keyboard-help{margin:auto;padding:22px;width:460px;max-width:calc(100vw - 32px);max-height:calc(100vh - 48px);overflow:auto;color:var(--txt);background:var(--bg-1);border:1px solid var(--line-2);border-radius:12px;box-shadow:0 24px 80px #0008}
-.keyboard-help::backdrop{background:#0008}
-.keyboard-help header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
-.keyboard-help h2{font-size:16px;font-weight:600;margin:0}
-.keyboard-help header button{width:30px;height:30px;font-size:20px}
-.keyboard-help table{width:100%;border-collapse:collapse;font-size:12px}
-.keyboard-help td{padding:6px 0;border-bottom:1px solid var(--line)}
-.keyboard-help td:last-child{text-align:right;white-space:nowrap;padding-left:16px}
-.keyboard-help kbd{font:11px var(--mono);color:var(--txt-2)}
-.keyboard-help p{color:var(--txt-3);font-size:11px;line-height:1.5;margin:16px 0 0}
 @container (max-width:700px){.timeline-summary{display:none}}
+/* Narrow field (1100 with inspector open is 516px): drop the redundant label, then the
+   legend range, so time, metric, path length and the graph toggle keep their full text. */
+@container (max-width:660px){.fieldcol .timeline-title{display:none}}
+@container (max-width:600px){.fieldcol .metric-range{display:none}}
 
-/* Identify the owner of a search when another path is selected. */
-.optimizer-background{display:flex;align-items:flex-start;gap:12px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--line);color:var(--txt-2);font-size:11px;line-height:1.5}
-.optimizer-background>span{flex:1;min-width:0}
-.optimizer-background strong{display:block;color:var(--txt);font-weight:500;overflow-wrap:anywhere}
-.optimizer-background button{flex:none;padding:5px 8px;border:1px solid var(--line-2);border-radius:6px;background:var(--bg-2)}
+/* ============ dialogs share one shell ============ */
+:is(.keyboard-help,.library-properties,.app-update-dialog,dialog.robot-manager,dialog.robot-diagnostics){border:1px solid var(--line-2);border-radius:var(--r-l);background:var(--bg-1);color:var(--txt);box-shadow:0 24px 80px rgb(0 0 0/.55)}
+:is(.keyboard-help,.library-properties,.app-update-dialog,dialog.robot-manager,dialog.robot-diagnostics)::backdrop{background:rgb(0 0 0/.55)}
+:is(.keyboard-help h2,.library-properties header strong,.app-update-header h2,.robot-push-dialog h2){margin:0;font-size:16px;font-weight:600;line-height:1.35}
+:is(.keyboard-help header button,.library-properties header button,.app-update-dialog .app-update-close,.robot-push-close){display:flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;min-height:28px;margin-left:auto;padding:0;border:0;border-radius:var(--r);background:transparent;color:var(--txt-3);font-size:20px;line-height:1}
+:is(.keyboard-help header button,.library-properties header button,.app-update-dialog .app-update-close,.robot-push-close):hover:not(:disabled){background:var(--bg-3);color:var(--txt)}
+.keyboard-help{width:460px;max-width:calc(100vw - 32px);max-height:calc(100vh - 48px);margin:auto;padding:20px 22px 22px;overflow:auto}
+.keyboard-help header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.keyboard-help table{width:100%;border-collapse:collapse;font-size:12.5px}
+.keyboard-help td{padding:7px 0;border-bottom:1px solid var(--line)}
+.keyboard-help td:last-child{padding-left:16px;text-align:right;white-space:nowrap}
+.keyboard-help kbd{padding:2px 6px;border:1px solid var(--line-2);border-radius:var(--r-s);background:var(--bg-2);color:var(--txt-2);font:11px var(--mono)}
+.keyboard-help p{margin:16px 0 0;color:var(--txt-3);font-size:12px;line-height:1.5}
