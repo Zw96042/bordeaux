@@ -1,18 +1,100 @@
-.robot-push-trigger {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--bg-2);
-  color: var(--txt-2);
-  font: 600 11px/1 var(--ui);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color 140ms ease-out, background-color 140ms ease-out, border-color 140ms ease-out;
+/* Robot connection, push review and diagnostics share the dialog shell and controls in app.css. */
+dialog.robot-manager,dialog.robot-diagnostics{margin:auto;padding:0}
+.robot-push-dialog{width:min(620px,calc(100vw - 32px));max-height:min(760px,calc(100vh - 40px));overflow:auto}
+.robot-push-dialog>header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 14px 2px 20px}
+.robot-push-dialog h3,.robot-push-dialog p{margin:0}
+.robot-push-dialog h3{font-size:13px;font-weight:600}
+.robot-push-close:disabled{opacity:.35;cursor:not-allowed}
+.robot-push-intro{padding:14px 20px 4px;color:var(--txt-2);font-size:12.5px;line-height:1.55}
+.robot-push-section{display:grid;gap:12px;padding:14px 20px 20px}
+.robot-push-section>p,.robot-push-status>p{color:var(--txt-2);font-size:12.5px;line-height:1.55}
+.robot-manager .robot-push-selection{color:var(--txt);font-size:15px;font-weight:600;overflow-wrap:anywhere}
+.robot-push-endpoint{display:grid;grid-template-columns:minmax(0,1fr) 96px;gap:10px}
+.robot-push-endpoint label{display:grid;gap:6px;color:var(--txt-2);font-size:12px;font-weight:500}
+.robot-push-endpoint input{min-width:0;height:34px;padding:0 10px;border:1px solid var(--ctl-line);border-radius:var(--r);background:var(--ctl);color:var(--txt);font:13px var(--mono);outline:none}
+.robot-push-endpoint input:focus{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent-line)}
+.robot-push-endpoint input:disabled{opacity:.55}
+/* Identity values are compared character by character, so they stay monospaced. */
+.robot-push-details{display:grid;margin:0;overflow:hidden;border:1px solid var(--line-2);border-radius:var(--r);background:var(--bg-2)}
+.robot-push-details>div{display:grid;grid-template-columns:120px minmax(0,1fr);gap:14px;padding:9px 12px}
+.robot-push-details>div+div{border-top:1px solid var(--line)}
+.robot-push-details dt{color:var(--txt-3);font-size:12px;font-weight:500;line-height:1.45}
+.robot-push-details dd{min-width:0;margin:0;color:var(--txt);font:12px/1.45 var(--mono);overflow-wrap:anywhere}
+/* Actions: the primary commit is rightmost; with three actions the first moves left. */
+.robot-push-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:4px}
+.robot-push-actions>button:first-child:nth-last-child(n+3):not(.primary){margin-right:auto}
+.robot-push-actions.split{justify-content:space-between}
+.robot-push-alert{margin:12px 20px 0;padding:9px 11px;border-left:2px solid var(--bad);border-radius:0 var(--r) var(--r) 0;background:var(--bad-soft);color:var(--txt);font-size:12.5px;line-height:1.5}
+.robot-push-status{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:10px;padding:14px 20px 20px}
+.robot-push-status p,.robot-push-status button{grid-column:2}
+.robot-push-status button{justify-self:start}
+.robot-push-status strong{font-size:13px;font-weight:600}
+.robot-push-spinner{width:16px;height:16px;border:2px solid var(--accent-soft);border-top-color:var(--accent);border-radius:50%;animation:robot-push-spin .8s linear infinite}
+.robot-push-outcome{margin:4px 20px 20px;padding:14px 16px;border:1px solid var(--line-2);border-left:2px solid var(--line-3);border-radius:var(--r);background:var(--bg-2)}
+.robot-push-outcome.active,.robot-push-outcome.pinned{border-left-color:var(--good);background:rgba(75,191,134,.08)}
+.robot-push-outcome.rejected,.robot-push-outcome.failed{border-left-color:var(--bad);background:var(--bad-soft)}
+.robot-manager .robot-push-outcome{padding:14px 16px}
+/* Reviewed files: the path name, then its exact file name and size. */
+.robot-retention-list{display:grid;gap:6px;margin:0;padding:0;list-style:none}
+.robot-retention-list li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;border:1px solid var(--line-2);border-radius:var(--r);background:var(--bg-2)}
+.robot-retention-list strong{display:block;color:var(--txt);font-size:13px;font-weight:550;overflow-wrap:anywhere}
+.robot-retention-list p{margin-top:2px;color:var(--txt-2);font:11.5px/1.45 var(--mono);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.robot-retention-actions{display:flex;flex:none;gap:6px}
+.robot-retention-actions button{min-height:28px;padding:0 10px}
+.robot-history{padding-top:10px;border-top:1px solid var(--line);color:var(--txt-2);font-size:12.5px}
+.robot-history>summary{padding:4px 0;color:var(--txt);font-weight:550}
+.robot-history>p,.robot-history>dl,.robot-history>button,.robot-history>ul{margin-top:12px}
+.robot-baseline-confirm{display:flex;align-items:flex-start;gap:9px;font-size:12.5px;line-height:1.5}
+.robot-baseline-confirm input{flex-shrink:0;margin-top:3px;accent-color:var(--accent)}
+/* The diagnostics entry sits quietly at the end of the connection dialog. */
+.robot-manager>.robot-connection-diagnostics{padding:0 20px 18px}
+.robot-push-trigger{display:inline-flex;align-items:center;gap:7px;min-height:28px;padding:0 8px;margin-left:-8px;border-radius:var(--r);color:var(--txt-2);font-size:12px;font-weight:550}
+.robot-push-trigger svg{color:var(--txt-3)}
+.robot-push-trigger-diagnostics::after{content:'Diagnostics'}
+.robot-push-trigger:hover:not(:disabled){background:var(--bg-3);color:var(--txt)}
+.robot-push-trigger:disabled{opacity:.45;cursor:not-allowed}
+@keyframes robot-push-spin{to{transform:rotate(360deg)}}
+/* Path push: one compact surface. Destination, files, then one footer with diagnostics left and the commit right. */
+.rfp{width:min(480px,calc(100vw - 32px))}
+.rfp h2{font-size:15px}
+.rfp-body{display:grid;gap:12px;padding:12px 20px 4px;color:var(--txt-2);font-size:12.5px;line-height:1.5}
+.rfp-body strong{color:var(--txt);font-weight:600}
+.rfp-fields{display:grid;grid-template-columns:minmax(0,1fr) 84px;gap:12px 10px}
+.rfp-fields label{display:grid;gap:6px;min-width:0;color:var(--txt-2);font-size:12px;font-weight:500}
+.rfp-fields .rfp-wide{grid-column:1/-1}
+.rfp-fields input{min-width:0;height:32px;padding:0 10px;border:1px solid var(--ctl-line);border-radius:var(--r);background:var(--ctl);color:var(--txt);font:12.5px var(--mono);outline:none}
+.rfp-fields input:focus{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent-line)}
+.rfp-fields input:disabled{opacity:.55}
+.rfp-dest{display:flex;align-items:center;gap:12px;padding:9px 8px 9px 12px;border:1px solid var(--line-2);border-radius:var(--r);background:var(--bg-2)}
+.rfp-dest-text{display:grid;flex:1;gap:2px;min-width:0;font-family:var(--mono);overflow-wrap:anywhere}
+.rfp-dest-text strong{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;font-size:12.5px;font-weight:500}
+.rfp-dest-text>span{color:var(--txt-3);font-size:11.5px}
+.rfp-dest-status{color:var(--txt-3);font:500 11.5px var(--ui)}
+.rfp-dest-status.good{color:var(--good)}
+.rfp-dest .qbtn{flex:none;min-height:28px;padding:0 10px}
+.rfp-files{display:grid;max-height:min(280px,40vh);margin:0;padding:0;overflow:auto;border:1px solid var(--line-2);border-radius:var(--r);list-style:none}
+.rfp-files li{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;gap:4px 14px;padding:8px 12px}
+.rfp-files li+li{border-top:1px solid var(--line)}
+.rfp-file-name{min-width:0;color:var(--txt);font-weight:550;overflow-wrap:anywhere}
+.rfp-file-meta{max-width:min(240px,40vw);color:var(--txt-3);font:11px/1.5 var(--mono);font-variant-numeric:tabular-nums;text-align:right;overflow-wrap:anywhere}
+.rfp-note{color:var(--txt-3);font-size:12px}
+.rfp-key{display:block;padding:10px 12px;border:1px solid var(--line-2);border-radius:var(--r);background:var(--bg-2);color:var(--txt);font:12px/1.5 var(--mono);overflow-wrap:anywhere;user-select:all}
+.rfp-alert{margin:0;padding:8px 11px;border-left:2px solid var(--bad);border-radius:0 var(--r) var(--r) 0;background:var(--bad-soft);color:var(--txt)}
+.rfp-view-working{display:flex;align-items:center;gap:10px;padding-top:16px}
+.rfp-view-done{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:start;padding-top:14px}
+.rfp-view-done p{margin-top:2px;overflow-wrap:anywhere}
+.rfp-view-done strong{font-size:13.5px}
+.rfp-check{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;background:rgb(75 191 134/.14);color:var(--good)}
+.rfp-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 20px 18px}
+.rfp-footer .robot-connection-diagnostics{padding:0}
+.rfp-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-left:auto}
+.rfp .qbtn.primary .robot-push-spinner{width:12px;height:12px;border-color:rgb(255 255 255/.3);border-top-color:#fff}
+.rfp .qbtn.primary:disabled:has(.robot-push-spinner){opacity:.85;cursor:progress}
+@media (max-width:700px){
+  .robot-push-dialog{width:100%;max-height:calc(100vh - 20px)}
+  dialog.robot-diagnostics{width:calc(100vw - 20px)}
+  .robot-push-details>div{grid-template-columns:1fr;gap:4px}
+  .robot-push-endpoint{grid-template-columns:1fr}
 }
 .robot-push-trigger:hover {
   border-color: var(--line-2);
