@@ -70,7 +70,7 @@ function operationError(signal: AbortSignal, timedOut: () => boolean, cause?: un
   const detail = cause instanceof Error ? cause.message : "";
   const diagnostic = [detail, code !== undefined ? `code ${String(code)}` : ""].filter(Boolean).join("; ");
   if (code === 3 || code === "EACCES") {
-    return new RobotTransportError("transfer_failed", "SFTP permission denied. The robot's lvuser account needs access to the selected destination directory" + (diagnostic ? ` (${diagnostic})` : ""), { cause });
+    return new RobotTransportError("transfer_failed", "SFTP permission denied. The robot's SSH account needs access to the selected destination directory" + (diagnostic ? ` (${diagnostic})` : ""), { cause });
   }
   return new RobotTransportError("unavailable", diagnostic ? `Robot SSH/SFTP failed: ${diagnostic}` : UNAVAILABLE_MESSAGE, { cause });
 }
@@ -209,7 +209,8 @@ class Ssh2RobotSession implements RobotSftpSession {
     }
     if (signal.aborted && !this.sessionSignal.aborted) throw new RobotTransportError("cancelled", "SFTP to the robot was cancelled");
     return callbackOperation(AbortSignal.any([signal, this.sessionSignal]), this.timedOut, (callback) => {
-      this.sftp.writeFile(remotePath(file), contents, { flag: "wx", mode: 0o600 }, callback);
+      // Admin uploads must remain readable by LabVIEW running as lvuser.
+      this.sftp.writeFile(remotePath(file), contents, { flag: "wx", mode: file.kind === "pathTemporary" ? 0o644 : 0o600 }, callback);
     });
   }
 
@@ -259,7 +260,7 @@ class Ssh2RobotSession implements RobotSftpSession {
       const contents = await this.read(from, 24 * 1024 * 1024, combined);
       await this.exists(to, combined); // Recheck that the final filename is not a link.
       await callbackOperation(combined, this.timedOut, (callback) => {
-        this.sftp.writeFile(destination, contents, { flag: "w", mode: 0o600 }, callback);
+        this.sftp.writeFile(destination, contents, { flag: "w", mode: 0o644 }, callback);
       });
       await this.remove(from, combined);
       // uploadRobotFiles verifies the final bytes; a failed copy is reported as
@@ -318,7 +319,7 @@ export async function connectRobotSftp(request: RobotConnectRequest): Promise<Ro
       client.connect({
         host: request.endpoint.host,
         port: request.endpoint.port,
-        username: "lvuser",
+        username: request.credentials.username ?? "lvuser",
         readyTimeout: request.timeoutMs,
         keepaliveInterval: Math.min(2_000, Math.max(250, Math.floor(request.timeoutMs / 3))),
         keepaliveCountMax: 2,

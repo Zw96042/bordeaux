@@ -15,13 +15,14 @@ async function robot({ linked = false, denyWrite = false } = {}) {
   const files = new Map([[`${directory}/existing.bdx`, Buffer.from("old")], [`${directory}/unrelated.bdx`, Buffer.from("untouched")]]);
   const directories = new Set(["/home", "/home/lvuser", "/home/lvuser/natinst", "/home/lvuser/natinst/bin", directory]);
   const writes: string[] = [];
+  const writeModes: Array<number | undefined> = [];
   const clients = new Set<Connection>();
   const server = new Server({ hostKeys: [hostKey] }, (client) => {
     clients.add(client);
     client.on("error", () => {});
     client.on("close", () => clients.delete(client));
     client.on("authentication", (ctx) => {
-      if (ctx.username === "lvuser" && (ctx.method === "none" || (ctx.method === "password" && ctx.password === ""))) ctx.accept();
+      if (ctx.username === "admin" && (ctx.method === "none" || (ctx.method === "password" && ctx.password === ""))) ctx.accept();
       else ctx.reject();
     });
     client.on("ready", () => client.on("session", (accept) => {
@@ -38,12 +39,13 @@ async function robot({ linked = false, denyWrite = false } = {}) {
         sftp.on("LSTAT", (id, target) => stat(id, target, false));
         sftp.on("STAT", (id, target) => stat(id, target, true));
         sftp.on("FSTAT", (id, handle) => stat(id, handles.get(handle.toString())!, true));
-        sftp.on("OPEN", (id, target, flags) => {
+        sftp.on("OPEN", (id, target, flags, attrs) => {
           if (flags & O.WRITE) {
             if (denyWrite) { sftp.status(id, S.PERMISSION_DENIED); return; }
             if ((flags & O.EXCL) && files.has(target)) { sftp.status(id, S.FAILURE); return; }
             if (flags & O.TRUNC || !files.has(target)) files.set(target, Buffer.alloc(0));
             writes.push(target);
+            writeModes.push(attrs.mode);
           } else if (!files.has(target)) { sftp.status(id, S.NO_SUCH_FILE); return; }
           const handle = String(++nextHandle); handles.set(handle, target); sftp.handle(id, Buffer.from(handle));
         });
@@ -74,7 +76,7 @@ async function robot({ linked = false, denyWrite = false } = {}) {
     for (const client of clients) client.end();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
-  return { files, writes, endpoint: { host: "127.0.0.1", port: (server.address() as AddressInfo).port, directory } };
+  return { files, writes, writeModes, endpoint: { host: "127.0.0.1", port: (server.address() as AddressInfo).port, directory } };
 }
 
 describe("path delivery against a real SSH/SFTP connection", () => {
@@ -85,13 +87,14 @@ describe("path delivery against a real SSH/SFTP connection", () => {
     const contents = Buffer.from([0, 255, 128, 10, 0, 7]);
     await uploadRobotFiles(connection, [{ fileName: "new.bdx", contents }, { fileName: "existing.bdx", contents }]);
     expect(r.files).toEqual(new Map([[`${directory}/existing.bdx`, contents], [`${directory}/unrelated.bdx`, Buffer.from("untouched")], [`${directory}/new.bdx`, contents]]));
+    expect(r.writeModes).toEqual([0o644, 0o644, 0o644]);
   }, 15_000);
 
   it("retains the permission failure and preserves existing files", async () => {
     const r = await robot({ denyWrite: true });
     const connection = await probeRobotFiles(r.endpoint);
     await expect(uploadRobotFiles(connection, [{ fileName: "existing.bdx", contents: Buffer.from("new") }]))
-      .rejects.toThrow(/permission denied/i);
+      .rejects.toThrow(/permission denied\. The robot's SSH account needs access/i);
     expect(r.files.get(`${directory}/existing.bdx`)?.toString()).toBe("old");
     expect(r.writes).toEqual([]);
   }, 15_000);

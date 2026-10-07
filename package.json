@@ -1,6 +1,6 @@
 {
   "name": "bordeaux",
-  "version": "0.2.0-beta.14",
+  "version": "0.2.0-beta.15",
   "private": true,
   "productName": "Bordeaux",
   "author": "FRC Team 2468",
@@ -36,7 +36,7 @@
   },
   "devDependencies": {
     "@electron/asar": "3.4.1",
-    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/client": "2.3.1",
     "@types/node": "^22.10.2",
     "@types/react": "18.3.31",
     "@types/react-dom": "18.3.7",

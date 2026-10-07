@@ -4,11 +4,12 @@ import { connectRobotSftp } from "../src/electron/robotSsh2Session";
 import { probeRobotFiles, uploadRobotFiles } from "../src/electron/robotFileTransfer";
 import type { RobotRemoteFile } from "../src/electron/robotSftpTransport";
 
-const mock = vi.hoisted(() => ({ sftp: {} as Record<string, unknown> }));
+const mock = vi.hoisted(() => ({ sftp: {} as Record<string, unknown>, connect: vi.fn() }));
 vi.mock("ssh2", async () => {
   const { EventEmitter } = await import("node:events");
   return { Client: class extends EventEmitter {
     connect(options: { hostVerifier: (key: Buffer) => boolean }) {
+      mock.connect(options);
       if (!options.hostVerifier(Buffer.from("host key"))) this.emit("error", new Error("Rejected host"));
       else queueMicrotask(() => this.emit("ready"));
     }
@@ -52,6 +53,23 @@ const signal = new AbortController().signal;
 const connect = () => connectRobotSftp({ endpoint: { host: "robot.local", port: 22 }, credentials: { password: "" }, signal, timeoutMs: 2000 });
 
 describe("direct file SSH session confinement", () => {
+  it.each(["admin", undefined] as const)("connects to the specified endpoint with account %s", async (username) => {
+    setup({});
+    const session = await connectRobotSftp({ endpoint: { host: "10.24.68.2", port: 2222 }, credentials: { username, password: "" }, signal, timeoutMs: 2000 });
+    try {
+      expect(mock.connect).toHaveBeenLastCalledWith(expect.objectContaining({ host: "10.24.68.2", port: 2222, username: username ?? "lvuser", password: "" }));
+    } finally { await session.close(); }
+  });
+
+  it("keeps legacy mailbox control files private", async () => {
+    setup({});
+    const session = await connect();
+    try {
+      await session.write({ kind: "incomingTemporary", nonce: "review", token: "a".repeat(32) }, Buffer.from("revision"), signal);
+      expect(mock.sftp.writeFile).toHaveBeenCalledWith(expect.any(String), Buffer.from("revision"), { flag: "wx", mode: 0o600 }, expect.any(Function));
+    } finally { await session.close(); }
+  });
+
   it.each(["/natinst", "/natinst/bin", "/home", "/home/lvuser"])("rejects missing required parent %s during read-only probe and upload", async (missing) => {
     const entries = { "/natinst": "dir", "/natinst/bin": "dir", "/home": "dir", "/home/lvuser": "dir" } as const;
     const f = setup(Object.fromEntries(Object.entries(entries).filter(([name]) => name !== missing)));
@@ -121,7 +139,7 @@ describe("direct file SSH session confinement", () => {
     const destination: RobotRemoteFile = { kind: "pathFile", directory: temporary.directory, fileName: temporary.fileName };
     try {
       await session.write(temporary, Buffer.from("bdx"), signal);
-      expect(mock.sftp.writeFile).toHaveBeenCalledWith(`/natinst/bin/Paths/.bordeaux-one.bdx-${"a".repeat(32)}.tmp`, Buffer.from("bdx"), { flag: "wx", mode: 0o600 }, expect.any(Function));
+      expect(mock.sftp.writeFile).toHaveBeenCalledWith(`/natinst/bin/Paths/.bordeaux-one.bdx-${"a".repeat(32)}.tmp`, Buffer.from("bdx"), { flag: "wx", mode: 0o644 }, expect.any(Function));
       await session.renameSameDirectory(temporary, destination, signal);
       expect(mock.sftp.ext_openssh_rename).toHaveBeenCalledOnce();
       expect(() => session.renameSameDirectory(temporary, { ...destination, directory: "/home/lvuser" }, signal)).toThrow();

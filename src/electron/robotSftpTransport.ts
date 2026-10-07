@@ -158,6 +158,7 @@ export interface RobotSftpSession {
 }
 
 export interface RobotCredentials {
+  username?: "admin" | "lvuser";
   password?: string;
   privateKey?: string | Buffer;
   passphrase?: string;

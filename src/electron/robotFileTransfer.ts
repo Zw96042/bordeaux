@@ -27,7 +27,7 @@ export async function probeRobotFiles(
 ): Promise<RobotFileConnection> {
   const validated = validateRobotFileEndpoint(endpoint);
   const signal = AbortSignal.timeout(TIMEOUT_MS);
-  const session = await factory({ endpoint: validated, credentials: { password: "" }, signal, timeoutMs: TIMEOUT_MS });
+  const session = await factory({ endpoint: validated, credentials: { username: "admin", password: "" }, signal, timeoutMs: TIMEOUT_MS });
   try {
     await requireDirectories(session)(validated.directory, false, signal);
     return { endpoint: validated, hostKeyFingerprint: session.hostKeyFingerprint };
@@ -67,7 +67,7 @@ export async function uploadRobotFiles(
   operation.addEventListener("abort", abortConnect, { once: true });
   let session: RobotSftpSession;
   try {
-    session = await factory({ endpoint, credentials: { password: "" }, expectedHostKeyFingerprint: connection.hostKeyFingerprint,
+    session = await factory({ endpoint, credentials: { username: "admin", password: "" }, expectedHostKeyFingerprint: connection.hostKeyFingerprint,
       signal: connecting.signal, timeoutMs: TIMEOUT_MS });
   } finally { operation.removeEventListener("abort", abortConnect); }
   let temporary: RobotRemoteFile | undefined;

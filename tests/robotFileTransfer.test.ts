@@ -39,6 +39,7 @@ describe("direct robot SFTP path delivery", () => {
   it("probes SSH and directories without a receiver or writes", async () => {
     const f = fixture();
     expect(await probeRobotFiles(endpoint, f.factory)).toEqual(connection);
+    expect(f.requests[0].credentials).toEqual({ username: "admin", password: "" });
     expect(f.directories).toEqual([false]);
     expect(f.stored.size).toBe(1);
     expect(f.closed()).toBe(1);
@@ -49,7 +50,7 @@ describe("direct robot SFTP path delivery", () => {
     f.stored.set("opening.bdx", Buffer.from("old"));
     await uploadRobotFiles(connection, files, undefined, f.factory);
     expect(f.requests[0].expectedHostKeyFingerprint).toBe(fingerprint);
-    expect(f.requests[0].credentials).toEqual({ password: "" });
+    expect(f.requests[0].credentials).toEqual({ username: "admin", password: "" });
     expect(f.stored.get("opening.bdx")).toEqual(files[0].contents);
     expect(f.stored.get("unrelated.bdx")?.toString()).toBe("preserve");
     expect(f.stored.size).toBe(2);
