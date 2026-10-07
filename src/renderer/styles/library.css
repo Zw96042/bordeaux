@@ -65,57 +65,41 @@
 .library-properties footer{display:flex;justify-content:flex-end;margin-top:18px}
 .library-link{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--txt-2);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
 
-/* Use spacing and weight to distinguish labels from group headings. */
-.ctxinsp .fieldlabel,.ctxinsp .numlbl,.ctxinsp .cgroup-h,.ctxinsp-tag,.timeline-title{font-family:var(--ui);text-transform:none;letter-spacing:0!important}
-.ctxinsp .fieldlabel,.ctxinsp .numlbl{font-size:11px;font-weight:400;white-space:normal;line-height:16px}
-.ctxinsp .fieldlabel>span{white-space:normal}
-.ctxinsp .cgroup-h{font-size:12px;font-weight:600;color:var(--txt-2);margin:20px 0 10px;padding:0;border:0}
-.ctxinsp .seg+.numrow{margin-top:12px}
-.library-structure .featempty{background:none;border:0;border-radius:0;margin:0;color:var(--txt-3)}
+/* Footer: the push target and its explicit action share one row. */
+.library-push{display:flex;align-items:center;flex-shrink:0;gap:10px;min-height:48px;padding:8px 8px 8px 14px;border-top:1px solid var(--line)}
+.library-selection{display:flex;flex:1;align-items:center;gap:8px;min-width:0;color:var(--txt-2);font-size:12px;line-height:16px}
+.library-current-name{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;min-width:0;overflow:hidden;white-space:normal;overflow-wrap:anywhere}
+.library-selection .library-clear{display:grid;flex:none;place-items:center;width:24px;height:24px;border-radius:var(--r-s);color:var(--txt-3)}
+.library-selection .library-clear:hover{background:var(--bg-3);color:var(--txt)}
+.library-push>button{display:flex;flex:none;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border:1px solid var(--line-2);border-radius:var(--r);background:var(--bg-2);color:var(--txt);font-size:12px;font-weight:550;transition:background-color .14s,border-color .14s}
+.library-push>button svg{color:var(--accent)}
+.library-push>button:disabled{opacity:.45;cursor:not-allowed}
+.library-push>button:disabled svg{color:inherit}
+.library-local{flex:none;padding-right:6px;color:var(--txt-3);font-size:11.5px}
 
-.cbar-k{text-transform:none;letter-spacing:0}
+/* Save failures: one tone, one explanation, one recovery action. */
+.library-location{flex:none;min-width:0;padding:10px 12px;border-bottom:1px solid var(--line)}
+.library-save-status{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 8px;padding:8px 10px;border-left:2px solid var(--bad);border-radius:0 var(--r) var(--r) 0;background:var(--bad-soft);color:var(--txt);font-size:12px;line-height:1.45}
+.library-save-status::before{content:'';width:6px;height:6px;margin-top:6px;border-radius:50%;background:var(--bad)}
+.library-save-status span{max-height:calc(5 * 1.45em);overflow-y:auto;overflow-wrap:anywhere;scrollbar-width:thin}
+.library-save-status button{grid-column:2;justify-self:start;min-height:28px;padding:0 10px}
 
-.library-structure .segfeatrow .featselect{grid-column:2/-1;display:grid;grid-template-columns:7px minmax(0,1fr);column-gap:8px;row-gap:2px;padding:7px 0}
-.library-structure .segfeatrow .featdot{grid-column:1;grid-row:1;align-self:start;margin-top:5px}
-.library-structure .segfeatrow .featnm{grid-column:2;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
-.library-structure .segfeatrow .featmeta{grid-column:2;font-family:var(--ui);white-space:normal;overflow-wrap:anywhere}
-
-.library-structure .wpfeatrow .featselect{display:grid;grid-template-columns:7px minmax(0,1fr);column-gap:8px;row-gap:3px;padding:7px 0}
-.library-structure .wpfeatrow .featdot{grid-column:1;grid-row:1;align-self:start;margin-top:5px}
-.library-structure .wpfeatrow .featnm{grid-column:2;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
-.library-structure .featdetails{grid-column:2;display:flex;align-items:center;flex-wrap:wrap;gap:4px 7px;min-width:0}
-.library-structure .featdetails .pill{text-transform:none;letter-spacing:0;line-height:14px}
-.optimizer-label{text-transform:none;letter-spacing:0;font:11px var(--ui)}
-.optimizer-failure{margin:0 0 14px;color:var(--txt-2);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
-
+/* Divider between the collection and the selected item's structure. */
+.library-divider{position:relative;flex:0 0 5px;height:5px;border-top:1px solid var(--line);cursor:row-resize;touch-action:none}
+.library-divider::after{content:'';position:absolute;left:calc(50% - 16px);top:0;width:32px;height:3px;border-radius:2px;background:var(--line-3);transition:background-color .14s}
+.library-divider:hover::after,.library-divider:focus-visible::after{background:var(--accent)}
+.library-structure{display:flex;flex:1;flex-direction:column;min-height:0;overflow:hidden}
+.library-section-title{display:flex;align-items:center;gap:7px;flex:0 0 32px;height:32px;padding:0 14px;border-bottom:1px solid var(--line);color:var(--txt-3);font-size:12px;font-weight:550;text-align:left}
+.library-structure-body{flex:1;min-height:0;overflow:hidden}
+.library-connection{flex:0 0 auto;white-space:nowrap}
 .fieldsvg [data-heading-control]:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
-
-.ctxinsp .ctxinsp-t{min-width:0;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;line-height:1.4}
-.ctxinsp .ctxinsp-tag,.ctxinsp .ctxinsp-x{flex-shrink:0}
-.rail-r .dropdown:not(.compact) .cmd-picker-trigger{height:auto;min-height:38px;padding-block:8px}
-.rail-r .cmd-picker-trigger>span{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
-
-.library-location{padding:10px 12px;border-bottom:1px solid var(--line);min-width:0;flex:none}
-.library-location-folder{display:flex;align-items:center;gap:8px;max-width:100%;font-size:12px;color:var(--txt-2);min-height:24px;text-align:left}
-.library-location-folder svg{flex:none}
-.library-location-folder span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.library-save-status{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 8px;margin-top:3px;font-size:10px;line-height:1.4;color:var(--txt-3)}
-.library-save-status[role="alert"]{color:var(--bad)}
-.library-save-status span{overflow-wrap:anywhere}
-.library-save-status button{color:var(--txt-2);text-decoration:underline;font-size:10px;text-align:left}
-.library-top{min-height:390px}
-.library-pick{grid-template-columns:14px minmax(0,1fr) auto;gap:9px;min-height:36px}
-.library-pick>svg{color:var(--txt-3)}
-.library-more{border-radius:4px}
-.library-menu{width:224px;padding:6px;border-radius:8px;box-shadow:0 12px 32px #0008}
-.library-menu button{height:auto;min-height:34px;padding:8px 10px;line-height:1.35}
-.library-rail .library-name{font-weight:450}
-.library-tools{padding-top:5px;min-height:38px}
-.library-search{height:32px;min-height:32px;border-radius:6px}
-
-/* Keep feature metadata in the full-width text column after removing bullets. */
-.library-structure .wpfeatrow .featselect,.library-structure .segfeatrow .featselect{grid-template-columns:minmax(0,1fr)}
-.library-structure .wpfeatrow .featnm,.library-structure .wpfeatrow .featdetails,.library-structure .segfeatrow .featnm,.library-structure .segfeatrow .featmeta{grid-column:1}
-.library-structure .segfeatrow .featnm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.library-structure .featselect{min-width:0;column-gap:0;row-gap:3px}
-.library-structure .featmeta{flex-shrink:0}
+@media (hover:hover){
+  .library-row:not(.selected):hover,.library-folder>button:first-child:hover{background:var(--bg-2)}
+  .library-folder>button:first-child:hover,.library-tools button:hover,.library-selection button:hover{color:var(--txt)}
+  .library-tools button:hover,.library-rename button:hover{background:var(--bg-3)}
+  .library-more:hover,.library-more[aria-expanded="true"]{background:var(--bg-3);color:var(--txt)}
+  .library-menu button:not(:disabled):hover{background:var(--bg-3)}
+  .library-menu button.danger:not(:disabled):hover{background:var(--bad-soft)}
+  .library-push>button:not(:disabled):hover{border-color:var(--line-3);background:var(--bg-3)}
+}
+@media (pointer:coarse){.library-more{opacity:1}}
