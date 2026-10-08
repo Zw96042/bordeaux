@@ -12,19 +12,128 @@
 .routine-workspace-flow,.routine-workspace-field{flex:1;min-width:0;min-height:0}
 .routine-workspace [hidden]{display:none!important}
 .routine-workspace .viewctl{bottom:16px}
-@container routine-workspace (max-width:640px){.routine-workspace .rt-branches{grid-template-columns:1fr;gap:16px;margin-left:12px;padding-left:12px;border-left:1px solid var(--line-2)}}
-@media(max-width:1180px){.routine-workspace-head{padding-inline:18px;gap:12px}.routine-workspace .rt-scroll{padding:22px 20px 36px}.routine-workspace-title>span{display:none}}
+.routine-workspace-transport{position:relative;flex-shrink:0}
+@media(max-width:1180px){.routine-workspace-head{gap:12px;padding-inline:18px}.routine-workspace-title>span{display:none}}
 
-/* Reserve actions and wrap authored names in both full-width and nested flows. */
-.routine-workspace .rt-step{display:grid;grid-template-columns:15px 18px minmax(0,1fr) 71px;gap:8px}
-.routine-workspace .rt-step-title,.routine-workspace .rt-step-meta,.routine-workspace .rt-brname,.routine-workspace-title>strong{white-space:normal;overflow:visible;overflow-wrap:anywhere;text-overflow:clip;line-height:1.45}
-.routine-workspace .rt-step .rt-step-tools{display:flex;margin:0}
-.routine-workspace .rt-tool.danger{opacity:1}
-.routine-workspace .rt-tool:disabled{opacity:.3;cursor:default}
-.routine-workspace .rt-step .rt-step-tag{display:block;padding:0;margin-top:4px;white-space:normal}
-.routine-workspace .rt-step-live{display:inline-block;margin-top:4px;text-transform:none;letter-spacing:0}
-.routine-workspace .rt-brlbl{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px;text-align:left}
-.routine-workspace .rt-brlive{grid-column:2;text-transform:none;letter-spacing:0;justify-self:start}
-.routine-workspace .rt-brkey,.rt-stat-k,.routine-workspace .rt-timeline-title{text-transform:none;letter-spacing:0;font-family:var(--ui);font-size:11px}
-.routine-workspace-head{padding-block:12px}
-@media(pointer:coarse){.routine-workspace .rt-step{grid-template-columns:44px 44px minmax(0,1fr)}.routine-workspace .rt-step-tools{grid-column:3;justify-self:end}}
+/* ============ flow ============ */
+.rt-panel{display:flex;flex-direction:column;width:100%;height:100%;overflow:hidden}
+.rt-panel.dragging,.rt-panel.dragging *{cursor:grabbing!important}
+.rt-scroll{flex:1;overflow:auto;padding:24px 32px 40px;scrollbar-width:thin}
+.rt-list{display:flex;flex-direction:column;width:100%;max-width:960px;min-width:380px;margin:0 auto}
+@media(max-width:1180px){.rt-scroll{padding:20px 20px 36px}}
+
+/* Step card: grip, icon, wrapping name, and a reserved action column. */
+.rt-step-wrap{position:relative}
+.rt-step{position:relative;display:grid;grid-template-columns:12px 18px minmax(0,1fr) 71px;align-items:center;gap:8px;min-height:48px;padding:8px 8px 8px 6px;border:1px solid var(--line-2);border-radius:var(--r);background:var(--bg-1);cursor:pointer;transition:border-color .12s,background-color .12s,opacity .12s}
+.rt-step.sel{border-color:var(--accent-line);background:var(--accent-soft);box-shadow:inset 2px 0 var(--accent)}
+.rt-step.active{border-color:color-mix(in srgb,var(--fc,var(--accent)) 55%,var(--line-2));box-shadow:inset 2px 0 var(--fc,var(--accent))}
+.rt-step.fired:not(.active):not(.sel){opacity:.62}
+.rt-step.dragging{opacity:.4;pointer-events:none;border-color:var(--accent-line)}
+.rt-step.drop-before::after,.rt-step.drop-after::after{content:'';position:absolute;z-index:5;left:6px;right:6px;height:2px;border-radius:2px;background:var(--accent)}
+.rt-step.drop-before::after{top:-5px}
+.rt-step.drop-after::after{bottom:-5px}
+.rt-grip{display:flex;align-items:center;justify-content:center;width:12px;color:var(--txt-3);opacity:0;cursor:grab;touch-action:none;transition:opacity .12s}
+.rt-grip:active{cursor:grabbing}
+.rt-step-ic{display:flex;justify-content:center;width:18px}
+/* No UA padding: the 14px chevron needs the whole 18px column. */
+.rt-collapse{display:flex;align-items:center;justify-content:center;width:18px;height:22px;padding:0;border-radius:var(--r-s);color:var(--txt-3)}
+.rt-collapse svg{flex:none}
+.rt-collapse.on svg{transform:rotate(-90deg)}
+.rt-step-body{display:block;min-width:0;padding:0;color:inherit;text-align:left;background:none}
+.rt-step-title{color:var(--txt);font-size:13px;font-weight:600;line-height:1.4;overflow-wrap:anywhere}
+.rt-step-meta{margin-top:2px;color:var(--txt-3);font-size:11.5px;line-height:1.4;overflow-wrap:anywhere}
+/* One tag style: quiet secondary text, no pill. */
+.rt-step-tag,.rt-step-live{display:inline-block;margin:3px 10px 0 0;color:var(--txt-3);font-size:11px;font-weight:550}
+.rt-step-live{color:var(--accent)}
+.rt-step-tools{display:flex;align-items:center;justify-content:flex-end;gap:1px}
+.rt-tool{display:flex;align-items:center;justify-content:center;width:23px;height:23px;border-radius:var(--r-s);color:var(--txt-3)}
+.rt-tool:disabled{opacity:.35;cursor:default}
+/* Hidden actions keep their column and return on hover, keyboard focus, or selection. */
+.rt-step-tools,.rt-gap-btn{opacity:0;transition:opacity .12s}
+.rt-step:is(:hover,:focus-within,.sel) .rt-step-tools,.rt-step:is(:hover,:focus-within) .rt-grip{opacity:1}
+.rt-step-wrap.fnwrap::before{display:none}
+
+/* Branches sit beside each other; an odd fallback route spans the row. The previewed route carries the accent rule. */
+.rt-branches{display:grid;grid-template-columns:repeat(2,minmax(260px,1fr));gap:12px 20px;margin:12px 0 16px 15px}
+.rt-branches .rt-branches{grid-template-columns:minmax(0,1fr)}
+.rt-branch:last-child:nth-child(odd){grid-column:1/-1}
+.rt-branch{min-width:0;padding-left:12px;border-left:2px solid var(--line-2)}
+.rt-branch.live{border-left-color:var(--accent)}
+.rt-brlbl{display:flex;align-items:baseline;gap:8px;width:100%;padding:6px 0 8px;color:var(--txt-2);text-align:left}
+.rt-brdot{display:none}
+.rt-brkey{flex:none;color:var(--txt-3);font:11.5px var(--mono)}
+.rt-brname{flex:1;min-width:0;color:var(--txt);font-size:12.5px;font-weight:600;line-height:1.4;overflow-wrap:anywhere}
+.rt-brcount{flex:none;color:var(--txt-3);font-size:11px}
+.rt-brlive{flex:none;color:var(--accent);font-size:11px;font-weight:550}
+.rt-brbody{display:flex;flex-direction:column;gap:6px}
+
+/* One add pattern: a quiet "Add step" row ends each list; inserts between steps appear on hover or focus. */
+.rt-addwrap{padding-top:8px}
+.rt-add{display:flex;align-items:center;gap:7px;width:100%;height:32px;padding:0 10px;border-radius:var(--r);color:var(--txt-3);font-size:12px;font-weight:550;text-align:left}
+.rt-add.on{background:var(--accent-soft);color:var(--accent)}
+.rt-gap{position:relative;display:flex;align-items:center;justify-content:center;height:16px}
+.rt-gap-btn{display:flex;align-items:center;justify-content:center;width:22px;height:18px;border:1px solid var(--line-2);border-radius:var(--r-s);background:var(--bg-2);color:var(--txt-3)}
+.rt-gap:is(:hover,:focus-within,.open) .rt-gap-btn,.rt-step-wrap:hover+.rt-gap .rt-gap-btn{opacity:1}
+.rt-gap.open{flex-direction:column;height:auto;min-height:16px}
+.rt-gap.open .rt-chooser{margin-top:6px}
+.rt-empty{display:flex;flex-direction:column;align-items:center;max-width:430px;margin:40px auto 0;padding:30px 0;text-align:center}
+.rt-empty-ic{display:none}
+.rt-empty-t{color:var(--txt);font-size:15px;font-weight:600}
+.rt-empty p{max-width:42ch;margin:8px 0 20px;color:var(--txt-3);font-size:12.5px;line-height:1.6;text-wrap:pretty}
+.rt-empty .rt-addwrap{width:100%;max-width:320px;padding:0}
+.rt-empty .rt-add{justify-content:center;height:36px;border:1px solid var(--line-2);background:var(--bg-2);color:var(--txt)}
+
+/* Inline step chooser, in flow. */
+.rt-chooser{display:flex;flex-direction:column;gap:2px;width:100%;max-width:520px;align-self:center;margin:6px 0 8px;padding:6px;border:1px solid var(--line-2);border-radius:var(--r-l);background:var(--bg-2);box-shadow:0 8px 22px -12px rgba(0,0,0,.6)}
+.rt-ch-sec{padding:4px 8px 4px;color:var(--txt-3);font-size:11.5px;font-weight:550}
+.rt-ch-row{display:flex;align-items:center;gap:10px;width:100%;padding:8px 9px;border-radius:var(--r);color:var(--txt);text-align:left}
+.rt-ch-row:disabled{opacity:.5;cursor:not-allowed}
+.rt-ch-ic{display:flex;flex-shrink:0;justify-content:center;width:18px}
+.rt-ch-main{display:flex;flex:1;flex-direction:column;gap:2px;min-width:0}
+.rt-ch-t{font-size:12.5px;font-weight:600}
+.rt-ch-d{color:var(--txt-3);font-size:11.5px}
+@media (hover:hover){
+  .rt-step:not(.sel):not(.active):hover{border-color:var(--line-3);background:var(--bg-2)}
+  .rt-grip:hover{color:var(--txt)}
+  .rt-tool:hover:not(:disabled),.rt-collapse:hover{background:var(--bg-3);color:var(--txt)}
+  .rt-tool.danger:hover{background:var(--bad-soft);color:var(--bad-txt)}
+  .rt-brlbl:hover .rt-brname{color:var(--accent-2)}
+  .rt-add:not(.on):hover{background:var(--bg-2);color:var(--txt)}
+  .rt-empty .rt-add:not(.on):hover{background:var(--bg-3)}
+  .rt-gap-btn:hover{border-color:var(--accent-line);color:var(--accent)}
+  .rt-ch-row:not(:disabled):hover{background:var(--bg-3)}
+}
+@container routine-workspace (max-width:640px){.rt-branches{grid-template-columns:minmax(0,1fr)}}
+@media (pointer:coarse){
+  .rt-step{grid-template-columns:44px 44px minmax(0,1fr)}
+  .rt-step-tools{grid-column:3;justify-self:end}
+  .rt-step-tools,.rt-gap-btn{opacity:1}
+  .rt-grip{opacity:.72}
+}
+
+/* ============ routine status and playback ============ */
+.routine-status{display:flex;align-items:flex-start;gap:10px;flex-shrink:0;padding:10px 24px;border-top:1px solid var(--line-2);background:var(--bg-1)}
+.routine-status-icon{display:flex;align-items:center;justify-content:center;flex-shrink:0;width:24px;height:24px;border-radius:var(--r);background:var(--accent-soft);color:var(--accent)}
+.routine-status-copy{display:flex;flex-direction:column;gap:2px;min-width:0;padding-top:3px}
+.routine-status-copy b{color:var(--txt);font-size:12.5px;font-weight:600}
+.routine-status-copy span{color:var(--txt-3);font-size:11.5px;line-height:1.4;overflow-wrap:anywhere}
+.routine-status.error .routine-status-icon{background:var(--bad-soft);color:var(--bad-txt)}
+.rt-transport.timeline{position:relative;display:grid;grid-template-rows:34px 44px;height:78px;border-top:1px solid var(--line-2);background:var(--hud-surface)}
+.rt-timeline-toolbar{display:flex;align-items:center;min-width:0;padding:0 10px 0 6px;border-bottom:1px solid var(--line)}
+.rt-tp-ctl{display:flex;align-items:center;gap:2px}
+.rt-tp-btn{display:flex;align-items:center;justify-content:center;flex-shrink:0;width:30px;height:26px;border-radius:var(--r-s);color:var(--txt-2)}
+.rt-tp-btn:disabled{opacity:.4;cursor:not-allowed}
+.rt-timeline-title{margin-left:10px;color:var(--txt-3);font-size:11.5px;font-weight:550}
+.rt-timeline-time,.rt-timeline-step{color:var(--txt);font:11.5px var(--mono);font-variant-numeric:tabular-nums}
+.rt-timeline-time{margin-left:10px}
+.rt-timeline-step{margin-left:auto}
+.rt-timeline-time small,.rt-timeline-step small{color:var(--txt-3);font:inherit}
+.rt-timeline-summary{margin-left:10px;color:var(--txt-3);font-size:11px}
+.rt-timeline-editor{position:relative;min-width:0;overflow:hidden}
+.rt-timeline-editor:has(.rt-tp-scrub:focus-visible){outline:2px solid var(--accent);outline-offset:-3px}
+.rt-timeline-track{position:absolute;left:10px;right:10px;top:21px;height:2px;border-radius:2px;background:var(--bg-4)}
+.rt-timeline-span{position:absolute;top:16px;height:12px;min-width:2px;border-left:2px solid var(--step-color);border-radius:2px;background:color-mix(in srgb,var(--step-color) 44%,transparent);pointer-events:none}
+.rt-timeline-event{position:absolute;top:15px;width:8px;height:8px;border:1.5px solid var(--warn);background:var(--bg-1);transform:translate(-50%,50%) rotate(45deg);pointer-events:none}
+.rt-timeline-editor .rt-tp-scrub{position:absolute;inset:0;width:100%;height:100%;margin:0;padding:0;opacity:0;cursor:pointer}
+.rt-timeline-editor::after{content:'';position:absolute;left:calc(10px + (100% - 20px) * var(--routine-progress,0));top:11px;width:1px;height:23px;background:#fff;pointer-events:none}
+@media (hover:hover){.rt-tp-btn:not(.play):not(:disabled):hover{background:var(--bg-3);color:var(--txt)}}
