@@ -1,6 +1,12 @@
-.command-branches { margin-top: 20px; min-width: 0; }
-.command-branch-route { margin: 16px 0; min-width: 0; }
-.command-branch-route > .textinput { width: 100%; box-sizing: border-box; }
-.command-branch-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.command-branch-actions .rt-openbtn { width: auto; flex: 1 1 110px; }
-.command-branches .fieldlabel { white-space: normal; overflow-wrap: anywhere; }
+.command-branches{min-width:0;margin-top:22px;padding-top:14px;border-top:1px solid var(--line)}
+.command-branches>.fieldlabel:first-child{margin-top:0;color:var(--txt);font-size:12.5px;font-weight:600}
+.command-branches .fieldlabel{overflow-wrap:anywhere}
+/* One route per group; 16px between routes, 6px from each label to its control. */
+.command-branch-route{min-width:0;margin-top:16px;padding:10px 0 2px 12px;border-left:2px solid var(--line-2)}
+.command-branch-route .fieldlabel{margin:8px 0 6px}
+.command-branch-route .grid2{align-items:start;margin:8px 0 0}
+.command-branch-route .grid2 .fieldlabel{margin-top:0}
+.command-branch-head{display:flex;align-items:center;gap:8px;min-height:24px}
+.command-branch-head strong{font-size:12.5px;font-weight:600}
+.command-branch-head span{flex:1;min-width:0;color:var(--txt-3);font:11.5px var(--mono);overflow-wrap:anywhere}
+.command-branches>.rt-openbtn{margin-top:16px}
