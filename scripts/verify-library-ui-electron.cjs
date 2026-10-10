@@ -1075,7 +1075,9 @@ app.whenReady().then(async () => {
         if (!field || field.matches(':disabled')) throw new Error('Numeric field unavailable: ' + label);
         field.focus(); field.select();
       }, label);
-      await win.webContents.insertText(String(value)); await delay(50);
+      await win.webContents.insertText(String(value));
+      // insertText delivers input asynchronously; blurring before it lands would leave an uncommitted draft.
+      await wait(() => evaluate((text) => document.activeElement?.value === text, String(value)), 'typed ' + label + ' value');
       await evaluate(() => { const field = document.activeElement; field.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); field.blur(); });
       await delay(80); await saveCurrent();
     };
@@ -1134,7 +1136,8 @@ app.whenReady().then(async () => {
     await pointerClick('[aria-label="Linkable point name"]');
     await evaluate(() => document.querySelector('[aria-label="Linkable point name"]').select());
     assert.equal(await evaluate(() => document.activeElement.getAttribute('aria-label')), 'Linkable point name');
-    await win.webContents.insertText('Scoring position'); await delay(80);
+    await win.webContents.insertText('Scoring position');
+    await wait(() => evaluate(() => document.querySelector('[aria-label="Linkable point name"]').value === 'Scoring position'), 'typed point name');
     await evaluate(() => { const input = document.querySelector('[aria-label="Linkable point name"]'); input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); input.blur(); });
     await delay(80);
     await saveCurrent();
@@ -1145,8 +1148,8 @@ app.whenReady().then(async () => {
     await evaluate(() => document.querySelector('.outline .featselect').click());
     await pointerClick('#waypoint-position-link');
     assert.equal(await evaluate(() => document.querySelectorAll('#waypoint-position-link-results [role="option"]').length), 1, 'Only the opted-in named point is offered');
-    await win.webContents.insertText('Scoring'); await delay(50);
-    assert.equal(await evaluate(() => document.querySelector('#waypoint-position-link-results [role="option"] strong')?.textContent), 'Scoring position');
+    await win.webContents.insertText('Scoring');
+    await wait(() => evaluate(() => document.querySelector('#waypoint-position-link-results [role="option"] strong')?.textContent === 'Scoring position'), 'filtered named point');
     await key('Down');
     assert.equal(await evaluate(() => document.querySelector('#waypoint-position-link').getAttribute('aria-activedescendant')), 'waypoint-position-link-result-0', 'Keyboard selects the exact named-point result');
     await key('Enter');
@@ -1447,8 +1450,8 @@ app.whenReady().then(async () => {
       assert.deepEqual(selection, { focused: true, start: 0, end: 0, length: 0 }, 'Backspace clears the existing notes');
       notesClearedBy = 'Backspace';
     }
-    await win.webContents.insertText('new operator notes'); await delay(100);
-    assert.equal(await evaluate(() => document.querySelector('.rp-notes').value), 'new operator notes');
+    await win.webContents.insertText('new operator notes');
+    await wait(() => evaluate(() => document.querySelector('.rp-notes').value === 'new operator notes'), 'typed operator notes');
     for (const [width, height] of [[1440, 900], [1100, 720]]) {
       win.setContentSize(width, height); await delay(100);
       await evaluate(() => document.querySelector('.rp-notes').scrollIntoView({ block: 'center' }));
