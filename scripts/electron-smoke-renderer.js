@@ -227,12 +227,11 @@
   const multiRoutineUi = routineLibraryOpened && newRoutineSelected && routineDuplicateSelected;
   document.querySelector('.library-rename')?.requestSubmit();
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const pushRoutineButton = [...document.querySelectorAll('.library-push button')].find((button) => button.textContent.trim() === 'Push routine');
-  if (!pushRoutineButton) throw new Error('Routine push action was not available');
-  pushRoutineButton.click();
-  const routineDeliveryBlocked = pushRoutineButton.disabled
-    && document.querySelector('.library-push').textContent.includes('Routine upload is unavailable with this connection')
+  // SFTP delivery uploads paths only: routines show a local-only label instead of a Push action.
+  const routineDeliveryBlocked = ![...document.querySelectorAll('.library-push button')].some((button) => button.textContent.trim() === 'Push routine')
+    && document.querySelector('.library-push .library-local')?.textContent === 'Local only'
     && !document.querySelector('[aria-labelledby="robot-file-title"]')?.open;
+  if (!routineDeliveryBlocked) throw new Error('Routines must stay local without a Push action');
   [...document.querySelectorAll('.library-tabs button')].find(button => button.textContent.trim() === 'Paths').click();
   await waitFor(() => [...document.querySelectorAll('.library-push button')].some(button => button.textContent.trim() === 'Push path'), 'path push action');
   [...document.querySelectorAll('.library-push button')].find(button => button.textContent.trim() === 'Push path').click();
