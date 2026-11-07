@@ -168,6 +168,8 @@ input,select,textarea{font-family:inherit}
 .qbtn.wide,.rt-openbtn{width:100%}
 .rt-openbtn{margin-top:14px}
 .qrow{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px}.qrow>.qbtn{flex:1}
+.rt-add-pages{flex:none;align-items:center;justify-content:space-between;padding:8px;margin:0;border-top:1px solid var(--line-2);font-size:11.5px;color:var(--txt-3)}
+.rt-add-pages>.qbtn{flex:none}
 /* Destructive actions are quiet and left-aligned at the end of their surface. */
 .delbtn{display:inline-flex;align-items:center;gap:7px;min-height:32px;margin:22px 0 0 -8px;padding:0 10px 0 8px;border-radius:var(--r);color:var(--txt-2);font-size:12px;font-weight:550;transition:background-color .14s,color .14s}
 .delbtn svg{color:var(--txt-3);transition:color .14s}

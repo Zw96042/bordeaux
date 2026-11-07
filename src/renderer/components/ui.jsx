@@ -5,9 +5,10 @@ import { PointerDrag } from "../hooks/usePointerDrag";
 import { committedDraftValue } from "../lib/numericDraft";
 import { PM } from "../lib/pathMath";
 import { UnitPrefs, formatAngularLimit } from "../lib/unitPreferences";
+import { filterPickerItems } from "../lib/pickerSearch";
 
 // Bordeaux shared UI primitives.
-  const { useState, useRef, useEffect, useId } = React;
+  const { useState, useRef, useEffect, useId, useMemo } = React;
   const h = React.createElement;
 
   const PATHS = {
@@ -118,12 +119,10 @@ import { UnitPrefs, formatAngularLimit } from "../lib/unitPreferences";
     const listboxId = id + '-listbox';
     const labelId = id + '-label';
     const pickerName = label || ariaLabel || 'options';
-    const selected = items.find((item) => item.value === value);
+    const selected = useMemo(() => items.find((item) => item.value === value), [items, value]);
     const displayLabel = selected?.label ?? (value != null && value !== '' ? String(value) : placeholder || 'Select…');
     const normalizedQuery = query.trim().toLowerCase();
-    const filteredItems = normalizedQuery
-      ? items.filter((item) => [item.label, item.meta, item.searchText].some((part) => String(part || '').toLowerCase().includes(normalizedQuery)))
-      : items;
+    const filteredItems = useMemo(() => open ? filterPickerItems(items, normalizedQuery, 'substring') : items, [items, normalizedQuery, open]);
     const visibleItems = filteredItems.slice(0, MAX_RENDERED_PICKER_ITEMS);
     const hiddenMatchCount = filteredItems.length - visibleItems.length;
     const showSearch = items.length > searchThreshold;
@@ -312,10 +311,9 @@ import { UnitPrefs, formatAngularLimit } from "../lib/unitPreferences";
     const searchRef = useRef(null);
     const changeRef = useRef(null);
     const optionRefs = useRef([]);
-    const selected = items.find((item) => item.value === value && value !== '');
+    const selected = useMemo(() => items.find((item) => item.value === value && value !== ''), [items, value]);
     const expanded = editing || !selected;
-    const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-    const matches = items.filter((item) => terms.every((term) => [item.label, item.meta, item.searchText].join(' ').toLocaleLowerCase().includes(term)));
+    const matches = useMemo(() => expanded ? filterPickerItems(items, query) : items, [items, query, expanded]);
     const visible = matches.slice(0, MAX_RENDERED_PICKER_ITEMS);
     useEffect(() => { setEditing(false); setQuery(''); setActive(-1); }, [resetKey]);
     useEffect(() => { if (editing) searchRef.current?.focus(); }, [editing]);

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import type { RobotCommandCatalog, RobotCommandDescriptor, LabviewProjectDiscovery } from "../shared/types";
+import type { RobotCommandCatalog, RobotCommandDescriptor, RobotCommandParameter, LabviewProjectDiscovery } from "../shared/types";
 import { discoverLabviewProject, resolveLabviewProject, LABVIEW_CATALOG_SOURCE } from "./labviewProject";
 import { writeJsonAtomically } from "./projectFiles";
 import { decodeLabviewNiInspection } from "./labviewNiTypes";
@@ -103,6 +103,12 @@ function merge(catalog: RobotCommandCatalog, commands: RobotCommandDescriptor[],
   if (!catalog.labviewDiscovery) return catalog;
   const memberKey = (member: string) => member.replaceAll("\\", "/").toLowerCase();
   const declared = new Set(catalog.commands.map((command) => memberKey(command.member)));
+  const inspectedByMember = new Map<string, RobotCommandDescriptor[]>();
+  for (const command of commands) {
+    const key = memberKey(command.member), matches = inspectedByMember.get(key);
+    if (matches) matches.push(command);
+    else inspectedByMember.set(key, [command]);
+  }
   const warnings = [...catalog.warnings];
   const canonical = (value: unknown): string => {
     if (!value || typeof value !== "object") return JSON.stringify(value);
@@ -110,13 +116,19 @@ function merge(catalog: RobotCommandCatalog, commands: RobotCommandDescriptor[],
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`).join(",")}}`;
   };
   const merged = catalog.commands.map((command) => {
-    const matches = commands.filter((inspected) => memberKey(inspected.member) === memberKey(command.member));
+    const matches = inspectedByMember.get(memberKey(command.member)) ?? [];
     if (!matches.length) return command;
     const inspected = matches[0];
     const inputs = command.parameters.filter((parameter) => parameter.role === "argument");
     const discoveredInputs = inspected.parameters.filter((parameter) => parameter.role === "argument");
+    const discoveredByName = new Map<string, RobotCommandParameter[]>();
+    for (const parameter of discoveredInputs) {
+      const matches = discoveredByName.get(parameter.name);
+      if (matches) matches.push(parameter);
+      else discoveredByName.set(parameter.name, [parameter]);
+    }
     const matchesTypes = inputs.length === discoveredInputs.length && inputs.every((parameter) => {
-      const found = discoveredInputs.filter((candidate) => candidate.name === parameter.name);
+      const found = discoveredByName.get(parameter.name) ?? [];
       return found.length === 1 && canonical(found[0].schema) === canonical(parameter.schema);
     });
     if (matches.length !== 1 || !matchesTypes) {

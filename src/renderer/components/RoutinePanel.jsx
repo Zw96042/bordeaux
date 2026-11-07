@@ -6,12 +6,13 @@ import { AUTO } from "../lib/routineModel";
 import { UnitPrefs } from "../lib/unitPreferences";
 import { commandArguments } from "./ContextInspector";
 import { UI } from "./ui";
+import { enabledPickerIndex, filterPickerItems, pickerPage, PICKER_PAGE_SIZE } from '../lib/pickerSearch';
 
 // Routine run sheet: one line per step in run order, each with its share of preview time on a shared axis. Repeats and
 // branches are bounded groups; a branch's routes are lanes. A closing row states what authored control flow does next
 // (shown when it is not obvious from the group ending); those facts come from AUTO.flowSummary, never from the chosen
 // preview route. Explanations live in tooltips and the inspector. Selecting a row only changes the right inspector.
-const { useState, useRef, useEffect, useLayoutEffect } = React;
+const { useState, useRef, useEffect, useLayoutEffect, useMemo } = React;
 const h = React.createElement;
 const { Icon } = UI;
 const A = AUTO;
@@ -293,32 +294,45 @@ function useOutside(ref, anchor, close) {
 }
 
 /** Searchable Add: project paths first (the common case), then the step kinds valid in this list. */
-function AddMenu({ anchor, paths, steps, onPick, onClose, label, dest }) {
+export function AddMenu({ anchor, paths, steps, onPick, onClose, label, dest }) {
   const ref = useRef(null), input = useRef(null);
   const [query, setQuery] = useState('');
-  const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-  const hit = (text) => terms.every((term) => text.toLocaleLowerCase().includes(term));
-  const pathItems = paths.filter((path) => hit(path.name)).map((path) => ({ key: 'path:' + path.id, kind: 'path', ref: path.id, label: path.name, icon: 'route' }));
-  const stepItems = steps.filter((step) => hit(step.label + ' ' + (step.meta || '')));
-  const items = [...pathItems, ...stepItems];
+  const pathChoices = useMemo(() => paths.map(path => ({ key: 'path:' + path.id, kind: 'path', ref: path.id, label: path.name, icon: 'route' })), [paths]);
+  const pathItems = useMemo(() => filterPickerItems(pathChoices, query), [pathChoices, query]);
+  const stepItems = useMemo(() => filterPickerItems(steps, query), [steps, query]);
+  const items = useMemo(() => [...pathItems, ...stepItems], [pathItems, stepItems]);
   const [active, setActive] = useState(0);
-  useEffect(() => setActive(items.findIndex((item) => !item.disabled)), [query]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [page, setPage] = useState(0);
+  const shown = pickerPage(items, page);
+  const activeVisible = active >= shown.start && active < shown.end && !items[active]?.disabled;
+  const pathCount = Math.max(0, Math.min(shown.items.length, pathItems.length - shown.start));
+  // A replacement catalog/query must not keep an old page or an active DOM id that no longer exists.
+  useEffect(() => { setActive(enabledPickerIndex(items, 0)); setPage(0); }, [items]);
   const pos = usePlacement(anchor, ref, 360, 'start');
   const placed = Boolean(pos);
   // A hidden element cannot take focus; focus once placed.
   useEffect(() => { if (placed) input.current?.focus(); }, [placed]);
-  useEffect(() => { ref.current?.querySelector('.rt-ch-row.active')?.scrollIntoView({ block: 'nearest' }); }, [active]);
+  useEffect(() => { ref.current?.querySelector('.rt-ch-row.active')?.scrollIntoView({ block: 'nearest' }); }, [active, shown.page, items]);
   useOutside(ref, anchor, onClose);
-  const step = (dir) => setActive((current) => {
-    for (let i = 1; i <= items.length; i++) { const next = (current + dir * i + items.length * 2) % items.length; if (!items[next].disabled) return next; }
-    return current;
-  });
+  const activate = (index) => { setActive(index); if (index >= 0) setPage(Math.floor(index / PICKER_PAGE_SIZE)); };
+  const step = (direction) => {
+    const from = activeVisible ? active : direction > 0 ? shown.start - 1 : shown.end;
+    activate(enabledPickerIndex(items, from + direction, direction));
+  };
+  const goPage = (nextPage) => {
+    const next = pickerPage(items, nextPage);
+    setPage(next.page); setActive(enabledPickerIndex(items, next.start, 1, false, next.end));
+    input.current?.focus();
+  };
   const onKeyDown = (event) => {
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); step(event.key === 'ArrowDown' ? 1 : -1); }
-    else if (event.key === 'Enter') { event.preventDefault(); const item = items[active]; if (item && !item.disabled) onPick(item); }
+    else if (event.key === 'PageDown' || event.key === 'PageUp') { event.preventDefault(); goPage(shown.page + (event.key === 'PageDown' ? 1 : -1)); }
+    else if (event.key === 'Home' || event.key === 'End') { event.preventDefault(); activate(enabledPickerIndex(items, event.key === 'Home' ? 0 : items.length - 1, event.key === 'Home' ? 1 : -1)); }
+    // Pagination buttons retain native Enter/Space activation; the combobox must not also choose an option.
+    else if (event.key === 'Enter' && !event.target.closest?.('.rt-add-pages button')) { event.preventDefault(); const item = activeVisible && items[active]; if (item && !item.disabled && !event.repeat) onPick(item); }
     else if (event.key === 'Escape' || event.key === 'Tab') { event.preventDefault(); event.stopPropagation(); onClose(true); }
   };
-  const option = (item, index) => h('div', { key: item.key, id: 'rt-add-opt-' + index, role: 'option', 'aria-selected': index === active, 'aria-disabled': item.disabled || undefined,
+  const option = (item, index) => h('div', { key: item.key, id: 'rt-add-opt-' + index, role: 'option', 'aria-selected': index === active, 'aria-disabled': item.disabled || undefined, 'aria-posinset': index + 1, 'aria-setsize': items.length,
     className: 'rt-ch-row' + (index === active ? ' active' : '') + (item.disabled ? ' disabled' : ''),
     onPointerMove: () => !item.disabled && setActive(index), onClick: () => !item.disabled && onPick(item) },
     h('span', { className: 'rt-ch-ic ' + (item.tone || '') }, h(Glyph, { name: item.icon, size: 15 })),
@@ -331,14 +345,19 @@ function AddMenu({ anchor, paths, steps, onPick, onClose, label, dest }) {
     h('div', { className: 'rt-add-search' },
       h(Icon, { name: 'search', size: 14 }),
       h('input', { ref: input, value: query, onChange: (event) => setQuery(event.target.value), placeholder: 'Path name or step', 'aria-label': 'Find a path or step',
-        role: 'combobox', 'aria-expanded': true, 'aria-controls': 'rt-add-list', 'aria-activedescendant': items[active] ? 'rt-add-opt-' + active : undefined, spellCheck: false, autoComplete: 'off' })),
+        role: 'combobox', 'aria-expanded': true, 'aria-controls': 'rt-add-list', 'aria-activedescendant': activeVisible ? 'rt-add-opt-' + active : undefined,
+        'aria-describedby': shown.last > 0 ? 'rt-add-pages' : undefined, 'aria-keyshortcuts': 'ArrowUp ArrowDown PageUp PageDown Home End', spellCheck: false, autoComplete: 'off' })),
     items.length
       ? h('div', { id: 'rt-add-list', className: 'rt-add-list', role: 'listbox', 'aria-label': 'Paths and steps' },
-          pathItems.length > 0 && h('div', { className: 'rt-ch-sec', role: 'presentation' }, 'Paths'),
-          pathItems.map((item, index) => option(item, index)),
-          stepItems.length > 0 && h('div', { className: 'rt-ch-sec', role: 'presentation' }, 'Steps'),
-          stepItems.map((item, index) => option(item, pathItems.length + index)))
-      : h('div', { className: 'rt-add-none' }, 'No path or step matches “' + query + '”')), document.body);
+          pathCount > 0 && h('div', { className: 'rt-ch-sec', role: 'presentation' }, 'Paths'),
+          shown.items.slice(0, pathCount).map((item, index) => option(item, shown.start + index)),
+          shown.items.length > pathCount && h('div', { className: 'rt-ch-sec', role: 'presentation' }, 'Steps'),
+          shown.items.slice(pathCount).map((item, index) => option(item, shown.start + pathCount + index)))
+      : h('div', { className: 'rt-add-none' }, 'No path or step matches “' + query + '”'),
+    shown.last > 0 && h('div', { className: 'qrow rt-add-pages', id: 'rt-add-pages', role: 'group', 'aria-label': 'Result pages. Use Page Up or Page Down to change pages.' },
+      h('button', { type: 'button', className: 'qbtn quiet', tabIndex: -1, disabled: shown.page === 0, 'aria-label': 'Previous results', title: 'Previous results (Page Up)', onClick: () => goPage(shown.page - 1) }, 'Previous'),
+      h('span', { role: 'status', 'aria-live': 'polite', 'aria-atomic': true }, (shown.start + 1).toLocaleString() + '–' + shown.end.toLocaleString() + ' of ' + items.length.toLocaleString()),
+      h('button', { type: 'button', className: 'qbtn quiet', tabIndex: -1, disabled: shown.page === shown.last, 'aria-label': 'Next results', title: 'Next results (Page Down)', onClick: () => goPage(shown.page + 1) }, 'Next'))), document.body);
 }
 
 /** Step actions, in the app's context-menu shape. Unavailable actions say why in one line. */
@@ -431,7 +450,7 @@ export function RoutinePanel(props) {
   const run_ = (operation) => { const result = edit(operation); if (result.changed && result.focusId) focusStep(result.focusId); return result; };
 
   // ---- Add ----
-  const stepItems = (where) => addMenuSteps(routine, where, catalog);
+  const stepItems = useMemo(() => add ? addMenuSteps(routine, add.where, catalog) : [], [routine, add, catalog]);
   const openAdd = (where, anchor, label) => { setMenu(null); setAdd({ where, anchor, label }); };
   const closeAdd = (refocus) => { const anchor = add?.anchor; setAdd(null); if (refocus && anchor?.isConnected) anchor.focus(); };
   const destination = (where) => {
@@ -700,6 +719,6 @@ export function RoutinePanel(props) {
         : h('div', { className: 'rt-list' + (running && run.total > 0 ? ' playing' : ''), role: 'list', 'aria-label': 'Routine run order', style: { '--p': run.total > 0 ? Math.min(1, time / run.total) : 0 } },
             renderList(routine.nodes, { kind: 'root' }, { depth: 0, offPreview: false, readOnly: false, after: { kind: 'end' }, exitTo: null }, 'Add step at the end'))),
     h('div', { className: 'rt-flow-note', role: 'status', 'aria-live': 'polite' }, note),
-    add && h(AddMenu, { anchor: add.anchor, paths, steps: stepItems(add.where), label: add.label, dest: destination(add.where), onPick: pick, onClose: closeAdd }),
+    add && h(AddMenu, { anchor: add.anchor, paths, steps: stepItems, label: add.label, dest: destination(add.where), onPick: pick, onClose: closeAdd }),
     menu && h(RowMenu, { anchor: menu.anchor, items: rowItems(menu.id), onClose: (refocus) => { const anchor = menu.anchor; setMenu(null); if (refocus) anchor?.closest('.rt-step')?.querySelector('.rt-step-body')?.focus(); } }));
 }

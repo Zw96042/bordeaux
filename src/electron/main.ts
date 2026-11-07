@@ -436,7 +436,8 @@ async function connectRobotProject(projectPath: string, runtime: RobotProjectRun
   const selectedPath = projectPath; guard();
   const canonicalPath = labviewProject?.root ?? selectedPath;
   const exactSelection = labviewProject?.projectFile ?? selectedPath;
-  const diskCatalog = await discoverRobotProject(exactSelection, runtime); guard();
+  // Explicit NI inspection already rediscovered and fingerprinted the sources.
+  const diskCatalog = inspectedCatalog ?? await discoverRobotProject(exactSelection, runtime); guard();
   const discoveredCatalog = inspectedCatalog ?? (runtime === "labview"
     ? cachedOnly ? await withSessionLabviewCommands(exactSelection, diskCatalog) ?? await withCachedLabviewCommands(exactSelection, diskCatalog, labviewDiscoveryCacheDirectory()) : await syncLabviewCommands(exactSelection, labviewDiscoveryCacheDirectory(), diskCatalog)
     : diskCatalog);

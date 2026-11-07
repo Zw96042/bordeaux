@@ -58,6 +58,9 @@ function Read-Modified($VI) {
 }
 $app = $null
 $context = $null
+# Keep a bounded working set loaded during this request, so adjacent VIs do not
+# repeatedly unload/reload shared dependencies. Metadata is still read afresh.
+$heldVIs = New-Object 'System.Collections.Generic.Queue[object]'
 try {
   $request = Get-Content -LiteralPath $RequestFile -Raw | ConvertFrom-Json
   if ($request.schemaVersion -notin @('bordeaux-ni-inspection/1', 'bordeaux-ni-wrapper/1') -or @($request.sources).Count -gt 1000) { throw 'Invalid Bordeaux NI request.' }
@@ -166,7 +169,12 @@ try {
       $row.reason = $_.Exception.GetBaseException().Message
       if ($null -ne $vi) { $row.modifiedAfter = Read-Modified $vi }
     }
-    finally { [BordeauxNiInspection]::Release($vi) }
+    finally {
+      if ($null -ne $vi) {
+        $heldVIs.Enqueue($vi)
+        if ($heldVIs.Count -gt 32) { [BordeauxNiInspection]::Release($heldVIs.Dequeue()) }
+      }
+    }
     $rows += @($row)
   }
   $dirtyContext = $null
@@ -178,6 +186,7 @@ try {
   [Console]::Error.WriteLine($_.Exception.GetBaseException().Message)
   exit 1
 } finally {
+  while ($heldVIs.Count -gt 0) { [BordeauxNiInspection]::Release($heldVIs.Dequeue()) }
   [BordeauxNiInspection]::Release($context)
   [BordeauxNiInspection]::Release($app)
 }

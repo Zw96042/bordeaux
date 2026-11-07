@@ -4,6 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { loadRendererExport } from './helpers/loadRendererExport';
 import { AUTO } from '../src/renderer/lib/routineModel';
 import { deletionInput } from '../src/renderer/components/DeletionNotice';
+import { filterPickerItems } from '../src/renderer/lib/pickerSearch';
 import { robotValueSchemasEqual } from '../src/shared/robotValueSchema';
 import { UI as RenderedUI } from '../src/renderer/components/ui';
 import { CommandBranches as RenderedBranches } from '../src/renderer/components/CommandBranches';
@@ -51,6 +52,7 @@ function environment() {
     instance.effects.push(() => { if (typeof cell.cleanup === 'function') cell.cleanup(); cell.cleanup = run(); });
   };
   const fakeReact = { Fragment: 'Fragment', useId: () => 'fake-id', useEffect: effect, useLayoutEffect: effect,
+    useMemo: (read, deps) => { const cell = slot(() => ({ ready: false })); if (!cell.ready || deps.some((value, index) => value !== cell.deps[index])) { cell.ready = true; cell.deps = deps; cell.value = read(); } return cell.value; },
     createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter((child) => child != null && child !== false && child !== true) }),
     useRef: (current) => slot(() => ({ current })),
     useState: (initial) => {
@@ -107,7 +109,7 @@ const press = (patch = {}) => ({ button: 0, detail: 1, key: '', preventDefault: 
 
 function primitives(env) {
   return loadRendererExport(new URL('../src/renderer/components/ui.jsx', import.meta.url), 'UI', {
-    context: { ...env.context, PointerDrag: { useController: () => ({}) }, committedDraftValue: () => null, PM: {}, UnitPrefs: {} },
+    context: { ...env.context, filterPickerItems, PointerDrag: { useController: () => ({}) }, committedDraftValue: () => null, PM: {}, UnitPrefs: {} },
     window: { innerWidth: 1440, innerHeight: 900, addEventListener() {}, removeEventListener() {} },
   });
 }

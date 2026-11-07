@@ -17,11 +17,57 @@ export function retireCommandPick(pick, { projectKey, docId, markers = [], sel, 
 /** Compare-and-clear: a retirement clears only its own request, never a newer placement's. */
 export const clearCommandPick = (token) => (current) => (current?.token === token ? null : current);
 
-/** Command choices; "No command" appears only once one is set, last, so typing never makes it the first match. */
-export const commandChoices = (commands = [], invocationId = '') =>
-  (invocationId && !commands.some((command) => command.id === invocationId) ? [{ value: invocationId, label: invocationId, meta: 'Not in robot code', badge: 'Missing' }] : [])
-    .concat(commands.map((command) => ({ value: command.id, label: command.label, meta: command.member, searchText: [command.description, command.id].filter(Boolean).join(' ') })))
-    .concat(invocationId ? [{ value: '', label: 'No command' }] : []);
+// Catalog arrays are immutable IPC snapshots. Replacing a catalog invalidates these weak identity caches.
+const choiceCache = new WeakMap(), richChoiceCache = new WeakMap();
+const emptyCommands = [];
+/** "No command" appears only once one is set, last, so typing never makes it the first match. */
+export function commandChoices(commands = emptyCommands, invocationId = '') {
+  let cached = choiceCache.get(commands);
+  if (!cached) {
+    const items = commands.map(command => ({ value: command.id, label: command.label, meta: command.member, searchText: [command.description, command.id].filter(Boolean).join(' ') }));
+    cached = { ids: new Set(commands.map(command => command.id)), items, selectedItems: items.concat({ value: '', label: 'No command' }) };
+    choiceCache.set(commands, cached);
+  }
+  if (invocationId && !cached.ids.has(invocationId)) {
+    if (cached.missingId !== invocationId) {
+      cached.missingId = invocationId;
+      cached.missingItems = [{ value: invocationId, label: invocationId, meta: 'Not in robot code', badge: 'Missing' }, ...cached.selectedItems];
+    }
+    return cached.missingItems;
+  }
+  return invocationId ? cached.selectedItems : cached.items;
+}
+
+/** Rich marker-inspector discovery keeps parameter and semantic searches, independently of selection. */
+export function inspectorCommandChoices(commands, invocationId = '', actionTag = '') {
+  let cached = richChoiceCache.get(commands);
+  if (!cached) {
+    const items = commands.map(command => ({ value: command.id, label: command.label,
+      meta: (command.parameters || []).filter(parameter => parameter.role === 'argument').map(parameter => parameter.label || parameter.name).join(', ') || command.member,
+      badge: '', searchText: [command.description, command.id, command.ownerType, command.member].concat(command.semanticTags || [])
+        .concat((command.parameters || []).map(parameter => [parameter.name, parameter.label, parameter.description, parameter.unit, parameter.valueType].filter(Boolean).join(' ')))
+        .filter(Boolean).join(' '),
+    }));
+    cached = { ids: new Set(commands.map(command => command.id)), items: [{ value: '', label: 'No command' }, ...items], actionTag: '', actionItems: null };
+    richChoiceCache.set(commands, cached);
+  }
+  let items = cached.items;
+  if (actionTag) {
+    if (cached.actionTag !== actionTag || !cached.actionItems) {
+      cached.actionTag = actionTag;
+      cached.actionItems = [cached.items[0], ...commands.map((command, index) => ({ ...cached.items[index + 1], badge: (command.semanticTags || []).includes(actionTag) ? 'Matches action' : '' }))];
+    }
+    items = cached.actionItems;
+  }
+  if (invocationId && !cached.ids.has(invocationId)) {
+    if (cached.missingId !== invocationId || cached.missingBase !== items) {
+      cached.missingId = invocationId; cached.missingBase = items;
+      cached.missingItems = [items[0], { value: invocationId, label: String(invocationId).split('.').pop() || String(invocationId), meta: 'Saved command is unavailable', badge: 'Missing' }, ...items.slice(1)];
+    }
+    return cached.missingItems;
+  }
+  return items;
+}
 
 /**
  * Escape from the closed command trigger clears the selection like Escape on the field; the open search keeps its

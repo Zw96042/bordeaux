@@ -70,6 +70,7 @@ jobs:
               scripts/verify-routine-workspace-ui.mjs
               scripts/verify-robot-push-ui.mjs
               scripts/verify-robot-file-push-ui.mjs
+              scripts/verify-command-search-ui.mjs
               scripts/verify-app-updates-ui.mjs
     env:
       ELECTRON_DISABLE_SECURITY_WARNINGS: "true"
@@ -87,6 +88,7 @@ jobs:
       BORDEAUX_OPTIMIZER_UI_OUTPUT: .ui-artifacts/optimizer
       BORDEAUX_PUSH_UI_OUTPUT: .ui-artifacts/push
       BORDEAUX_FILE_PUSH_UI_OUTPUT: .ui-artifacts/file-push
+      BORDEAUX_COMMAND_SEARCH_UI_OUTPUT: .ui-artifacts/command-search
       BORDEAUX_UPDATES_UI_OUTPUT: .ui-artifacts/updates
     steps:
       - uses: actions/checkout@v7

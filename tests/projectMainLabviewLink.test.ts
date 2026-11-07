@@ -77,6 +77,26 @@ async function fixture() {
   return { root, folder, file, sandbox, handlers, activate, get context() { return sandbox.projectContext() as typeof context; } };
 }
 
+it("adopts a freshly inspected catalog without rediscovery but still checks the selected file", async () => {
+  const f = await fixture();
+  const catalog = await discoverLabviewProject(f.file);
+  const result = await f.sandbox.connectRobotProject(f.file, "labview", catalog);
+  expect(result.catalog.commands).toEqual(catalog.commands);
+  expect(f.sandbox.discoverRobotProject).not.toHaveBeenCalled();
+  expect(f.sandbox.withCachedLabviewCommands).not.toHaveBeenCalled();
+  expect(f.sandbox.syncLabviewCommands).not.toHaveBeenCalled();
+  await fs.promises.unlink(f.file);
+  await expect(f.sandbox.connectRobotProject(f.file, "labview", catalog)).rejects.toThrow();
+});
+
+it("does not publish an inspected catalog when its project context is superseded", async () => {
+  const f = await fixture(), catalog = await discoverLabviewProject(f.file);
+  const pending = f.sandbox.connectRobotProject(f.file, "labview", catalog);
+  f.activate();
+  await expect(pending).rejects.toThrow(/project changed|superseded/);
+  expect(f.sandbox.linkedRobotCatalog).toBeNull();
+});
+
 it("adopts a modeled Link selection before the queued departure saves and grants an exact receipt", async () => {
   // Actual main/App/departure callbacks and storage; modeled dialog completion, no native UI claim.
   const f = await fixture(), project = createDemoProject(); project.name = "Before Link selection"; project.editor = {};

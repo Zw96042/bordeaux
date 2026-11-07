@@ -1,4 +1,5 @@
 import { PathLinks } from "../lib/pathLinks";
+import { inspectorCommandChoices } from "../lib/commandPick";
 import { SharedWaypointPosition } from "./SharedWaypointPosition";
 import * as React from "react";
 import { PM } from "../lib/pathMath";
@@ -700,18 +701,7 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
       const selectedCommand = commands.find((command) => command.id === invocationId);
       const unresolved = invocationId && !selectedCommand;
       const pendingActionTag = m.actionIntent && m.actionIntent.semanticTag;
-      const commandPickerItems = [{ value: '', label: 'No command' }]
-        .concat(unresolved ? [{ value: invocationId, label: simpleRobotName(invocationId), meta: 'Saved command is unavailable', badge: 'Missing' }] : [])
-        .concat(commands.map((command) => ({
-          value: command.id,
-          label: command.label,
-          meta: (command.parameters || []).filter((parameter) => parameter.role === 'argument').map((parameter) => parameter.label || parameter.name).join(', ') || command.member,
-          badge: pendingActionTag && (command.semanticTags || []).includes(pendingActionTag) ? 'Matches action' : '',
-          searchText: [command.description, command.id, command.ownerType, command.member].concat(command.semanticTags || [])
-            .concat((command.parameters || []).map((parameter) => [parameter.name, parameter.label, parameter.description, parameter.unit, parameter.valueType].filter(Boolean).join(' ')))
-            .filter(Boolean)
-            .join(' '),
-        })));
+      const commandPickerItems = inspectorCommandChoices(commands, invocationId, pendingActionTag);
       const argumentParameters = selectedCommand ? (selectedCommand.parameters || []).filter((parameter) => parameter.role === 'argument') : [];
       const dependencyParameters = selectedCommand ? (selectedCommand.parameters || []).filter((parameter) => parameter.role === 'dependency') : [];
       const invocationArguments = m.invocation && m.invocation.commandId === invocationId ? (m.invocation.arguments || {}) : {};
