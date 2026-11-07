@@ -48,8 +48,10 @@ it("keeps required CI job identities, all shards, and all desktop scripts", () =
   const groups = ci.jobs.desktop.strategy.matrix.include;
   expect(groups.map(({ group }) => group)).toEqual(["library", "planning", "workflows"]);
   const desktopScripts = groups.flatMap(({ checks }) => checks.trim().split("\n"));
-  expect(desktopScripts).toHaveLength(17);
-  expect(new Set(desktopScripts).size).toBe(17);
+  expect(desktopScripts).toHaveLength(18);
+  expect(new Set(desktopScripts).size).toBe(18);
+  expect(desktopScripts).toContain("scripts/verify-command-search-ui.mjs");
+  expect(ci.jobs.desktop.env.BORDEAUX_COMMAND_SEARCH_UI_OUTPUT).toBe(".ui-artifacts/command-search");
   expect(desktopScripts).toContain("scripts/verify-editor-interactions.mjs");
   expect(desktopScripts).toContain("scripts/verify-windows-chrome.mjs");
   expect(desktopScripts).toContain("scripts/verify-robot-electrical-ui.mjs");
