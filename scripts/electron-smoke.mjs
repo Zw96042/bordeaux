@@ -79,7 +79,9 @@ try {
   const packagedExecutable = process.env.BORDEAUX_SMOKE_EXECUTABLE;
   const childEnvironment = { ...process.env, BORDEAUX_SMOKE_TEST: "1", BORDEAUX_SMOKE_DIRECTORY: smokeDirectory };
   delete childEnvironment.ELECTRON_RUN_AS_NODE;
-  const child = spawn(packagedExecutable || electron, packagedExecutable ? ["--enable-mcp-access"] : ["dist-electron/electron/main.js", "--enable-mcp-access"], {
+  const args = packagedExecutable ? ["--enable-mcp-access"] : ["dist-electron/electron/main.js", "--enable-mcp-access"];
+  if (process.env.BORDEAUX_UI_DISABLE_GPU === "1") args.unshift("--disable-gpu");
+  const child = spawn(packagedExecutable || electron, args, {
     cwd: process.cwd(),
     env: childEnvironment,
     stdio: ["ignore", "pipe", "pipe"],
@@ -102,8 +104,6 @@ try {
     clearTimeout(timeout);
   }
 
-  assert.equal(timedOut, false, "Electron smoke exceeded its 30-second deadline");
-  assert.equal(code, 0, `Electron smoke process exited with code ${code}`);
   const resultLine = output.split(/\r?\n/).find((line) => line.startsWith("BORDEAUX_SMOKE_RESULT "));
   assert.ok(resultLine, "Electron smoke process did not return results");
   const result = JSON.parse(resultLine.slice("BORDEAUX_SMOKE_RESULT ".length));
@@ -120,7 +120,7 @@ try {
   assert.ok(result.main > 0, "Main landmark must exist");
   assert.ok(result.nav > 0, "Navigation landmark must exist");
   for (const check of [
-    "api", "root", "startupAdopted", "validation", "motorPreset", "eventMarkerAutosave", "multiRoutineUi", "robotPushUi",
+    "api", "root", "startupAdopted", "validation", "motorPreset", "eventMarkerAutosave", "multiRoutineUi", "routineExportApi", "routinePushUi", "robotPushUi",
     "robotDiscovery", "robotBuilt", "robotRecent", "missingTypeEvidenceRejected", "eventlessBdxExported",
     "restored", "roundTrip", "editorRestored", "nodeGlobalsBlocked", "popupBlocked", "inlineScriptBlocked",
     "filesWritten", "invalidDraftBlockedClose", "closedWithExactSourceReceipt", "updaterIntegration", "updaterPopoverVisible", "unsavedDraftRetained", "folderBdxSaved", "sourceSavedOnBdxFailure",
@@ -133,6 +133,10 @@ try {
   assert.equal(result.robotUi.commandOptions, declaration.commands.length + 1, "Declared LabVIEW commands plus No command option");
   const generatedPaths = await fs.readdir(path.join(smokeDirectory, "Paths"));
   assert.ok(generatedPaths.some(name => name.endsWith(".bdx")), "Save writes BDX into Paths");
+  // Keep payload/feature assertions distinguishable from a platform shutdown failure. Both remain required.
+  console.log("BORDEAUX_SMOKE_ASSERTIONS_OK");
+  assert.equal(timedOut, false, "Electron smoke exceeded its 30-second deadline");
+  assert.equal(code, 0, `Electron smoke process exited with code ${code}`);
   console.log("BORDEAUX_SMOKE_OK");
 } finally {
   try {
