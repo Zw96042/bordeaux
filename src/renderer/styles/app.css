@@ -765,6 +765,7 @@ details[open]>summary::after{transform:translateY(3px) rotate(-135deg)}
 
 /* Passive field feedback occupies one row; longer explanations are opt-in. */
 .field-status{position:relative;display:flex;align-items:flex-start;width:max-content;max-width:100%;min-width:0;border:1px solid var(--line-2);border-radius:var(--r);background:var(--hud-surface);box-shadow:var(--elevation);color:var(--txt-2);font-size:12px;line-height:1.4;pointer-events:auto}
+.routine-export-notices{display:flex;justify-content:center;padding:8px 12px;flex-shrink:0}
 .field-status.error{border-color:rgba(210,101,95,.45)}
 .field-status details{min-width:0}
 .field-status summary{min-width:0;min-height:36px;padding:6px 10px}

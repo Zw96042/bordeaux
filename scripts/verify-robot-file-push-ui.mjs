@@ -26,10 +26,11 @@ const path = require('node:path');
 app.setPath('userData', path.join(${JSON.stringify(output)}, 'user-data'));
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('force-device-scale-factor', '1');
 app.whenReady().then(async () => {
   const win = new BrowserWindow({ show: false, width: 1440, height: 900, useContentSize: true, webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false } });
   win.webContents.on('console-message', (event) => { if (event.level === 'error') console.error(event.message); });
-  await win.loadFile(${JSON.stringify(path.join(output, 'dist/index.html'))});
+  await win.loadFile(${JSON.stringify(path.join(output, 'dist/index.html'))}, { query: { filter: ${JSON.stringify(process.env.BORDEAUX_FILE_PUSH_UI_FILTER || '')} } });
   let processing = false;
   const poll = setInterval(async () => {
     if (processing) return;
@@ -75,7 +76,7 @@ app.whenReady().then(async () => {
 const env = { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' };
 delete env.ELECTRON_RUN_AS_NODE;
 console.log(`Robot push controller verification artifacts: ${output}`);
-const child = spawn(electron, [runner], { cwd: root, env, stdio: 'inherit' });
+const child = spawn(electron, [...(process.env.BORDEAUX_UI_DISABLE_GPU === '1' ? ['--disable-gpu'] : []), runner], { cwd: root, env, stdio: 'inherit' });
 const timer = setTimeout(() => child.kill('SIGKILL'), 90_000);
 const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', resolve); });
 clearTimeout(timer);

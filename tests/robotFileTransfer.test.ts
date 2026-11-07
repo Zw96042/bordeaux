@@ -32,6 +32,21 @@ const connection = { endpoint, hostKeyFingerprint: fingerprint };
 const files = [{ fileName: "opening.bdx", contents: Buffer.from([0, 1, 255, 128]) }];
 
 describe("direct robot SFTP path delivery", () => {
+  it('uploads only one selected routine with readback and preserves other files', async () => {
+    const f = fixture(), contents = Buffer.from('{"schema":"bordeaux-routine-runtime/1"}');
+    await uploadRobotFiles(connection, [{ fileName: 'Opening.bdr', contents }], undefined, f.factory);
+    expect(f.stored.get('Opening.bdr')).toEqual(contents);
+    expect(f.stored.get('unrelated.bdx')?.toString()).toBe('preserve');
+    expect(f.stored.size).toBe(2);
+  });
+  it('rejects a corrupted routine readback without replacing the selected destination', async () => {
+    const f = fixture(); f.stored.set('Opening.bdr', Buffer.from('previous'));
+    const read = f.session.read.bind(f.session);
+    f.session.read = async (file, max, signal) => file.kind === 'pathTemporary' ? Buffer.from('corrupt') : read(file, max, signal);
+    await expect(uploadRobotFiles(connection, [{ fileName: 'Opening.bdr', contents: Buffer.from('reviewed') }], undefined, f.factory)).rejects.toThrow(/read-back did not match/);
+    expect(f.stored.get('Opening.bdr')?.toString()).toBe('previous');
+    expect(f.stored.get('unrelated.bdx')?.toString()).toBe('preserve');
+  });
   it("normalizes trailing slashes on the requested destination", () => {
     expect(validateRobotFileEndpoint({ ...endpoint, directory: "/natinst/bin/Paths///" })).toEqual(endpoint);
     expect(validateRobotFileEndpoint({ ...endpoint, directory: "/home/lvuser/" }).directory).toBe("/home/lvuser");

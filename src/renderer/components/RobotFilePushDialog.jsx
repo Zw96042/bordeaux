@@ -6,6 +6,7 @@ import { shortFact } from '../lib/projectLifecycle';
 const h = React.createElement;
 const button = (label, onClick, props = {}) => h('button', { type: 'button', className: 'qbtn', onClick, ...props }, label);
 const plural = (count) => count + (count === 1 ? ' path' : ' paths');
+const scopeLabel = (files) => files.length === 1 && files[0].fileName.endsWith('.bdr') ? '1 routine' : plural(files.length);
 const kilobytes = (bytes) => (bytes < 1024 ? bytes + ' B' : (bytes / 1024).toFixed(bytes < 10240 ? 1 : 0) + ' KB');
 // Port 22 is the robot default, so the address only carries a port when it differs.
 const address = (endpoint) => endpoint.host + (Number(endpoint.port) === 22 ? '' : ':' + endpoint.port);
@@ -41,7 +42,7 @@ export function RobotFilePushDialog({ controller: c }) {
   const dialog = React.useRef(null);
   React.useEffect(() => {
     if (c.open && !dialog.current.open) dialog.current.showModal();
-    else if (!c.open && dialog.current.open) dialog.current.close();
+    else if (!c.open && dialog.current.open) { dialog.current.close(); c.returnFocus(); }
   }, [c.open]);
   const endpoint = c.preview?.connection.endpoint || c.settings?.endpoint;
   const identity = c.probe && ['identity', 'trusting'].includes(c.phase);
@@ -80,7 +81,7 @@ export function RobotFilePushDialog({ controller: c }) {
     view = 'summary';
     // The endpoint shown is the stored one, so "Saved" is a fact about this computer, never about the robot.
     body = [alert, h(Destination, { key: 'dest', endpoint, status: c.reachability === 'offline' ? 'Disconnected' : c.connection ? 'Verified' : 'Saved · not verified' }),
-      c.connection && h('p', { key: 'note', className: 'rfp-note' }, 'Select paths in the library, then choose Push.')];
+      c.connection && h('p', { key: 'note', className: 'rfp-note' }, 'Select paths or open a routine, then choose Push.')];
     const done = (!c.connection && waiting) ? null : button('Done', c.close, { key: 'done', className: 'qbtn primary', autoFocus: true });
     actions = [
       button('Edit', c.chooseAnotherRobot, { key: 'edit', disabled: c.busy }),
@@ -114,11 +115,11 @@ export function RobotFilePushDialog({ controller: c }) {
       : [button(c.phase === 'uploading' ? 'Cancel upload' : 'Cancel', c.cancel, { key: 'cancel', autoFocus: true }),
         h('button', { key: 'upload', type: 'button', className: 'qbtn primary', disabled: c.busy, onClick: c.confirmPush },
           c.phase === 'uploading' && h('span', { className: 'robot-push-spinner', 'aria-hidden': true }),
-          c.phase === 'uploading' ? 'Uploading…' : 'Upload ' + plural(files.length))];
+          c.phase === 'uploading' ? 'Uploading…' : 'Upload ' + scopeLabel(files))];
   } else if (c.phase === 'transferred' && c.result) {
     view = 'done'; diagnostics = false;
     body = [h('span', { key: 'check', className: 'rfp-check' }, h(UI.Icon, { name: 'check', size: 14, sw: 2.2 })),
-      h('div', { key: 'text' }, h('strong', null, plural(c.result.files.length) + ' uploaded'),
+      h('div', { key: 'text' }, h('strong', null, scopeLabel(c.result.files) + ' uploaded'),
         // Only an acknowledged creation of this exact folder is reported; an existing folder needs no mention.
         h('p', null, (c.result.directoryCreated === true ? 'Folder created. ' : '') + 'Verified in ' + c.result.directory + '. Nothing started.'))];
     actions = [c.reachability === 'offline' && button('Connect', c.probeRobot, { key: 'connect' }), button('Done', c.close, { key: 'done', className: 'qbtn primary', autoFocus: true })];

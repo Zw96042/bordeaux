@@ -14,7 +14,7 @@ function useUnavailableRobotPushController({ projectKey }) {
     const routine = scope?.kind === 'routine';
     setUnavailable({ kind: routine ? 'routine' : 'path',
       pathId: scope?.kind === 'paths' && scope.pathIds?.length === 1 ? scope.pathIds[0] : null,
-      reason: routine ? 'Push sends paths only. Routines stay local.'
+      reason: routine ? 'Robot transfer unavailable. Export the routine locally in the desktop app.'
         : 'Robot transfer unavailable. Export the path locally.' });
     setOpen(true);
   };

@@ -103,7 +103,7 @@ export interface RoutineExecutionAdapters {
 }
 
 /** Reject every unsupported/malformed branch before the first host operation. */
-function preflight(routine: AutonomousRoutine, commands: Map<string, RobotCommandDescriptor>, paths: ReadonlySet<string>): void {
+export function preflightRoutine(routine: AutonomousRoutine, commands: Map<string, RobotCommandDescriptor>, paths: ReadonlySet<string>): void {
   const pending = [{ nodes: routine.nodes, depth: 0, repeatDepth: 0 }], ids = new Set<string>(); let count = 0;
   while (pending.length) {
     const frame = pending.pop()!;
@@ -144,7 +144,7 @@ function preflight(routine: AutonomousRoutine, commands: Map<string, RobotComman
  * Each invocation has a fresh ID; each loop pass has a fresh result scope. */
 export async function executeRoutine(source: AutonomousRoutine, descriptors: RobotCommandDescriptor[], pathIds: ReadonlySet<string>, host: RoutineExecutionAdapters, signal: AbortSignal): Promise<'completed' | 'ended' | 'cancelled'> {
   const routine = structuredClone(source), commands = new Map(structuredClone(descriptors).map(command => [command.id, command]));
-  preflight(routine, commands, pathIds);
+  preflightRoutine(routine, commands, pathIds);
   const runId = crypto.randomUUID(); let occurrence = 0, stepsSinceYield = 0;
   const checked = () => { if (signal.aborted) throw new DOMException('Routine cancelled', 'AbortError'); };
   const call = async <T>(work: () => Promise<T>): Promise<T> => {

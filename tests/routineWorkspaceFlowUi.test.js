@@ -168,7 +168,7 @@ describe('preview boundary is stated once', () => {
     expect(help).toBe(PREVIEW_HELP);
     expect(help.split(/(?<=[.!?])\s+/)).toHaveLength(2);
     expect(help).toContain('commands and conditions do not run');
-    expect(help).toContain('Robot routine playback is unavailable.');
+    expect(help).toContain('Push routine uploads a file; robot code validates it before execution.');
     // No assumptions list, per-repeat pass counts, internal IDs or repeated save/pose disclaimers.
     expect(workspace).not.toMatch(/<ul|<li/);
     expect(help).not.toMatch(/routine_node_7f0c|previews 2 passes|Saving|Poses|Untimed/);

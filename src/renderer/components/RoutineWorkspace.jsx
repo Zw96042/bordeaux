@@ -5,7 +5,7 @@ import { PowerAnalysis } from './PowerAnalysis';
 const h = React.createElement;
 
 /** The preview boundary, said once. Per-step choices and untimed time live in the inspector and transport. */
-export const PREVIEW_HELP = 'Preview only; commands and conditions do not run. Robot routine playback is unavailable.';
+export const PREVIEW_HELP = 'Preview only; commands and conditions do not run. Push routine uploads a file; robot code validates it before execution.';
 
 export function RoutineWorkspace({ routine, flow, field, transport, status, run, robot }) {
   const [view, setView] = React.useState('flow');

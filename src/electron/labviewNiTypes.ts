@@ -66,7 +66,7 @@ function unsignedBounds(xml: XElement): { min?: number | string; max?: number | 
   return xml.name === "U8" ? { min: 0, max: 255 } : xml.name === "U16" ? { min: 0, max: 65535 }
     : xml.name === "U32" ? { min: "0", max: "4294967295" } : xml.name === "U64" ? { min: "0", max: "18446744073709551615" } : {};
 }
-function typedefs(raw: unknown, name: string): { root?: string; paths: string[] } {
+export function typedefs(raw: unknown, name: string): { root?: string; paths: string[] } {
   const outer = list(raw, "NI terminal extended information", 4);
   if (outer.length !== 1) throw new Error("Unsupported NI terminal extended information layout");
   const entries = list(outer[0], "NI typedef records", 512);
@@ -86,7 +86,7 @@ function typedefs(raw: unknown, name: string): { root?: string; paths: string[] 
   }
   return { root, paths };
 }
-function statusCluster(xml: XElement): boolean {
+export function statusCluster(xml: XElement): boolean {
   const fields = children(xml);
   return xml.name === "Cluster" && Number(xml.elementValueOrEmpty("NumElts")) === 3 && fields.length === 3 && fields[0].name === "String" && fields[0].elementValueOrEmpty("Name") === "Name"
     && fields[1].name === "EW" && fields[1].elementValueOrEmpty("Name") === "Status"

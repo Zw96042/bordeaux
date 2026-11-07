@@ -193,7 +193,7 @@ describe('SFTP file push controller', () => {
     bridge.getRobotFileConnection.mockResolvedValueOnce({ endpoint: connection.endpoint });
     await ready(); await render().requestPush({ kind: 'paths', pathIds: ['A'] });
     props = { ...props, projectKey: 'other' }; render();
-    expect(render()).toMatchObject({ canRetry: false, error: 'The project changed. Choose Push again to review the current paths.' });
+    expect(render()).toMatchObject({ canRetry: false, error: 'The project changed. Choose Push again to review the current files.' });
   });
   it('surfaces failed preparation and supports a fresh retry', async () => {
     bridge.prepareRobotFiles.mockRejectedValueOnce(new Error('Path cannot be exported'));
@@ -208,9 +208,27 @@ describe('SFTP file push controller', () => {
     pending.reject(new Error('Upload canceled')); await work;
     expect(render().phase).toBe('failed'); expect(render().error).toBe('Upload canceled');
   });
-  it.each(['routine', 'project'])('does not prepare unsupported %s delivery', async (kind) => {
+  it.each(['project'])('does not prepare unsupported %s delivery', async (kind) => {
     const c = await ready(); await c.requestPush({ kind });
     expect(render().phase).toBe('unsupported'); expect(bridge.prepareRobotFiles).not.toHaveBeenCalled();
+  });
+  it('captures one routine and retries that scope without widening to paths', async () => {
+    const routinePreview = { ...preview, files: [{ ...preview.files[0], pathId: 'routine', fileName: 'Opening.bdr' }] };
+    bridge.prepareRobotRoutine = vi.fn(async () => routinePreview);
+    const c = await ready(); await c.requestPush({ kind: 'routine', routineId: 'routine' });
+    expect(bridge.prepareRobotRoutine).toHaveBeenCalledWith(project, 'routine');
+    expect(bridge.prepareRobotFiles).not.toHaveBeenCalled();
+    expect(render()).toMatchObject({ phase: 'review', preview: { linked: [] } });
+    bridge.confirmRobotFiles.mockRejectedValueOnce(new Error('readback failed'));
+    await render().confirmPush();
+    project.paths[0].name = 'New source edit';
+    await render().retry();
+    expect(bridge.prepareRobotRoutine.mock.calls[1][1]).toBe('routine');
+    expect(bridge.prepareRobotFiles).not.toHaveBeenCalled();
+    await render().includeLinked('one');
+    expect(bridge.prepareRobotRoutine).toHaveBeenCalledTimes(2);
+    expect(bridge.cancelRobotFiles).toHaveBeenCalledWith('one');
+    expect(render().phase).toBe('review');
   });
   it('continues pending selection when the saved connection arrives late', async () => {
     const pending = deferred(); bridge.getRobotFileConnection.mockReturnValue(pending.promise);
@@ -298,7 +316,7 @@ describe('linked paths outside a push', () => {
     if (outcome === 'resolve') pending.resolve({ canceled: true }); else pending.reject(new Error('late discard'));
     await work;
     expect(bridge.prepareRobotFiles).toHaveBeenCalledTimes(1);
-    expect(render()).toMatchObject({ phase: 'idle', preview: null, canRetry: false, error: 'The project changed. Choose Push again to review the current paths.' });
+    expect(render()).toMatchObject({ phase: 'idle', preview: null, canRetry: false, error: 'The project changed. Choose Push again to review the current files.' });
   });
   it.each(['resolve', 'reject'])('drops a public push whose discard settles (%s) after invalidation', async (outcome) => {
     const c = await review();
@@ -308,7 +326,7 @@ describe('linked paths outside a push', () => {
     if (outcome === 'resolve') pending.resolve({ canceled: true }); else pending.reject(new Error('late discard'));
     await work;
     expect(bridge.prepareRobotFiles).toHaveBeenCalledTimes(1);
-    expect(render()).toMatchObject({ phase: 'idle', error: 'The project changed. Choose Push again to review the current paths.' });
+    expect(render()).toMatchObject({ phase: 'idle', error: 'The project changed. Choose Push again to review the current files.' });
   });
   it('refuses more than 64 paths before discarding the valid review, and allows exactly 64', async () => {
     const many = (count) => ({ paths: Array.from({ length: count }, (_, index) => ({ id: 'P' + index, name: 'P' + index,

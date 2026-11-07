@@ -26,8 +26,8 @@ export function validateRobotFileDirectory(directory: unknown): string {
 }
 
 export function validateRobotFileName(fileName: unknown): string {
-  if (typeof fileName !== "string" || !/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,119}\.bdx$/.test(fileName)) {
-    throw new RobotTransportError("invalid_request", "Robot path filename must be a safe .bdx basename");
+  if (typeof fileName !== "string" || !/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,119}\.(?:bdx|bdr)$/.test(fileName)) {
+    throw new RobotTransportError("invalid_request", "Robot filename must be a safe .bdx or .bdr basename");
   }
   return fileName;
 }

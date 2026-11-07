@@ -27,7 +27,8 @@ import path from "node:path";
 // Every application chunk remains counted.
 // Point-link review, continuous playback and the Windows menu add the separately reviewed 8 KiB allowance.
 // The styled tooltip layer and the toolbar update icon add 2 KiB.
-const APPLICATION_JAVASCRIPT_BUDGET_BYTES = 756 * 1024;
+// Includes explicit routine export controls and completion/error notices.
+const APPLICATION_JAVASCRIPT_BUDGET_BYTES = 758 * 1024;
 // Accepted-artifact validation, resumable search, and best-effort editing planning stay off the UI thread.
 // Adding planPath and current geometry overlays costs about 20 KB versus the legacy worker.
 // The measured worker is 195,729 bytes; 200 KiB keeps bounded headroom without removing the gate.

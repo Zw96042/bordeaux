@@ -304,7 +304,7 @@ it("matches frozen 1.1 force binary files and independent decoded fixture eviden
       samples: decoded.samples, followSections: decoded.follow, events: decoded.events.map((event) => ({ ...event, args: event.args.map((argument) => ({ key: argument.key, tag: argument.tag, hex: argument.raw.toString("hex") })) })) }, null, 2) + "\n";
     if (process.env.BORDEAUX_UPDATE_BDX_FIXTURES === "1") { fs.writeFileSync(path.join(directory, name + ".bdx"), built.bytes); fs.writeFileSync(path.join(directory, name + ".expected.json"), expected); }
     expect(fs.readFileSync(path.join(directory, name + ".bdx"))).toEqual(Buffer.from(built.bytes));
-    expect(fs.readFileSync(path.join(directory, name + ".expected.json"), "utf8")).toBe(expected);
+    expect(fs.readFileSync(path.join(directory, name + ".expected.json"), "utf8").replace(/\r\n/g, "\n")).toBe(expected);
     manifest.push({ name, sha256: built.sha256, bytes: built.bytes.length });
   }
   if (process.env.BORDEAUX_UPDATE_BDX_FIXTURES === "1") {

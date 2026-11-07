@@ -22,24 +22,25 @@ const reject = async (request, message) => act(async () => request.reject(new Er
 async function native(request) { await new Promise((resolve) => { window.__pushUiRequest = request; window.__finishPushUiRequest = () => { window.__pushUiRequest = null; resolve(); }; }); }
 const button = (label) => [...document.querySelectorAll('button')].find((button) => button.textContent === label || button.getAttribute('aria-label') === label);
 async function pointer(label) { const rect = button(label).getBoundingClientRect(); await act(async () => native({ pointer: { x: Math.round(rect.x + rect.width/2), y: Math.round(rect.y + rect.height/2) } })); }
-function Harness() { controller = useRobotPushController(props); return <><button id="origin" onClick={() => controller.requestPush({ kind: 'paths', pathIds: ['A','B'] })}>Push selection</button><button id="connection-origin" onClick={() => controller.openConnection()}>Manage connection</button><PushControl place="paths" paths={files.map(f => ({ ...f, id: f.pathId, waypoints: [{}, {}] }))} selection={{ selected: ['A', 'B'] }} controller={controller} /><RobotPushDialog controller={controller} /><DiagnosticBundleDialog getProject={props.getProject} targetSelector=".robot-connection-diagnostics" onOpen={controller.close} onClose={() => controller.returnFocus()} renderKey={controller.open + ":" + controller.phase} /></>; }
+function Harness() { controller = useRobotPushController(props); return <><button id="origin" onClick={() => controller.requestPush({ kind: 'paths', pathIds: ['A','B'] })}>Push selection</button><button id="connection-origin" onClick={() => controller.openConnection()}>Manage connection</button><PushControl place={props.place || 'paths'} activeRoutine={{ id: 'R', name: 'Long routine with typed branch and repeated pickup attempts' }} paths={files.map(f => ({ ...f, id: f.pathId, waypoints: [{}, {}] }))} selection={{ selected: ['A', 'B'] }} controller={controller} /><RobotPushDialog controller={controller} /><DiagnosticBundleDialog getProject={props.getProject} targetSelector=".robot-connection-diagnostics" onOpen={controller.close} onClose={() => controller.returnFocus()} renderKey={controller.open + ":" + controller.phase} /></>; }
 async function mount(saved = connection) {
   await act(async () => root.render(null));
   props = { getProject: () => ({ paths: files.map((f) => ({ id: f.pathId, name: f.name })), routines: [] }), projectKey: 'project-1', catalogKey: 'catalog-1' };
-  mock = { probes: [], trusts: [], prepares: [], confirms: [], canceled: [], saves: [], checks: [] };
+  mock = { probes: [], trusts: [], prepares: [], preparesRoutine: [], confirms: [], canceled: [], saves: [], checks: [] };
   const enqueue = (name,args) => { const request = { args: structuredClone(args), ...deferred() }; mock[name].push(request); return request.promise; };
-  window.bordeauxAPI = { robotDeliveryCapabilities: { fileTransfer: true, pathPush: true, routinePush: false },
+  window.bordeauxAPI = { robotDeliveryCapabilities: { fileTransfer: true, pathPush: true, routinePush: true },
     previewBetaDiagnostic: async () => ({ previewId: 'diagnostic', contents: '{}' }),
     getRobotFileConnection: async () => saved,
     checkRobotFileConnection: (...args) => enqueue('checks', args),
     saveRobotFileSettings: (...args) => enqueue('saves',args),
     probeRobotFiles: (...args) => enqueue('probes',args), trustRobotFiles: (...args) => enqueue('trusts',args),
     prepareRobotFiles: (...args) => enqueue('prepares',args), confirmRobotFiles: (...args) => enqueue('confirms',args),
+    prepareRobotRoutine: (...args) => enqueue('preparesRoutine',args),
     cancelRobotFiles: async (id) => { mock.canceled.push(id); return { canceled: true }; } };
   await act(async () => root.render(<Harness />));
 }
 async function prepare() { await pointer('Push selection'); await resolve(mock.prepares.at(-1), preview); assert(controller.phase === 'review', 'Must review immutable files'); }
-async function test(name, run, saved) { try { await mount(saved); await run(); results.push({ name, ok: true }); } catch (error) { results.push({ name, ok: false, error: error.stack }); } }
+async function test(name, run, saved) { if (new URLSearchParams(location.search).get('filter') && !name.includes(new URLSearchParams(location.search).get('filter'))) return; try { await mount(saved); await run(); results.push({ name, ok: true }); } catch (error) { results.push({ name, ok: false, error: error.stack }); } }
 await test('Saved robot settings can be edited offline, saved by keyboard and restored without transport', async () => {
   await action(() => controller.openConnection()); await pointer('Edit');
   await action(() => { controller.setHost('practice-robot.local'); controller.setPort('2222'); controller.setDirectory('/home/lvuser/practice'); });
@@ -200,13 +201,34 @@ await test('Source edits preserve reviewed snapshot while navigation preserves a
   await resolve(mock.confirms[0], { state: 'transferred', files, directory: endpoint.directory });
   assert(controller.phase === 'transferred', 'Confirmed files retain exact result across navigation');
 });
-await test('Review cancellation and unsupported routine never upload', async () => {
+await test('Review cancellation and unsupported full replacement never upload', async () => {
   await prepare(); await pointer('Cancel'); assert(controller.phase === 'cancelled' && !controller.open, 'Cancel ends review and closes');
   assert(document.activeElement.id === 'origin', 'Cancel returns focus to the push origin');
-  await action(() => controller.requestPush({ kind: 'routine', routineId: 'R' }));
-  assert(controller.phase === 'unsupported' && !mock.confirms.length, 'Routine cannot upload');
   await action(() => controller.requestPush({ kind: 'project' }));
   assert(controller.phase === 'unsupported' && !mock.confirms.length, 'Full replacement cannot upload');
+});
+await test('Routine toolbar uses a scoped immutable review, preserves retry scope and returns keyboard focus', async () => {
+  props = { ...props, place: 'routines' }; await act(async () => root.render(<Harness />));
+  await native({ capture: 'routine-toolbar' });
+  const origin = button('Push routine');
+  await pointer('Push routine');
+  assert(mock.preparesRoutine.length === 1 && mock.preparesRoutine[0].args[1] === 'R' && !mock.prepares.length, 'Only the selected routine is prepared');
+  const routineFiles = [{ pathId: 'R', name: 'Long routine with typed branch and repeated pickup attempts', fileName: 'Long-routine-with-typed-branch-and-repeated-pickup-attempts.bdr', size: 768000, sha256: 'd'.repeat(64) }];
+  await resolve(mock.preparesRoutine[0], { ...preview, files: routineFiles });
+  assert(button('Upload 1 routine') && !document.querySelector('.rfp-linked'), 'Routine file scope is visible, without widening to paths');
+  await native({ capture: 'routine-review' });
+  await pointer('Upload 1 routine'); await reject(mock.confirms[0], 'SFTP read-back did not match the routine. Check the destination and try again.');
+  await pointer('Try again');
+  assert(mock.preparesRoutine.length === 2 && mock.preparesRoutine[1].args[1] === 'R' && !mock.prepares.length, 'Retry retains one-routine scope');
+  await resolve(mock.preparesRoutine[1], { ...preview, operationId: 'routine-2', files: routineFiles });
+  button('Cancel').focus(); await act(async () => native({ key: 'Tab' }));
+  assert(document.activeElement?.textContent === 'Upload 1 routine', 'Keyboard reaches exact routine upload');
+  await act(async () => native({ key: 'Enter' }));
+  await resolve(mock.confirms[1], { state: 'transferred', files: routineFiles, directory: endpoint.directory });
+  assert(document.querySelector('dialog').textContent.includes('1 routine uploaded') && document.querySelector('dialog').textContent.includes('Nothing started'), 'Readback success grants no execution claim');
+  await native({ capture: 'routine-success' });
+  await act(async () => native({ key: 'Escape' }));
+  assert(!controller.open && document.activeElement === origin, 'Escape returns to routine Push: ' + document.activeElement?.outerHTML + ' origin connected=' + origin.isConnected + ' disabled=' + origin.disabled + ' controller.open=' + controller.open + ' dialog.open=' + document.querySelector('dialog').open);
 });
 await test('Connection diagnostics portal opens the real local diagnostic flow', async () => {
   await action(() => controller.openConnection());

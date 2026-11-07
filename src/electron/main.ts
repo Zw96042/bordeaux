@@ -12,6 +12,9 @@ import { validateProject, validateProjectSource } from "../shared/validation";
 import { ProjectBdxChangedError, type ProjectBdxExportScope } from "./projectBdxExport";
 import { prepareBdxBindings } from "./bdxBindings";
 import { buildBdxBatchOffThread, buildBdxOffThread } from "./bdxWorkerClient";
+import { buildRoutineOffThread } from "./routineRuntimeWorkerClient";
+import { routineEvidenceSnapshot } from "./routineBindings";
+import { routineCommandIds } from "./routineSelection";
 import { buildLabviewCatalog, LABVIEW_CATALOG_SOURCE, resolveLabviewProject } from "./labviewProject";
 import { withCachedLabviewCommands, withSessionLabviewCommands } from "./labviewNiInspection";
 import { statLabviewLocalPath } from "./labviewProjectDiscovery";
@@ -514,7 +517,7 @@ async function writeSelectedProjectBdx(target: string, bytes: Uint8Array, before
   try {
     if (await robotExportTargetSnapshot(target) !== before) throw new Error("BDX destination changed during review; export again");
     assertCurrent();
-    if (identity) {
+    if (identity && target.toLowerCase().endsWith(".bdx")) {
       await writeProjectFolderBdx(identity.folderPath, [{ fileName: path.basename(target), bytes }], { mode: "selected", folderIdentity: identity, assertCurrent });
     } else await writeBufferAtomically(target, bytes, { assertCurrent });
   } finally { release?.(); }
@@ -788,6 +791,7 @@ function buildMenu() {
         { label: "Save copy…", accelerator: "CmdOrCtrl+Shift+S", click: () => sendCommand("save-project-as") },
         { type: "separator" },
         { label: "Export selected path as BDX…", accelerator: "CmdOrCtrl+E", click: () => sendCommand("export-bdx") },
+        { label: "Export active routine…", click: () => sendCommand("export-routine") },
         { type: "separator" },
         process.platform === "darwin" ? { role: "close" } : { role: "quit" },
       ],
@@ -1280,6 +1284,31 @@ handle("project:exportBdx", async (_event, rawProject, rawPathId) => {
     pathCount: built.pathCount, eventCount: built.eventCount, sampleCount: built.sampleCount };
 });
 
+handle("project:exportRoutine", async (_event, rawProject, rawRoutineId) => {
+  if (typeof rawRoutineId !== "string" || !rawRoutineId.trim()) throw new Error("Select a routine before exporting");
+  const project = rawProject as BordeauxProject, link = captureLinkedProject(project);
+  const assertCurrent = () => { if (!link.isCurrent()) throw new Error("The selected project changed during routine export; export again"); };
+  const bindingOptions = link.bindingOptions(routineCommandIds(project, rawRoutineId).size > 0), bindings = await prepareBdxBindings(bindingOptions);
+  const built = await buildRoutineOffThread({ project, routineId: rawRoutineId, bindings });
+  assertCurrent();
+  const result = await dialog.showSaveDialog(mainWindow!, { title: "Export active routine", defaultPath: built.fileName,
+    filters: [{ name: "Bordeaux runtime routine", extensions: ["bdr"] }] });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  const target = result.filePath.toLowerCase().endsWith(".bdr") ? result.filePath : result.filePath + ".bdr";
+  const before = await robotExportTargetSnapshot(target);
+  if (before !== "missing") {
+    const review = await dialog.showMessageBox(mainWindow!, { type: "question", title: "Replace routine file?", message: path.basename(target),
+      detail: `${built.nodeCount} steps · ${built.pathCount} embedded paths · ${built.bytes.length} bytes\nThis writes a local routine file. Robot code validates compatibility before execution.`,
+      buttons: ["Cancel", "Replace"], defaultId: 0, cancelId: 0 });
+    if (review.response !== 1) return { canceled: true };
+  }
+  const currentBindings = await prepareBdxBindings(bindingOptions);
+  assertCurrent();
+  if (routineEvidenceSnapshot(currentBindings) !== routineEvidenceSnapshot(bindings)) throw new Error("NI command evidence changed during routine export; review and export again");
+  await writeSelectedProjectBdx(target, built.bytes, before, assertCurrent);
+  return { exported: true, relativePath: path.basename(target), sha256: built.sha256, pathCount: built.pathCount, nodeCount: built.nodeCount, commandCount: built.commandCount };
+});
+
 handle("diagnostics:preview", async (_event, rawProject) => {
   const catalog = diagnosticCatalog(linkedRobotCatalog);
   let fieldPin = diagnosticFieldPin(rawProject);
@@ -1573,6 +1602,27 @@ handle("robotFiles:prepare", async (_event, rawProject, pathIds) => {
     const current = await prepareBdxBindings(bindingOptions);
     assertCurrent();
     if (current.definitionJson !== bindings.definitionJson) throw new Error("NI parameter evidence changed; review this transfer again");
+  });
+});
+handle("robotFiles:prepareRoutine", async (_event, rawProject, routineId) => {
+  if (typeof routineId !== "string" || !routineId.trim()) throw new Error("Select one routine to push");
+  const project = rawProject as BordeauxProject;
+  if (!project || !Array.isArray(project.paths) || !Array.isArray(project.routines)) throw new Error("A valid Bordeaux project is required");
+  const pairing = robotFileDelivery.current();
+  if (!pairing) throw new Error("Connect a robot before preparing this transfer");
+  const link = captureLinkedProject(project);
+  const assertCurrent = () => {
+    if (!link.isCurrent() || JSON.stringify(pairing) !== JSON.stringify(robotFileDelivery.current())) throw new Error("The project or robot connection changed; review this transfer again");
+  };
+  const bindingOptions = link.bindingOptions(routineCommandIds(project, routineId).size > 0), bindings = await prepareBdxBindings(bindingOptions);
+  assertCurrent();
+  const built = await buildRoutineOffThread({ project, routineId, bindings });
+  assertCurrent();
+  return robotFileDelivery.prepare([{ pathId: routineId, name: built.name, fileName: built.fileName, contents: Buffer.from(built.bytes) }], async () => {
+    assertCurrent();
+    const current = await prepareBdxBindings(bindingOptions);
+    assertCurrent();
+    if (routineEvidenceSnapshot(current) !== routineEvidenceSnapshot(bindings)) throw new Error("NI command evidence changed; review this transfer again");
   });
 });
 handle("robotFiles:confirm", (_event, operationId) => {

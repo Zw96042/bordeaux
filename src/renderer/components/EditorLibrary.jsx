@@ -132,7 +132,7 @@ function PathProperties({ item, project, actions, close }) {
 
 function EditorLibrary({ mode, prefs, update, project, routines, activePathId, activeRoutineId, onPath, onRoutine, actions, times, controller, selection, deletionNotice }) {
   const pathsMode = mode === 'paths';
-  const routinePushAvailable = !controller.fileTransfer && typeof window !== 'undefined' && window.bordeauxAPI?.robotDeliveryCapabilities?.routinePush === true;
+  const routinePushAvailable = typeof window !== 'undefined' && window.bordeauxAPI?.robotDeliveryCapabilities?.routinePush === true;
   const pushUnavailable = !pathsMode && !routinePushAvailable;
   const items = pathsMode ? project.paths : routines;
   const activeId = pathsMode ? activePathId : activeRoutineId;

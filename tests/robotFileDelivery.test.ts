@@ -12,6 +12,17 @@ function setup(initial: RobotFileConnection | null = connection) {
   return { delivery: new RobotFileDelivery(initial, persist, transport), persist, transport };
 }
 describe("reviewed robot file delivery", () => {
+  it('keeps a selected routine immutable and rejects changed NI evidence before transport', async () => {
+    const { delivery, transport } = setup();
+    const original = { ...file(), pathId: 'routine-1', fileName: 'Opening.bdr', contents: Buffer.from('reviewed routine') };
+    const review = delivery.prepare([original], async () => undefined);
+    original.contents.fill(0);
+    await delivery.confirm(review.operationId);
+    expect(transport.upload.mock.calls[0][1]).toEqual([{ ...original, contents: Buffer.from('reviewed routine') }]);
+    const changed = delivery.prepare([original], async () => { throw new Error('NI command evidence changed'); });
+    await expect(delivery.confirm(changed.operationId)).rejects.toThrow('NI command evidence changed');
+    expect(transport.upload).toHaveBeenCalledOnce();
+  });
   it("checks the pinned robot without invalidating a reviewed upload or changing trust", async () => {
     const { delivery, transport, persist } = setup();
     const preview = delivery.prepare([file()], async () => undefined);

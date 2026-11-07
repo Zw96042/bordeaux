@@ -116,7 +116,7 @@ app.whenReady().then(async () => {
       await click('.routine-workspace-about');
       const helpOpen = await previewHelp();
       assert.ok(helpOpen.open && helpOpen.expanded === 'true' && helpOpen.focused, 'Pointer opens preview help and keeps trigger focus');
-      assert.ok(helpOpen.sentences.length <= 2 && helpOpen.sentences.includes('Robot routine playback is unavailable.'), 'Preview help states the runtime boundary in two sentences');
+      assert.ok(helpOpen.sentences.length <= 2 && helpOpen.sentences.includes('Push routine uploads a file; robot code validates it before execution.'), 'Preview help states the runtime boundary in two sentences');
       assert.ok(helpOpen.fits, 'Preview help fits under its trigger');
       assert.equal(helpOpen.flow, helpClosed.flow, 'Opening preview help does not move the flow');
       await snapshot('preview-notes-' + width);

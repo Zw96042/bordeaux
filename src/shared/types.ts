@@ -575,7 +575,7 @@ export interface RoutineFunctionNode {
   target?: string;
   /** Generated Robot command invoked between path steps. */
   invocation?: CommandInvocation;
-  /** Local authoring and preview only until the robot execution contract supports outputs. */
+  /** Completed-command output routes; local preview does not invoke commands. */
   outputBranch?: RoutineCommandOutputBranch;
   ends?: RoutineCommandEnds;
 }

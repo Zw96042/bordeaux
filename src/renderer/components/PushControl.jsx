@@ -102,7 +102,7 @@ function PushMenu({ controller, status, total, incomplete, onPushAll }) {
  */
 export function PushControl({ place, paths, selection, activeRoutine, controller }) {
   const pathsPlace = place === 'paths';
-  const routinePushAvailable = !controller.fileTransfer && typeof window !== 'undefined' && window.bordeauxAPI?.robotDeliveryCapabilities?.routinePush === true;
+  const routinePushAvailable = typeof window !== 'undefined' && window.bordeauxAPI?.robotDeliveryCapabilities?.routinePush === true;
   const selected = pathsPlace ? selection.selected : [];
   const byId = (id) => paths.find((path) => path.id === id);
   // Push needs geometry: a path still being drawn (fewer than two waypoints) cannot be sent.

@@ -2680,6 +2680,20 @@ import { buildTimeline, tAtF } from "../components/pathTimelineModel";
       finally { setRobotProjectState((current) => ({ ...current, operation: null })); }
     }, [flushProjectDraft, materializeProject]);
 
+    const onExportRoutine = useCallback(async () => {
+      if (!flushProjectDraft()) return;
+      if (!window.bordeauxAPI?.exportRoutine) { setExportError('Routine export is available in the Bordeaux desktop app.'); return; }
+      const snapshot = materializeProject();
+      if (!snapshot.activeRoutineId) { setExportError('Select a routine before exporting.'); return; }
+      setExportError(''); setBdxNotice('');
+      setRobotProjectState((current) => ({ ...current, operation: 'export' }));
+      try {
+        const result = await window.bordeauxAPI.exportRoutine(snapshot, snapshot.activeRoutineId);
+        if (result?.exported) setBdxNotice({ kind: 'routine', detail: 'Saved ' + result.relativePath + ', ' + result.nodeCount + ' steps, ' + result.pathCount + ' embedded paths. Local export complete; robot code checks compatibility before execution.' });
+      } catch (error) { setExportError(operationErrorMessage(error)); }
+      finally { setRobotProjectState((current) => ({ ...current, operation: null })); }
+    }, [flushProjectDraft, materializeProject]);
+
     useEffect(() => {
       if (!window.bordeauxAPI) return undefined;
       const api = window.bordeauxAPI;
@@ -2695,10 +2709,11 @@ import { buildTimeline, tAtF } from "../components/pathTimelineModel";
         else if (command === 'save-project') void requestSaveCopy(false);
         else if (command === 'save-project-as') void requestSaveCopy();
         else if (command === 'export-bdx') void onExportBdx();
+        else if (command === 'export-routine') void onExportRoutine();
         else if (command === 'robot-link') void linkRobotProject();
         else if (command === 'robot-build') void buildRobotCatalog();
       });
-    }, [showProjects, switchFromMenu, requestSaveCopy, onExportBdx, linkRobotProject, buildRobotCatalog]);
+    }, [showProjects, switchFromMenu, requestSaveCopy, onExportBdx, onExportRoutine, linkRobotProject, buildRobotCatalog]);
     // The native menu owns ⌘O/⌘N in the desktop app; this covers the browser renderer. Opening twice is harmless.
     // Capture, because the library and form fields stop their own key events from bubbling.
     useEffect(() => {
@@ -2913,7 +2928,7 @@ import { buildTimeline, tAtF } from "../components/pathTimelineModel";
     const bandActions = { ...inspActions, renamePath: (name) => renamePath(activeIdx, name), setRangeEnd, addRangeAt, addSlowZone, moveRangeHandle, addMarkerAt, addWaypoint, escapeSelection, setWaypointPositionLink, openPointLinks };
     const selNode = (page === 'auto' && routineSel) ? AUTO.findNode(routine, routineSel) : null;
     const fieldNotices = [
-      bdxNotice && { id: 'bdx-export', label: 'BDX exported', detail: bdxNotice.detail, autoDismissMs: 5000, dismissKey: bdxNotice,
+      bdxNotice && { id: 'bdx-export', label: bdxNotice.kind === 'routine' ? 'Routine exported' : 'BDX exported', detail: bdxNotice.detail, autoDismissMs: 5000, dismissKey: bdxNotice,
         action: { label: 'Dismiss', onClick: () => setBdxNotice((current) => current === bdxNotice ? '' : current) } },
       exportError && { id: 'export', error: true, label: 'Export failed', detail: exportError,
         action: { label: 'Dismiss', onClick: () => setExportError('') } },
@@ -2958,11 +2973,13 @@ import { buildTimeline, tAtF } from "../components/pathTimelineModel";
                 h(RoutineFieldPlayback, { store: routinePlaybackStore, run, selectedId: routineSel, doc, derived, sel: { kind: null, idx: -1 }, tool: 'select', view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: autoFieldActions }),
                 h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid, onFlip: flipPaths })),
               // Pending plans are loading; anything else blocking the preview is a fact with its reason, never "Planning…".
-              status: run.blocked && h('div', { className: 'routine-status ' + (run.planningStatus === 'pending' || run.planningStatus === 'idle' ? 'planning' : 'error'), role: run.planningStatus === 'pending' || run.planningStatus === 'idle' ? 'status' : 'alert' },
+              status: h(React.Fragment, null,
+                (bdxNotice || exportError) && h('div', { className: 'routine-export-notices' }, h(FieldStatus, { notices: fieldNotices.filter(notice => ['bdx-export', 'export'].includes(notice.id)) })),
+                run.blocked && h('div', { className: 'routine-status ' + (run.planningStatus === 'pending' || run.planningStatus === 'idle' ? 'planning' : 'error'), role: run.planningStatus === 'pending' || run.planningStatus === 'idle' ? 'status' : 'alert' },
                 h('span', { className: 'routine-status-icon' }, h(UI.Icon, { name: run.planningStatus === 'pending' || run.planningStatus === 'idle' ? 'route' : 'info', size: 14 })),
                 h('div', { className: 'routine-status-copy' },
                   h('b', null, run.planningStatus === 'error' ? 'Routine planning failed' : run.planningStatus === 'pending' || run.planningStatus === 'idle' ? 'Planning routine trajectories…' : 'Preview unavailable'),
-                  run.planningError && h('span', null, run.planningError))),
+                  run.planningError && h('span', null, run.planningError)))),
               transport: h(RoutineTransportPlayback, { store: routinePlaybackStore, run }) }),
             h('aside', { className: 'rail rail-r' + (selNode ? '' : ' collapsed'), 'aria-label': 'Routine step inspector' },
               selNode && h(StepInspector, { node: selNode, routine, issues: routineIssues, paths: project.paths, acq, run, robotProject: { ...robotProjectState, link: linkRobotProject } })))

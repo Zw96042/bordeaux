@@ -34,7 +34,9 @@ Installed GitHub builds update on version-derived beta or production channels; M
 
 Choose a `.lvproj` or its containing folder. Project discovery reads project XML; NI inspection supplies saved VI connector types and parameter defaults. The command catalog contains stable command and condition IDs. Discovery never executes robot VIs.
 
-Saving a path writes a local `.bdx` file. Binary export requires saved NI type evidence for command parameters; eventless paths can export without a linked catalog. Robot-code VIs read the file and return setpoints and command requests. The caller supplies measured pose, time, lifecycle state and motor/command integration. See [LabVIEW integration](docs/labview/index.md).
+Saving a path writes a local `.bdx` file. Binary export requires saved NI type evidence for command parameters; eventless paths can export without a linked catalog. Robot-code VIs read the file and return setpoints and command requests. The caller supplies measured pose, time, lifecycle state and motor/command integration.
+
+**File → Export active routine…** saves the selected authored routine as a self-contained `.bdr` with embedded paths. **Push routine** uploads that selected routine through the reviewed SFTP flow. Compatible LabVIEW code preloads the whole graph and runs paths, typed commands, waits, branches and repeats; successful delivery does not confirm robot acceptance or execution. Commands require matching owned start/cancel callbacks. See the [runtime format and command contract](src/shared/export/README.md).
 
 Robot push is a separate explicit action. Saving and local deletion do not connect to a robot or remove robot contents. Revision review, readback and matching disabled-runtime acknowledgment remain required where the configured robot receiver supports deployment.
 
