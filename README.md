@@ -46,6 +46,12 @@ Mark a waypoint **Linkable** and give it a **Point name** to make it available f
 
 For swerve paths, drag the start heading arrow or edit **Initial robot facing** independently of travel direction. Editing facing while tangent or look-at mode is active switches only the first segment to manual facing. **Entry speed (vi)** and **Exit speed (vf)** specify speed along the path, subject to trajectory limits. A waypoint’s explicit **Stop at entry/exit** overrides that boundary speed to zero; remove the stop to use a moving boundary. Tank heading follows the tangent.
 
+Rotation targets and waypoint arrival headings offer **Shortest**, **Clockwise**, and **Counterclockwise** turns into that heading. Shortest is the default. To continue a full turn through an intermediate target, choose the same direction on that target and the end heading. Matching headings with an explicit direction request one complete revolution. A moving turn needs distance; use a stopped turn for an in-place rotation.
+
+**Focus** hides the path list. The **Paths** strip at the left edge restores it and returns keyboard focus to the current path.
+
+In Routines, **Change path** opens a searchable path list with folder, duration, and usage context. The preview scrubber shows seconds and the current step. Click or drag to seek and pause; use the arrow keys for 0.1-second steps, Shift for 1-second steps, Page Up/Down for step boundaries, and Home/End for the start/end. Space plays or pauses. Untimed commands do not add preview time, and preview never executes commands or conditions.
+
 Field feedback uses one compact status; expanded **Details** holds diagnostics. Normal trajectory rebuilding remains automatic. Playback and field editing need a current trajectory: when planning rejects the path, the status explains why and offers **Edit limits**; when final planning runs out of time, it offers **Try again**. A saved optimization that cannot be validated offers **Optimize**.
 
 **Undo** applies to what you are looking at: the open path, or the routines, plus project-wide changes such as deleting a path or folder. It skips edits made elsewhere, but it is unavailable while a newer edit elsewhere depends on the change, such as an edit to a path that shared a position with a deleted one. Undo that newer edit first. Restoring a folder or path keeps library names, folders, and links you have changed since.

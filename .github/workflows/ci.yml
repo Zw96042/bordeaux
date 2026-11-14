@@ -54,6 +54,9 @@ jobs:
               scripts/verify-labview-project-ui.mjs
               scripts/verify-windows-chrome.mjs
               scripts/verify-library-ui.mjs
+              scripts/verify-rotation-focus-ui.mjs
+              scripts/verify-routine-scrubber-ui.mjs
+              scripts/verify-notification-ui.mjs
           - group: planning
             checks: |
               scripts/verify-planning-recovery-ui.mjs
@@ -90,6 +93,9 @@ jobs:
       BORDEAUX_FILE_PUSH_UI_OUTPUT: .ui-artifacts/file-push
       BORDEAUX_COMMAND_SEARCH_UI_OUTPUT: .ui-artifacts/command-search
       BORDEAUX_UPDATES_UI_OUTPUT: .ui-artifacts/updates
+      BORDEAUX_ROTATION_FOCUS_UI_OUTPUT: .ui-artifacts/rotation-focus
+      BORDEAUX_ROUTINE_SCRUBBER_UI_OUTPUT: .ui-artifacts/routine-scrubber
+      BORDEAUX_NOTIFICATION_UI_OUTPUT: .ui-artifacts/notifications
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/install
