@@ -1,6 +1,6 @@
 import { sample as sampleGeometry, pointAtFraction } from '../../shared/math/geometry';
 import { buildAnchors, headingAt } from '../../shared/math/headingAnchors';
-import { effectiveRanges, featureFraction } from '../../shared/math/pathRanges';
+import { directedHeadingSampleFractions, insertHeadingTargetSamples, effectiveRanges, featureFraction } from '../../shared/math/pathRanges';
 
 // Authored facing only. Tracking limits, heading transitions and stationary
 // actions belong to the worker's timing solve, never this pending projection.
@@ -10,7 +10,7 @@ function authoredHeadings(path, waypoints, sampled, wpFrac, robot) {
   const radians = degrees => Number.isFinite(degrees) ? (degrees % 360) * Math.PI / 180 : 0;
   const manual = [], targets = [];
   waypoints.forEach((w, i) => {
-    const entry = { f: wpFrac[i] || 0, rad: radians(w?.theta) };
+    const entry = { f: wpFrac[i] || 0, rad: radians(w?.theta), rotationDirection: w?.rotationDirection };
     const endpoint = i === 0 || i === waypoints.length - 1;
     if (endpoint || (w?.thetaOn && (modes[i - 1] === 'manual' || (w.turnInPlace && modes[i] === 'manual')))) manual.push(entry);
     if (endpoint || (w?.thetaOn && (modes[i - 1] === 'targets' || (w.turnInPlace && modes[i] === 'targets')))) targets.push(entry);
@@ -18,7 +18,7 @@ function authoredHeadings(path, waypoints, sampled, wpFrac, robot) {
   (Array.isArray(path?.targets) ? path.targets : []).forEach(target => {
     if (target && Number.isFinite(target.deg)
       && (target.anchor === 'dist' ? Number.isFinite(target.d ?? target.f ?? 0) : Number.isFinite(target.f ?? 0))) {
-      targets.push({ f: featureFraction(target, sampled), rad: radians(target.deg) });
+      targets.push({ f: featureFraction(target, sampled), rad: radians(target.deg), rotationDirection: target.rotationDirection });
     }
   });
   const manualAnchors = buildAnchors(manual), targetAnchors = buildAnchors(targets);
@@ -64,6 +64,17 @@ export function editingGeometry(path, perSegment = 14, robot = null) {
     if (pts.length > 1) pts[0].heading = pts[1].heading;
     sampled = { pts, length, segs: Math.max(0, waypoints.length - 1), wpIdx };
   }
+  const checks = [];
+  try {
+    if (sampled.pts.length && waypoints.length > 1) {
+      const directed = directedHeadingSampleFractions({ waypoints, targets: path?.targets, headingMode: path?.headingMode }, sampled, robot?.drive === 'tank');
+      insertHeadingTargetSamples(sampled, directed, sampled.wpIdx);
+    }
+  } catch (error) {
+    // Insertion commits only on success. Keep the finite base geometry and
+    // authored waypoint indices so even over-budget or unresolved drafts edit.
+    checks.push({ code: 'heading-sampling', kind: 'heading-sampling', level: 'error', text: error.message, message: error.message, f: 0 });
+  }
   const pts = sampled.pts, zero = pts.map(() => 0);
   const wpIdx = sampled.wpIdx || [];
   const wpFrac = wpIdx.map(i => (pts[i]?.s || 0) / (sampled.length || 1));
@@ -81,14 +92,14 @@ export function editingGeometry(path, perSegment = 14, robot = null) {
     prof: { t: zero, v: zero, head, totalTime: 0, holds: [], turns: [], jiggles: [] },
     metrics: { head, v: zero, accel: zero, omega: zero, curv: pts.map(p => p.curv || 0), vMax: 0.1, aMax: 0.1, wMax: 0.01, kMax: 0 },
     anchors, mode, effRanges, headingMode,
-    rev: Boolean(path?.driveBackward), totalDistance: sampled.length, markers: [], checks: [], planner: 'profiledSpline',
+    rev: Boolean(path?.driveBackward), totalDistance: sampled.length, markers: [], checks, planner: 'profiledSpline',
   };
 }
 
 /** Project arrival/departure timing for field colors; playback uses the full trace below. */
 export function projectEditingTiming(geometry, bestEffort, issues = []) {
   const samples = bestEffort?.samples;
-  const checks = issues.map(issue => ({ ...issue, f: issue.f0, seg: issue.segment, kind: issue.code, level: issue.severity, text: issue.message }));
+  const checks = [...(geometry.checks || []), ...issues.map(issue => ({ ...issue, f: issue.f0, seg: issue.segment, kind: issue.code, level: issue.severity, text: issue.message }))];
   if (!samples?.length) return { ...geometry, checks };
   const arrivals = [];
   for (const point of samples) {
@@ -119,7 +130,7 @@ export function projectEditingTiming(geometry, bestEffort, issues = []) {
  */
 export function liveEditingPreview(path, robot, solvedPath, solved) {
   if (solvedPath === path) return solved;
-  const geometry = editingGeometry(path, 14, robot), checks = solved?.checks || [];
+  const geometry = editingGeometry(path, 14, robot), checks = [...geometry.checks, ...(solved?.checks || [])];
   const trace = solved?.trajectorySamples?.length > 1 ? solved.trajectorySamples : solved?.finalTrajectory?.samples;
   if (!(trace?.length > 1) || geometry.sample.pts.length < 2) return { ...geometry, checks };
   // Map each live point to the solved fraction within its waypoint segment, keeping stops on their waypoints.
@@ -160,7 +171,7 @@ export function liveEditingPreview(path, robot, solvedPath, solved) {
   });
   return { ...geometry, checks, trajectorySamples,
     prof: { ...geometry.prof, t, v, totalTime },
-    metrics: { ...geometry.metrics, v, vMax: Math.max(0.1, ...v) } };
+    metrics: { ...geometry.metrics, v, vMax: v.reduce((max, value) => Math.max(max, value), 0.1) } };
 }
 
 /** Exact shared trace, including stopped holds, rotations and jiggle excursions. */

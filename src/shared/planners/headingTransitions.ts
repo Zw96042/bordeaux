@@ -1,5 +1,5 @@
 import type { PathDoc, Waypoint } from "../types";
-import { wrapRadians } from "../math/angles";
+import { movingTurnDelta, wrapRadians } from "../math/angles";
 
 const EPSILON = 1e-9;
 
@@ -13,6 +13,7 @@ export interface HeadingTransitionWindow {
 export interface HeadingLawAnchor {
   f: number;
   heading: number;
+  rotationDirection?: Waypoint["rotationDirection"];
 }
 
 export interface HeadingTransitionGoal {
@@ -20,6 +21,7 @@ export interface HeadingTransitionGoal {
   distanceM: number;
   heading: number;
   spanEndIndex: number;
+  rotationDirection?: Waypoint["rotationDirection"];
 }
 
 const TANGENT_JOINT_BLEND_DISTANCE_M = 0.18;
@@ -182,6 +184,7 @@ export function headingTransitionGoals(
       segmentIndex: segment,
       distanceM: Math.max(boundaryDistance, clamp(anchor.f, 0, 1) * totalDistanceM),
       heading: anchor.heading,
+      rotationDirection: anchor.rotationDirection,
       spanEndIndex,
     });
   }
@@ -196,6 +199,7 @@ export function smoothHeadingTransitions(
   points: readonly { s: number; heading?: number }[],
   waypoints: readonly Waypoint[],
   transitionGoals: readonly HeadingTransitionGoal[] = [],
+  incomingBoundaryHeadings: readonly (number | undefined)[] = [],
 ): number[] {
   if (rawHeadings.length === 0) return [];
   const unwrappedRaw = [rawHeadings[0]];
@@ -226,6 +230,8 @@ export function smoothHeadingTransitions(
       ? headings[boundaryIndex]
       : incomingLawHasWaypointAnchor
         ? unwrapFrom(headings[boundaryIndex - 1], incomingWaypoint.theta * (Math.PI / 180))
+      : Number.isFinite(incomingBoundaryHeadings[segment])
+        ? unwrapFrom(headings[boundaryIndex - 1], incomingBoundaryHeadings[segment]!)
       : segmentLaws[segment - 1] === "tangent" && Number.isFinite(sampledIncomingTangent)
         ? unwrapFrom(headings[boundaryIndex - 1], sampledIncomingTangent!)
         : headings[boundaryIndex - 1];
@@ -243,7 +249,7 @@ export function smoothHeadingTransitions(
       const sampledGoal = Math.abs(points[goalIndex].s - transitionGoal.distanceM) <= EPSILON
         ? transitionGoal.heading
         : unwrappedRaw[goalIndex];
-      const goalHeading = unwrapFrom(startHeading, sampledGoal);
+      const goalHeading = startHeading + movingTurnDelta(startHeading, sampledGoal, transitionGoal.rotationDirection);
       const startDistance = points[startIndex].s;
       const endDistance = points[goalIndex].s;
       const span = endDistance - startDistance;

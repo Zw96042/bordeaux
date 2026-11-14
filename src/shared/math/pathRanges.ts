@@ -2,6 +2,9 @@ import type { ConstraintRange, PathDoc } from "../types";
 import type { SampledPath } from "./geometry";
 
 import { angWrap, lerp } from "./geometry";
+import { waypointHeadingSemantics } from "./waypointHeading";
+import { HEADING_FRACTION_EPSILON } from "./headingAnchors";
+import { MAX_TRAJECTORY_SAMPLES } from "../planners/limits";
 
 // ---- constraint-range anchoring -------------------------------------------
 // A range can be anchored three ways. We resolve each to
@@ -50,20 +53,100 @@ export function featureFraction(feature: { anchor?: string; d?: number; f?: numb
   return Math.max(0, Math.min(1, raw));
 }
 
+/** Keep directed revolutions resolvable even when two anchors are very close. */
+export function directedHeadingSampleFractions(doc: Pick<PathDoc, "waypoints" | "targets" | "headingMode">, smp: SampledPath, tank = false): number[] {
+  if (tank || !smp.pts.length) return [];
+  const authoredTargets = Array.isArray(doc.targets) ? doc.targets : [];
+  const directed = (anchor: { rotationDirection?: string } | null | undefined) => anchor?.rotationDirection === "cw" || anchor?.rotationDirection === "ccw";
+  if (!doc.waypoints.some(directed) && !authoredTargets.some(directed)) return [];
+  const fractions = waypointFracs(doc, smp);
+  const modes = doc.waypoints.slice(0, -1).map(w => w?.segmentHeadingMode || doc.headingMode || "targets");
+  const manual: Array<{ f: number; rotationDirection?: string }> = [], targets: typeof manual = [];
+  doc.waypoints.forEach((w, index) => {
+    if (!w) return;
+    const semantics = waypointHeadingSemantics(w, index, modes);
+    const anchor = { f: fractions[index], rotationDirection: w.rotationDirection };
+    if (semantics.manual) manual.push(anchor);
+    if (semantics.targets) targets.push(anchor);
+  });
+  authoredTargets.forEach(t => {
+    if (!t || !Number.isFinite(t.deg)) return;
+    const f = featureFraction(t, smp);
+    if (Number.isFinite(f)) targets.push({ f, rotationDirection: t.rotationDirection });
+  });
+  const result = new Set<number>();
+  const add = (fraction: number) => {
+    if (result.has(fraction)) return;
+    if (result.size >= MAX_TRAJECTORY_SAMPLES) throw new Error("Heading samples exceed the trajectory sample limit");
+    result.add(fraction);
+  };
+  for (const [law, anchors] of [["manual", manual], ["targets", targets]] as const) {
+    if (!anchors.some(directed)) continue;
+    // Each law is interpolated path-wide, but only its active portions (and
+    // acquisition from a mode boundary) affect motion. Hidden metadata must
+    // neither reject a valid path nor spend its sampling budget.
+    const runs: Array<{ start: number; end: number; acquires: boolean }> = [];
+    modes.forEach((mode, segment) => {
+      if (mode !== law) return;
+      if (segment > 0 && modes[segment - 1] === law) runs[runs.length - 1].end = fractions[segment + 1];
+      else runs.push({ start: fractions[segment], end: fractions[segment + 1], acquires: segment > 0 && !doc.waypoints[segment]?.turnInPlace });
+    });
+    if (!runs.length) continue;
+    anchors.sort((a, b) => a.f - b.f);
+    let runIndex = 0;
+    // Retain preceding shortest anchors too: omitting an off-grid half-turn
+    // before a directed span can change the branch when sampled headings unwrap.
+    for (const anchor of anchors) {
+      while (runIndex < runs.length && runs[runIndex].end < anchor.f) runIndex++;
+      if (runIndex < runs.length && runs[runIndex].start <= anchor.f) add(anchor.f);
+    }
+    runIndex = 0;
+    for (let i = 1; i < anchors.length; i++) {
+      const anchor = anchors[i];
+      if (!directed(anchor)) continue;
+      const previous = anchors[i - 1].f;
+      while (runIndex < runs.length && runs[runIndex].end < previous) runIndex++;
+      for (let active = runIndex; active < runs.length && runs[active].start <= anchor.f; active++) {
+        const run = runs[active];
+        const start = Math.max(previous, run.start), end = Math.min(anchor.f, run.end);
+        if (end < start || (end === start && anchor.f > previous)) continue;
+        const spanStart = run.acquires ? Math.max(previous, run.start) : previous;
+        // Every subdivision must survive both fraction interpolation and the
+        // distance-based sample merge, not merely have positive physical length.
+        const span = anchor.f - spanStart;
+        if (span / 8 <= HEADING_FRACTION_EPSILON || span * smp.length / 8 <= 1e-9) {
+          throw new Error("A directed moving turn needs distance between heading anchors; use a stopped turn for an in-place rotation.");
+        }
+        add(start);
+        for (let part = 1; part < 8; part++) add(start + (end - start) * part / 8);
+        add(end);
+      }
+    }
+  }
+  return [...result];
+}
+
 export function insertHeadingTargetSamples(smp: SampledPath, fractions: readonly number[], waypointIndices: number[]) {
   if (!smp.pts.length || !fractions.length || smp.length <= 1e-9) return waypointIndices;
-  let indices = waypointIndices.slice();
-  const targets = fractions.map((fraction) => Math.max(0, Math.min(1, fraction)))
+  const source = smp.pts;
+  const output: typeof source = [];
+  const sourceIndices: number[] = [];
+  let cursor = 0;
+  const targets = fractions.filter(Number.isFinite).map((fraction) => Math.max(0, Math.min(1, fraction)))
     .sort((a, b) => a - b);
   targets.forEach((fraction) => {
     const distance = fraction * smp.length;
-    const afterIndex = smp.pts.findIndex((point) => point.s >= distance - 1e-9);
-    if (afterIndex <= 0 || afterIndex >= smp.pts.length) return;
-    if (Math.abs(smp.pts[afterIndex].s - distance) <= 1e-9) return;
-    const before = smp.pts[afterIndex - 1], after = smp.pts[afterIndex];
+    while (cursor < source.length && source[cursor].s < distance - 1e-9) {
+      sourceIndices[cursor] = output.length;
+      output.push(source[cursor++]);
+    }
+    if (!cursor || cursor >= source.length) return;
+    if (Math.abs(source[cursor].s - distance) <= 1e-9 || Math.abs(output.at(-1)!.s - distance) <= 1e-9) return;
+    if (output.length + source.length - cursor >= MAX_TRAJECTORY_SAMPLES) throw new Error("Heading samples exceed the trajectory sample limit");
+    const before = output.at(-1)!, after = source[cursor];
     const ratio = (distance - before.s) / Math.max(1e-9, after.s - before.s);
     const crossesSegment = before.seg !== after.seg;
-    smp.pts.splice(afterIndex, 0, {
+    output.push({
       ...before,
       x: lerp(before.x, after.x, ratio),
       y: lerp(before.y, after.y, ratio),
@@ -73,8 +156,13 @@ export function insertHeadingTargetSamples(smp: SampledPath, fractions: readonly
       curv: lerp(before.curv, after.curv, ratio),
       s: distance,
     });
-    indices = indices.map((index) => index >= afterIndex ? index + 1 : index);
   });
+  while (cursor < source.length) {
+    sourceIndices[cursor] = output.length;
+    output.push(source[cursor++]);
+  }
+  smp.pts = output;
+  const indices = waypointIndices.map(index => sourceIndices[index]);
   smp.wpIdx = indices;
   return indices;
 }

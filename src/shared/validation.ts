@@ -535,6 +535,7 @@ function validateProjectInner(project: unknown, allowIncompletePaths = false): V
             issues.push(issue(`${wpBase}.positionName`, "Linkable point name must contain 1–80 characters"));
           }
           validateFinite(issues, waypoint.theta, `${wpBase}.theta`, "Waypoint heading");
+          if (waypoint.rotationDirection !== undefined && !["shortest", "cw", "ccw"].includes(String(waypoint.rotationDirection))) issues.push(issue(`${wpBase}.rotationDirection`, "Rotation direction is invalid"));
           (["thetaOn", "linked", "stop"] as const).forEach((key) => {
             if (typeof waypoint[key] !== "boolean") issues.push(issue(`${wpBase}.${key}`, `${key} must be true or false`));
           });
@@ -624,6 +625,7 @@ function validateProjectInner(project: unknown, allowIncompletePaths = false): V
         if (!isRecord(target)) return issues.push(issue(targetBase, "Rotation target must be an object"));
         validateFinite(issues, target.f, `${targetBase}.f`, "Target fraction");
         validateFinite(issues, target.deg, `${targetBase}.deg`, "Target angle");
+        if (target.rotationDirection !== undefined && !["shortest", "cw", "ccw"].includes(String(target.rotationDirection))) issues.push(issue(`${targetBase}.rotationDirection`, "Rotation direction is invalid"));
         if (target.anchor !== undefined && target.anchor !== "param" && target.anchor !== "dist") issues.push(issue(`${targetBase}.anchor`, "Target position lock is invalid"));
         validateOptionalFinite(issues, target.d, `${targetBase}.d`, "Target distance", { nonnegative: true });
         if (finite(target.f) && (target.f < 0 || target.f > 1)) issues.push(issue(`${targetBase}.f`, "Target fraction must be between 0 and 1"));

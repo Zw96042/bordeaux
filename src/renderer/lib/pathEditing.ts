@@ -1,8 +1,10 @@
-import { autoHandles } from "../../shared/math/geometry";
-import { remapWaypointRange } from "../../shared/math/pathRanges";
+import { autoHandles, sample } from "../../shared/math/geometry";
+import { featureFraction, remapWaypointRange } from "../../shared/math/pathRanges";
+import { waypointHeadingSemantics } from "../../shared/math/waypointHeading";
+import { deriveHeadingGeometry } from "../../shared/math/pm";
 import { clampWorldPoint, clone } from "../../shared/project/defaults";
 import { alignedWaypointHandles } from "../../shared/project/waypointHandles";
-import type { ControlPoint, PathDoc, Waypoint } from "../../shared/types";
+import type { ControlPoint, PathDoc, RotationDirection, Waypoint } from "../../shared/types";
 
 type EditablePath = PathDoc & { _selAfter?: number };
 
@@ -74,6 +76,54 @@ export function duplicateWaypoint(path: EditablePath, index: number): EditablePa
 
 export function reversePath(path: PathDoc): PathDoc {
   if (path.waypoints.length < 2) return path;
+  // Direction belongs to the incoming anchor, so reversing a path transfers
+  // the opposite direction to the previous anchor, including rotation targets.
+  const geometry = sample(path.waypoints, 56, true);
+  const modes = path.waypoints.slice(0, -1).map((w) => w.segmentHeadingMode || path.headingMode || 'targets');
+  // Capture before mutating any anchors. This is the same heading-only
+  // derivation the planner uses, including acquisition at a mode boundary.
+  const needsBoundaryHeading = modes.some((mode, index) => index > 0 && mode !== modes[index - 1])
+    && [...path.waypoints, ...(path.targets || [])].some(anchor => anchor.rotationDirection === 'cw' || anchor.rotationDirection === 'ccw');
+  const originalHeadings = needsBoundaryHeading ? deriveHeadingGeometry(path, null, 56) : null;
+  type Anchor = { f: number; owner: { rotationDirection?: RotationDirection }; direction?: RotationDirection };
+  const manual: Anchor[] = [], targets: Anchor[] = [];
+  path.waypoints.forEach((w, index) => {
+    const semantics = waypointHeadingSemantics(w, index, modes);
+    const anchor = { f: geometry.pts[geometry.wpIdx![index]]?.s / (geometry.length || 1), owner: w, direction: w.rotationDirection };
+    if (semantics.manual) manual.push(anchor);
+    if (semantics.targets) targets.push(anchor);
+    // The outgoing law starts here even when it has no incoming anchor yet.
+    // After reversal this boundary becomes the arrival anchor of that law.
+    if (index > 0 && modes[index] !== modes[index - 1]) {
+      if (modes[index] === 'manual' && !semantics.manual) manual.push({ ...anchor, direction: undefined });
+      if (modes[index] === 'targets' && !semantics.targets) targets.push({ ...anchor, direction: undefined });
+    }
+  });
+  path.targets.forEach((target) => targets.push({ f: featureFraction(target, geometry), owner: target, direction: target.rotationDirection }));
+  const reversed = (anchors: Anchor[]) => {
+    anchors.sort((a, b) => a.f - b.f);
+    return new Map(anchors.map((anchor, index) => {
+      const next = anchors[index + 1]?.direction;
+      return [anchor.owner, next === 'ccw' ? 'cw' : next === 'cw' ? 'ccw' : next] as const;
+    }));
+  };
+  const manualDirections = reversed(manual), targetDirections = reversed(targets);
+  path.waypoints.forEach((w, index) => {
+    const direction = (modes[index] === 'manual' ? manualDirections : targetDirections).get(w);
+    if (direction) {
+      w.rotationDirection = direction;
+      if (direction !== 'shortest' && index > 0 && modes[index] !== modes[index - 1]) {
+        w.thetaOn = true;
+        if (originalHeadings) w.theta = originalHeadings.head[originalHeadings.wpIdx[index]] * 180 / Math.PI;
+      }
+    }
+    else delete w.rotationDirection;
+  });
+  path.targets.forEach((target) => {
+    const direction = targetDirections.get(target);
+    if (direction) target.rotationDirection = direction;
+    else delete target.rotationDirection;
+  });
   const lastWaypoint = path.waypoints[path.waypoints.length - 1];
   const endpointJiggle = lastWaypoint.jiggle ? { ...lastWaypoint.jiggle } : null;
   const oldSeg = path.waypoints.map((w) => w.segType);

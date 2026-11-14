@@ -143,6 +143,9 @@ export interface HeadingTransition {
   distanceM?: number;
 }
 
+/** Direction of the incoming moving turn; matching headings request a full turn. */
+export type RotationDirection = "shortest" | "cw" | "ccw";
+
 export interface Waypoint {
   x: number;
   y: number;
@@ -151,6 +154,7 @@ export interface Waypoint {
   /** Opt-in name that exposes this waypoint in the shared-position picker. */
   positionName?: string;
   theta: number;
+  rotationDirection?: RotationDirection;
   thetaOn: boolean;
   linked: boolean;
   stop: boolean;
@@ -176,6 +180,7 @@ export interface Waypoint {
 export interface RotationTarget {
   f: number;
   deg: number;
+  rotationDirection?: RotationDirection;
   anchor?: "param" | "dist";
   d?: number;
 }

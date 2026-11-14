@@ -2,9 +2,9 @@ import { indexIntervalPolicies } from "../../shared/planners/intervalPolicies";
 import { robotHardLimits as sharedRobotHardLimits } from "../../shared/robotLimits";
 import { lerp, angWrap, angLerp, D2R, R2D, sample as sampleGeometry, pointAtFraction, nearestFraction, autoHandles, SEGTYPES } from "../../shared/math/geometry";
 import { headingAt, buildAnchors } from "../../shared/math/headingAnchors";
-import { waypointFracs, effectiveRanges, featureFraction, insertHeadingTargetSamples, remapWaypointRange } from "../../shared/math/pathRanges";
+import { waypointFracs, effectiveRanges, featureFraction, remapWaypointRange } from "../../shared/math/pathRanges";
 import { metricColor, metricGradient, METRICS } from "../../shared/math/metricDisplay";
-import { headingTransitionWindows, headingTransitionGoals, smoothHeadingTransitions } from "../../shared/planners/headingTransitions";
+import { deriveHeadingGeometry } from "../../shared/math/pm";
   function reversePathAnchors(doc, totalDistance) {
     const total = Math.max(0, Number(totalDistance) || 0);
     const fraction = (value) => Math.max(0, Math.min(1, Number(value) || 0));
@@ -205,8 +205,9 @@ import { headingTransitionWindows, headingTransitionGoals, smoothHeadingTransiti
       v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i + 1] * v[i + 1] + 2 * aBack[i] * ds)));
     }
     // Enforce signed angular acceleration in the generated timing itself. A
-    // local window scale changes omega linearly and alpha quadratically, which
-    // avoids the alternating zero-speed samples produced by point-wise caps.
+    // uniform time scale changes omega linearly and alpha quadratically. Local
+    // scaling introduces new acceleration jumps at its edges and can repeatedly
+    // brake an otherwise constant-rate turn. Preserve the solved profile shape.
     if (head && head.length === n && Aang > 1e-4) {
       const stopped = new Set(opts.stopIdx || []);
       const intervalDt = (index) => {
@@ -218,40 +219,27 @@ import { headingTransitionWindows, headingTransitionGoals, smoothHeadingTransiti
         return dt > 1e-9 ? angWrap(head[index] - head[index - 1]) / dt : 0;
       };
       const translationInterval = (interval) => interval > 0 && interval < n && translationPriority[interval];
-      for (let pass = 0; pass < 40; pass++) {
-        const caps = v.slice();
-        let changed = false;
-        for (let interval = 2; interval < n; interval++) {
-          if (stopped.has(interval - 1) || translationInterval(interval - 1) || translationInterval(interval)) continue;
-          const beforeDt = intervalDt(interval - 1), afterDt = intervalDt(interval);
-          if (beforeDt <= 1e-9 || afterDt <= 1e-9) continue;
-          const beforeOmega = intervalOmega(interval - 1), afterOmega = intervalOmega(interval);
-          const omegaDirection = Math.sign(beforeOmega) || Math.sign(afterOmega);
-          const signedAcceleration = omegaDirection * (afterOmega - beforeOmega) / ((beforeDt + afterDt) / 2);
-          const measured = Math.abs(signedAcceleration);
-          const directionalLimit = beforeOmega * afterOmega < 0
-            ? Math.min(Aang, AangDecel)
-            : signedAcceleration < 0 ? AangDecel : Aang;
-          const localLimit = Math.min(directionalLimit, rangeAngA[interval - 2], rangeAngA[interval - 1], rangeAngA[interval]) * 0.8;
-          if (measured <= localLimit * 1.001 + 1e-9) continue;
-          const scale = Math.min(0.98, Math.sqrt(localLimit / measured) * 0.98);
-          for (let index = interval - 2; index <= interval; index++) {
-            if (stopped.has(index)) continue;
-            caps[index] = Math.min(caps[index], v[index] * scale);
-            rotLimited[index] = Math.max(rotLimited[index], 2);
-          }
-          changed = true;
+      let timingScale = 1;
+      for (let interval = 2; interval < n; interval++) {
+        if (stopped.has(interval - 1) || translationInterval(interval - 1) || translationInterval(interval)) continue;
+        const beforeDt = intervalDt(interval - 1), afterDt = intervalDt(interval);
+        if (beforeDt <= 1e-9 || afterDt <= 1e-9) continue;
+        const beforeOmega = intervalOmega(interval - 1), afterOmega = intervalOmega(interval);
+        const omegaDirection = Math.sign(beforeOmega) || Math.sign(afterOmega);
+        const signedAcceleration = omegaDirection * (afterOmega - beforeOmega) / ((beforeDt + afterDt) / 2);
+        const measured = Math.abs(signedAcceleration);
+        const directionalLimit = beforeOmega * afterOmega < 0
+          ? Math.min(Aang, AangDecel)
+          : signedAcceleration < 0 ? AangDecel : Aang;
+        const localLimit = Math.min(directionalLimit, rangeAngA[interval - 2], rangeAngA[interval - 1], rangeAngA[interval]) * 0.8;
+        if (measured <= localLimit * 1.001 + 1e-9) continue;
+        timingScale = Math.min(timingScale, Math.sqrt(localLimit / measured) * 0.98);
+      }
+      if (timingScale < 1) {
+        for (let i = 0; i < n; i++) {
+          v[i] *= timingScale;
+          if (!stopped.has(i)) rotLimited[i] = Math.max(rotLimited[i], 2);
         }
-        for (let i = 0; i < n; i++) v[i] = caps[i];
-        for (let i = 1; i < n; i++) {
-          const ds = pts[i].s - pts[i - 1].s;
-          v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * aFwd[i] * ds)));
-        }
-        for (let i = n - 2; i >= 0; i--) {
-          const ds = pts[i + 1].s - pts[i].s;
-          v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i + 1] * v[i + 1] + 2 * aBack[i] * ds)));
-        }
-        if (!changed) break;
       }
     }
     // time
@@ -610,24 +598,8 @@ import { headingTransitionWindows, headingTransitionGoals, smoothHeadingTransiti
       robot = { ...robot, maxSpeed: hardLimits.maxSpeed };
       doc = { ...doc, constraints: effectiveConstraints(doc.constraints, robot) };
     }
-    const smp = sample(doc.waypoints, perSeg);
-    const nWp = doc.waypoints.length;
-    const originalLast = Math.max(0, smp.pts.length - 1);
-    let wpIdx = (smp.wpIdx || doc.waypoints.map((_, k) => Math.min(originalLast, k * perSeg))).slice();
-    const initialWpFrac = wpIdx.map((index) => smp.pts.length ? smp.pts[index].s / (smp.length || 1) : 0);
-    const targetFractions = (doc.targets || []).map((target) => featureFraction(target, smp)).filter((fraction) => {
-      let segment = 0;
-      while (segment < nWp - 2 && fraction >= initialWpFrac[segment + 1] - 1e-9) segment++;
-      const mode = robot && robot.drive === 'tank'
-        ? 'tangent'
-        : ((doc.waypoints[segment] && doc.waypoints[segment].segmentHeadingMode) || doc.headingMode || 'targets');
-      return mode === 'targets';
-    });
-    wpIdx = insertHeadingTargetSamples(smp, targetFractions, wpIdx);
-    const pts = smp.pts;
-    const lastI = Math.max(0, pts.length - 1);
-    const total = smp.length || 1;
-    const wpFrac = wpIdx.map((i) => (pts.length ? pts[i].s / total : 0));
+    const { sample: smp, wpIdx, wpFrac, head, mode, headingMode, headingTransitions } = deriveHeadingGeometry(doc, robot, perSeg);
+    const pts = smp.pts, nWp = doc.waypoints.length, lastI = Math.max(0, pts.length - 1), total = smp.length || 1;
     const stopIdx = [];
     doc.waypoints.forEach((w, k) => { if (w.stop) stopIdx.push(wpIdx[k]); });
     const cap = (robot && robot.maxSpeed) || doc.constraints.maxVel;
@@ -635,47 +607,6 @@ import { headingTransitionWindows, headingTransitionGoals, smoothHeadingTransiti
     const sv = doc.waypoints[0] && doc.waypoints[0].stop ? 0 : doc.startVel;
     const gv = doc.waypoints[nWp - 1] && doc.waypoints[nWp - 1].stop ? 0 : doc.goalVel;
     const effRanges = effectiveRanges(doc, smp);
-    // Heading mode is owned by the outgoing segment; omitted overrides inherit the path default.
-    const headingMode = (robot && robot.drive === 'tank') ? 'tangent' : (doc.headingMode || 'targets');
-    const effectiveHeadingMode = (segment) => (robot && robot.drive === 'tank')
-      ? 'tangent'
-      : ((doc.waypoints[segment] && doc.waypoints[segment].segmentHeadingMode) || headingMode);
-    const segmentModes = doc.waypoints.slice(0, -1).map((_, segment) => effectiveHeadingMode(segment));
-    const manualEntries = [], targetEntries = [];
-    doc.waypoints.forEach((w, k) => {
-      const isEnd = k === 0 || k === nWp - 1;
-      const incomingMode = segmentModes[k - 1];
-      const outgoingMode = segmentModes[k];
-      const entry = { f: wpFrac[k], rad: (w.theta || 0) * D2R };
-      if (isEnd || (w.thetaOn && (incomingMode === 'manual' || (w.turnInPlace && outgoingMode === 'manual')))) manualEntries.push(entry);
-      if (isEnd || (w.thetaOn && (incomingMode === 'targets' || (w.turnInPlace && outgoingMode === 'targets')))) targetEntries.push({ ...entry });
-    });
-    (doc.targets || []).forEach((t) => targetEntries.push({ f: featureFraction(t, smp), rad: t.deg * D2R }));
-    const manualAnchors = buildAnchors(manualEntries), targetAnchors = buildAnchors(targetEntries);
-    const rawHead = [];
-    pts.forEach((p, pointIndex) => {
-      const f = total > 1e-6 ? p.s / total : 0;
-      let segment = 0;
-      while (segment < nWp - 2 && pointIndex >= wpIdx[segment + 1]) segment++;
-      const segmentMode = effectiveHeadingMode(segment);
-      if (segmentMode === 'lookAt') {
-        const target = doc.waypoints[segment] && doc.waypoints[segment].segmentLookAt;
-        const dx = target ? target.x - p.x : 0, dy = target ? target.y - p.y : 0;
-        rawHead.push(Math.hypot(dx, dy) > 1e-6 ? Math.atan2(dy, dx) : (rawHead.length ? rawHead[rawHead.length - 1] : p.heading));
-      } else {
-        rawHead.push(segmentMode === 'tangent' ? p.heading : headingAt(f, segmentMode === 'targets' ? targetAnchors : manualAnchors));
-      }
-    });
-    const segmentLaws = doc.waypoints.slice(0, -1).map((w, segment) => segmentModes[segment] === 'lookAt' ? 'lookAt:' + (w.segmentLookAt ? w.segmentLookAt.x : '') + ':' + (w.segmentLookAt ? w.segmentLookAt.y : '') : segmentModes[segment]);
-    const transitionBreaks = doc.waypoints.slice(0, -1).map((w) => !!w.turnInPlace);
-    const headingTransitions = headingTransitionWindows(doc.waypoints, segmentLaws, transitionBreaks, wpFrac, total, "heading");
-    const transitionGoals = headingTransitionGoals(segmentLaws, transitionBreaks, wpIdx, pts, {
-      manual: manualAnchors.map(({ f, rad }) => ({ f, heading: rad })),
-      targets: targetAnchors.map(({ f, rad }) => ({ f, heading: rad })),
-    });
-    const head = smoothHeadingTransitions(rawHead, segmentLaws, transitionBreaks, wpIdx, pts, doc.waypoints, transitionGoals);
-    const allTangent = doc.waypoints.slice(0, -1).every((_, segment) => effectiveHeadingMode(segment) === 'tangent');
-    const mode = allTangent ? 'tank' : 'swerve';
     const dwell = [], turns = [], jiggles = [];
     doc.waypoints.forEach((w, k) => { if (w.stop && w.wait > 0) dwell.push({ idx: wpIdx[k], wait: w.wait }); });
     doc.waypoints.forEach((w, k) => { if (w.stop && w.turnInPlace) turns.push({ idx: wpIdx[k], start: k > 0 ? head[Math.max(0, wpIdx[k] - 1)] : head[0], end: w.turnInPlace.headingDeg * D2R, direction: w.turnInPlace.direction, maxAngVel: doc.constraints.maxAngVel, maxAngAccel: Math.min(doc.constraints.maxAngAccel, doc.constraints.maxAngDecel || doc.constraints.maxAngAccel), maxAngJerk: doc.constraints.maxAngJerk }); });

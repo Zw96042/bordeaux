@@ -1,5 +1,14 @@
 const FULL_TURN = Math.PI * 2;
 
+/** Moving anchors may request a complete revolution when headings match. */
+export function movingTurnDelta(start: number, end: number, direction?: "shortest" | "cw" | "ccw"): number {
+  let delta = wrapRadians(end - start);
+  if ((direction === "cw" || direction === "ccw") && Math.abs(delta) < 1e-9) delta = 0;
+  if (direction === "ccw" && delta <= 0) delta += FULL_TURN;
+  if (direction === "cw" && delta >= 0) delta -= FULL_TURN;
+  return delta;
+}
+
 export function wrapRadians(value: number): number {
   const wrapped = value % FULL_TURN;
   // Degree-to-radian conversion and subtracting a common rotation can put an

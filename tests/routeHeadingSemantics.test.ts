@@ -22,7 +22,9 @@ function trajectoryFingerprint(value: unknown): string {
     typeof item === "number" && Number.isFinite(item) ? Number(item.toFixed(9)) : item)).digest("hex");
 }
 
-// Captured from the original pm.ts before extracting its anchor predicate, at the precision above.
+// Captured before extracting the anchor predicate. Four provisional PM timing
+// fingerprints were updated after removing the local angular-braking oscillation;
+// a pristine-PM comparison confirmed their Normal samples and geometry unchanged.
 const normalHashes: Record<string, string> = {
   "corpus-blue-table-trench": "b46a240c7b2671690b7e7f257f4ef0b259b0edadc73844918507d74b7b2f797b",
   "corpus-blue-away-bump": "7d09787fb7d4a11a2f863e94ebb6128c1eeec3d44b15fbd50c9e3bcf73bbf7ac",
@@ -33,12 +35,12 @@ const normalHashes: Record<string, string> = {
 const anchorHashes: Record<string, string> = {
   "manual-false": "286213b2cf0d329919f078cf8f1ccf06a01c709a5da6ae1837e299c8532c16a3",
   "manual-true": "3bed155bfef216fe2eaae59289ec0c6f73fb079c2b4c7f0fefb67f67dabdfbdc",
-  "tangent-turn-manual": "8439059835beffc93bab593f3fbf95e64575db7f57020b6bacbbd61d63968f89",
-  "manual-tangent": "350491f0fe5f6068d9541f9006bb3e73e9b845e9c808526c4305bc73e394f470",
+  "tangent-turn-manual": "e65f58b6a8ef97b36579976074fd7e8d59e927137566620e9abccecd3311fac8",
+  "manual-tangent": "1ddff7b746b2494cae69df67e2af34ac24ddd37eaef42a20365f42ed7e7e5f52",
   "targets-false": "af0b736b24413f0c791801eaf2672477dadd430320010a50c03e26e2f7b04350",
   "targets-true": "e79d6280447bd62f04ebb42154ce24953ce289805e1d8ca3e289fa5f0c9a96ee",
-  "tangent-turn-targets": "8439059835beffc93bab593f3fbf95e64575db7f57020b6bacbbd61d63968f89",
-  "targets-tangent": "3b9fb763fcfa08d5805cfc23a438916cc3689adb507790f16972da256786061e"
+  "tangent-turn-targets": "e65f58b6a8ef97b36579976074fd7e8d59e927137566620e9abccecd3311fac8",
+  "targets-tangent": "882fada7bb3d554f10d572f852de7dc913fa1cecaf233920c30d06c3e22aa861"
 };
 const tangentPaths = corpus.paths.filter((p) => p.headingMode === "tangent");
 const robot = createDemoProject().robot;

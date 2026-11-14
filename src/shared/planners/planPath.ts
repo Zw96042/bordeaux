@@ -169,6 +169,7 @@ function invalidInputIssue(input: PlannerInput, samplesPerSegment: number): { is
       }
     }
     if (!isFiniteNumber(waypoint.theta) && invalidHeading === undefined) invalidHeading = index;
+    if (waypoint.rotationDirection !== undefined && !["shortest", "cw", "ccw"].includes(waypoint.rotationDirection)) return fail("Waypoint rotation direction is invalid", true, { waypoint: index });
   }
   const excessiveHeading = path.waypoints.findIndex((waypoint) => Math.abs(waypoint.theta) > MAX_AUTHORED_ANGLE_DEG);
   if (excessiveHeading >= 0) return fail("Waypoint heading is too large", true, { waypoint: excessiveHeading });
@@ -179,6 +180,7 @@ function invalidInputIssue(input: PlannerInput, samplesPerSegment: number): { is
       if (!target || !isFiniteNumber(target.deg) || Math.abs(target.deg) > MAX_AUTHORED_ANGLE_DEG) {
         return fail("Target heading is invalid or too large", true, { constraint: "targets" });
       }
+      if (target.rotationDirection !== undefined && !["shortest", "cw", "ccw"].includes(target.rotationDirection)) return fail("Target rotation direction is invalid", true, { constraint: "targets" });
     }
   }
   if (!robot || typeof robot !== "object") return fail("Robot is missing", true);

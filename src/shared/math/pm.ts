@@ -8,7 +8,7 @@ import type { HeadingTransitionWindow } from "../planners/headingTransitions";
 import { lerp, bez, bezD, angWrap, angLerp, D2R, R2D, sample, pointAtFraction, nearestFraction, autoHandles, SEGTYPES } from "./geometry";
 import { headingAt, buildAnchors } from "./headingAnchors";
 import { waypointHeadingSemantics } from "./waypointHeading";
-import { waypointFracs, effectiveRanges, featureFraction, insertHeadingTargetSamples, remapWaypointRange } from "./pathRanges";
+import { waypointFracs, effectiveRanges, featureFraction, directedHeadingSampleFractions, insertHeadingTargetSamples, remapWaypointRange } from "./pathRanges";
 import { metricColor, metricGradient, METRICS } from "./metricDisplay";
 import { headingTransitionWindows, headingTransitionGoals, smoothHeadingTransitions } from "../planners/headingTransitions";
 
@@ -125,8 +125,9 @@ function profile(pts: readonly Pick<GeometryPoint, "s" | "curv">[], c: ProfileCo
     v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i + 1] * v[i + 1] + 2 * aBack[i] * ds)));
   }
   // Enforce signed angular acceleration in the generated timing itself. A
-  // local window scale changes omega linearly and alpha quadratically, which
-  // avoids the alternating zero-speed samples produced by point-wise caps.
+  // uniform time scale changes omega linearly and alpha quadratically. Local
+  // scaling introduces new acceleration jumps at its edges and can repeatedly
+  // brake an otherwise constant-rate turn. Preserve the solved profile shape.
   if (head && head.length === n && Aang > 1e-4) {
     const stopped = new Set(opts.stopIdx || []);
     const intervalDt = (index: number) => {
@@ -138,40 +139,27 @@ function profile(pts: readonly Pick<GeometryPoint, "s" | "curv">[], c: ProfileCo
       return dt > 1e-9 ? angWrap(head[index] - head[index - 1]) / dt : 0;
     };
     const translationInterval = (interval: number) => interval > 0 && interval < n && translationPriority[interval];
-    for (let pass = 0; pass < 40; pass++) {
-      const caps = v.slice();
-      let changed = false;
-      for (let interval = 2; interval < n; interval++) {
-        if (stopped.has(interval - 1) || translationInterval(interval - 1) || translationInterval(interval)) continue;
-        const beforeDt = intervalDt(interval - 1), afterDt = intervalDt(interval);
-        if (beforeDt <= 1e-9 || afterDt <= 1e-9) continue;
-        const beforeOmega = intervalOmega(interval - 1), afterOmega = intervalOmega(interval);
-        const omegaDirection = Math.sign(beforeOmega) || Math.sign(afterOmega);
-        const signedAcceleration = omegaDirection * (afterOmega - beforeOmega) / ((beforeDt + afterDt) / 2);
-        const measured = Math.abs(signedAcceleration);
-        const directionalLimit = beforeOmega * afterOmega < 0
-          ? Math.min(Aang, AangDecel)
-          : signedAcceleration < 0 ? AangDecel : Aang;
-        const localLimit = Math.min(directionalLimit, rangeAngA[interval - 2], rangeAngA[interval - 1], rangeAngA[interval]) * 0.8;
-        if (measured <= localLimit * 1.001 + 1e-9) continue;
-        const scale = Math.min(0.98, Math.sqrt(localLimit / measured) * 0.98);
-        for (let index = interval - 2; index <= interval; index++) {
-          if (stopped.has(index)) continue;
-          caps[index] = Math.min(caps[index], v[index] * scale);
-          rotLimited[index] = Math.max(rotLimited[index], 2);
-        }
-        changed = true;
+    let timingScale = 1;
+    for (let interval = 2; interval < n; interval++) {
+      if (stopped.has(interval - 1) || translationInterval(interval - 1) || translationInterval(interval)) continue;
+      const beforeDt = intervalDt(interval - 1), afterDt = intervalDt(interval);
+      if (beforeDt <= 1e-9 || afterDt <= 1e-9) continue;
+      const beforeOmega = intervalOmega(interval - 1), afterOmega = intervalOmega(interval);
+      const omegaDirection = Math.sign(beforeOmega) || Math.sign(afterOmega);
+      const signedAcceleration = omegaDirection * (afterOmega - beforeOmega) / ((beforeDt + afterDt) / 2);
+      const measured = Math.abs(signedAcceleration);
+      const directionalLimit = beforeOmega * afterOmega < 0
+        ? Math.min(Aang, AangDecel)
+        : signedAcceleration < 0 ? AangDecel : Aang;
+      const localLimit = Math.min(directionalLimit, rangeAngA[interval - 2], rangeAngA[interval - 1], rangeAngA[interval]) * 0.8;
+      if (measured <= localLimit * 1.001 + 1e-9) continue;
+      timingScale = Math.min(timingScale, Math.sqrt(localLimit / measured) * 0.98);
+    }
+    if (timingScale < 1) {
+      for (let i = 0; i < n; i++) {
+        v[i] *= timingScale;
+        if (!stopped.has(i)) rotLimited[i] = Math.max(rotLimited[i], 2);
       }
-      for (let i = 0; i < n; i++) v[i] = caps[i];
-      for (let i = 1; i < n; i++) {
-        const ds = pts[i].s - pts[i - 1].s;
-        v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i - 1] * v[i - 1] + 2 * aFwd[i] * ds)));
-      }
-      for (let i = n - 2; i >= 0; i--) {
-        const ds = pts[i + 1].s - pts[i].s;
-        v[i] = Math.min(v[i], Math.sqrt(Math.max(0, v[i + 1] * v[i + 1] + 2 * aBack[i] * ds)));
-      }
-      if (!changed) break;
     }
   }
   // time
@@ -307,8 +295,8 @@ function analyze(pts: readonly Pick<GeometryPoint, "s" | "curv">[], _prof: Veloc
   return out;
 }
 
-// ---- one-call derivation: everything the field + panels need for a path ----
-function derivePath(doc: PathDoc, robot: RobotConfig | null, perSeg?: number, options?: { skipStationaryActions?: boolean }) {
+/** Geometry and heading laws only: no velocity profile or timing solve. */
+export function deriveHeadingGeometry(doc: PathDoc, robot: RobotConfig | null, perSeg?: number) {
   perSeg = perSeg || DEFAULT_SAMPLES_PER_SEGMENT;
   const smp = sample(doc.waypoints, perSeg, true);
   const nWp = doc.waypoints.length;
@@ -323,17 +311,10 @@ function derivePath(doc: PathDoc, robot: RobotConfig | null, perSeg?: number, op
       : ((doc.waypoints[segment] && doc.waypoints[segment].segmentHeadingMode) || doc.headingMode || 'targets');
     return mode === 'targets';
   });
-  wpIdx = insertHeadingTargetSamples(smp, targetFractions, wpIdx);
+  wpIdx = insertHeadingTargetSamples(smp, [...targetFractions, ...directedHeadingSampleFractions(doc, smp, robot?.drive === 'tank')], wpIdx);
   const pts = smp.pts;
   const total = smp.length || 1;
   const wpFrac = wpIdx.map((i) => (pts.length ? pts[i].s / total : 0));
-  const stopIdx: number[] = [];
-  doc.waypoints.forEach((w, k) => { if (w.stop) stopIdx.push(wpIdx[k]); });
-  const cap = (robot && robot.maxSpeed) || doc.constraints.maxVel;
-  const vmax = Math.min(doc.constraints.maxVel, cap);
-  const sv = doc.waypoints[0] && doc.waypoints[0].stop ? 0 : doc.startVel;
-  const gv = doc.waypoints[nWp - 1] && doc.waypoints[nWp - 1].stop ? 0 : doc.goalVel;
-  const effRanges = effectiveRanges(doc, smp);
   // Heading mode is owned by the outgoing segment; omitted overrides inherit the path default.
   const headingMode = (robot && robot.drive === 'tank') ? 'tangent' : (doc.headingMode || 'targets');
   const effectiveHeadingMode = (segment: number) => (robot && robot.drive === 'tank')
@@ -343,11 +324,11 @@ function derivePath(doc: PathDoc, robot: RobotConfig | null, perSeg?: number, op
   const manualEntries: HeadingAnchor[] = [], targetEntries: HeadingAnchor[] = [];
   doc.waypoints.forEach((w, k) => {
     const heading = waypointHeadingSemantics(w, k, segmentModes);
-    const entry = { f: wpFrac[k], rad: (w.theta || 0) * D2R };
+    const entry = { f: wpFrac[k], rad: (w.theta || 0) * D2R, rotationDirection: w.rotationDirection };
     if (heading.manual) manualEntries.push(entry);
     if (heading.targets) targetEntries.push({ ...entry });
   });
-  (doc.targets || []).forEach((t) => targetEntries.push({ f: featureFraction(t, smp), rad: t.deg * D2R }));
+  (doc.targets || []).forEach((t) => targetEntries.push({ f: featureFraction(t, smp), rad: t.deg * D2R, rotationDirection: t.rotationDirection }));
   const manualAnchors = buildAnchors(manualEntries), targetAnchors = buildAnchors(targetEntries);
   const rawHead: number[] = [];
   // pointIndex only grows, so every boundary passed by an earlier sample is
@@ -369,13 +350,46 @@ function derivePath(doc: PathDoc, robot: RobotConfig | null, perSeg?: number, op
   const transitionBreaks = doc.waypoints.slice(0, -1).map((w) => !!w.turnInPlace);
   const headingTransitions = headingTransitionWindows(doc.waypoints, segmentLaws, transitionBreaks, wpFrac, total, "heading");
   const transitionGoals = headingTransitionGoals(segmentLaws, transitionBreaks, wpIdx, pts, {
-    manual: manualAnchors.map(({ f, rad }) => ({ f, heading: rad })),
-    targets: targetAnchors.map(({ f, rad }) => ({ f, heading: rad })),
+    manual: manualAnchors.map(({ f, rad, rotationDirection }) => ({ f, heading: rad, rotationDirection })),
+    targets: targetAnchors.map(({ f, rad, rotationDirection }) => ({ f, heading: rad, rotationDirection })),
   });
-  const head = smoothHeadingTransitions(rawHead, segmentLaws, transitionBreaks, wpIdx, pts, doc.waypoints, transitionGoals);
+  const directed = (anchor: { rotationDirection?: string }) => anchor.rotationDirection === 'cw' || anchor.rotationDirection === 'ccw';
+  const directedManual = manualAnchors.some(directed), directedTargets = targetAnchors.some(directed);
+  const incomingBoundaryHeadings = doc.waypoints.map((_, index) => {
+    if (!index || segmentLaws[index - 1] === segmentLaws[index]) return undefined;
+    const incoming = segmentModes[index - 1];
+    const goal = transitionGoals.find(candidate => candidate.segmentIndex === index);
+    if (!(incoming === 'manual' && directedManual) && !(incoming === 'targets' && directedTargets) && !(goal && directed(goal))) return undefined;
+    // A disabled theta must not turn the preceding sample into an arrival
+    // anchor: its facing changes with sampling density. Evaluate the incoming
+    // law at the actual boundary for directed paths; retain legacy shortest laws.
+    const point = pts[wpIdx[index]];
+    if (incoming === 'manual' || incoming === 'targets') return headingAt(wpFrac[index], incoming === 'manual' ? manualAnchors : targetAnchors);
+    if (incoming === 'lookAt') {
+      const target = doc.waypoints[index - 1].segmentLookAt;
+      if (target && Math.hypot(target.x - point.x, target.y - point.y) > 1e-6) return Math.atan2(target.y - point.y, target.x - point.x);
+      return undefined;
+    }
+    return point.heading;
+  });
+  const head = smoothHeadingTransitions(rawHead, segmentLaws, transitionBreaks, wpIdx, pts, doc.waypoints, transitionGoals, incomingBoundaryHeadings);
   const allTangent = doc.waypoints.slice(0, -1).every((_, segment) => effectiveHeadingMode(segment) === 'tangent');
   const mode: DriveType = allTangent ? 'tank' : 'swerve';
   const anchors = mode === 'tank' ? [] : buildAnchors(pts.map((p, i) => ({ f: total > 1e-6 ? p.s / total : 0, rad: head[i] })));
+  return { sample: smp, wpIdx, wpFrac, head, anchors, mode, headingMode, headingTransitions };
+}
+
+// ---- one-call derivation: everything the field + panels need for a path ----
+function derivePath(doc: PathDoc, robot: RobotConfig | null, perSeg?: number, options?: { skipStationaryActions?: boolean }) {
+  const { sample: smp, wpIdx, wpFrac, head, anchors, mode, headingMode, headingTransitions } = deriveHeadingGeometry(doc, robot, perSeg);
+  const pts = smp.pts, total = smp.length || 1, nWp = doc.waypoints.length;
+  const stopIdx: number[] = [];
+  doc.waypoints.forEach((w, k) => { if (w.stop) stopIdx.push(wpIdx[k]); });
+  const cap = (robot && robot.maxSpeed) || doc.constraints.maxVel;
+  const vmax = Math.min(doc.constraints.maxVel, cap);
+  const sv = doc.waypoints[0] && doc.waypoints[0].stop ? 0 : doc.startVel;
+  const gv = doc.waypoints[nWp - 1] && doc.waypoints[nWp - 1].stop ? 0 : doc.goalVel;
+  const effRanges = effectiveRanges(doc, smp);
   const dwell: { idx: number; wait: number }[] = [], turns: ProfileTurn[] = [];
   doc.waypoints.forEach((w, k) => { if (w.stop && w.wait != null && w.wait > 0) dwell.push({ idx: wpIdx[k], wait: w.wait }); });
   if (!(options && options.skipStationaryActions)) doc.waypoints.forEach((w, k) => { if (w.stop && w.turnInPlace) turns.push({ idx: wpIdx[k], start: k > 0 ? head[Math.max(0, wpIdx[k] - 1)] : head[0], end: w.turnInPlace.headingDeg * D2R, direction: w.turnInPlace.direction, maxAngVel: doc.constraints.maxAngVel, maxAngAccel: Math.min(doc.constraints.maxAngAccel, doc.constraints.maxAngDecel || doc.constraints.maxAngAccel), maxAngJerk: doc.constraints.maxAngJerk }); });

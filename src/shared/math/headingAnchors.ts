@@ -1,4 +1,6 @@
-import { angWrap, D2R } from "./geometry";
+import { D2R } from "./geometry";
+import { movingTurnDelta } from "./angles";
+import type { RotationDirection } from "../types";
 
 // heading anchors -> continuous heading along arclength fraction f in [0,1]
 // anchors: [{f, rad}] must include f=0 and f=1, sorted
@@ -6,7 +8,8 @@ import { angWrap, D2R } from "./geometry";
 // zero spatial rate at every anchor. Any authored flat span keeps the
 // shape-preserving law so hold-heading intent remains exact. Cache the
 // coefficients because every geometry sample reuses them.
-export interface HeadingAnchor { f: number; rad: number }
+export interface HeadingAnchor { f: number; rad: number; rotationDirection?: RotationDirection }
+export const HEADING_FRACTION_EPSILON = 1e-9;
 type HeadingSpline = { headings: number[]; second: number[]; slopes?: never }
   | { headings: number[]; slopes: number[]; second?: never };
 const headingSplineCache = new WeakMap<readonly HeadingAnchor[], HeadingSpline>();
@@ -16,11 +19,12 @@ function headingSpline(anchors: readonly HeadingAnchor[]): HeadingSpline {
   if (cached) return cached;
   const headings = [anchors[0].rad];
   for (let i = 1; i < anchors.length; i++) {
-    headings.push(headings[i - 1] + angWrap(anchors[i].rad - headings[i - 1]));
+    const delta = movingTurnDelta(headings[i - 1], anchors[i].rad, anchors[i].rotationDirection);
+    headings.push(headings[i - 1] + delta);
   }
   const spans = anchors.slice(1).map((anchor, i) => anchor.f - anchors[i].f);
-  const secants = spans.map((span, i) => span > 1e-9 ? (headings[i + 1] - headings[i]) / span : 0);
-  if (anchors.length > 2 && spans.every((span) => span > 1e-9) && secants.every((slope) => Math.abs(slope) > 1e-9)) {
+  const secants = spans.map((span, i) => span > HEADING_FRACTION_EPSILON ? (headings[i + 1] - headings[i]) / span : 0);
+  if (anchors.length > 2 && spans.every((span) => span > HEADING_FRACTION_EPSILON) && secants.every((slope) => Math.abs(slope) > 1e-9)) {
     const second = new Array<number>(anchors.length).fill(0);
     const diagonal = new Array<number>(anchors.length).fill(0), upper = new Array<number>(anchors.length).fill(0), rhs = new Array<number>(anchors.length).fill(0);
     diagonal[0] = 2 * spans[0];
@@ -49,6 +53,12 @@ function headingSpline(anchors: readonly HeadingAnchor[]): HeadingSpline {
       const c1 = headings[i + 1] - headings[i] - span * span * (2 * second[i] + second[i + 1]) / 6;
       const c2 = second[i] * span * span / 2;
       const c3 = (second[i + 1] - second[i]) * span * span / 6;
+      if (anchors[i + 1].rotationDirection === "cw" || anchors[i + 1].rotationDirection === "ccw") {
+        const direction = Math.sign(secants[i]);
+        const probes = [0, 1];
+        if (Math.abs(c3) > 1e-12) probes.push(Math.max(0, Math.min(1, -c2 / (3 * c3))));
+        if (probes.some((t) => direction * (c1 + 2 * c2 * t + 3 * c3 * t * t) < -1e-9)) return false;
+      }
       const extrema = [];
       const discriminant = 4 * c2 * c2 - 12 * c3 * c1;
       if (Math.abs(c3) > 1e-12 && discriminant >= 0) {
@@ -101,7 +111,7 @@ export function headingAt(f: number, anchors: readonly HeadingAnchor[]) {
   if (low < anchors.length && f >= anchors[i].f && f <= anchors[low].f) {
     const a = anchors[i], b = anchors[low];
     const span = b.f - a.f;
-    if (span < 1e-9) return headings[i];
+    if (span < HEADING_FRACTION_EPSILON) return headings[i];
     if (spline.second) {
       const left = b.f - f, right = f - a.f;
       return spline.second[i] * left ** 3 / (6 * span)
@@ -124,7 +134,7 @@ export function headingAt(f: number, anchors: readonly HeadingAnchor[]) {
 export function buildAnchors(entries: readonly HeadingAnchor[]) {
   const arr = (entries || [])
     .filter(e => e && isFinite(e.f) && isFinite(e.rad))
-    .map(e => ({ f: Math.max(0, Math.min(1, e.f)), rad: e.rad }))
+    .map(e => ({ f: Math.max(0, Math.min(1, e.f)), rad: e.rad, ...(e.rotationDirection ? { rotationDirection: e.rotationDirection } : {}) }))
     .sort((a, b) => a.f - b.f);
   if (!arr.length) return [{ f: 0, rad: 0 }, { f: 1, rad: 0 }];
   if (arr[0].f > 1e-6) arr.unshift({ f: 0, rad: arr[0].rad });
