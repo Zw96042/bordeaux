@@ -105,6 +105,61 @@ describe("direct VI binary path", () => {
     expect((result.samples.length - 1) * 0.02).toBeGreaterThanOrEqual(result.totalTimeS);
     result.samples.slice(1).forEach((row, index) => expect(row.t - result.samples[index].t).toBeLessThanOrEqual(0.020000001));
   });
+  it("exports authored position following with unchanged samples, events and wire layout", () => {
+    const f = binaryWriterFixture(), timed = build(f), timedWire = inspect(timed.bytes);
+    f.path.followMode = "position";
+    const original = structuredClone(f.project), positioned = build(f), wire = inspect(positioned.bytes);
+    expect(f.project).toEqual(original);
+    expect(positioned.document.paths[0].followSections.map(section => section.mode)).toEqual(["position"]);
+    expect(wire.samples).toEqual(timedWire.samples);
+    expect(wire.events).toEqual(timedWire.events);
+    expect(wire.strings).toEqual(timedWire.strings);
+    expect(wire.totals).toEqual(timedWire.totals);
+    expect(wire.follow).toEqual(timedWire.follow.map(section => [...section.slice(0, 3), 1, 0]));
+    const expected = Buffer.from(timed.bytes), actual = Buffer.from(positioned.bytes);
+    // Only the already-defined mode field and payload CRC change.
+    const followOffset = 32 + 4 + expected.readUInt32BE(32) + 4 + wire.samples.length * 120 + 4;
+    expected.writeUInt16BE(1, followOffset + 12);
+    expected.writeUInt32BE(crc32(expected.subarray(32)), 20);
+    expect(actual).toEqual(expected);
+  });
+  it("retains per-segment overrides and timed departure/arrival waits around position sections", () => {
+    const f = binaryWriterFixture(false, false);
+    f.path.followMode = "position";
+    f.path.waypoints = buildWaypoints([
+      { x: 2, y: 2, segType: "line", segmentFollowMode: "time", stop: true, wait: .1 },
+      { x: 4, y: 2, segType: "line", stop: true, wait: .2 },
+      { x: 6, y: 2, stop: true, wait: .3 },
+    ]);
+    const built = build(f), path = built.document.paths[0], wire = inspect(built.bytes);
+    expect(path.followSections.map(section => section.mode)).toEqual(["time", "time", "time", "position", "time"]);
+    expect(wire.follow).toEqual(path.followSections.map(section => [section.segmentIndex, section.startSample, section.endSample, section.mode === "time" ? 0 : 1, 0]));
+    expect(wire.follow[0][1]).toBe(0);
+    wire.follow.slice(1).forEach((section, index) => expect(section[1]).toBe(wire.follow[index][2]));
+    expect(wire.follow.at(-1)![2]).toBe(wire.samples.length - 1);
+    for (const section of path.followSections.filter(section => section.mode === "time" && section.startSample !== section.endSample)) {
+      expect(path.samples[section.endSample].t).toBeGreaterThan(path.samples[section.startSample].t);
+    }
+  });
+  it("rejects stationary position segments while retaining explicit time segments", () => {
+    const f = binaryWriterFixture(false, false);
+    f.path.followMode = "position";
+    f.path.waypoints = buildWaypoints([{ x: 2, y: 2, segType: "line" }, { x: 2, y: 2 }]);
+    expect(() => build(f)).toThrow(/position-follow segment 1.*use Time for stationary segments/);
+    f.path.waypoints[0].segmentFollowMode = "time";
+    expect(build(f).document.paths[0].totalTimeS).toBe(0);
+  });
+  it.each(["pose", "distance"])("rejects a position section with a nonprogressing %s edge", field => {
+    const f = binaryWriterFixture(false, false);
+    f.path.followMode = "position";
+    const built = trajectory.buildRobotTrajectory(f.project, f.bindings.catalog);
+    const samples = built.document.paths[0].samples;
+    if (field === "pose") { samples[1].x = samples[0].x; samples[1].y = samples[0].y; }
+    else samples[1].s = samples[0].s;
+    const spy = vi.spyOn(trajectory, "buildRobotTrajectory").mockReturnValue(built);
+    try { expect(() => build(f)).toThrow(/position-follow segment 1.*strictly increasing distance and nonzero finite XY edges/); }
+    finally { spy.mockRestore(); }
+  });
   it("requires saved NI evidence for commands and fails explicitly for unsupported compound arguments", () => {
     const f = binaryWriterFixture(); delete f.bindings.parameterTypes["fixture.command"];
     expect(() => build(f)).toThrow(/saved NI parameter type evidence/);
@@ -184,8 +239,6 @@ describe("direct VI binary path", () => {
     expect(() => build(position)).toThrow(/only time-triggered/);
     const cancel = binaryWriterFixture(); cancel.path.markers[0].invocation!.cancelOnPathEnd = true;
     expect(() => build(cancel)).toThrow(/CancelOnPathEnd must be false/);
-    const follow = binaryWriterFixture(false, false); follow.path.followMode = "position";
-    expect(() => build(follow)).toThrow(/position-follow sections are not supported/);
     for (const niType of ["Array", "Cluster"]) {
       const f = binaryWriterFixture(); f.bindings.parameterTypes["fixture.command"].power.niType = niType;
       expect(() => build(f)).toThrow(new RegExp(`NI ${niType} arguments are not supported`));

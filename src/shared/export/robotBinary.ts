@@ -100,7 +100,6 @@ export function buildRobotBinary(project: BordeauxProject, selection: BinarySele
   const built = buildRobotTrajectory(scoped, bindings.catalog, { materializeArgumentDefaults: true }), document = built.document;
   document.routine = null;
   const path = document.paths[0];
-  if (path.followSections.some((section) => section.mode !== "time")) throw new Error(`Path ${path.name}: position-follow sections are not supported by ${DYNAMIC_WRAPPER_PROTOCOL}`);
   const canonical = buildCanonicalPathState(selected, path.samples);
   const sampled = densifyRobotSamples(path.samples, canonical.points.map((point) => point.tangentRad), canonical.points.map((point) => point.curvatureInvM));
   path.samples = sampled.samples;
@@ -136,6 +135,16 @@ export function buildRobotBinary(project: BordeauxProject, selection: BinarySele
   let end = 0;
   for (const section of path.followSections) {
     if (section.startSample !== end || section.endSample < end || section.endSample >= path.samples.length || !["time", "position"].includes(section.mode)) throw new Error("BDX follow sections must cover contiguous sample ranges");
+    if (section.mode === "position") {
+      const invalid = () => new Error(`Path ${path.name}: position-follow segment ${section.segmentIndex + 1} requires a nonempty sample range with strictly increasing distance and nonzero finite XY edges; use Time for stationary segments`);
+      if (section.endSample === section.startSample) throw invalid();
+      // Match the native follower's capability check on the final exported edges.
+      for (let index = section.startSample + 1; index <= section.endSample; index += 1) {
+        const before = path.samples[index - 1], after = path.samples[index];
+        const dx = after.x - before.x, dy = after.y - before.y, chordSquared = dx * dx + dy * dy;
+        if (![dx, dy, chordSquared].every(Number.isFinite) || !(chordSquared > 0) || !(after.s > before.s)) throw invalid();
+      }
+    }
     payload.integer(section.segmentIndex, 4); payload.integer(section.startSample, 4); payload.integer(section.endSample, 4); payload.integer(section.mode === "time" ? 0 : 1, 2); payload.integer(0, 2); end = section.endSample;
   }
   if (end !== path.samples.length - 1) throw new Error("BDX follow sections must cover every sample");

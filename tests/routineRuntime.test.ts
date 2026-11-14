@@ -5,8 +5,34 @@ import { routineBindingsFromBinary, routineEvidenceSnapshot } from '../src/elect
 import { routineRuntimeFixture } from './fixtures/routineRuntimeFixture';
 import { routineCommandIds } from '../src/electron/routineSelection';
 import type { RoutineNode } from '../src/shared/types';
+import { buildWaypoints } from '../src/shared/project/defaults';
 
 describe('self-contained runtime routine compiler', () => {
+  it.each([false, true])('embeds exact standalone position-follow bytes (mixed modes: %s)', mixed => {
+    const f = routineRuntimeFixture(), path = f.project.paths[0];
+    path.followMode = 'position';
+    path.waypoints = buildWaypoints([
+      { x: 2, y: 2, segType: 'line', ...(mixed ? { segmentFollowMode: 'time' as const } : {}) },
+      { x: 4, y: 2, segType: 'line' },
+      { x: 6, y: 2, stop: true, wait: .1 },
+    ]);
+    f.project.routines[0].nodes = [{ id: 'path', type: 'path', ref: path.id }];
+    const original = structuredClone(f.project);
+    const standalone = buildRobotBinary(f.project, { kind: 'path', id: path.id }, f.binary);
+    expect(standalone.document.paths[0].followSections.map(section => section.mode)).toEqual(mixed ? ['time', 'position', 'time'] : ['position', 'position', 'time']);
+    const built = buildRoutineRuntime(f.project, 'routine', f.bindings);
+    expect(built.document.schema).toBe('bordeaux-routine-runtime/1');
+    expect(built.document.paths).toEqual([{ name: standalone.name, sha256: standalone.sha256, bdxHex: Buffer.from(standalone.bytes).toString('hex') }]);
+    expect(built.document.nodes[0]).toMatchObject({ op: 1, path: 0 });
+    expect(f.project).toEqual(original);
+  });
+  it('rejects a degenerate position section before producing a routine file', () => {
+    const f = routineRuntimeFixture(), path = f.project.paths[0];
+    path.followMode = 'position';
+    path.waypoints = buildWaypoints([{ x: 2, y: 2, segType: 'line' }, { x: 2, y: 2 }]);
+    f.project.routines[0].nodes = [{ id: 'path', type: 'path', ref: path.id }];
+    expect(() => buildRoutineRuntime(f.project, 'routine', f.bindings)).toThrow(/position-follow segment 1/);
+  });
   it('does not request NI evidence for a command-free selected graph or unrelated drafts', () => {
     const f = routineRuntimeFixture();
     f.project.routines[0].nodes = [{ id: 'path', type: 'path', ref: f.project.paths[0].id }, { id: 'wait', type: 'builtin', builtinId: 'bordeaux.wait', arguments: { durationS: .02 } }];
