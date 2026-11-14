@@ -19,7 +19,13 @@ const env = { ...process.env, BORDEAUX_LIBRARY_UI_OUTPUT: output,
 delete env.ELECTRON_RUN_AS_NODE;
 console.log('Library UI artifacts: ' + output);
 const child = spawn(electron, [path.resolve('scripts/verify-library-ui-electron.cjs')], { env, stdio: 'inherit' });
-// Includes linked and folder undo scenarios that reopen the project several times.
-const timer = setTimeout(() => child.kill('SIGKILL'), 240_000);
+// All 49 checks include repeated project reloads and end-to-end native scrolling of
+// a 5000-character title. CI scrolling variance can exceed the former four-minute total.
+let timedOut = false;
+const timer = setTimeout(() => {
+  timedOut = true;
+  console.error('Library UI exceeded its 300-second overall deadline. Artifacts: ' + output);
+  child.kill('SIGKILL');
+}, 300_000);
 child.on('error', (error) => { clearTimeout(timer); console.error(error); process.exitCode = 1; });
-child.on('exit', (code) => { clearTimeout(timer); process.exitCode = code === 0 ? 0 : 1; });
+child.on('exit', (code) => { clearTimeout(timer); process.exitCode = code === 0 && !timedOut ? 0 : 1; });

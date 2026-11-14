@@ -191,8 +191,9 @@ exports.runConsequences = async h => {
     await chooseOutput('distance'); assert.deepEqual(await source(), missingBefore, 'Reselect missing saved output is unchanged'); await noAction(missingBefore);
     await chooseOutput(''); await wait(async () => !commandNode(await source()).outputBranch, 'Continue recovers missing output'); await notice('continue', width);
     await click('.deletion-notice button'); await expectSource(missingBefore);
-    // Routine history clears step selection. Reopen the restored command before editing its routes again.
-    await click('[data-id="inspect-step"] .rt-step-body');
+    // Undo retains a surviving step and its inspector; clicking its row again would close it.
+    assert.equal(await evaluate(() => document.querySelector('[data-id="inspect-step"] .rt-step-body').getAttribute('aria-pressed')), 'true', 'Undo retains the restored command selection');
+    assert.ok(await evaluate(() => document.querySelector('#command-branch-output')?.getClientRects().length), 'Undo retains the command output control');
     await chooseOutput('ready'); await notice('output', width); await click('.deletion-notice button'); await expectSource(missingBefore); await isolate();
     await record({ width, height, name: 'missing output preserved/reselection no-op/Continue recovery/Undo', passed: true });
     const fractional = clone(catalog); fractional.commands[0].outputs[2].min = .5; fractional.commands[0].outputs[2].max = 100.5;
