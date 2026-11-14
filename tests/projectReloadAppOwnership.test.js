@@ -108,7 +108,7 @@ it('binds the load result before scheduling a refresh, which cannot rebind the l
   const lifecycle = { getProjectSession: () => response.promise };
   const readBoundSession = await callback(app, 'readBoundSession', { lifecycle, documentEpoch: epoch, adoptSessionRecord });
   const refreshSessionRecord = await callback(app, 'refreshSessionRecord', { lifecycle, readBoundSession });
-  const effects = Object.fromEntries(['retireDeletion', 'setSessionRecordId', 'setBdxPending', 'setRecoveryState', 'setRecoveredFrom', 'setReloadKept', 'setShowFailure', 'setActionNotice', 'invalidateScheduledAutosave', 'cancelEdit', 'setComparison', 'setProjectKey', 'setLibraryPreferenceKey', 'setProject', 'setActiveIdx', 'setSel', 'setRoutineSel', 'setExportError', 'setBdxNotice', 'updateDirty', 'setRobotProjectState'].map(name => [name, vi.fn()]));
+  const effects = Object.fromEntries(['retireDeletion', 'setSessionRecordId', 'setBdxPending', 'setRecoveryState', 'setRecoveredFrom', 'setReloadKept', 'setShowFailure', 'setActionNotice', 'invalidateScheduledAutosave', 'cancelEdit', 'setComparison', 'setProjectKey', 'setLibraryPreferenceKey', 'setProject', 'setActiveIdx', 'setSel', 'setRoutineSel', 'setExportError', 'setBdxNotice', 'setApplyError', 'updateDirty', 'setRobotProjectState'].map(name => [name, vi.fn()]));
   const load = await callback(app, 'loadProject', { ...effects, window: { bordeauxAPI: { restoreProjectRobotCode: vi.fn() } }, restoreRobotCode,
     setSessionRecordId: record, documentEpoch: epoch, sessionContext: bound,
     bdxSaveFailure: {}, exportJobs: { current: new Set() }, exportShown: {}, optimizer: { reset() {} }, projectFolderName: () => '', normalizeProject: p => p,
@@ -117,6 +117,7 @@ it('binds the load result before scheduling a refresh, which cannot rebind the l
   load({ name: 'A', paths: [{ id: 'path' }] }, null, { session: { context, recoveryRecordId: 'A-record' } });
   expect(epoch.current).toBe(8); expect(record).toHaveBeenLastCalledWith('A-record');
   expect(restoreRobotCode).toHaveBeenCalledWith(context, 1);
+  expect(effects.setApplyError).toHaveBeenCalledWith(''); // A loaded project starts without an earlier optimization failure.
   response.resolve({ context: { ...context, documentSessionId: 'B' }, recoveryRecordId: 'B-record' });
   await Promise.resolve(); await Promise.resolve();
   expect(bound.current).toEqual(context); expect(record).toHaveBeenCalledTimes(1);

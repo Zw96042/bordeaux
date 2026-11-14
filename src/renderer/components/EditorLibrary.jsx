@@ -35,7 +35,20 @@ export { selectedPathIds };
 const LIBRARY_MIN_HEIGHT = 280, LIST_MIN_HEIGHT = 80;
 const MIN_RATIO = 25, MAX_RATIO = 75;
 
-export function LibraryRail({ preferenceKey, mode, hidden, children, ...props }) {
+// While Focus hides the library, a slim strip stays where it was so the way back is where the list went.
+// Restoring moves keyboard focus to the current path, since the strip itself disappears.
+function LibraryRestore({ mode, onRestore, rail }) {
+  const label = mode === 'paths' ? 'Show path list' : 'Show routine list';
+  return h('div', { className: 'library-restore' },
+    h('button', { type: 'button', className: 'library-restore-btn', 'aria-label': label, title: label + '  (\\)',
+      onClick: () => {
+        onRestore();
+        requestAnimationFrame(() => (rail.current?.querySelector('.library-pick[aria-current="true"]') || rail.current?.querySelector('button:not(:disabled)'))?.focus());
+      } },
+      h(Icon, { name: 'panelopen', size: 18 }), h('span', { 'aria-hidden': true }, mode === 'paths' ? 'Paths' : 'Routines')));
+}
+
+export function LibraryRail({ preferenceKey, mode, hidden, onRestore, children, ...props }) {
   const storageKey = 'bordeaux.library.' + preferenceKey + '.' + mode;
   const [prefs, setPrefs] = useState(() => readPreferences(storageKey));
   const [railHeight, setRailHeight] = useState(0);
@@ -80,7 +93,7 @@ export function LibraryRail({ preferenceKey, mode, hidden, children, ...props })
     const bounds = rail.current.getBoundingClientRect();
     update({ ratio: clampRatio((event.clientY - bounds.top) / bounds.height * 100) });
   };
-  return h('nav', { ref: rail, hidden, className: 'rail rail-l library-rail' + (children ? '' : ' library-only'), 'aria-label': mode === 'paths' ? 'Paths and outline' : 'Routines',
+  return h(React.Fragment, null, hidden && onRestore && h(LibraryRestore, { mode, onRestore, rail }), h('nav', { ref: rail, hidden, className:'rail rail-l library-rail' + (children ? '' : ' library-only'), 'aria-label': mode === 'paths' ? 'Paths and outline' : 'Routines',
     style: { '--library-ratio': ratio + '%', '--library-min-height': effectiveMinHeight + 'px' },
     onKeyDown: (event) => { if (event.defaultPrevented) event.stopPropagation(); } },
     h('section', { ref: top, className: 'library-top' },
@@ -91,7 +104,7 @@ export function LibraryRail({ preferenceKey, mode, hidden, children, ...props })
       onKeyDown: (event) => { const next = { ArrowUp: ratio - 5, ArrowDown: ratio + 5, Home: minRatio, End: MAX_RATIO }[event.key]; if (next !== undefined) { event.preventDefault(); update({ ratio: clampRatio(next) }); } } }),
     children && h('section', { className: 'library-structure' },
       h('div', { className: 'library-section-title' }, mode === 'paths' ? 'Path outline' : 'Routine steps'),
-      h('div', { ref: structureBody, className: 'library-structure-body', onScrollCapture: (event) => { if (event.target.matches('.outline-scroll,.rt-scroll')) update({ structureScroll: event.target.scrollTop }); } }, children(prefs.sections, (sections) => update({ sections: typeof sections === 'function' ? sections(latest.current.sections) : sections })))));
+      h('div', { ref: structureBody, className: 'library-structure-body', onScrollCapture: (event) => { if (event.target.matches('.outline-scroll,.rt-scroll')) update({ structureScroll: event.target.scrollTop }); } }, children(prefs.sections, (sections) => update({ sections: typeof sections === 'function' ? sections(latest.current.sections) : sections }))))));
 }
 
 function LibraryMenu({ menu, close, children, id }) {

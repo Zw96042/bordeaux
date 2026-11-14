@@ -20,6 +20,13 @@ describe('workspace Space admission', () => {
     const target = { closest: selectors => selectors.split(',').includes(selector) ? {} : null };
     expect(isPlaybackSpace(event({ target }), 'plan', doc())).toBe(false);
   });
+  it('keeps playback while a hover tooltip is open, but not while another popover is', () => {
+    const seen = [];
+    const query = { querySelectorAll: selector => { seen.push(selector); return []; } };
+    expect(isPlaybackSpace(event(), 'plan', query)).toBe(true);
+    const popovers = seen[0].split(',').filter(part => part.includes('[popover]'));
+    expect(popovers).toEqual(['[popover]:popover-open:not([role="tooltip"])']);
+  });
   it('does not give mutation buttons native Space merely because they share chooser styling', () => {
     const target = { closest: selectors => selectors.split(',').includes('.choice-change') ? {} : null };
     expect(isPlaybackSpace(event({ target }), 'plan', doc())).toBe(true);

@@ -9,7 +9,9 @@ import { UI } from "./ui";
 import { compareExactDecimals, robotParameterValueError, robotSchemaValueError } from "../../shared/robotCommands";
 
   const h = React.createElement;
-  const { Num, DraftText, Toggle, Seg, Icon, Dropdown, ChoiceBrowser, constraintRangeSummary } = UI;
+  const { Num, DraftText, Toggle, Seg, TurnDirection, Icon, Dropdown, ChoiceBrowser, constraintRangeSummary } = UI;
+  // Shortest is the default, so choosing it clears the authored direction instead of storing it.
+  const AUTHORED_DIRECTION = { shortest: undefined, cw: 'cw', ccw: 'ccw' };
   const { FIELD_W, FIELD_H } = FIELD_DIMS;
 
   // Anchor meaning lives in each option's tooltip instead of a hint under every anchor control.
@@ -538,7 +540,10 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
         h('div', { className: 'inrow first' },
           h('span', { className: 'inrow-l' }, 'Pin heading here', h('small', null, 'Otherwise it interpolates')),
           h(Toggle, { on: !!w.thetaOn, ariaLabel: 'Pin heading at waypoint', onChange: (v) => actions.toggleTheta(i, v) })),
-        w.thetaOn && h(Num, { label: 'Heading \u03b8', value: w.theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v }) }));
+        w.thetaOn && h(Num, { label: 'Heading \u03b8', value: w.theta || 0, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v }) }),
+        w.thetaOn && headingDirection);
+      const headingDirection = h(TurnDirection, { value: w.rotationDirection, values: AUTHORED_DIRECTION, label: 'Turn into heading', ariaLabel: 'Turn direction into heading',
+        onChange: (rotationDirection) => actions.setWp(i, { rotationDirection }) });
       icon = 'waypoint'; title = waypointLabel(i);
       body = h(React.Fragment, null,
         h('div', { className: 'grid2' },
@@ -565,7 +570,8 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
             : isAnchor
               ? h(React.Fragment, null,
                   h(Num, { label: isStart ? 'Initial robot facing' : 'Final robot facing', value: (w.theta || 0) + facingOffset, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setWp(i, { theta: v - facingOffset }) }),
-                  h('div', { className: 'seg-hint' }, 'Facing does not change the path tangent.'))
+                  h('div', { className: 'seg-hint' }, 'Facing does not change the path tangent.'),
+                  isEnd && headingDirection)
               : interiorHeadingEditor(),
 
         h('div', { className: 'inrow' },
@@ -577,8 +583,8 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
           h(Toggle, { on: !!w.turnInPlace, ariaLabel: 'Turn in place at waypoint', onChange: (v) => actions.setTurnInPlace(i, v) })),
         !isStart && w.turnInPlace && h(React.Fragment, null,
           h(Num, { label: 'Turn to heading', value: w.turnInPlace.headingDeg, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setTurnInPlaceMeta(i, { headingDeg: v }) }),
-          h('div', { className: 'fieldlabel' }, 'Turn direction'),
-          h(Seg, { value: w.turnInPlace.direction || 'shortest', ariaLabel: 'Turn direction', options: [{ v: 'shortest', label: 'Shortest' }, { v: 'counterclockwise', label: 'CCW' }, { v: 'clockwise', label: 'CW' }], onChange: (v) => actions.setTurnInPlaceMeta(i, { direction: v }) }),
+          h(TurnDirection, { value: w.turnInPlace.direction, values: { shortest: 'shortest', cw: 'clockwise', ccw: 'counterclockwise' }, ariaLabel: 'Turn in place direction',
+            onChange: (direction) => actions.setTurnInPlaceMeta(i, { direction }) }),
           h('div', { className: 'seg-hint' }, 'Uses rotation limits.')),
         isAnchor && endpointSpeed(i),
         isAnchor && h('div', { className: 'seg-hint' }, 'Speed along the path; 0 means stopped.'),
@@ -678,6 +684,8 @@ import { compareExactDecimals, robotParameterValueError, robotSchemaValueError }
       body = h(React.Fragment, null,
         targetHeadingMode !== 'targets' && h('div', { className: 'hint' }, h(Icon, { name: 'info', size: 14 }), 'Inactive on this segment \u2014 switch its heading mode to Targets.'),
         h(Num, { label: 'Target heading', value: t.deg, unit: '\u00b0', step: 1, precision: 1, onChange: (v) => actions.setTarget(sel.idx, { deg: v }) }),
+        h(TurnDirection, { value: t.rotationDirection, values: AUTHORED_DIRECTION, label: 'Turn into heading', ariaLabel: 'Turn direction into target heading',
+          onChange: (rotationDirection) => actions.setTarget(sel.idx, { rotationDirection }) }),
         h('div', { className: 'fieldlabel' }, 'Anchor position'),
         h(Seg, { value: targetAnchor, ariaLabel: 'Anchor position', options: ANCHOR_OPTIONS, onChange: (v) => actions.setTarget(sel.idx, { anchor: v }) }),
         targetAnchor === 'dist'

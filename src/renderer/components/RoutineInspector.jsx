@@ -8,6 +8,9 @@ import { CommandParameterEditor, commandArguments, parameterValueError, safeCont
 import { UI } from "./ui";
 import { robotValueSchemasEqual } from "../../shared/robotValueSchema";
 import { Glyph, continuityText, describeStop, stepTitle } from "./RoutinePanel";
+import { routinePathChoices, routinePathUses } from "../lib/routinePathChoices";
+import { niceStep } from "./pathTimelineModel";
+import { PointerDrag } from "../hooks/usePointerDrag";
 
 // Routine step inspector (right rail) and the bottom preview transport.
 // One inspector system, shared with the Plan page (.ctxinsp shell + form primitives).
@@ -145,10 +148,14 @@ export function StepInspector(props) {
 
   if (node.type === 'path') {
     glyph = 'route'; title = 'Path';
+    // The chosen path reads as a card; Change opens the searchable list with each path's folder, time and use here.
+    // A deleted path has no card, so the list stays open beside the problem until another path is chosen.
+    const choices = routinePathChoices(paths, { folders: props.pathFolders, times: props.pathTimes, uses: routinePathUses(routine) });
     body = h(React.Fragment, null,
-      h(Dropdown, { id: 'routine-bound-path', label: 'Path', value: node.ref, icon: 'route',
-        items: [...(paths.some((path) => path.id === node.ref) ? [] : [{ value: node.ref, label: 'Unavailable path', meta: 'Choose another path', badge: 'Missing' }]), ...paths.map((path) => ({ value: path.id, label: path.name }))],
-        onChange: (value) => set({ ref: value }) }),
+      h(ChoiceBrowser, { id: 'routine-bound-path', resetKey: node.id, label: 'Path to follow', value: node.ref, actionLabel: 'Change path',
+        items: choices.map(({ path, meta }) => ({ value: path.id, label: path.name, meta })),
+        placeholder: 'Search paths or folders', emptyText: 'No paths yet. Create one in Paths.',
+        onChange: (value) => { if (value !== node.ref) set({ ref: value }); } }),
       seg && h('div', { className: 'rt-stat' },
         h('div', { className: 'rt-stat-i' }, h('span', { className: 'rt-stat-v' }, fmt(seg.t1 - seg.t0)), h('span', { className: 'rt-stat-k' }, 'Duration')),
         h('div', { className: 'rt-stat-i' }, h('span', { className: 'rt-stat-v' }, UnitPrefs.format(seg.deriv.sample.length, 'm', 2)), h('span', { className: 'rt-stat-k' }, 'Distance')),
@@ -284,13 +291,15 @@ export function StepInspector(props) {
       body));
 }
 
-/** Preview transport. Time is the chosen trace's display time: limits draw as upper bounds, untimed commands as markers. */
+/** Preview transport. Time is the chosen trace's display time: limits draw as upper bounds, untimed commands as markers.
+ * The scrubber is a slider over a time scale: drag the handle or press anywhere on the lane to seek (seeking pauses),
+ * hover to read a time and the step there, and use the arrows (Shift for 1 s), Page Up/Down for step starts, Home/End. */
 export function RoutineTransport(props) {
   const { run, time, playing, controls, running } = props;
   const occurrences = run.steps.filter((step) => step.kind !== 'repeat');
-  const activeIdx = run.steps.length && (running || time > 0) ? A.stepAt(run, time) : -1;
+  const stepIndex = (t) => run.steps.length ? A.stepAt(run, t) : -1;
+  const activeIdx = running || time > 0 ? stepIndex(time) : -1;
   const active = activeIdx >= 0 ? run.steps[activeIdx] : null;
-  const ordinal = active ? run.steps.slice(0, activeIdx + 1).filter((step) => step.kind !== 'repeat').length : 0;
   const pct = run.total > 0 ? Math.max(0, Math.min(1, time / run.total)) : 0;
   const duration = run.duration || { maxS: run.total, unknownCount: 0, usesLimits: false };
   const timedPlayable = run.timedPlayable !== undefined ? run.timedPlayable : run.total > 0;
@@ -306,14 +315,24 @@ export function RoutineTransport(props) {
     run.truncated && 'Preview stops at 2,000 steps',
     !timedPlayable && occurrences.length > 0 && !run.blocked && 'Untimed preview',
   ].filter(Boolean).join(' · ');
+  // A repeat's pass marker is not itself a step; the step there is the first one after it.
+  const playingAt = (t) => {
+    const index = stepIndex(t);
+    if (index < 0) return null;
+    const found = run.steps.slice(index).findIndex((step) => step.kind !== 'repeat');
+    return found < 0 ? null : { step: run.steps[index + found], ordinal: run.steps.slice(0, index + found + 1).filter((step) => step.kind !== 'repeat').length };
+  };
+  const stepName = (step) => step.label || A.nodeTitle(step.node);
   const color = (step) => step.kind === 'path' || step.kind === 'gen' ? 'var(--accent)' : step.kind === 'wait' ? 'var(--warn)' : step.kind === 'event' ? 'var(--cmd)' : 'var(--txt-3)';
   const at = (t) => `calc(10px + (100% - 20px) * ${run.total ? t / run.total : 0})`;
   const width = (d) => `calc((100% - 20px) * ${run.total ? d / run.total : 0})`;
   const marks = run.steps.filter((step) => step.t1 <= step.t0 && (step.kind === 'decision' || step.kind === 'end' || step.kind === 'event' || (step.kind === 'repeat' && step.pass > 1)));
   const markClass = (step) => step.kind === 'decision' ? 'rt-timeline-event' : step.kind === 'end' ? 'rt-timeline-end' : step.kind === 'repeat' ? 'rt-timeline-pass' : 'rt-timeline-untimed';
-  // Pass numbers only where there is room for them; every tick keeps its descriptive title.
-  const editorRef = React.useRef(null);
+  const editorRef = React.useRef(null), scrubRef = React.useRef(null);
   const [editorWidth, setEditorWidth] = React.useState(0);
+  const [hover, setHover] = React.useState(null);
+  const [dragging, setDragging] = React.useState(false);
+  const drag = PointerDrag.useController();
   React.useLayoutEffect(() => {
     const element = editorRef.current; if (!element) return undefined;
     setEditorWidth(element.clientWidth);
@@ -322,6 +341,7 @@ export function RoutineTransport(props) {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+  // Pass numbers only where there is room for them; every mark keeps its descriptive title.
   const labelledPasses = new Set();
   if (editorWidth && run.total > 0) {
     let lastX = -Infinity;
@@ -331,20 +351,65 @@ export function RoutineTransport(props) {
     });
   }
   const markLabel = (step) => step.kind === 'repeat' ? A.nodeTitle(step.node) + ', pass ' + step.pass : step.kind === 'event' ? A.nodeTitle(step.node) + ' (untimed)' : step.label || A.nodeTitle(step.node);
+  // Seconds scale, spaced like the Paths timeline's time axis.
+  const tickStep = timedPlayable && editorWidth > 40 ? niceStep(run.total, Math.max(2, (editorWidth - 20) / 84)) : 0;
+  const tickDigits = tickStep ? Math.max(0, Math.min(2, -Math.floor(Math.log10(tickStep) + 1e-9))) : 0;
+  const ticks = tickStep ? Array.from({ length: Math.min(60, Math.floor(run.total / tickStep + 1e-6) + 1) }, (_, i) => Number((i * tickStep).toFixed(4))) : [];
+  // Page Up/Down targets: every step start, and the end.
+  const starts = [...new Set([...run.steps.map((step) => step.t0), run.total])].filter(Number.isFinite).sort((a, b) => a - b);
+  const timeAt = (event) => {
+    const rect = editorRef.current.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (event.clientX - rect.left - 10) / Math.max(1, rect.width - 20))) * run.total;
+  };
+  const seek = (t) => controls.seek(Math.max(0, Math.min(run.total, t)));
+  const onPointerDown = (event) => {
+    if (!timedPlayable || event.button !== 0) return;
+    event.preventDefault(); scrubRef.current?.focus({ preventScroll: true });
+    setDragging(true); setHover(null); seek(timeAt(event));
+    drag.start(event, { cursor: 'grabbing', move: (next) => seek(timeAt(next)), end: () => setDragging(false), cancel: () => setDragging(false) });
+  };
+  const onKeyDown = (event) => {
+    if (!timedPlayable || event.altKey || event.ctrlKey || event.metaKey) return;
+    const small = event.shiftKey ? 1 : 0.1;
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? run.total
+      : event.key === 'ArrowRight' || event.key === 'ArrowUp' ? time + small
+      : event.key === 'ArrowLeft' || event.key === 'ArrowDown' ? time - small
+      : event.key === 'PageDown' ? starts.find((t) => t > time + 1e-6) ?? run.total
+      : event.key === 'PageUp' ? [...starts].reverse().find((t) => t < time - 1e-6) ?? 0 : null;
+    if (next == null) return;
+    event.preventDefault(); event.stopPropagation(); seek(next);
+  };
+  const now = active ? playingAt(time) : null;
+  const readoutTime = dragging ? time : hover;
+  const readout = readoutTime != null ? playingAt(readoutTime) : null;
 
-  return h('div', { className: 'rt-transport timeline' + (running ? ' running' : '') },
+  return h('div', { className: 'rt-transport timeline' + (running ? ' running' : '') + (timedPlayable ? '' : ' untimed') },
     h('div', { className: 'rt-timeline-toolbar' },
       h('div', { className: 'rt-tp-ctl' },
         h('button', { className: 'rt-tp-btn', type: 'button', title: 'Restart preview', 'aria-label': 'Restart routine', onClick: controls.reset }, h(Icon, { name: 'rewind', size: 14 })),
-        h('button', { className: 'rt-tp-btn play', type: 'button', disabled: !timedPlayable, title: timedPlayable ? 'Play / pause preview' : 'Nothing in this preview has a duration', 'aria-label': playing ? 'Pause routine playback' : 'Play routine', onClick: controls.toggle }, h(Icon, { name: playing ? 'pause' : 'play', size: 15, fill: !playing }))),
+        h('button', { className: 'rt-tp-btn play', type: 'button', disabled: !timedPlayable, title: timedPlayable ? 'Play / pause preview  (Space)' : 'Nothing in this preview has a duration', 'aria-label': playing ? 'Pause routine playback' : 'Play routine', onClick: controls.toggle }, h(Icon, { name: playing ? 'pause' : 'play', size: 15, fill: !playing }))),
       h('span', { className: 'rt-timeline-time' }, time.toFixed(2), h('small', null, ' / ' + totalLabel)),
       h('span', { className: 'rt-timeline-summary', title: summary || undefined }, summary),
       pass && passes && h('span', { className: 'rt-timeline-pass-now' }, 'Pass ' + pass.pass + ' of ' + passes),
-      h('div', { className: 'rt-timeline-step' }, activeIdx >= 0 ? String(ordinal).padStart(2, '0') : '–', h('small', null, '/' + String(occurrences.length).padStart(2, '0')))),
-    h('div', { className: 'rt-timeline-editor', ref: editorRef, style: { '--routine-progress': pct } },
+      // The step playing now by name, then its place in the run order. Before playback, the run's size.
+      h('div', { className: 'rt-timeline-step', title: now ? stepName(now.step) : undefined },
+        now ? h(React.Fragment, null, h('span', { className: 'rt-timeline-now' }, stepName(now.step)), h('small', null, now.ordinal + ' of ' + occurrences.length))
+          : occurrences.length > 0 && h('small', null, plural(occurrences.length, 'step')))),
+    h('div', { className: 'rt-timeline-editor' + (dragging ? ' dragging' : ''), ref: editorRef, style: { '--routine-progress': pct } },
+      ticks.map((t, i) => h('span', { key: 'tick' + i, className: 'rt-timeline-tick' + (t / run.total > 0.97 ? ' end' : ''), style: { left: at(t) }, 'aria-hidden': true }, t === 0 ? '0' : t.toFixed(tickDigits))),
       h('span', { className: 'rt-timeline-track' }),
-      run.steps.filter((step) => step.t1 > step.t0).map((step) => h('span', { key: step.occurrenceId || step.node.id, className: 'rt-timeline-span' + (step.timing === 'upperBound' ? ' upper' : ''),
+      run.steps.filter((step) => step.t1 > step.t0).map((step) => h('span', { key: step.occurrenceId || step.node.id, className: 'rt-timeline-span' + (step.timing === 'upperBound' ? ' upper' : '') + (now?.step === step ? ' on' : ''),
         title: (step.timing === 'upperBound' ? 'Up to ' : '') + (step.label || A.nodeTitle(step.node)), style: { left: at(step.t0), width: width(step.t1 - step.t0), '--step-color': color(step) } })),
-      marks.map((step) => h('span', { key: 'm' + (step.occurrenceId || step.node.id), className: markClass(step), title: markLabel(step), style: { left: at(step.t0) } }, step.kind === 'repeat' && labelledPasses.has(step.occurrenceId) ? step.pass : null)),
-      h('input', { className: 'rt-tp-scrub', type: 'range', 'aria-label': 'Routine playback position', min: 0, max: 1000, value: Math.round(pct * 1000), disabled: !timedPlayable, onChange: (event) => controls.seek((event.target.value / 1000) * run.total) })));
+      timedPlayable && marks.map((step) => h('span', { key: 'm' + (step.occurrenceId || step.node.id), className: markClass(step), title: markLabel(step), style: { left: at(step.t0) } }, step.kind === 'repeat' && labelledPasses.has(step.occurrenceId) ? step.pass : null)),
+      !timedPlayable && h('span', { className: 'rt-timeline-empty' }, run.blocked ? 'Preview unavailable' : 'Nothing to scrub: no step in this preview has a duration'),
+      timedPlayable && hover != null && !dragging && h('span', { className: 'rt-timeline-hover', style: { left: at(hover) }, 'aria-hidden': true }),
+      timedPlayable && h('span', { className: 'rt-timeline-playhead', 'aria-hidden': true }),
+      timedPlayable && readoutTime != null && h('span', { className: 'rt-timeline-readout', style: { '--at': run.total ? readoutTime / run.total : 0 }, 'aria-hidden': true },
+        h('b', null, fmt(readoutTime)), readout && h('span', null, stepName(readout.step))),
+      h('div', { ref: scrubRef, className: 'rt-tp-scrub', role: 'slider', tabIndex: timedPlayable ? 0 : -1, 'aria-label': 'Routine playback position',
+        'aria-disabled': timedPlayable ? undefined : true, 'aria-valuemin': 0, 'aria-valuemax': Number(run.total.toFixed(2)), 'aria-valuenow': Number(time.toFixed(2)),
+        'aria-valuetext': fmt(time) + ' of ' + totalLabel + (now ? ', ' + stepName(now.step) : ''),
+        onPointerDown, onKeyDown,
+        onPointerMove: (event) => { if (timedPlayable && !dragging && event.pointerType !== 'touch') setHover(timeAt(event)); },
+        onPointerLeave: () => setHover(null) })));
 }

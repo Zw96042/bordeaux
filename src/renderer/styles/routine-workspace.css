@@ -34,7 +34,8 @@
 
 .rt-step-wrap{display:contents}
 .rt-group{display:flex;flex-direction:column;margin:4px 0;border:1px solid var(--line-2);border-radius:var(--r-l);background:var(--bg-1)}
-.rt-block{display:flex;flex-direction:column;padding:0 0 4px 20px}
+.rt-block{display:flex;flex-direction:column;padding:4px 0 4px 20px;border-top:1px solid var(--line)}
+.rt-group>.rt-step{border-radius:var(--r-l) var(--r-l) 0 0}
 .rt-branch{display:flex;flex-direction:column;margin:2px 0 4px;border-left:2px solid var(--line-3)}
 .rt-branch.live{border-left-color:var(--txt-2)}
 
@@ -99,17 +100,16 @@
 /* A group's footer: a repeat's loop-back, or an outcome the group's end does not already show. */
 .rt-close{display:flex;align-items:flex-start;gap:8px;padding:4px 6px 6px 12px;color:var(--txt-3);font-size:11.5px;line-height:16px}
 .rt-close-ic{display:flex;flex:none;align-items:center;height:16px;color:var(--txt-2)}
-.rt-close-t{min-width:0;overflow-wrap:anywhere}
+.rt-close-t{min-width:0;overflow-wrap:anywhere;text-wrap:pretty}
 .rt-close-name{color:var(--txt-2);font-weight:550}
 
-/* One explicit Add at the end. Inside a populated group, insertion is a + on the gap line while the group is hovered
-   or focused; an empty list always shows its Add. */
+/* One explicit Add at the end of every list. Inside a group it is a quiet line in the step column, so the space under
+   a group's last step reads as where its next step goes; it brightens while the group is hovered or focused. */
 .rt-addwrap{position:relative;padding:0 4px 0 52px}
 .rt-list>.rt-addwrap{padding-top:10px}
 .rt-add{display:inline-flex;align-items:center;gap:7px;min-height:28px;padding:0 8px;margin-left:-8px;border-radius:var(--r);color:var(--txt-3);font-size:12px;font-weight:500}
 .rt-block .rt-add{gap:6px;min-height:24px;font-size:11.5px}
-.rt-block .rt-addwrap:not(.empty) .rt-add{min-height:10px;height:10px;padding:0 4px;margin-left:-4px;font-size:0;opacity:0}
-.rt-block .rt-addwrap:not(.empty):is(:hover,:focus-within)::before{content:'';position:absolute;left:68px;right:34px;top:50%;height:1px;background:var(--line-3)}
+.rt-block .rt-addwrap:not(.empty) .rt-add{opacity:.6}
 .rt-step-wrap:is(:hover,:focus-within)>.rt-block>.rt-addwrap .rt-add,.rt-step-wrap:is(:hover,:focus-within)>.rt-block>.rt-branch>.rt-addwrap .rt-add,.rt-block .rt-add:is(:focus,[aria-expanded=true]),.rt-panel.dragging .rt-add{opacity:1}
 .rt-addwrap .rt-add:is(.on,[aria-expanded=true]){background:var(--bg-3);color:var(--txt)}
 .rt-range-bar{display:flex;align-items:center;gap:10px;flex-shrink:0;min-height:44px;padding:6px 24px;border-bottom:1px solid var(--line);background:var(--bg-1);font-size:12.5px}
@@ -163,32 +163,52 @@
 .routine-status-copy b{color:var(--txt);font-size:12.5px;font-weight:600}
 .routine-status-copy span{color:var(--txt-3);font-size:11.5px;line-height:1.4;overflow-wrap:anywhere}
 .routine-status.error .routine-status-icon{background:var(--bad-soft);color:var(--bad-txt)}
-.rt-transport.timeline{position:relative;display:grid;grid-template-rows:34px 44px;height:78px;border-top:1px solid var(--line-2);background:var(--hud-surface)}
-.rt-timeline-toolbar{display:flex;align-items:center;min-width:0;padding:0 10px 0 6px;border-bottom:1px solid var(--line)}
+/* The transport: controls and the step playing now, over a seconds scale with a lane of step spans and a playhead
+   handle. The lane is one slider; its focus ring is drawn by the editor. */
+.rt-transport.timeline{position:relative;display:grid;grid-template-rows:34px 56px;height:90px;border-top:1px solid var(--line-2);background:var(--hud-surface)}
+.rt-timeline-toolbar{display:flex;align-items:center;min-width:0;padding:0 12px 0 6px;border-bottom:1px solid var(--line)}
 .rt-tp-ctl{display:flex;align-items:center;gap:2px}
 .rt-tp-btn{display:flex;align-items:center;justify-content:center;flex-shrink:0;width:30px;height:26px;border-radius:var(--r-s);color:var(--txt-2)}
 .rt-tp-btn:disabled{opacity:.4}
 .rt-timeline-time,.rt-timeline-step{color:var(--txt);font:11.5px var(--mono);font-variant-numeric:tabular-nums}
-.rt-timeline-time{margin-left:10px}
-.rt-timeline-step{margin-left:auto;padding-left:10px}
-.rt-timeline-time small,.rt-timeline-step small{color:var(--txt-3);font:inherit}
+.rt-timeline-time{flex:none;margin-left:10px;white-space:nowrap}
+.rt-timeline-time small,.rt-timeline-step small{color:var(--txt-3);font:inherit;white-space:nowrap}
+.rt-timeline-step{display:flex;flex:0 1 auto;align-items:baseline;gap:8px;min-width:0;max-width:46%;margin-left:auto;padding-left:12px}
+.rt-timeline-now{min-width:0;overflow:hidden;color:var(--txt);font:550 12px var(--ui);text-overflow:ellipsis;white-space:nowrap}
 .rt-timeline-editor{position:relative;min-width:0;overflow:hidden}
-.rt-timeline-editor:has(.rt-tp-scrub:focus-visible){outline:2px solid var(--accent);outline-offset:-3px}
-.rt-timeline-track{position:absolute;left:10px;right:10px;top:21px;height:2px;border-radius:2px;background:var(--bg-4)}
-.rt-timeline-span{position:absolute;top:16px;height:12px;min-width:2px;border-left:2px solid var(--step-color);border-radius:2px;background:color-mix(in srgb,var(--step-color) 44%,transparent);pointer-events:none}
-.rt-timeline-event{position:absolute;top:15px;width:8px;height:8px;border:1.5px solid var(--warn);background:var(--bg-1);transform:translate(-50%,50%) rotate(45deg);pointer-events:none}
-.rt-timeline-editor .rt-tp-scrub{position:absolute;inset:0;width:100%;height:100%;margin:0;padding:0;opacity:0;cursor:pointer}
-.rt-timeline-editor::after{content:'';position:absolute;left:calc(10px + (100% - 20px) * var(--routine-progress,0));top:11px;width:1px;height:23px;background:#fff;pointer-events:none}
-@media (hover:hover){.rt-tp-btn:not(.play):not(:disabled):hover{background:var(--bg-3);color:var(--txt)}}
+.rt-timeline-editor:has(.rt-tp-scrub:focus-visible){outline:2px solid var(--focus);outline-offset:-3px;border-radius:var(--r-s)}
+.rt-timeline-tick{position:absolute;top:5px;color:var(--txt-3);font:10px/1 var(--mono);font-variant-numeric:tabular-nums;transform:translateX(-50%);pointer-events:none}
+.rt-timeline-tick.end{transform:translateX(-100%)}
+.rt-timeline-tick.end::after{left:auto;right:0}
+.rt-timeline-tick::after{content:'';position:absolute;left:50%;top:13px;width:1px;height:4px;background:var(--line-3)}
+.rt-timeline-track{position:absolute;left:10px;right:10px;top:22px;height:16px;border-radius:var(--r-s);background:var(--bg-2);box-shadow:inset 0 0 0 1px var(--line)}
+/* Each step is its own block with a dark seam at its start; the one playing now is brighter. */
+.rt-timeline-span{position:absolute;top:25px;height:10px;min-width:2px;border-radius:2px;background:color-mix(in srgb,var(--step-color) 40%,transparent);box-shadow:inset 2px 0 0 var(--bg-1);pointer-events:none}
+.rt-timeline-span.on{background:color-mix(in srgb,var(--step-color) 85%,transparent)}
+.rt-timeline-event{position:absolute;top:25px;width:8px;height:8px;border:1.5px solid var(--warn);background:var(--bg-1);transform:translate(-50%,0) rotate(45deg);pointer-events:none}
 /* Preview marks: limits draw hatched as upper bounds; untimed commands are ticks, not spans. */
 .rt-timeline-span.upper{background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--step-color) 44%,transparent) 0 3px,transparent 3px 6px)}
-.rt-timeline-end{position:absolute;top:17px;width:8px;height:8px;background:var(--txt-2);transform:translateX(-50%);pointer-events:none}
-.rt-timeline-untimed{position:absolute;top:14px;width:2px;height:14px;border-radius:1px;background:var(--cmd);transform:translateX(-50%);pointer-events:none}
-.rt-timeline-pass{position:absolute;top:30px;color:var(--txt-3);font:9.5px/1 var(--mono);transform:translateX(-50%);pointer-events:none}
-.rt-timeline-pass::before{content:'';position:absolute;left:50%;top:-16px;width:1px;height:12px;background:var(--txt-3)}
-.rt-timeline-pass-now{margin-left:10px;color:var(--txt-2);font-size:11px;white-space:nowrap}
-.rt-timeline-summary{margin-left:10px;color:var(--txt-3);font-size:11px;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.rt-timeline-time,.rt-timeline-step{flex:none;white-space:nowrap}
+.rt-timeline-end{position:absolute;top:26px;width:8px;height:8px;background:var(--txt-2);transform:translateX(-50%);pointer-events:none}
+.rt-timeline-untimed{position:absolute;top:23px;width:2px;height:14px;border-radius:1px;background:var(--cmd);transform:translateX(-50%);pointer-events:none}
+.rt-timeline-pass{position:absolute;top:43px;color:var(--txt-3);font:9.5px/1 var(--mono);transform:translateX(-50%);pointer-events:none}
+.rt-timeline-pass::before{content:'';position:absolute;left:50%;top:-21px;width:1px;height:19px;background:var(--txt-3)}
+.rt-timeline-empty{position:absolute;left:10px;right:10px;top:22px;display:flex;align-items:center;justify-content:center;height:16px;color:var(--txt-3);font-size:11.5px;pointer-events:none}
+/* The playhead: a line across scale and lane with a round handle on the lane, larger while hovered or dragged. */
+.rt-timeline-playhead{position:absolute;z-index:2;left:calc(10px + (100% - 20px) * var(--routine-progress,0));top:18px;width:2px;height:28px;margin-left:-1px;border-radius:1px;background:var(--txt);pointer-events:none}
+.rt-timeline-playhead::before{content:'';position:absolute;left:50%;top:5px;width:12px;height:12px;border-radius:50%;background:var(--txt);box-shadow:0 0 0 2px var(--bg-1),0 1px 4px rgb(0 0 0/.5);transform:translateX(-50%);transition:width .12s ease-out,height .12s ease-out,top .12s ease-out}
+.rt-timeline-editor:is(:hover,.dragging) .rt-timeline-playhead::before{top:4px;width:14px;height:14px}
+.rt-timeline-hover{position:absolute;z-index:1;top:18px;width:1px;height:28px;background:rgb(255 255 255/.35);pointer-events:none}
+.rt-timeline-readout{position:absolute;z-index:4;top:1px;left:clamp(64px,calc(10px + (100% - 20px) * var(--at,0)),calc(100% - 64px));display:flex;align-items:baseline;gap:6px;max-width:min(320px,calc(100% - 24px));padding:1px 7px;border:1px solid var(--line-2);border-radius:var(--r-s);background:var(--bg-3);box-shadow:var(--elevation);color:var(--txt-2);font-size:11px;line-height:16px;white-space:nowrap;transform:translateX(-50%);pointer-events:none}
+.rt-timeline-readout b{color:var(--txt);font:550 11px var(--mono);font-variant-numeric:tabular-nums}
+.rt-timeline-readout span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.rt-timeline-editor .rt-tp-scrub{position:absolute;z-index:3;inset:0;cursor:pointer;touch-action:none}
+.rt-timeline-editor.dragging .rt-tp-scrub{cursor:grabbing}
+.rt-transport.untimed .rt-tp-scrub{cursor:default}
+.rt-tp-scrub:focus-visible{outline:none!important}
+@media (hover:hover){.rt-tp-btn:not(.play):not(:disabled):hover{background:var(--bg-3);color:var(--txt)}}
+@media (prefers-reduced-motion:reduce){.rt-timeline-playhead::before{transition:none}}
+.rt-timeline-pass-now{flex:none;margin-left:10px;color:var(--txt-2);font-size:11px;white-space:nowrap}
+.rt-timeline-summary{margin-left:10px;color:var(--txt-3);font-size:11px;flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* ============ routine inspector ============ */
 /* Notices on routine surfaces are plain text: no left rule, no tinted box. */

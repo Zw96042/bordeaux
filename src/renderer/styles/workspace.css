@@ -24,7 +24,11 @@
 .pp-title{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;min-width:0;overflow:hidden;color:var(--txt);font-size:13px;font-weight:600;line-height:17px;overflow-wrap:break-word}
 .pp-sub{color:var(--txt-3);font:11px/15px var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
 .pp-head-actions{display:flex;flex:none;align-items:center;gap:2px;margin:-3px 0 0 auto}
+/* Power matches More. */
+.pp-head-actions .qbtn{min-height:26px;height:26px;padding:0 8px;border-radius:var(--r-s)}
 .pp-more{height:26px;padding:0 9px;border-radius:var(--r-s);color:var(--txt-2);font-size:12px;font-weight:550;transition:background-color .12s,color .12s}
+/* At the narrow panel, tighter actions keep a selected item's title ("Waypoint 12") on one line beside Clear selection. */
+@media (max-width:1239px){.pp-head{gap:4px}.pp-head-actions .qbtn,.pp-more{padding:0 5px}}
 .pp-more[aria-expanded="true"]{background:var(--accent-soft);color:var(--accent)}
 .pp-mini{position:relative;display:grid;flex:none;place-items:center;width:24px;height:24px;border-radius:var(--r-s);color:var(--txt-3);transition:background-color .12s,color .12s}
 .pp-mini::before{content:'';position:absolute;inset:-4px}
@@ -38,6 +42,8 @@
 .pp-text-btn{min-height:26px;padding:0 6px;border-radius:var(--r-s);color:var(--accent);font-size:12.5px;font-weight:550;white-space:nowrap}
 .pp-text-btn:disabled{color:var(--txt-3)}
 .pp .numrow{display:grid;grid-template-columns:minmax(0,1fr) 108px;align-items:center;gap:8px;min-height:30px;padding:0 10px 0 14px}
+/* At the narrow panel the values give labels room, so "Corner accel" and "Entry speed" are not cut. */
+@media (max-width:1239px){.pp .numrow{grid-template-columns:minmax(0,1fr) 96px}}
 .pp .numlbl{overflow:hidden;font-size:12.5px;text-overflow:ellipsis;white-space:nowrap}
 .pp .numbox,.pt-limits .numbox{height:28px;padding:0 8px;border-color:transparent;background:transparent}
 .pp .numinput{font-size:12.5px;text-align:right}

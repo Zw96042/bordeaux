@@ -43,6 +43,10 @@ import { filterPickerItems } from "../lib/pickerSearch";
     search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z M16 16l5 5',
     refreshcw: 'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8 M21 3v5h-5 M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16 M8 16H3v5',
     rotatecw: 'M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8 M21 3v5h-5',
+    rotateccw: 'M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8 M3 3v5h5',
+    turnshortest: 'M5 16a7 7 0 0 1 14 0 M2.5 13.5L5 16l2.5-2.5 M16.5 13.5L19 16l2.5-2.5',
+    panelclose: 'M4 4h16v16H4z M9 4v16 M15.5 9.5L13 12l2.5 2.5',
+    panelopen: 'M4 4h16v16H4z M9 4v16 M13.5 9.5L16 12l-2.5 2.5',
     download: 'M12 15V3 M7 10l5 5 5-5 M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4',
     refresh: 'M20 7v5h-5 M4 17v-5h5 M18.5 10a7 7 0 0 0-12-3L4 10 M5.5 14a7 7 0 0 0 12 3l2.5-3',
     zones: 'M4 12h16 M4 7h16 M4 17h16',
@@ -505,6 +509,21 @@ import { filterPickerItems } from "../lib/pickerSearch";
       options.map(o => h('button', { key: o.v, type: 'button', disabled: Boolean(o.disabled), className: 'seg-i' + (value === o.v ? ' on' : ''), title: o.title, 'aria-description': o.title, 'aria-label': o.ariaLabel, 'aria-pressed': value === o.v, onClick: () => onChange(o.v) }, o.label)));
   }
 
+  // Turn direction into an authored heading. Full words need a stacked group at inspector width.
+  const TURN_DIRECTIONS = [
+    { v: 'shortest', icon: 'turnshortest', label: 'Shortest', title: 'The smaller turn' },
+    { v: 'cw', icon: 'rotatecw', label: 'Clockwise', title: 'Clockwise, seen from above' },
+    { v: 'ccw', icon: 'rotateccw', label: 'Counterclockwise', title: 'Counterclockwise, seen from above' },
+  ];
+  /** `values` maps the three choices onto a model's own names; a missing value reads as shortest. */
+  function TurnDirection({ value, onChange, ariaLabel = 'Turn direction', label = 'Turn direction', values = { shortest: 'shortest', cw: 'cw', ccw: 'ccw' } }) {
+    const current = TURN_DIRECTIONS.find((o) => values[o.v] === value)?.v || 'shortest';
+    return h(React.Fragment, null,
+      label && h('div', { className: 'fieldlabel' }, label),
+      h(Seg, { value: current, ariaLabel, className: 'seg-stack turn-direction', onChange: (v) => { if (v !== current) onChange(values[v]); },
+        options: TURN_DIRECTIONS.map((o) => ({ v: o.v, title: o.title, label: h(React.Fragment, null, h(Icon, { name: o.icon, size: 15 }), h('span', null, o.label)) })) }));
+  }
+
   function constraintRangeSummary(range, constraints, robot) {
     const c = PM.effectiveConstraints(constraints || {}, robot);
     const velocityBase = Math.min(c.maxVel || Infinity, robot && robot.maxSpeed > 0 ? robot.maxSpeed : Infinity);
@@ -577,4 +596,4 @@ import { filterPickerItems } from "../lib/pickerSearch";
             it.hint && h('span', { className: 'ctxmenu-k' }, it.hint))));
   }
 
-export const UI = { Icon, IconBtn, Dropdown, ChoiceBrowser, Num, DraftText, Section, Toggle, Seg, ContextMenu, constraintRangeSummary };
+export const UI = { Icon, IconBtn, Dropdown, ChoiceBrowser, Num, DraftText, Section, Toggle, Seg, TurnDirection, ContextMenu, constraintRangeSummary };

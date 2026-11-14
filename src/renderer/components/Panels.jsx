@@ -103,8 +103,10 @@ import { deletionInput } from "./DeletionNotice";
 
   function ViewControls({ zoomPct, zoomBy, onFit, showGrid, setShowGrid, graphOpen, onFlip, fieldFocus, toggleFieldFocus }) {
     return h('div', { className: 'viewctl' + (graphOpen ? ' graph-open' : '') },
-      toggleFieldFocus && h('button', { className: 'vc-text field-focus', type: 'button', 'aria-pressed': fieldFocus,
-        onClick: toggleFieldFocus, title: 'Hide or show the path list  (\\)' }, 'Focus'),
+      // One name for both states; the pressed state, icon and title say whether the path list is hidden.
+      toggleFieldFocus && h('button', { className: 'vc-text field-focus', type: 'button', 'aria-pressed': fieldFocus, 'aria-label': 'Focus field',
+        onClick: toggleFieldFocus, title: (fieldFocus ? 'Show' : 'Hide') + ' the path list  (\\)' },
+        h(Icon, { name: fieldFocus ? 'panelopen' : 'panelclose', size: 15 }), h('span', null, 'Focus')),
       toggleFieldFocus && h('div', { className: 'vc-div' }),
       onFlip && h('button', { className: 'vc-text field-flip', type: 'button', ...deletionInput(onFlip),
         title: 'Move all paths to the opposite alliance (180°). Undo restores them.', 'aria-label': 'Flip all paths 180 degrees' }, 'Flip'),

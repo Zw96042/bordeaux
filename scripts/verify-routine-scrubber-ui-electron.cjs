@@ -1,0 +1,314 @@
+// Built-App check for the routine transport scrubber, the routine path chooser and the routine flow layout.
+// Uses the mocked branches preload and a local catalog: no NI, no robot transport, nothing executes.
+const { app, BrowserWindow, ipcMain } = require('electron');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const output = process.env.BORDEAUX_ROUTINE_SCRUBBER_UI_OUTPUT;
+const baselineOnly = Boolean(process.env.BORDEAUX_ROUTINE_SCRUBBER_BASELINE);
+app.setPath('userData', path.join(output, 'user-data'));
+let win, saved, published, saves = 0;
+const errors = [], robotCalls = [], passed = [];
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const evaluate = (fn, ...args) => win.webContents.executeJavaScript(`(${fn.toString()})(...${JSON.stringify(args)})`, true);
+async function wait(fn, label) { for (let i = 0; i < 200; i++) { if (await fn()) return; await delay(75); } throw Error('Timed out: ' + label); }
+async function focusWindow() {
+  app.focus({ steal: true }); win.focus(); win.webContents.focus();
+  await wait(() => evaluate(() => document.hasFocus()), 'renderer keyboard focus');
+}
+async function pointOf(selector, text) {
+  await wait(() => evaluate((selector, text) => {
+    const item = [...document.querySelectorAll(selector)].find((el) => el.getClientRects().length && (!text || el.textContent.trim() === text));
+    return !!item && !item.disabled && !item.closest('[inert]');
+  }, selector, text), 'enabled control: ' + selector + (text ? ' ' + text : ''));
+  return evaluate((selector, text) => {
+    const item = [...document.querySelectorAll(selector)].find((el) => el.getClientRects().length && (!text || el.textContent.trim() === text));
+    item.scrollIntoView({ block: 'nearest' });
+    const r = item.getBoundingClientRect(), x = Math.round(r.x + r.width / 2), y = Math.round(r.y + r.height / 2);
+    if (!item.contains(document.elementFromPoint(x, y))) throw Error('Obscured control: ' + selector + ' ' + text);
+    return { x, y, left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width };
+  }, selector, text);
+}
+async function click(selector, text) {
+  await focusWindow();
+  const point = await pointOf(selector, text);
+  for (const type of ['mouseDown', 'mouseUp']) win.webContents.sendInputEvent({ type, button: 'left', clickCount: 1, modifiers: [], x: point.x, y: point.y });
+  await delay(200);
+}
+async function mouse(type, x, y, buttons = true) {
+  win.webContents.sendInputEvent({ type, x: Math.round(x), y: Math.round(y), button: 'left', clickCount: 1, modifiers: buttons && type === 'mouseMove' ? ['leftButtonDown'] : [] });
+  await delay(40);
+}
+async function key(keyCode, modifiers = []) {
+  await focusWindow();
+  win.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
+  const char = { Space: ' ', Enter: '\r' }[keyCode];
+  if (char && !modifiers.length) win.webContents.sendInputEvent({ type: 'char', keyCode: char, modifiers });
+  win.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
+  await delay(90);
+}
+async function type(text) { await focusWindow(); await win.webContents.insertText(text); await delay(150); }
+async function snapshot(name) {
+  await evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await fs.writeFile(path.join(output, name + '.png'), (await win.webContents.capturePage()).toPNG());
+}
+const pass = (label) => { passed.push(label); console.log('PASS ' + label); };
+
+const catalog = { runtime: 'labview', authoritative: true, generatedSchemaVersion: '1.3', projectName: 'Routine scrubber fixture',
+  sourceFileCount: 1, scannedAt: '', warnings: [],
+  commands: [{ id: 'intake', label: 'Run the intake until a game piece is seated', member: 'Intake.vi', parameters: [], labviewConnector: {}, outputs: [] }],
+  conditions: [{ id: 'piece', label: 'Enough game pieces collected', description: 'Illustrative registered condition.' }],
+  builtIns: [{ id: 'bordeaux.wait', kind: 'wait' }] };
+ipcMain.handle('branches:restore', () => ({ project: saved }));
+ipcMain.handle('branches:catalog', () => ({ catalog, bookmarkId: 'fixture' }));
+ipcMain.on('branches:published', (_event, project) => { published = structuredClone(project); });
+ipcMain.on('branches:confirm', () => {});
+ipcMain.handle('branches:robot-call', (_event, name) => { robotCalls.push(name); throw Error('Unexpected robot operation: ' + name); });
+ipcMain.handle('branches:save', (_event, project) => { saved = structuredClone(project); saves++; return { saved: true }; });
+async function save() { const before = saves; await click('.project-chip'); await click('[role="menuitem"][data-action="save"]'); await wait(() => saves > before, 'save'); }
+async function source() { await wait(() => Boolean(published?.routines), 'published routines'); return structuredClone(published.routines); }
+
+const ROUTINE = 'scrub-routine';
+async function load(routineId = ROUTINE, expect = '[data-id="leave"]') {
+  published = undefined;
+  await win.loadFile(path.resolve('dist-renderer/index.html'));
+  await focusWindow();
+  await wait(() => evaluate(() => Boolean(document.querySelector('.places .place'))), 'editor ready');
+  await click('.places .place', 'Routines');
+  await click(`[data-library-item="${routineId}"]`);
+  await wait(() => evaluate((s) => Boolean(document.querySelector(s)), expect), 'routine flow ' + routineId);
+}
+async function planned() {
+  await wait(() => evaluate(() => !document.querySelector('.routine-status.planning')
+    && ![...document.querySelectorAll('.rt-step-meta')].some((el) => el.textContent.includes('Preparing preview'))), 'routine planning settled');
+  await evaluate(() => document.fonts.ready.then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+}
+
+app.whenReady().then(async () => {
+  try {
+    const corpus = JSON.parse(await fs.readFile('benchmarks/planner-corpus/v2/corpus.bordeaux.json', 'utf8'));
+    const pick = (id, name, folderId) => ({ ...structuredClone(corpus.paths.find((p) => p.id === id)), name, ...(folderId ? { folderId } : {}) });
+    const paths = [
+      pick('corpus-neutral-stop', 'Collect along the alliance wall and return through the protected crossing', 'f-collect'),
+      pick('corpus-blue-table-trench', 'Score from the trench', 'f-score'),
+      pick('corpus-blue-away-bump', 'Cross the bump to the far side', 'f-score'),
+      pick('corpus-neutral-slalom', 'Slalom warm-up'),
+    ];
+    const [wall, trench, bump] = paths.map((p) => p.id);
+    const routines = [
+      { id: ROUTINE, name: 'Leave, collect twice, choose a scoring route, then hold', nodes: [
+        { id: 'leave', type: 'path', ref: wall },
+        { id: 'settle', type: 'builtin', builtinId: 'bordeaux.wait', arguments: { durationS: 0.75 } },
+        { id: 'intake', type: 'function', cat: 'command', title: 'Run the intake until a game piece is seated', invocation: { commandId: 'intake', arguments: {} } },
+        { id: 'cycle', type: 'repeat', times: 2, nodes: [{ id: 'cycle-path', type: 'path', ref: trench }] },
+        { id: 'choice', type: 'decision', cond: 'piece', thenLabel: 'Full — cross to score', elseLabel: 'Keep holding',
+          then: [{ id: 'score', type: 'path', ref: bump }], else: [{ id: 'hold', type: 'builtin', builtinId: 'bordeaux.wait', arguments: { durationS: 1 } }] },
+      ] },
+      { id: 'untimed-routine', name: 'Only an untimed command', nodes: [
+        { id: 'only-command', type: 'function', cat: 'command', title: 'Run the intake until a game piece is seated', invocation: { commandId: 'intake', arguments: {} } }] },
+      { id: 'missing-routine', name: 'Uses a deleted path', nodes: [{ id: 'missing', type: 'path', ref: 'deleted-path' }] },
+      { id: 'empty-routine', name: 'Nothing yet', nodes: [] },
+    ];
+    saved = { ...corpus, schemaVersion: '1.1', paths, pathFolders: [{ id: 'f-collect', name: 'Collection' }, { id: 'f-score', name: 'Scoring' }], pathLinks: [], routines, activeRoutineId: ROUTINE,
+      editor: { activePathId: wall, robotProjectBookmarkId: 'fixture', unitSystem: 'metric' } };
+    win = new BrowserWindow({ show: true, width: 1440, height: 900, useContentSize: true,
+      webPreferences: { preload: path.join(__dirname, 'verify-command-branches-ui-preload.cjs'), sandbox: false, contextIsolation: true, backgroundThrottling: false } });
+    win.webContents.on('console-message', (details) => { if (details.level === 'error' && !details.message.startsWith("Loading the font 'data:")) errors.push(details.message); });
+
+    if (baselineOnly) {
+      for (const [width, height] of [[1440, 900], [1100, 720]]) {
+        win.setContentSize(width, height);
+        await load(); await planned();
+        await snapshot('baseline-flow-' + width);
+        await click('[data-id="leave"] .rt-step-body'); await delay(300);
+        await snapshot('baseline-path-inspector-' + width);
+        await click('.rt-addwrap .rt-add'); await delay(300);
+        await snapshot('baseline-add-menu-' + width);
+        await key('Escape');
+        await click('.routine-workspace-views .seg-i', 'Field preview'); await delay(300);
+        await snapshot('baseline-field-' + width);
+      }
+      app.exit(0); return;
+    }
+    const slider = '.rt-tp-scrub';
+    const sliderState = () => evaluate((s) => { const el = document.querySelector(s); return el && { now: Number(el.getAttribute('aria-valuenow')), max: Number(el.getAttribute('aria-valuemax')), text: el.getAttribute('aria-valuetext'), disabled: el.getAttribute('aria-disabled'), tab: el.tabIndex, focused: document.activeElement === el }; }, slider);
+    const lane = () => evaluate(() => { const r = document.querySelector('.rt-timeline-editor').getBoundingClientRect(); return { left: r.left + 10, width: r.width - 20, y: r.top + 30 }; });
+    const near = (a, b, tolerance, label) => assert.ok(Math.abs(a - b) <= tolerance, label + ': ' + a + ' vs ' + b);
+    const isPaused = () => evaluate(() => Boolean(document.querySelector('[aria-label="Play routine"]')));
+    const routineNode = async (id) => {
+      const routines = await source(); let hit = null;
+      const walk = (nodes) => nodes.forEach((n) => { if (n.id === id) hit = n; ['nodes', 'then', 'else'].forEach((k) => Array.isArray(n[k]) && walk(n[k])); });
+      routines.forEach((r) => walk(r.nodes)); return hit;
+    };
+    const waitRef = (id, ref, label) => wait(async () => (await routineNode(id))?.ref === ref, label);
+    const option = '#routine-bound-path-results [role="option"] strong';
+
+    for (const [width, height, units] of [[1440, 900, 'metric'], [1100, 720, 'imperial']]) {
+      win.setContentSize(width, height); saved.editor.unitSystem = units;
+      await load(); await planned();
+      await snapshot('flow-closed-' + width);
+
+      // Scrubber: the scale, the handle and its accessible state.
+      const idle = await sliderState();
+      assert.equal(idle.now, 0); assert.ok(idle.max > 5, 'timed total'); assert.equal(idle.disabled, null); assert.equal(idle.tab, 0);
+      const scale = await evaluate(() => ({ ticks: [...document.querySelectorAll('.rt-timeline-tick')].map((t) => t.textContent),
+        knob: getComputedStyle(document.querySelector('.rt-timeline-playhead'), '::before').width, step: document.querySelector('.rt-timeline-step').textContent }));
+      assert.ok(scale.ticks.length >= 4 && scale.ticks[0] === '0', 'seconds scale: ' + scale.ticks.join(' '));
+      assert.equal(scale.knob, '12px', 'visible playhead handle'); assert.equal(scale.step, '7 steps', 'idle run size');
+
+      // Tab from Play reaches the scrubber with a visible ring (as the workflow harness expects).
+      await evaluate(() => document.querySelector('button[aria-label="Play routine"]').focus());
+      await key('Tab');
+      assert.equal((await sliderState()).focused, true, 'Tab from Play reaches the scrubber');
+      assert.equal(await evaluate(() => getComputedStyle(document.querySelector('.rt-timeline-editor')).outlineStyle), 'solid');
+
+      // Pointer press seeks there and pauses; the step playing there is named.
+      let geometry = await lane();
+      await focusWindow();
+      await mouse('mouseDown', geometry.left + geometry.width * 0.4, geometry.y, false); await mouse('mouseUp', geometry.left + geometry.width * 0.4, geometry.y, false);
+      const pressed = await sliderState();
+      near(pressed.now, idle.max * 0.4, idle.max * 0.02, 'press seeks to 40%'); assert.equal(pressed.focused, true, 'press focuses the slider');
+      assert.ok(await isPaused(), 'seeking leaves playback paused');
+      const nowName = await evaluate(() => document.querySelector('.rt-timeline-now')?.textContent || '');
+      assert.ok(nowName.length > 0 && pressed.text.includes(nowName), 'current step named in toolbar and value text: ' + pressed.text);
+      assert.equal(await evaluate(() => document.querySelectorAll('.rt-timeline-span.on').length <= 1), true);
+
+      // Hover reads a time without seeking.
+      await mouse('mouseMove', geometry.left + geometry.width * 0.7, geometry.y, false);
+      await wait(() => evaluate(() => Boolean(document.querySelector('.rt-timeline-readout'))), 'hover readout');
+      const hoverText = await evaluate(() => document.querySelector('.rt-timeline-readout').textContent);
+      assert.match(hoverText, /^\d+\.\d\d s/, 'hover time: ' + hoverText);
+      near((await sliderState()).now, pressed.now, 0.011, 'hover does not seek');
+      await snapshot('scrub-hover-' + width);
+
+      // Drag the handle: continuous seeking with a dragged-time readout, ending where released.
+      geometry = await lane();
+      await mouse('mouseDown', geometry.left + geometry.width * 0.4, geometry.y, false);
+      for (const f of [0.5, 0.65, 0.8]) await mouse('mouseMove', geometry.left + geometry.width * f, geometry.y);
+      assert.equal(await evaluate(() => document.querySelector('.rt-timeline-editor').classList.contains('dragging')), true, 'dragging state');
+      near((await sliderState()).now, idle.max * 0.8, idle.max * 0.02, 'drag follows the pointer');
+      await snapshot('scrub-drag-' + width);
+      await mouse('mouseUp', geometry.left + geometry.width * 0.8, geometry.y, false);
+      assert.equal(await evaluate(() => document.querySelector('.rt-timeline-editor').classList.contains('dragging')), false);
+      near((await sliderState()).now, idle.max * 0.8, idle.max * 0.02, 'release keeps the dragged time');
+      // Park the pointer on empty library space: an open hover tooltip (a popover) withholds playback Space.
+      await mouse('mouseMove', 120, height - 80, false); await wait(() => evaluate(() => !document.querySelector('[popover]:popover-open')), 'no open tooltip');
+
+      // Keyboard seeking.
+      await key('Home'); assert.equal((await sliderState()).now, 0);
+      await key('Right'); near((await sliderState()).now, 0.1, 0.001, 'Arrow steps 0.1 s');
+      await key('Right', ['shift']); near((await sliderState()).now, 1.1, 0.001, 'Shift+Arrow steps 1 s');
+      await key('PageDown'); const nextStart = (await sliderState()).now; assert.ok(nextStart > 1.1, 'Page Down moves to the next step start');
+      await key('PageUp'); assert.ok((await sliderState()).now < nextStart, 'Page Up moves back to a step start');
+      await key('End'); near((await sliderState()).now, idle.max, 0.011, 'End');
+      await key('Home');
+      await key('Space'); await wait(async () => !(await isPaused()), 'Space plays from the scrubber');
+      await key('Space'); await wait(isPaused, 'Space pauses');
+      await key('Home'); await key('PageDown'); await key('PageDown'); await key('PageDown');
+      await snapshot('scrub-keyboard-' + width);
+
+      // Field preview keeps the same transport.
+      await click('.routine-workspace-views .seg-i', 'Field preview');
+      await snapshot('field-scrubbed-' + width);
+      await click('.routine-workspace-views .seg-i', 'Flow');
+
+      // Path chooser: the current path reads as a card with its context.
+      await click('[data-id="leave"] .rt-step-body');
+      await wait(() => evaluate(() => Boolean(document.querySelector('.routine-insp .choice-current'))), 'path card');
+      const card = await evaluate(() => document.querySelector('.routine-insp .choice-current').textContent);
+      assert.ok(card.includes('Collect along the alliance wall') && card.includes('Collection') && card.includes('In this routine'), 'card: ' + card);
+      await snapshot('path-card-' + width);
+      // Keyboard: Change, search by folder, choose with arrows and Enter; focus returns to Change.
+      await click('.routine-insp .choice-change', 'Change path');
+      assert.equal(await evaluate(() => document.activeElement.id), 'routine-bound-path');
+      await type('scoring');
+      assert.deepEqual(await evaluate((s) => [...document.querySelectorAll(s)].map((el) => el.textContent), option), ['Score from the trench', 'Cross the bump to the far side']);
+      await snapshot('path-search-' + width);
+      await key('Down'); await key('Down'); await key('Enter');
+      await waitRef('leave', bump, 'keyboard path choice');
+      await wait(() => evaluate(() => document.activeElement.classList.contains('choice-change')), 'focus returns to Change');
+      await click('[aria-label="Undo"]'); await waitRef('leave', wall, 'Undo path choice');
+      // Undo keeps the step selected, and its inspector shows the restored path.
+      await wait(() => evaluate((name) => document.querySelector('.routine-insp .choice-current')?.textContent.startsWith(name), paths[0].name), 'Undo keeps the step and shows its restored path');
+      assert.equal(await evaluate(() => document.querySelector('[data-id="leave"] .rt-step-body').getAttribute('aria-pressed')), 'true', 'Undo keeps the step selected');
+      // Pointer: the open list marks the current path; Escape keeps it; a click chooses another.
+      await click('.routine-insp .choice-change', 'Change path');
+      assert.equal(await evaluate(() => document.querySelector('#routine-bound-path-results [aria-selected="true"] strong').textContent), paths[0].name, 'current choice is marked');
+      await key('Escape');
+      await wait(() => evaluate(() => Boolean(document.querySelector('.routine-insp .choice-current'))), 'Escape keeps the current path');
+      await click('.routine-insp .choice-change', 'Change path');
+      await click(option, 'Slalom warm-up');
+      await waitRef('leave', paths[3].id, 'pointer path choice');
+      await snapshot('path-chosen-' + width);
+      await click('[aria-label="Undo"]'); await waitRef('leave', wall, 'Undo pointer choice');
+
+      // Add: paths come first with folder, time and use here, and are searchable.
+      await click('.rt-list>.rt-addwrap .rt-add');
+      await wait(() => evaluate(() => Boolean(document.querySelector('.rt-add-menu'))), 'add menu');
+      const options = await evaluate(() => [...document.querySelectorAll('.rt-add-menu [role="option"]')].slice(0, 4).map((el) => el.textContent));
+      assert.ok(options[1].includes('Scoring') && options[1].includes('In this routine'), 'add path context: ' + options[1]);
+      await snapshot('add-paths-' + width);
+      await type('warm'); await key('Enter');
+      await wait(async () => { const nodes = (await source())[0].nodes; return nodes.length === 6 && nodes[5].ref === paths[3].id; }, 'added path step');
+      await click('[aria-label="Undo"]'); await wait(async () => (await source())[0].nodes.length === 5, 'Undo add');
+
+      // Inspector open and closed with the transport.
+      await click('[data-id="choice"] .rt-step-body'); await snapshot('flow-open-' + width);
+      await click('[aria-label="Close step inspector"]'); await snapshot('flow-closed-after-' + width);
+    }
+    pass('Scrubber scale, handle, press/hover/drag, keyboard (Arrow, Shift, Page, Home/End, Space), path card/search/choose/Undo and Add context at 1440x900 metric and 1100x720 imperial');
+
+    // Save and reopen a chosen path.
+    win.setContentSize(1440, 900); saved.editor.unitSystem = 'metric';
+    await load(); await planned();
+    await click('[data-id="leave"] .rt-step-body');
+    await click('.routine-insp .choice-change', 'Change path'); await type('trench'); await key('Down'); await key('Enter');
+    await waitRef('leave', trench, 'choose trench');
+    await save(); await load(); await planned();
+    await click('[data-id="leave"] .rt-step-body');
+    assert.ok((await evaluate(() => document.querySelector('.routine-insp .choice-current').textContent)).startsWith('Score from the trench'), 'chosen path survives save and reopen');
+    pass('Chosen path survives save and reopen');
+
+    // Deleted path: no card; the list stays open beside the problem, and a choice repairs it.
+    await load('missing-routine', '[data-id="missing"]');
+    await click('[data-id="missing"] .rt-step-body');
+    await wait(() => evaluate(() => Boolean(document.querySelector('#routine-bound-path-results'))), 'missing path list');
+    assert.equal(await evaluate(() => Boolean(document.querySelector('.routine-insp .choice-current'))), false);
+    assert.ok(await evaluate(() => document.querySelector('.routine-insp').textContent.includes('unavailable')), 'missing path problem stated');
+    await snapshot('missing-path-1440');
+    await click(option, 'Slalom warm-up');
+    await waitRef('missing', paths[3].id, 'repair missing path');
+    await snapshot('missing-repaired-1440');
+    pass('Deleted path keeps the chooser open with its problem and is repaired by a choice');
+
+    // Untimed and empty routines.
+    for (const [width, height] of [[1440, 900], [1100, 720]]) {
+      win.setContentSize(width, height);
+      await load('untimed-routine', '[data-id="only-command"]'); await planned();
+      const untimed = await sliderState();
+      assert.equal(untimed.disabled, 'true'); assert.equal(untimed.tab, -1);
+      assert.equal(await evaluate(() => document.querySelector('button[aria-label="Play routine"]').disabled), true);
+      assert.ok(await evaluate(() => document.querySelector('.rt-timeline-empty')?.textContent.includes('no step in this preview has a duration')), 'untimed explanation');
+      assert.equal(await evaluate(() => document.querySelectorAll('.rt-timeline-tick,.rt-timeline-playhead').length), 0);
+      const geometry = await lane();
+      await mouse('mouseDown', geometry.left + geometry.width / 2, geometry.y, false); await mouse('mouseUp', geometry.left + geometry.width / 2, geometry.y, false);
+      assert.equal((await sliderState()).now, untimed.now, 'untimed press does nothing');
+      await snapshot('untimed-' + width);
+      await load('empty-routine', '.rt-empty');
+      assert.equal(await evaluate(() => Boolean(document.querySelector('.rt-transport'))), false, 'empty routine has no transport');
+      await snapshot('empty-' + width);
+    }
+    pass('Untimed preview disables the scrubber with a reason; an empty routine has no transport');
+
+    assert.deepEqual(robotCalls, [], 'no robot transport calls');
+    assert.deepEqual(errors, [], 'renderer console errors');
+    await fs.writeFile(path.join(output, 'result.json'), JSON.stringify({ ok: true, passed, saves }, null, 2));
+    console.log('Routine transport and path chooser checks passed. Screenshots: ' + output);
+    app.exit(0);
+  } catch (error) {
+    console.error(error);
+    try { await snapshot('failure'); } catch (_) { /* Window may be gone. */ }
+    await fs.writeFile(path.join(output, 'result.json'), JSON.stringify({ ok: false, error: String(error && error.stack || error), errors, passed }, null, 2)).catch(() => {});
+    app.exit(1);
+  }
+});

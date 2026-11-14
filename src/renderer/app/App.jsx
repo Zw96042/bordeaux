@@ -82,6 +82,7 @@ import { buildTimeline, tAtF } from "../components/pathTimelineModel";
     const message = error && error.message ? error.message : String(error);
     return message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '');
   }
+  const countOf = (count, noun) => count + ' ' + noun + (count === 1 ? '' : 's');
   function normalizeProject(raw) {
     return PathLinks.reconcile(normalizeProjectData(raw));
   }
@@ -465,6 +466,8 @@ import { buildTimeline, tAtF } from "../components/pathTimelineModel";
     else if (!robotProjectState.operation) robotCatalogFingerprint.current = null;
     const [exportError, setExportError] = useState('');
     const [bdxNotice, setBdxNotice] = useState('');
+    // A candidate that could not be applied is its own fact, never an export failure.
+    const [applyError, setApplyError] = useState('');
     const [projectLocation, setProjectLocation] = useState(null);
     const [saveState, setSaveStateValue] = useState({ status: 'idle', error: '' });
     // A source failure carries a try number until a save succeeds (a BDX failure means the source saved). Only attempts
@@ -1146,7 +1149,10 @@ import { buildTimeline, tAtF } from "../components/pathTimelineModel";
         const inverse = { ...entry, state: clone(routineState(current)) }, restored = clone(entry.state);
         branchGeneration.current += 1;
         projectRef.current = promoteRoutineProjectSchema(withRoutineState(current, restored));
-        setProject((value) => promoteRoutineProjectSchema(withRoutineState(value, restored))); setRoutineSel(null);
+        setProject((value) => promoteRoutineProjectSchema(withRoutineState(value, restored)));
+        // The selected step stays selected (with its inspector) when it still exists in the same routine after the step back.
+        const activeId = inverse.state.activeRoutineId, restoredActive = restored.routines.find((routine) => routine.id === restored.activeRoutineId);
+        setRoutineSel((selected) => selected && restored.activeRoutineId === activeId && restoredActive && AUTO.findNode(restoredActive, selected) ? selected : null);
         return inverse;
       }
       const applied = applyProjectEntry(current, entry, docRef.current?.id ?? null);
@@ -2033,7 +2039,8 @@ import { buildTimeline, tAtF } from "../components/pathTimelineModel";
         playbackStore.reset();
         setComparison(null);
         writeDoc(nextPath);
-      } catch (error) { setExportError(error.message || 'The candidate could not be applied.'); }
+        setApplyError('');
+      } catch (error) { setApplyError(error.message || 'The candidate could not be applied.'); }
     };
     const useNormalTrajectory = () => {
       beginHistory();
@@ -2076,6 +2083,7 @@ import { buildTimeline, tAtF } from "../components/pathTimelineModel";
       routinePlaybackStore.reset();
       setExportError('');
       setBdxNotice('');
+      setApplyError('');
       history.clear();
       updateDirty(Boolean(origin));
       setRobotProjectState((current) => ({ ...current, status: 'unlinked', operation: null, catalog: null, integration: null, bookmarkId: null, suggestion: null, error: '', notice: '' }));
@@ -2675,7 +2683,7 @@ import { buildTimeline, tAtF } from "../components/pathTimelineModel";
       setRobotProjectState((current) => ({ ...current, operation: 'export' }));
       try {
         const result = await window.bordeauxAPI.exportBdx(materializeProject(), selected);
-        if (result?.exported) setBdxNotice({ detail: 'Saved ' + result.relativePath + ', ' + result.sampleCount + ' samples, ' + result.eventCount + ' events. Local export complete; robot code checks compatibility before execution.' });
+        if (result?.exported) setBdxNotice({ detail: 'Saved ' + result.relativePath + ', ' + countOf(result.sampleCount, 'sample') + ', ' + countOf(result.eventCount, 'event') + '. Local export complete; robot code checks compatibility before execution.' });
       } catch (error) { setExportError(operationErrorMessage(error)); }
       finally { setRobotProjectState((current) => ({ ...current, operation: null })); }
     }, [flushProjectDraft, materializeProject]);
@@ -2689,7 +2697,7 @@ import { buildTimeline, tAtF } from "../components/pathTimelineModel";
       setRobotProjectState((current) => ({ ...current, operation: 'export' }));
       try {
         const result = await window.bordeauxAPI.exportRoutine(snapshot, snapshot.activeRoutineId);
-        if (result?.exported) setBdxNotice({ kind: 'routine', detail: 'Saved ' + result.relativePath + ', ' + result.nodeCount + ' steps, ' + result.pathCount + ' embedded paths. Local export complete; robot code checks compatibility before execution.' });
+        if (result?.exported) setBdxNotice({ kind: 'routine', detail: 'Saved ' + result.relativePath + ', ' + countOf(result.nodeCount, 'step') + ', ' + countOf(result.pathCount, 'embedded path') + '. Local export complete; robot code checks compatibility before execution.' });
       } catch (error) { setExportError(operationErrorMessage(error)); }
       finally { setRobotProjectState((current) => ({ ...current, operation: null })); }
     }, [flushProjectDraft, materializeProject]);
@@ -2914,7 +2922,7 @@ import { buildTimeline, tAtF } from "../components/pathTimelineModel";
       else setActiveRoutine(routine.id);
     };
     const renderLibrary = (mode, structure) => h(LibraryRail, {
-      key: projectKey + ':' + mode, preferenceKey: libraryPreferenceKey, mode, hidden: mode === 'paths' && fieldFocus, project, routines,
+      key: projectKey + ':' + mode, preferenceKey: libraryPreferenceKey, mode, hidden: mode === 'paths' && fieldFocus, onRestore: toggleFieldFocus, project, routines,
       activePathId: doc.id, activeRoutineId: routine.id, times, selection: pushSelection,
       onPath: (id) => { const index = pathIndex(id); if (index >= 0) setActive(index); }, onRoutine: setActiveRoutine,
       controller: pushActions,
@@ -2932,6 +2940,8 @@ import { buildTimeline, tAtF } from "../components/pathTimelineModel";
         action: { label: 'Dismiss', onClick: () => setBdxNotice((current) => current === bdxNotice ? '' : current) } },
       exportError && { id: 'export', error: true, label: 'Export failed', detail: exportError,
         action: { label: 'Dismiss', onClick: () => setExportError('') } },
+      applyError && { id: 'optimization-apply', error: true, label: 'Couldn’t apply optimization', detail: 'The path is unchanged. ' + applyError,
+        action: { label: 'Dismiss', onClick: () => setApplyError('') } },
       editingFailure && { id: 'planning', error: true, label: 'Couldn’t time this path', detail: editingFailure.message,
         action: { label: 'Try again', onClick: editing.retry } },
       !optimizationOpen && selectedOutcome.unvalidated && { id: 'optimization', error: true, label: 'Optimization unavailable', detail: 'Saved optimization is unverified. Review before use.',
@@ -2968,7 +2978,7 @@ import { buildTimeline, tAtF } from "../components/pathTimelineModel";
             renderLibrary('routines', null),
             h(RoutineWorkspace, {
               routine, run, robot,
-              flow: h(RoutinePanelPlayback, { key: routine.id, embedded: true, issues: routineIssues, collapsedIds: routineCollapsed[projectKey + ':' + routine.id] || [], onCollapsedIdsChange: (ids) => setRoutineCollapsed((current) => ({ ...current, [projectKey + ':' + routine.id]: ids })), store: routinePlaybackStore, routine, run, paths: project.paths, selId: routineSel, onSelect: selectRoutineStep, acq, catalog: robotProjectState.catalog }),
+              flow: h(RoutinePanelPlayback, { key: routine.id, embedded: true, issues: routineIssues, collapsedIds: routineCollapsed[projectKey + ':' + routine.id] || [], onCollapsedIdsChange: (ids) => setRoutineCollapsed((current) => ({ ...current, [projectKey + ':' + routine.id]: ids })), store: routinePlaybackStore, routine, run, paths: project.paths, pathFolders: project.pathFolders, pathTimes: times, selId: routineSel, onSelect: selectRoutineStep, acq, catalog: robotProjectState.catalog }),
               field: h(React.Fragment, null,
                 h(RoutineFieldPlayback, { store: routinePlaybackStore, run, selectedId: routineSel, doc, derived, sel: { kind: null, idx: -1 }, tool: 'select', view, setView, alliance, showGrid, robot, drive: robot.drive, accent, metric, actions: autoFieldActions }),
                 h(Panels.ViewControls, { zoomPct, zoomBy, onFit, showGrid, setShowGrid, onFlip: flipPaths })),
@@ -2982,7 +2992,7 @@ import { buildTimeline, tAtF } from "../components/pathTimelineModel";
                   run.planningError && h('span', null, run.planningError)))),
               transport: h(RoutineTransportPlayback, { store: routinePlaybackStore, run }) }),
             h('aside', { className: 'rail rail-r' + (selNode ? '' : ' collapsed'), 'aria-label': 'Routine step inspector' },
-              selNode && h(StepInspector, { node: selNode, routine, issues: routineIssues, paths: project.paths, acq, run, robotProject: { ...robotProjectState, link: linkRobotProject } })))
+              selNode && h(StepInspector, { node: selNode, routine, issues: routineIssues, paths: project.paths, pathFolders: project.pathFolders, pathTimes: times, acq, run, robotProject: { ...robotProjectState, link: linkRobotProject } })))
         : h('main', { className: 'stage stage-plan workspace', style: { '--band-height': bandHeight + 'px' } },
             renderLibrary('paths', null),
             h(PathWorkspace, { key: projectKey + ':' + doc.id, rootRef: workColumn, editStore, previewer: editPreviewer, doc, derived, derivedPath: derivation.path,

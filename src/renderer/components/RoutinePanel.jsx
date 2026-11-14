@@ -7,6 +7,7 @@ import { UnitPrefs } from "../lib/unitPreferences";
 import { commandArguments } from "./ContextInspector";
 import { UI } from "./ui";
 import { enabledPickerIndex, filterPickerItems, pickerPage, PICKER_PAGE_SIZE } from '../lib/pickerSearch';
+import { routinePathChoices, routinePathUses } from '../lib/routinePathChoices';
 
 // Routine run sheet: one line per step in run order, each with its share of preview time on a shared axis. Repeats and
 // branches are bounded groups; a branch's routes are lanes. A closing row states what authored control flow does next
@@ -293,11 +294,12 @@ function useOutside(ref, anchor, close) {
   }, [ref, anchor, close]);
 }
 
-/** Searchable Add: project paths first (the common case), then the step kinds valid in this list. */
-export function AddMenu({ anchor, paths, steps, onPick, onClose, label, dest }) {
+/** Searchable Add: project paths first (the common case), then the step kinds valid in this list.
+ * `pathMeta` gives each path its context line (folder, time, use here); it is searchable like the name. */
+export function AddMenu({ anchor, paths, steps, onPick, onClose, label, dest, pathMeta }) {
   const ref = useRef(null), input = useRef(null);
   const [query, setQuery] = useState('');
-  const pathChoices = useMemo(() => paths.map(path => ({ key: 'path:' + path.id, kind: 'path', ref: path.id, label: path.name, icon: 'route' })), [paths]);
+  const pathChoices = useMemo(() => paths.map(path => ({ key: 'path:' + path.id, kind: 'path', ref: path.id, label: path.name, icon: 'route', meta: pathMeta?.get(path.id) || undefined })), [paths, pathMeta]);
   const pathItems = useMemo(() => filterPickerItems(pathChoices, query), [pathChoices, query]);
   const stepItems = useMemo(() => filterPickerItems(steps, query), [steps, query]);
   const items = useMemo(() => [...pathItems, ...stepItems], [pathItems, stepItems]);
@@ -389,6 +391,15 @@ function Grip({ onPointerDown }) {
 export function RoutinePanel(props) {
   const { routine, run, paths, selId, onSelect, acq, time, running, catalog } = props;
   const issues = props.issues || [];
+  // Recomputed only when authored inputs or durations change, never per playback frame. Unchanged text keeps the
+  // same Map, so a background duration that changes nothing visible keeps an open Add menu's cursor.
+  const pathMetaRef = useRef(null);
+  const pathMeta = useMemo(() => {
+    const entries = routinePathChoices(paths, { folders: props.pathFolders, times: props.pathTimes, uses: routinePathUses(routine) }).map((choice) => [choice.path.id, choice.meta]);
+    const key = JSON.stringify(entries);
+    if (pathMetaRef.current?.key !== key) pathMetaRef.current = { key, map: new Map(entries) };
+    return pathMetaRef.current.map;
+  }, [paths, props.pathFolders, props.pathTimes, routine.nodes]); // eslint-disable-line react-hooks/exhaustive-deps
   const [note, setNote] = useState('');
   const noteTimer = useRef(0);
   const report = (text) => { setNote(text); clearTimeout(noteTimer.current); noteTimer.current = setTimeout(() => setNote(''), 6000); };
@@ -719,6 +730,6 @@ export function RoutinePanel(props) {
         : h('div', { className: 'rt-list' + (running && run.total > 0 ? ' playing' : ''), role: 'list', 'aria-label': 'Routine run order', style: { '--p': run.total > 0 ? Math.min(1, time / run.total) : 0 } },
             renderList(routine.nodes, { kind: 'root' }, { depth: 0, offPreview: false, readOnly: false, after: { kind: 'end' }, exitTo: null }, 'Add step at the end'))),
     h('div', { className: 'rt-flow-note', role: 'status', 'aria-live': 'polite' }, note),
-    add && h(AddMenu, { anchor: add.anchor, paths, steps: stepItems, label: add.label, dest: destination(add.where), onPick: pick, onClose: closeAdd }),
+    add && h(AddMenu, { anchor: add.anchor, paths, pathMeta, steps: stepItems, label: add.label, dest: destination(add.where), onPick: pick, onClose: closeAdd }),
     menu && h(RowMenu, { anchor: menu.anchor, items: rowItems(menu.id), onClose: (refocus) => { const anchor = menu.anchor; setMenu(null); if (refocus) anchor?.closest('.rt-step')?.querySelector('.rt-step-body')?.focus(); } }));
 }

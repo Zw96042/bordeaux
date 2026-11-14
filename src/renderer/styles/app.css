@@ -234,6 +234,10 @@ input,select,textarea{font-family:inherit}
 .seg-i:disabled{opacity:.45}
 @media (hover:hover){.seg-i:not(.on):not(:disabled):hover{color:var(--txt);background:var(--bg-3)}}
 .seg-heading .seg-i{padding-inline:2px;font-size:11px}
+.seg.seg-stack{grid-template-columns:minmax(0,1fr)}
+.seg-stack .seg-i{display:flex;align-items:center;gap:8px;padding:0 10px;text-align:left;overflow-wrap:normal}
+.seg-stack .seg-i svg{flex:none;opacity:.8}
+.seg-stack .seg-i.on svg{opacity:1}
 /* Disclosures: one chevron that turns when open. */
 summary{display:flex;align-items:center;gap:8px;min-height:36px;list-style:none;cursor:pointer}
 summary::-webkit-details-marker{display:none}
@@ -535,6 +539,12 @@ details[open]>summary::after{transform:translateY(3px) rotate(-135deg)}
 .vc-text:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
 @media (hover:hover){.vc-text:hover{background:var(--bg-3);color:var(--txt)}}
 @media (hover:hover){.vc-btn:not(.active):hover,.vc-pct:hover{background:var(--bg-3);color:var(--txt)}}
+.vc-text.field-focus{display:flex;align-items:center;gap:6px;padding-left:7px}
+/* Focus leaves this strip where the library was; it is the way back. */
+.library-restore{display:flex;flex:0 0 52px;flex-direction:column;align-items:center;padding:8px 0;background:var(--bg-1);border-right:1px solid var(--line-2)}
+.library-restore-btn{display:flex;flex-direction:column;align-items:center;gap:4px;width:44px;padding:8px 0 7px;border-radius:var(--r-s);color:var(--txt-2);font-size:11px;font-weight:550}
+.library-restore-btn:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
+@media (hover:hover){.library-restore-btn:hover{background:var(--bg-3);color:var(--txt)}}
 
 /* ============ robot page ============ */
 .page-main{display:flex;flex:1;min-height:0;overflow:hidden}
@@ -784,6 +794,7 @@ details[open]>summary::after{transform:translateY(3px) rotate(-135deg)}
 .field-status-item{padding:9px 0;overflow-wrap:anywhere}
 .field-status-item+.field-status-item{border-top:1px solid var(--line)}
 .field-status-item strong{color:var(--txt);font-size:inherit;font-weight:600}
+.field-status-item.error strong{color:var(--bad-txt)}
 .field-status-item p{margin:4px 0;font-size:inherit}
 .field-status-item button{margin-left:-10px;color:var(--accent);font-weight:550}
 @media (hover:hover){.field-status button:hover{background:var(--bg-4)}}
